@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/cards"
+	"github.com/ramonehamilton/MTGA-Companion/internal/storage/models"
 	"github.com/ramonehamilton/MTGA-Companion/internal/storage/repository"
 )
 
@@ -353,11 +355,26 @@ func (s *SeedDeckBuilder) BuildAroundSeed(ctx context.Context, req *SeedDeckBuil
 
 // analyzeSeedCard extracts key information from the seed card.
 func (s *SeedDeckBuilder) analyzeSeedCard(ctx context.Context, cardID int) (*SeedCardAnalysis, error) {
-	// Get card from card service
-	card, err := s.cardService.GetCard(cardID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get seed card: %w", err)
+	var card *cards.Card
+
+	// First try to get from setCardRepo (where Arena cards are stored)
+	if s.setCardRepo != nil {
+		arenaIDStr := strconv.Itoa(cardID)
+		setCard, err := s.setCardRepo.GetCardByArenaID(ctx, arenaIDStr)
+		if err == nil && setCard != nil {
+			card = convertSetCardToCard(setCard)
+		}
 	}
+
+	// Fall back to card service if not found
+	if card == nil && s.cardService != nil {
+		var err error
+		card, err = s.cardService.GetCard(cardID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get seed card: %w", err)
+		}
+	}
+
 	if card == nil {
 		return nil, fmt.Errorf("seed card not found: %d", cardID)
 	}
@@ -398,6 +415,58 @@ func (s *SeedDeckBuilder) analyzeSeedCard(ctx context.Context, cardID int) (*See
 	}
 
 	return analysis, nil
+}
+
+// convertSetCardToCard converts a models.SetCard to a cards.Card.
+func convertSetCardToCard(sc *models.SetCard) *cards.Card {
+	if sc == nil {
+		return nil
+	}
+
+	arenaID, _ := strconv.Atoi(sc.ArenaID)
+
+	// Build type line from Types slice
+	typeLine := strings.Join(sc.Types, " ")
+
+	// Handle optional fields
+	var manaCost *string
+	if sc.ManaCost != "" {
+		manaCost = &sc.ManaCost
+	}
+
+	var oracleText *string
+	if sc.Text != "" {
+		oracleText = &sc.Text
+	}
+
+	var power, toughness *string
+	if sc.Power != "" {
+		power = &sc.Power
+	}
+	if sc.Toughness != "" {
+		toughness = &sc.Toughness
+	}
+
+	var imageURI *string
+	if sc.ImageURL != "" {
+		imageURI = &sc.ImageURL
+	}
+
+	return &cards.Card{
+		ArenaID:    arenaID,
+		ScryfallID: sc.ScryfallID,
+		Name:       sc.Name,
+		TypeLine:   typeLine,
+		SetCode:    sc.SetCode,
+		ManaCost:   manaCost,
+		CMC:        float64(sc.CMC),
+		Colors:     sc.Colors,
+		Rarity:     sc.Rarity,
+		Power:      power,
+		Toughness:  toughness,
+		OracleText: oracleText,
+		ImageURI:   imageURI,
+	}
 }
 
 // getCandidates retrieves candidate cards based on request filters.
