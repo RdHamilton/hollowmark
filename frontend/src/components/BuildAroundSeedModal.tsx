@@ -1096,7 +1096,8 @@ export default function BuildAroundSeedModal({
   }
 
   // Generated deck result view (Issue #774)
-  if (generatedDeck && selectedCard) {
+  // When useDeckCardsAsSeed is true, we don't have a selectedCard but still need to show the deck
+  if (generatedDeck && (selectedCard || useDeckCardsAsSeed)) {
     return (
       <div className="build-around-overlay" onClick={handleClose}>
         <div
