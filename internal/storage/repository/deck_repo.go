@@ -800,13 +800,19 @@ func (r *deckRepository) ValidateDraftDeck(ctx context.Context, deckID string) (
 		WHERE types LIKE '%Basic%' AND types LIKE '%Land%'
 	`
 	basicRows, err := r.db.QueryContext(ctx, basicLandQuery)
-	if err == nil {
+	if err != nil {
+		log.Printf("[ValidateDraftDeck] Warning: failed to query basic land IDs: %v", err)
+		// Continue with empty set - basic lands will fail validation
+	} else {
 		defer func() { _ = basicRows.Close() }()
 		for basicRows.Next() {
 			var arenaID int
 			if basicRows.Scan(&arenaID) == nil {
 				basicLandIDs[arenaID] = true
 			}
+		}
+		if err := basicRows.Err(); err != nil {
+			log.Printf("[ValidateDraftDeck] Warning: error iterating basic land rows: %v", err)
 		}
 	}
 
