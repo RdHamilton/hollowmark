@@ -344,7 +344,7 @@ describe('MatchHistory', () => {
       expect(formatCell).toBeDefined();
     });
 
-    it('should normalize Play to Play Queue without DeckFormat', async () => {
+    it('should show Constructed for Play queue without DeckFormat', async () => {
       const match = createMockMatch({
         DeckFormat: undefined,
         EventName: 'Play',
@@ -355,9 +355,10 @@ describe('MatchHistory', () => {
       renderWithProvider(<MatchHistory />);
 
       await waitFor(() => {
-        // Both columns should show 'Play Queue'
-        const playQueueElements = screen.getAllByText('Play Queue');
-        expect(playQueueElements.length).toBeGreaterThanOrEqual(2);
+        // Format column should show 'Constructed' since we don't know the specific format
+        expect(screen.getByText('Constructed')).toBeInTheDocument();
+        // Event column should show 'Constructed Play Queue'
+        expect(screen.getByText('Constructed Play Queue')).toBeInTheDocument();
       });
     });
 

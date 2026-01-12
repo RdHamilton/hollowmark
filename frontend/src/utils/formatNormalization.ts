@@ -88,8 +88,15 @@ export function normalizeQueueType(queueType: string): string {
 }
 
 /**
+ * Known generic queue types that don't indicate a specific format.
+ * These are used for Constructed matches but don't tell us Standard vs Historic vs etc.
+ */
+const GENERIC_QUEUE_TYPES = ['Play', 'Ladder', 'Traditional_Ladder', 'Traditional_Play'];
+
+/**
  * Gets the display format for a match.
  * Prefers the deck format (Standard, Historic, etc.) over the queue type.
+ * For generic queue types without deck format, shows "Constructed" as a fallback.
  *
  * @param match - The match object
  * @returns The format to display in the Format column
@@ -98,6 +105,11 @@ export function getDisplayFormat(match: models.Match): string {
   // If we have a deck format, use it
   if (match.DeckFormat) {
     return match.DeckFormat;
+  }
+  // For generic queue types (Play, Ladder), show Constructed as fallback
+  // This indicates it's a constructed match but we don't know the specific format
+  if (GENERIC_QUEUE_TYPES.includes(match.Format)) {
+    return 'Constructed';
   }
   // Fall back to normalized queue type
   return normalizeQueueType(match.Format);
@@ -112,6 +124,7 @@ export function getDisplayFormat(match: models.Match): string {
  * - Standard deck + Play -> 'Standard Play Queue'
  * - Alchemy deck + Alchemy -> 'Alchemy Play Queue'
  * - HistoricBrawl deck + HistoricBrawl -> 'HistoricBrawl Play Queue'
+ * - Unknown deck + Play -> 'Constructed Play Queue'
  * - QuickDraft_TLA -> 'QuickDraft'
  *
  * @param match - The match object
@@ -124,6 +137,12 @@ export function getDisplayEventName(match: models.Match): string {
   // If we have a deck format, combine with normalized queue type
   if (match.DeckFormat && ['Play Queue', 'Ranked', 'Traditional Ranked', 'Traditional Play'].includes(queueName)) {
     return `${match.DeckFormat} ${queueName}`;
+  }
+
+  // For generic queue types without deck format, show "Constructed" prefix
+  // This indicates it's a constructed match but we don't know the specific format
+  if (GENERIC_QUEUE_TYPES.includes(rawEvent) && ['Play Queue', 'Ranked', 'Traditional Ranked', 'Traditional Play'].includes(queueName)) {
+    return `Constructed ${queueName}`;
   }
 
   // For draft formats or when no deck format, just return the normalized queue name

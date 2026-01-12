@@ -123,14 +123,24 @@ describe('formatNormalization', () => {
       expect(getDisplayFormat(match)).toBe('Historic');
     });
 
-    it('should fall back to normalized queue type when no DeckFormat', () => {
+    it('should return Constructed for generic Ladder queue without DeckFormat', () => {
       const match = createMatch({ DeckFormat: undefined, Format: 'Ladder' });
-      expect(getDisplayFormat(match)).toBe('Ranked');
+      expect(getDisplayFormat(match)).toBe('Constructed');
     });
 
-    it('should fall back to normalized queue type for Play', () => {
+    it('should return Constructed for generic Play queue without DeckFormat', () => {
       const match = createMatch({ DeckFormat: undefined, Format: 'Play' });
-      expect(getDisplayFormat(match)).toBe('Play Queue');
+      expect(getDisplayFormat(match)).toBe('Constructed');
+    });
+
+    it('should return Constructed for Traditional_Ladder without DeckFormat', () => {
+      const match = createMatch({ DeckFormat: undefined, Format: 'Traditional_Ladder' });
+      expect(getDisplayFormat(match)).toBe('Constructed');
+    });
+
+    it('should return Constructed for Traditional_Play without DeckFormat', () => {
+      const match = createMatch({ DeckFormat: undefined, Format: 'Traditional_Play' });
+      expect(getDisplayFormat(match)).toBe('Constructed');
     });
 
     it('should handle draft formats without DeckFormat', () => {
@@ -215,14 +225,24 @@ describe('formatNormalization', () => {
     });
 
     describe('matches without DeckFormat', () => {
-      it('should return normalized queue type for Ladder', () => {
-        const match = createMatch({ DeckFormat: undefined, EventName: 'Ladder' });
-        expect(getDisplayEventName(match)).toBe('Ranked');
+      it('should return Constructed Ranked for Ladder without DeckFormat', () => {
+        const match = createMatch({ DeckFormat: undefined, EventName: 'Ladder', Format: 'Ladder' });
+        expect(getDisplayEventName(match)).toBe('Constructed Ranked');
       });
 
-      it('should return normalized queue type for Play', () => {
-        const match = createMatch({ DeckFormat: undefined, EventName: 'Play' });
-        expect(getDisplayEventName(match)).toBe('Play Queue');
+      it('should return Constructed Play Queue for Play without DeckFormat', () => {
+        const match = createMatch({ DeckFormat: undefined, EventName: 'Play', Format: 'Play' });
+        expect(getDisplayEventName(match)).toBe('Constructed Play Queue');
+      });
+
+      it('should return Constructed Traditional Ranked for Traditional_Ladder without DeckFormat', () => {
+        const match = createMatch({ DeckFormat: undefined, EventName: 'Traditional_Ladder', Format: 'Traditional_Ladder' });
+        expect(getDisplayEventName(match)).toBe('Constructed Traditional Ranked');
+      });
+
+      it('should return Constructed Traditional Play for Traditional_Play without DeckFormat', () => {
+        const match = createMatch({ DeckFormat: undefined, EventName: 'Traditional_Play', Format: 'Traditional_Play' });
+        expect(getDisplayEventName(match)).toBe('Constructed Traditional Play');
       });
     });
 
