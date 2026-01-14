@@ -291,3 +291,60 @@ func TestDraftRatingsRepository_GetStaleStats_EmptyDB(t *testing.T) {
 		t.Errorf("expected 0 stale stats, got %d", len(staleStats))
 	}
 }
+
+func TestDraftRatingsRepository_GetCardNameAndSetByArenaID(t *testing.T) {
+	db := setupDraftRatingsTestDB(t)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Error closing database: %v", err)
+		}
+	}()
+
+	repo := NewDraftRatingsRepository(db)
+	ctx := context.Background()
+
+	// Insert a test card
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO draft_card_ratings (set_code, draft_format, arena_id, name, color, rarity, gihwr)
+		VALUES ('TLA', 'QuickDraft', 123456, 'Aang, Avatar Unleashed', 'W', 'mythic', 60.0)
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert test card: %v", err)
+	}
+
+	// Test finding an existing card
+	name, setCode, err := repo.GetCardNameAndSetByArenaID(ctx, "123456")
+	if err != nil {
+		t.Fatalf("GetCardNameAndSetByArenaID returned error: %v", err)
+	}
+	if name != "Aang, Avatar Unleashed" {
+		t.Errorf("expected name 'Aang, Avatar Unleashed', got '%s'", name)
+	}
+	if setCode != "TLA" {
+		t.Errorf("expected setCode 'TLA', got '%s'", setCode)
+	}
+}
+
+func TestDraftRatingsRepository_GetCardNameAndSetByArenaID_NotFound(t *testing.T) {
+	db := setupDraftRatingsTestDB(t)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Error closing database: %v", err)
+		}
+	}()
+
+	repo := NewDraftRatingsRepository(db)
+	ctx := context.Background()
+
+	// Test with a non-existent arena ID
+	name, setCode, err := repo.GetCardNameAndSetByArenaID(ctx, "999999")
+	if err != nil {
+		t.Fatalf("GetCardNameAndSetByArenaID returned error for non-existent card: %v", err)
+	}
+	if name != "" {
+		t.Errorf("expected empty name for non-existent card, got '%s'", name)
+	}
+	if setCode != "" {
+		t.Errorf("expected empty setCode for non-existent card, got '%s'", setCode)
+	}
+}
