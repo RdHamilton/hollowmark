@@ -43,6 +43,8 @@ type DraftRatingsRepository interface {
 
 	// Lookup methods
 	GetSetCodeByArenaID(ctx context.Context, arenaID string) (string, error)
+	// GetCardNameAndSetByArenaID returns the card name and set code for an Arena ID from 17Lands ratings data.
+	// Returns empty strings if the card is not found.
 	GetCardNameAndSetByArenaID(ctx context.Context, arenaID string) (name, setCode string, err error)
 
 	// Staleness tracking methods
