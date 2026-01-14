@@ -448,6 +448,7 @@ func (m *mockDraftRatingsRepo) GetSetsWithRatings(_ context.Context) ([]string, 
 func (m *mockDraftRatingsRepo) SaveCardRating(_ context.Context, _, _ string, _ interface{}) error {
 	return nil
 }
+
 func (m *mockDraftRatingsRepo) GetCardRatings(_ context.Context, _, _ string) (interface{}, error) {
 	return nil, nil
 }
@@ -457,10 +458,10 @@ func TestFetchCardByArenaID_FallbackLogic(t *testing.T) {
 	// This tests the nil check we added
 
 	tests := []struct {
-		name              string
-		ratingsRepoNil    bool
-		arenaIDInRatings  bool
-		expectedBehavior  string
+		name             string
+		ratingsRepoNil   bool
+		arenaIDInRatings bool
+		expectedBehavior string
 	}{
 		{
 			name:             "nil ratingsRepo skips fallback",
