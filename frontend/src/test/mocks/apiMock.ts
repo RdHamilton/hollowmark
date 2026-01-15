@@ -1,4 +1,9 @@
 import { vi } from 'vitest';
+import type {
+  CommunityComparisonResponse,
+  TrendAnalysisResponse,
+  LearningCurveResponse,
+} from '@/services/api/drafts';
 
 // API module mocks for the REST API service
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -90,13 +95,13 @@ export const mockDrafts = {
       worstPeriodWinRate: 0,
       winRateImprovement: 0,
     },
-  })),
+  } as unknown as TrendAnalysisResponse)),
   getLearningCurve: vi.fn(() => Promise.resolve({
     setCode: '',
     improvement: 0,
     isMastered: false,
     periods: [],
-  })),
+  } as unknown as LearningCurveResponse)),
   getCommunityComparison: vi.fn(() => Promise.resolve({
     setCode: 'DSK',
     draftFormat: 'PremierDraft',
@@ -107,7 +112,7 @@ export const mockDrafts = {
     sampleSize: 25,
     rank: 'Above Average',
     archetypeComparison: [],
-  })),
+  } as unknown as CommunityComparisonResponse)),
   getCommunityComparisonBySet: vi.fn(() => Promise.resolve({
     setCode: 'DSK',
     draftFormat: 'PremierDraft',
@@ -118,7 +123,7 @@ export const mockDrafts = {
     sampleSize: 25,
     rank: 'Above Average',
     archetypeComparison: [],
-  })),
+  } as unknown as CommunityComparisonResponse)),
   getAllCommunityComparisons: vi.fn(() => Promise.resolve([])),
 };
 

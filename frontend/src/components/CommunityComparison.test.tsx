@@ -5,10 +5,22 @@ import CommunityComparison from './CommunityComparison';
 import { mockDrafts } from '@/test/mocks/apiMock';
 import { analytics } from '@/types/models';
 
+type CommunityComparisonInput = {
+  setCode: string;
+  draftFormat: string;
+  userWinRate: number;
+  communityAvgWinRate: number;
+  winRateDelta: number;
+  percentileRank: number;
+  sampleSize: number;
+  rank: string;
+  archetypeComparison?: analytics.ArchetypeComparisonEntry[];
+};
+
 function createMockComparison(
-  overrides: Partial<analytics.CommunityComparisonResponse> = {}
+  overrides: Partial<CommunityComparisonInput> = {}
 ): analytics.CommunityComparisonResponse {
-  return new analytics.CommunityComparisonResponse({
+  const defaultData: CommunityComparisonInput = {
     setCode: 'DSK',
     draftFormat: 'PremierDraft',
     userWinRate: 0.58,
@@ -39,8 +51,8 @@ function createMockComparison(
         isAboveCommunity: false,
       },
     ],
-    ...overrides,
-  });
+  };
+  return new analytics.CommunityComparisonResponse({ ...defaultData, ...overrides });
 }
 
 describe('CommunityComparison Component', () => {

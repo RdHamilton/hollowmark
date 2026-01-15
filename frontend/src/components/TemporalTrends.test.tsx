@@ -5,10 +5,51 @@ import TemporalTrends from './TemporalTrends';
 import { mockDrafts } from '@/test/mocks/apiMock';
 import { analytics } from '@/types/models';
 
+type TrendEntryInput = {
+  periodStart: string;
+  periodEnd: string;
+  draftsCount: number;
+  matchesPlayed: number;
+  matchesWon: number;
+  winRate: number;
+  avgDraftGrade?: number;
+};
+
+type TrendSummaryInput = {
+  totalDrafts: number;
+  totalMatches: number;
+  totalWins: number;
+  overallWinRate: number;
+  bestPeriodWinRate: number;
+  worstPeriodWinRate: number;
+  winRateImprovement: number;
+};
+
+type TrendAnalysisInput = {
+  periodType: string;
+  setCode?: string;
+  direction: string;
+  trends: TrendEntryInput[];
+  summary: TrendSummaryInput;
+};
+
+type LearningPeriodInput = {
+  draftNumber: number;
+  winRate: number;
+  cumulative: number;
+};
+
+type LearningCurveInput = {
+  setCode: string;
+  improvement: number;
+  isMastered: boolean;
+  periods: LearningPeriodInput[];
+};
+
 function createMockTrendAnalysis(
-  overrides: Partial<analytics.TrendAnalysisResponse> = {}
+  overrides: Partial<TrendAnalysisInput> = {}
 ): analytics.TrendAnalysisResponse {
-  return new analytics.TrendAnalysisResponse({
+  const defaultData: TrendAnalysisInput = {
     periodType: 'weekly',
     setCode: undefined,
     direction: 'improving',
@@ -41,14 +82,14 @@ function createMockTrendAnalysis(
       worstPeriodWinRate: 0.53,
       winRateImprovement: 0.09,
     },
-    ...overrides,
-  });
+  };
+  return new analytics.TrendAnalysisResponse({ ...defaultData, ...overrides });
 }
 
 function createMockLearningCurve(
-  overrides: Partial<analytics.LearningCurveResponse> = {}
+  overrides: Partial<LearningCurveInput> = {}
 ): analytics.LearningCurveResponse {
-  return new analytics.LearningCurveResponse({
+  const defaultData: LearningCurveInput = {
     setCode: 'DSK',
     improvement: 0.15,
     isMastered: true,
@@ -59,8 +100,8 @@ function createMockLearningCurve(
       { draftNumber: 4, winRate: 0.55, cumulative: 0.51 },
       { draftNumber: 5, winRate: 0.7, cumulative: 0.55 },
     ],
-    ...overrides,
-  });
+  };
+  return new analytics.LearningCurveResponse({ ...defaultData, ...overrides });
 }
 
 describe('TemporalTrends Component', () => {
