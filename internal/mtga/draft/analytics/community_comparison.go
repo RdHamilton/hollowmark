@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/ramonehamilton/MTGA-Companion/internal/storage/models"
@@ -12,6 +13,7 @@ import (
 type CommunityComparisonAnalyzer struct {
 	draftRepo       repository.DraftRepository
 	analyticsRepo   repository.DraftAnalyticsRepository
+	matchRepo       repository.MatchRepository
 	ratingsProvider RatingsProvider
 }
 
@@ -34,7 +36,22 @@ func NewCommunityComparisonAnalyzer(
 	}
 }
 
-// CompareToCommunit compares user performance to 17Lands community averages.
+// NewCommunityComparisonAnalyzerWithMatches creates a new analyzer with match repository for fallback queries.
+func NewCommunityComparisonAnalyzerWithMatches(
+	draftRepo repository.DraftRepository,
+	analyticsRepo repository.DraftAnalyticsRepository,
+	matchRepo repository.MatchRepository,
+	ratingsProvider RatingsProvider,
+) *CommunityComparisonAnalyzer {
+	return &CommunityComparisonAnalyzer{
+		draftRepo:       draftRepo,
+		analyticsRepo:   analyticsRepo,
+		matchRepo:       matchRepo,
+		ratingsProvider: ratingsProvider,
+	}
+}
+
+// CompareToCommunity compares user performance to 17Lands community averages.
 func (c *CommunityComparisonAnalyzer) CompareToCommunity(ctx context.Context, setCode, draftFormat string) (*models.DraftCommunityComparison, error) {
 	// Calculate user's win rate for this set/format
 	sessions, err := c.draftRepo.GetCompletedSessions(ctx, 1000)
@@ -58,6 +75,33 @@ func (c *CommunityComparisonAnalyzer) CompareToCommunity(ctx context.Context, se
 			userMatches++
 			if r.Result == "win" {
 				userWins++
+			}
+		}
+	}
+
+	// Fallback: If no results in draft_match_results, query matches table directly
+	// Draft matches have formats like "QuickDraft_TLA_20251127" containing the set code
+	if userMatches == 0 && c.matchRepo != nil {
+		filter := models.StatsFilter{}
+		matches, err := c.matchRepo.GetMatches(ctx, filter)
+		if err == nil {
+			for _, match := range matches {
+				// Check if this match is from a draft for this set and format
+				format := match.Format
+				eventName := match.EventName
+				isDraftMatch := strings.Contains(format, "Draft") || strings.Contains(eventName, "Draft")
+				containsSetCode := strings.Contains(format, setCode) || strings.Contains(eventName, setCode)
+
+				// Check if format matches the requested draft format (e.g., "PremierDraft", "QuickDraft")
+				// Format strings look like "QuickDraft_TLA_20251127" or "PremierDraft_TLA_20251127"
+				matchesFormat := draftFormat == "" || strings.Contains(format, draftFormat) || strings.Contains(eventName, draftFormat)
+
+				if isDraftMatch && containsSetCode && matchesFormat {
+					userMatches++
+					if match.Result == "win" {
+						userWins++
+					}
+				}
 			}
 		}
 	}
