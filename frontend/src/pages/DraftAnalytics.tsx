@@ -17,8 +17,8 @@ const DraftAnalytics: React.FC = () => {
       try {
         const formats = await apiAdapter.drafts.getDraftFormats();
         setAvailableSets(formats);
-        if (formats.length > 0 && !selectedSet) {
-          setSelectedSet(formats[0]);
+        if (formats.length > 0) {
+          setSelectedSet((currentSet) => currentSet || formats[0]);
         }
       } catch (err) {
         console.error('Failed to fetch draft formats:', err);
@@ -27,7 +27,7 @@ const DraftAnalytics: React.FC = () => {
       }
     }
     fetchSets();
-  }, [selectedSet]);
+  }, []);
 
   if (loading) {
     return (

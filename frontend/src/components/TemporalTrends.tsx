@@ -216,7 +216,19 @@ const TemporalTrends: React.FC<TemporalTrendsProps> = ({
           <ComposedChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#444" />
             <XAxis dataKey="label" stroke="#aaa" tick={{ fontSize: 12 }} />
-            <YAxis stroke="#aaa" domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
+            <YAxis
+              yAxisId={0}
+              stroke="#aaa"
+              domain={[0, 100]}
+              tickFormatter={(value) => `${value}%`}
+            />
+            <YAxis
+              yAxisId={1}
+              orientation="right"
+              stroke="#82ca9d"
+              tick={{ fontSize: 11 }}
+              allowDecimals={false}
+            />
             <Tooltip
               contentStyle={{ backgroundColor: '#2d2d2d', border: '1px solid #444' }}
               formatter={(value: number, name: string) => {
@@ -232,6 +244,7 @@ const TemporalTrends: React.FC<TemporalTrendsProps> = ({
               fill="#4a9eff33"
               stroke="#4a9eff"
               name="Win Rate"
+              yAxisId={0}
             />
             <Line
               type="monotone"
@@ -239,7 +252,7 @@ const TemporalTrends: React.FC<TemporalTrendsProps> = ({
               stroke="#82ca9d"
               strokeDasharray="5 5"
               name="Drafts"
-              yAxisId={0}
+              yAxisId={1}
               dot={false}
             />
           </ComposedChart>
