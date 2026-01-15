@@ -1,4 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Unmock the standard module first (it's mocked globally in setup.ts)
+// so we can test the actual implementation
+vi.unmock('@/services/api/standard');
+vi.unmock('../standard');
+
 import * as standard from '../standard';
 
 // Mock the apiClient

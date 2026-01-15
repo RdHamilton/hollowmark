@@ -125,9 +125,11 @@ func (s *SystemFacade) Initialize(ctx context.Context, dbPath string) error {
 	cardProvider := NewLocalFirstCardProvider(setCardRepo, draftRatingsRepo, cardService, cards.NewScryfallClient())
 	s.services.DeckExporter = deckexport.NewExporter(cardProvider)
 
-	// Initialize RecommendationEngine (depends on CardService, SetCardRepo, and DraftRatingsRepo)
+	// Initialize RecommendationEngine (depends on CardService, SetCardRepo, CollectionRepo, and DraftRatingsRepo)
 	ratingsRepo := s.services.Storage.DraftRatingsRepo()
-	s.services.RecommendationEngine = recommendations.NewRuleBasedEngineWithSetRepo(cardService, setCardRepo, ratingsRepo)
+	recEngine := recommendations.NewRuleBasedEngineWithSetRepo(cardService, setCardRepo, ratingsRepo)
+	recEngine.SetCollectionRepo(s.services.Storage.CollectionRepo())
+	s.services.RecommendationEngine = recEngine
 
 	log.Println("Card services initialized successfully")
 

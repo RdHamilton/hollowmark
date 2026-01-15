@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { drafts } from '@/services/api';
 import { gui } from '@/types/models';
+import CardHoverPreview from './CardHoverPreview';
 import './RecommendationCard.css';
 
 interface RecommendationCardProps {
@@ -18,6 +19,7 @@ export default function RecommendationCard({
   const [detailedExplanation, setDetailedExplanation] = useState<string | null>(null);
   const [loadingExplanation, setLoadingExplanation] = useState(false);
   const [explanationError, setExplanationError] = useState<string | null>(null);
+  const [hoverPosition, setHoverPosition] = useState<{ x: number; y: number } | null>(null);
 
   const handleShowDetails = async () => {
     if (showDetails) {
@@ -66,14 +68,48 @@ export default function RecommendationCard({
 
   const rec = recommendation;
 
+  const handleMouseEnter = (event: React.MouseEvent) => {
+    if (!rec.imageURI) return;
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    // Position to the left of the card row, ensuring it stays on screen
+    const previewWidth = 280;
+    let x = rect.left - previewWidth - 10;
+    let y = rect.top;
+
+    // If it would go off the left edge, show on the right instead
+    if (x < 10) {
+      x = rect.right + 10;
+    }
+
+    // Keep within vertical bounds
+    const previewHeight = 450;
+    if (y + previewHeight > window.innerHeight - 20) {
+      y = window.innerHeight - previewHeight - 20;
+    }
+    if (y < 10) {
+      y = 10;
+    }
+
+    setHoverPosition({ x, y });
+  };
+
+  const handleMouseLeave = () => {
+    setHoverPosition(null);
+  };
+
   return (
-    <div className={`recommendation-card ${showDetails ? 'expanded' : ''}`}>
+    <div
+      className={`recommendation-card ${showDetails ? 'expanded' : ''}`}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
       <div className="rec-card-main">
         {rec.imageURI && (
           <img src={rec.imageURI} alt={rec.name} className="rec-card-image" />
         )}
         <div className="rec-card-info">
-          <div className="rec-card-name">{rec.name}</div>
+          <div className="rec-card-name" title={rec.name}>{rec.name}</div>
           <div className="rec-card-type">{rec.typeLine}</div>
           {rec.manaCost && <div className="rec-card-mana">{rec.manaCost}</div>}
           <div className="rec-score-summary">
@@ -198,6 +234,20 @@ export default function RecommendationCard({
             </span>
           </div>
         </div>
+      )}
+
+      {/* Hover Preview - Shared component with full details */}
+      {hoverPosition && rec.imageURI && (
+        <CardHoverPreview
+          imageURL={rec.imageURI}
+          name={rec.name}
+          typeLine={rec.typeLine}
+          manaCost={rec.manaCost}
+          score={rec.score}
+          confidence={rec.confidence}
+          reasoning={rec.reasoning}
+          position={hoverPosition}
+        />
       )}
     </div>
   );

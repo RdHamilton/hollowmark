@@ -163,6 +163,15 @@ export const mockNotes = {
   getPriorityColor: vi.fn((() => 'text-gray-400') as MockFn),
 };
 
+export const mockStandard = {
+  getStandardSets: vi.fn((() => Promise.resolve([] as unknown[])) as MockFn),
+  getUpcomingRotation: vi.fn((() => Promise.resolve({} as unknown)) as MockFn),
+  getRotationAffectedDecks: vi.fn((() => Promise.resolve([] as unknown[])) as MockFn),
+  getStandardConfig: vi.fn((() => Promise.resolve({} as unknown)) as MockFn),
+  validateDeckStandard: vi.fn((() => Promise.resolve({ isLegal: true, errors: [], warnings: [], setBreakdown: [] })) as MockFn),
+  getCardLegality: vi.fn((() => Promise.resolve({} as unknown)) as MockFn),
+};
+
 export const mockMLSuggestions = {
   getMLSuggestions: vi.fn((() => Promise.resolve([] as unknown[])) as MockFn),
   generateMLSuggestions: vi.fn((() => Promise.resolve([] as unknown[])) as MockFn),
@@ -253,6 +262,7 @@ export const mockApi = {
   system: mockSystem,
   notes: mockNotes,
   mlSuggestions: mockMLSuggestions,
+  standard: mockStandard,
 };
 
 // Legacy mock kept for backwards compatibility with tests that haven't migrated
@@ -394,6 +404,9 @@ export function resetMocks() {
     if (vi.isMockFunction(mock)) mock.mockClear();
   });
   Object.values(mockMLSuggestions).forEach((mock) => {
+    if (vi.isMockFunction(mock)) mock.mockClear();
+  });
+  Object.values(mockStandard).forEach((mock) => {
     if (vi.isMockFunction(mock)) mock.mockClear();
   });
   Object.values(mockWailsApp).forEach((mock) => {

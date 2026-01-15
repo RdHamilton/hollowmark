@@ -53,10 +53,12 @@ func NewService(options ServiceOptions) (*Service, error) {
 // GetCardRatings fetches card ratings for a set and format.
 // Strategy:
 // 1. Try S3 public datasets first (recommended approach)
-// 2. If S3 fails or dataset doesn't exist, fall back to web API
+// 2. If S3 data is found, merge Arena IDs and Scryfall URLs from web API
+// 3. If S3 fails or dataset doesn't exist, fall back to web API
 //
 // This ensures we use the recommended datasets when available while
 // still supporting newer sets like TLA that only have web API data.
+// The web API provides Arena IDs (mtga_id) and Scryfall URLs that CSV doesn't have.
 func (s *Service) GetCardRatings(ctx context.Context, setCode, format string) ([]seventeenlands.CardRating, error) {
 	log.Printf("[DatasetService] Fetching card ratings for %s / %s", setCode, format)
 
@@ -64,7 +66,17 @@ func (s *Service) GetCardRatings(ctx context.Context, setCode, format string) ([
 	ratings, err := s.tryS3Dataset(ctx, setCode, format)
 	if err == nil && len(ratings) > 0 {
 		log.Printf("[DatasetService] Successfully fetched %d ratings from S3 datasets", len(ratings))
-		return ratings, nil
+
+		// Merge Arena IDs and Scryfall URLs from web API
+		// This is needed because CSV files don't contain card identifiers
+		mergedRatings, mergeErr := s.mergeWebAPIMetadata(ctx, ratings, setCode, format)
+		if mergeErr != nil {
+			log.Printf("[DatasetService] Warning: failed to merge web API metadata: %v", mergeErr)
+			// Return CSV ratings without identifiers as fallback
+			return ratings, nil
+		}
+		log.Printf("[DatasetService] Merged %d ratings with web API metadata", len(mergedRatings))
+		return mergedRatings, nil
 	}
 
 	// Log S3 failure but continue to fallback
@@ -86,6 +98,39 @@ func (s *Service) GetCardRatings(ctx context.Context, setCode, format string) ([
 
 	log.Printf("[DatasetService] Successfully fetched %d ratings from web API (fallback)", len(ratings))
 	return ratings, nil
+}
+
+// mergeWebAPIMetadata fetches card metadata (Arena IDs, Scryfall URLs) from the web API
+// and merges them into CSV-parsed ratings based on card name.
+func (s *Service) mergeWebAPIMetadata(ctx context.Context, csvRatings []seventeenlands.CardRating, setCode, format string) ([]seventeenlands.CardRating, error) {
+	// Fetch web API data for card identifiers
+	webRatings, err := s.webScraper.FetchCardRatings(ctx, setCode, format)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch web API metadata: %w", err)
+	}
+
+	// Build name-to-metadata lookup map from web API data
+	webMetadataByName := make(map[string]*seventeenlands.CardRating)
+	for i := range webRatings {
+		webMetadataByName[webRatings[i].Name] = &webRatings[i]
+	}
+
+	// Merge metadata into CSV ratings
+	mergedCount := 0
+	for i := range csvRatings {
+		if webData, ok := webMetadataByName[csvRatings[i].Name]; ok {
+			// Copy identifiers from web API
+			csvRatings[i].MTGAID = webData.MTGAID // Arena ID
+			csvRatings[i].URL = webData.URL       // Scryfall image URL (contains Scryfall ID)
+			csvRatings[i].URLBack = webData.URLBack
+			csvRatings[i].Color = webData.Color   // Color from web API is more reliable
+			csvRatings[i].Rarity = webData.Rarity // Rarity from web API is more reliable
+			mergedCount++
+		}
+	}
+
+	log.Printf("[DatasetService] Merged metadata for %d/%d cards", mergedCount, len(csvRatings))
+	return csvRatings, nil
 }
 
 // tryS3Dataset attempts to download and parse a dataset from S3.
