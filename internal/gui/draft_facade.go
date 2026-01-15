@@ -1731,11 +1731,12 @@ func (d *DraftFacade) GetCommunityComparison(ctx context.Context, setCode, draft
 		draftFormat = "PremierDraft"
 	}
 
-	// Create community comparison analyzer with default 17Lands provider
+	// Create community comparison analyzer with default 17Lands provider and match repo for fallback
 	provider := analytics.NewDefault17LandsProvider()
-	analyzer := analytics.NewCommunityComparisonAnalyzer(
+	analyzer := analytics.NewCommunityComparisonAnalyzerWithMatches(
 		d.services.Storage.DraftRepo(),
 		d.services.Storage.DraftAnalyticsRepo(),
+		d.services.Storage.MatchRepo(),
 		provider,
 	)
 
