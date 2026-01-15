@@ -2365,6 +2365,17 @@ func (d *DeckFacade) SuggestDecks(ctx context.Context, draftEventID string) (*Su
 		}
 	}
 
+	// Ensure set cards are cached before suggesting decks
+	// This is critical for Arena-exclusive sets (like TLA) that need 17Lands data
+	if setCode != "" && d.services.SetFetcher != nil {
+		log.Printf("[SuggestDecks] Ensuring set %s is cached...", setCode)
+		_, fetchErr := d.services.SetFetcher.FetchAndCacheSet(ctx, setCode)
+		if fetchErr != nil {
+			log.Printf("[SuggestDecks] Warning: Failed to cache set %s: %v", setCode, fetchErr)
+			// Continue anyway - we may have partial data
+		}
+	}
+
 	// Get all cards from the draft session
 	draftPool, err := d.services.Storage.DeckRepo().GetDraftCards(ctx, draftEventID)
 	if err != nil {

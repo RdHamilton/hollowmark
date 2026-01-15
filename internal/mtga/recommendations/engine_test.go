@@ -1651,3 +1651,59 @@ func containsHelper(s, substr string) bool {
 	}
 	return false
 }
+
+// TestGetRecommendations_ConstructedDeck tests that constructed decks require
+// proper engine initialization (fixes #904).
+func TestGetRecommendations_ConstructedDeck(t *testing.T) {
+	ctx := context.Background()
+
+	// Create a mock deck with cards from a specific set
+	deck := &DeckContext{
+		Deck: &models.Deck{
+			ID:     "test-constructed-deck",
+			Format: "standard",
+		},
+		Cards: []*models.DeckCard{
+			{CardID: 1, Quantity: 4, Board: "main"},
+			{CardID: 2, Quantity: 4, Board: "main"},
+		},
+		CardMetadata: map[int]*cards.Card{
+			1: {
+				ArenaID:  1,
+				Name:     "Sheoldred, the Apocalypse",
+				SetCode:  "DMU",
+				Colors:   []string{"B"},
+				TypeLine: "Legendary Creature — Phyrexian Praetor",
+				CMC:      4,
+			},
+			2: {
+				ArenaID:  2,
+				Name:     "Cut Down",
+				SetCode:  "DMU",
+				Colors:   []string{"B"},
+				TypeLine: "Instant",
+				CMC:      1,
+			},
+		},
+		Format: "standard",
+	}
+
+	filters := &Filters{
+		MaxResults:    10,
+		MinScore:      0.3,
+		IncludeLands:  true,
+		OnlyDraftPool: false, // This is a constructed deck
+	}
+
+	t.Run("returns error without cardService", func(t *testing.T) {
+		// Engine requires cardService to be initialized
+		engine := NewRuleBasedEngine(nil, nil)
+		_, err := engine.GetRecommendations(ctx, deck, filters)
+		if err == nil {
+			t.Fatal("Expected error when cardService is nil")
+		}
+		if err.Error() != "card service is not initialized" {
+			t.Errorf("Unexpected error: %v", err)
+		}
+	})
+}
