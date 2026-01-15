@@ -263,12 +263,16 @@ export default function DeckBuilder() {
     }
   }, [deckID, draftEventID, updateCurrentState]);
 
+  // Calculate total cards (including quantities) for validation triggering
+  const totalCardCount = cards.reduce((sum, card) => sum + card.Quantity, 0);
+
   // Validate deck for legality when deck loads or cards change
+  // Use totalCardCount instead of cards.length to trigger validation when quantities change
   useEffect(() => {
-    if (deck && deck.Format === 'standard' && cards.length > 0) {
+    if (deck && deck.Format === 'standard' && totalCardCount > 0) {
       validateDeck(deck.ID);
     }
-  }, [deck, cards.length, validateDeck]);
+  }, [deck, totalCardCount, validateDeck]);
 
   const handleAddCard = async (cardID: number, quantity: number, board: 'main' | 'sideboard') => {
     if (!deck) return;

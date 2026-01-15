@@ -10,6 +10,16 @@ vi.mock('@/services/websocketClient', () => mockWailsRuntime);
 // Mock the REST API modules globally
 vi.mock('@/services/api', () => mockApi);
 
+// Mock individual API modules that are imported directly
+vi.mock('@/services/api/standard', () => ({
+  validateDeckStandard: vi.fn(() => Promise.resolve({ isLegal: true, errors: [], warnings: [], setBreakdown: [] })),
+  getStandardSets: vi.fn(() => Promise.resolve([])),
+  getUpcomingRotation: vi.fn(() => Promise.resolve({})),
+  getRotationAffectedDecks: vi.fn(() => Promise.resolve([])),
+  getStandardConfig: vi.fn(() => Promise.resolve({})),
+  getCardLegality: vi.fn(() => Promise.resolve({})),
+}));
+
 // Cleanup after each test
 afterEach(() => {
   cleanup();

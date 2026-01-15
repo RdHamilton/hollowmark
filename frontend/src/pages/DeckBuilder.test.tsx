@@ -6,6 +6,10 @@ import DeckBuilder from './DeckBuilder';
 import { mockDecks, mockDrafts, mockCards } from '@/test/mocks/apiMock';
 import { ApiRequestError } from '@/services/apiClient';
 import { models, gui } from '@/types/models';
+import * as standardApi from '@/services/api/standard';
+
+// Get the mocked validateDeckStandard function for assertions
+const mockValidateDeckStandard = vi.mocked(standardApi.validateDeckStandard);
 
 // Mock download utility
 vi.mock('@/utils/download', () => ({
@@ -799,5 +803,81 @@ describe('DeckBuilder Component - Deck Creation from Draft', () => {
     );
 
     consoleErrorSpy.mockRestore();
+  });
+});
+
+describe('DeckBuilder Component - Legality Validation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockNavigate.mockClear();
+    mockParams = { deckID: 'test-deck-id' };
+  });
+
+  it('should trigger validation for Standard deck when total card count changes', async () => {
+    // Create a Standard format deck
+    const mockDeck = createMockDeck({
+      Format: 'standard',
+      Source: 'constructed',
+      DraftEventID: '',
+    });
+    // Initial state: 2 unique cards with total 4+4=8 cards
+    const initialCards = [
+      createMockDeckCard({ ID: 1, CardID: 11111, Quantity: 4, Board: 'main' }),
+      createMockDeckCard({ ID: 2, CardID: 22222, Quantity: 4, Board: 'main' }),
+    ];
+    const mockStats = createMockDeckStatistics({ totalMainboard: 8 });
+
+    // Mock standard validation API
+    mockValidateDeckStandard.mockResolvedValue({
+      isLegal: false,
+      errors: [{ cardId: 0, cardName: '', reason: 'deck_size', details: 'Deck has 8 cards (minimum 60 required)' }],
+      warnings: [],
+      setBreakdown: [],
+    });
+
+    mockDecks.getDeck.mockResolvedValue({
+      deck: mockDeck,
+      cards: initialCards,
+      tags: [],
+    });
+    mockDecks.getDeckStatistics.mockResolvedValue(mockStats);
+
+    render(<DeckBuilder />);
+
+    // Wait for deck to load
+    await waitFor(() => {
+      expect(screen.getByText('Test Deck')).toBeInTheDocument();
+    });
+
+    // Validation should be triggered for Standard deck with cards
+    await waitFor(() => {
+      expect(mockValidateDeckStandard).toHaveBeenCalledWith('test-deck-id');
+    });
+  });
+
+  it('should not trigger validation for Limited format decks', async () => {
+    const mockDeck = createMockDeck({
+      Format: 'limited',
+      Source: 'draft',
+      DraftEventID: 'draft-123',
+    });
+    const mockCardsData = [createMockDeckCard()];
+    const mockStats = createMockDeckStatistics();
+
+    mockDecks.getDeck.mockResolvedValue({
+      deck: mockDeck,
+      cards: mockCardsData,
+      tags: [],
+    });
+    mockDecks.getDeckStatistics.mockResolvedValue(mockStats);
+
+    render(<DeckBuilder />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Deck')).toBeInTheDocument();
+    });
+
+    // Validation should NOT be triggered for Limited format
+    expect(mockValidateDeckStandard).not.toHaveBeenCalled();
   });
 });

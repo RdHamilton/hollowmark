@@ -167,20 +167,27 @@ func (s *DeckSuggester) SuggestDecks(
 
 	// Load all cards from the draft pool
 	poolCards := make([]*cards.Card, 0, len(draftPool))
+	failedCount := 0
+	failedArenaIDs := make([]int, 0)
 	for _, arenaID := range draftPool {
 		card := s.getCard(ctx, arenaID)
 		if card != nil {
 			poolCards = append(poolCards, card)
+		} else {
+			failedCount++
+			if len(failedArenaIDs) < 5 {
+				failedArenaIDs = append(failedArenaIDs, arenaID)
+			}
 		}
 	}
 
 	if len(poolCards) == 0 {
 		return &SuggestDecksResponse{
-			Error: "Could not load any cards from draft pool",
+			Error: fmt.Sprintf("Could not load any cards from draft pool (tried %d arena IDs, sample: %v)", len(draftPool), failedArenaIDs),
 		}, nil
 	}
 
-	log.Printf("SuggestDecks: Loaded %d cards from pool", len(poolCards))
+	log.Printf("SuggestDecks: Loaded %d/%d cards from pool (failed: %d, sample failed IDs: %v)", len(poolCards), len(draftPool), failedCount, failedArenaIDs)
 
 	// Evaluate each color combination
 	suggestions := make([]*SuggestedDeck, 0)
@@ -204,6 +211,25 @@ func (s *DeckSuggester) SuggestDecks(
 
 	if len(suggestions) > 0 {
 		response.BestCombo = &suggestions[0].ColorCombo
+	} else if len(poolCards) > 0 {
+		// No viable combinations found - provide helpful error message
+		// Count total creatures in pool
+		creatureCount := 0
+		for _, card := range poolCards {
+			if containsTypeInTypeLine(card.TypeLine, "Creature") {
+				creatureCount++
+			}
+		}
+
+		if len(poolCards) < 15 {
+			response.Error = fmt.Sprintf("Not enough cards in pool (%d cards). Need at least 15 playable cards for a viable deck. Continue drafting to pick more cards.", len(poolCards))
+		} else if creatureCount < 6 {
+			response.Error = fmt.Sprintf("Not enough creatures in pool (%d creatures). Need at least 6 creatures for a viable deck. Try picking more creatures.", creatureCount)
+		} else {
+			// Cards exist but no color combination has enough depth
+			response.Error = "No color combination has enough playable cards. Your pool may be spread too thin across colors. Focus on 1-2 colors when drafting."
+		}
+		log.Printf("SuggestDecks: No viable combos - poolSize=%d, creatures=%d", len(poolCards), creatureCount)
 	}
 
 	log.Printf("SuggestDecks: Found %d viable color combinations", len(suggestions))
@@ -846,6 +872,11 @@ func (s *DeckSuggester) getCard(ctx context.Context, arenaID int) *cards.Card {
 		if err == nil && setCard != nil {
 			return convertSetCardToCardsCard(setCard)
 		}
+		if err != nil {
+			log.Printf("SuggestDecks: SetCardRepo lookup failed for arenaID=%d: %v", arenaID, err)
+		}
+	} else {
+		log.Printf("SuggestDecks: SetCardRepo is nil, cannot lookup arenaID=%d", arenaID)
 	}
 
 	// Fallback to CardService
@@ -854,8 +885,14 @@ func (s *DeckSuggester) getCard(ctx context.Context, arenaID int) *cards.Card {
 		if err == nil && card != nil {
 			return card
 		}
+		if err != nil {
+			log.Printf("SuggestDecks: CardService lookup failed for arenaID=%d: %v", arenaID, err)
+		}
+	} else {
+		log.Printf("SuggestDecks: CardService is nil, cannot lookup arenaID=%d", arenaID)
 	}
 
+	log.Printf("SuggestDecks: Failed to load card with arenaID=%d from any source", arenaID)
 	return nil
 }
 

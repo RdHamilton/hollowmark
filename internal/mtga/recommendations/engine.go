@@ -80,7 +80,8 @@ type EmbeddingService interface {
 // RuleBasedEngine implements a rule-based recommendation system.
 type RuleBasedEngine struct {
 	cardService      *cards.Service
-	setCardRepo      repository.SetCardRepository // For faster lookups from local DB
+	setCardRepo      repository.SetCardRepository    // For faster lookups from local DB
+	collectionRepo   repository.CollectionRepository // User's collection for constructed suggestions
 	ratingsRepo      repository.DraftRatingsRepository
 	cfbRatingsRepo   repository.CFBRatingsRepository   // ChannelFireball ratings (optional)
 	cooccurrenceRepo repository.CooccurrenceRepository // Co-occurrence data (optional)
@@ -129,6 +130,11 @@ func (e *RuleBasedEngine) SetCooccurrenceRepo(cooccurrenceRepo repository.Cooccu
 // SetEDHRECRepo sets the EDHREC repository for Commander-based synergy data.
 func (e *RuleBasedEngine) SetEDHRECRepo(edhrecRepo repository.EDHRECRepository) {
 	e.edhrecRepo = edhrecRepo
+}
+
+// SetCollectionRepo sets the collection repository for constructed deck recommendations.
+func (e *RuleBasedEngine) SetCollectionRepo(collectionRepo repository.CollectionRepository) {
+	e.collectionRepo = collectionRepo
 }
 
 // SetMTGZoneRepo sets the MTGZone repository for archetype-based recommendations.
@@ -192,9 +198,89 @@ func (e *RuleBasedEngine) GetRecommendations(ctx context.Context, deck *DeckCont
 			}
 		}
 	} else {
-		// For constructed, we'd query all available cards
-		// For now, return empty since we need card database integration
-		return []*CardRecommendation{}, nil
+		// For constructed decks, try collection first, then fall back to set-based suggestions
+		// Get deck's color identity for filtering
+		deckColors := make(map[string]bool)
+		for _, deckCard := range deck.Cards {
+			if card, ok := deck.CardMetadata[deckCard.CardID]; ok {
+				for _, color := range card.Colors {
+					deckColors[color] = true
+				}
+			}
+		}
+
+		candidates = make([]*cards.Card, 0)
+
+		// Try to get candidates from user's collection first (best for constructed)
+		if e.collectionRepo != nil && e.setCardRepo != nil {
+			// GetAll returns map[int]int (cardID -> quantity)
+			collectionMap, err := e.collectionRepo.GetAll(ctx)
+			if err == nil && len(collectionMap) > 0 {
+				for arenaID, quantity := range collectionMap {
+					// Skip if quantity is 0
+					if quantity == 0 {
+						continue
+					}
+					// Get card metadata from SetCardRepo
+					setCard, err := e.setCardRepo.GetCardByArenaID(ctx, fmt.Sprintf("%d", arenaID))
+					if err == nil && setCard != nil {
+						card := convertSetCardToCardsCard(setCard)
+						// Only include cards that match deck's color identity or are colorless
+						if len(card.Colors) == 0 {
+							candidates = append(candidates, card)
+						} else {
+							matchesColors := true
+							for _, color := range card.Colors {
+								if !deckColors[color] {
+									matchesColors = false
+									break
+								}
+							}
+							if matchesColors {
+								candidates = append(candidates, card)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Fall back to set-based suggestions if collection is empty or unavailable
+		if len(candidates) == 0 && e.setCardRepo != nil {
+			// Get unique set codes from deck cards
+			setCodesMap := make(map[string]bool)
+			for _, deckCard := range deck.Cards {
+				if card, ok := deck.CardMetadata[deckCard.CardID]; ok && card.SetCode != "" {
+					setCodesMap[card.SetCode] = true
+				}
+			}
+
+			// Query cards from each set that match deck colors
+			for setCode := range setCodesMap {
+				setCards, err := e.setCardRepo.GetCardsBySet(ctx, setCode)
+				if err != nil {
+					continue
+				}
+				for _, setCard := range setCards {
+					card := convertSetCardToCardsCard(setCard)
+					// Only include cards that match deck's color identity or are colorless
+					if len(card.Colors) == 0 {
+						candidates = append(candidates, card)
+					} else {
+						matchesColors := true
+						for _, color := range card.Colors {
+							if !deckColors[color] {
+								matchesColors = false
+								break
+							}
+						}
+						if matchesColors {
+							candidates = append(candidates, card)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Score each candidate
