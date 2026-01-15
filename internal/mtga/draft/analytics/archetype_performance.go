@@ -150,9 +150,10 @@ func (a *ArchetypePerformanceAnalyzer) LinkDraftToMatches(ctx context.Context, s
 		startTime = *session.EndTime
 	}
 
+	// Don't filter by format - isMatchFromDraft will filter to draft-related matches
+	// Draft matches have formats like "QuickDraft_TLA_20251127" not "Ladder" or "Play"
 	filter := models.StatsFilter{
 		StartDate: &startTime,
-		Formats:   []string{"Ladder", "Play"},
 	}
 
 	matches, err := a.matchRepo.GetMatches(ctx, filter)

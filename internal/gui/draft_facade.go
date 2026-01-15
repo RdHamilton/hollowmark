@@ -11,6 +11,7 @@ import (
 	"github.com/ramonehamilton/MTGA-Companion/internal/export"
 	"github.com/ramonehamilton/MTGA-Companion/internal/metrics"
 	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/cards/seventeenlands"
+	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/draft/analytics"
 	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/draft/grading"
 	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/draft/insights"
 	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/draft/pickquality"
@@ -1646,4 +1647,142 @@ func (d *DraftFacade) GetExportableDrafts(ctx context.Context, limit int) ([]*mo
 	}
 
 	return sessions, nil
+}
+
+// GetTemporalTrends returns calculated temporal performance trends.
+// periodType should be "weekly" or "monthly".
+// numPeriods specifies how many periods to return (default 12).
+func (d *DraftFacade) GetTemporalTrends(ctx context.Context, periodType string, numPeriods int, setCode *string) (*analytics.TrendAnalysisResponse, error) {
+	if d.services.Storage == nil {
+		return nil, &AppError{Message: "Database not initialized"}
+	}
+
+	if numPeriods <= 0 {
+		numPeriods = 12
+	}
+
+	// Create trend analyzer
+	analyzer := analytics.NewTemporalTrendAnalyzer(
+		d.services.Storage.DraftRepo(),
+		d.services.Storage.DraftAnalyticsRepo(),
+	)
+
+	// Calculate trends based on period type
+	var trends []*models.DraftTemporalTrend
+	var err error
+
+	switch periodType {
+	case "weekly", models.PeriodTypeWeek:
+		trends, err = analyzer.CalculateWeeklyTrends(ctx, numPeriods, setCode)
+	case "monthly", models.PeriodTypeMonth:
+		trends, err = analyzer.CalculateMonthlyTrends(ctx, numPeriods, setCode)
+	default:
+		trends, err = analyzer.CalculateWeeklyTrends(ctx, numPeriods, setCode)
+		periodType = models.PeriodTypeWeek
+	}
+
+	if err != nil {
+		return nil, &AppError{Message: fmt.Sprintf("Failed to calculate trends: %v", err)}
+	}
+
+	// Analyze trend direction
+	direction := analyzer.AnalyzeTrendDirection(trends)
+
+	// Build response
+	return analytics.BuildTrendAnalysisResponse(periodType, setCode, trends, direction), nil
+}
+
+// GetLearningCurve returns the learning progression for a specific set.
+// Shows how performance has improved over the course of drafting a set.
+func (d *DraftFacade) GetLearningCurve(ctx context.Context, setCode string) (*analytics.LearningCurveResponse, error) {
+	if d.services.Storage == nil {
+		return nil, &AppError{Message: "Database not initialized"}
+	}
+
+	if setCode == "" {
+		return nil, &AppError{Message: "setCode is required"}
+	}
+
+	// Create trend analyzer
+	analyzer := analytics.NewTemporalTrendAnalyzer(
+		d.services.Storage.DraftRepo(),
+		d.services.Storage.DraftAnalyticsRepo(),
+	)
+
+	curve, err := analyzer.BuildLearningCurve(ctx, setCode)
+	if err != nil {
+		return nil, &AppError{Message: fmt.Sprintf("Failed to build learning curve: %v", err)}
+	}
+
+	return curve, nil
+}
+
+// GetCommunityComparison returns a comparison of user performance vs 17Lands community averages.
+func (d *DraftFacade) GetCommunityComparison(ctx context.Context, setCode, draftFormat string) (*analytics.CommunityComparisonResponse, error) {
+	if d.services.Storage == nil {
+		return nil, &AppError{Message: "Database not initialized"}
+	}
+
+	if setCode == "" {
+		return nil, &AppError{Message: "setCode is required"}
+	}
+
+	if draftFormat == "" {
+		draftFormat = "PremierDraft"
+	}
+
+	// Create community comparison analyzer with default 17Lands provider and match repo for fallback
+	provider := analytics.NewDefault17LandsProvider()
+	analyzer := analytics.NewCommunityComparisonAnalyzerWithMatches(
+		d.services.Storage.DraftRepo(),
+		d.services.Storage.DraftAnalyticsRepo(),
+		d.services.Storage.MatchRepo(),
+		provider,
+	)
+
+	// Get or calculate community comparison
+	comparison, err := analyzer.CompareToCommunity(ctx, setCode, draftFormat)
+	if err != nil {
+		return nil, &AppError{Message: fmt.Sprintf("Failed to calculate community comparison: %v", err)}
+	}
+
+	if comparison == nil {
+		return nil, nil // No data for this set
+	}
+
+	// Get archetype comparison
+	archetypeComparison, err := analyzer.CompareArchetypePerformance(ctx, setCode, draftFormat)
+	if err != nil {
+		// Continue without archetype data
+		archetypeComparison = nil
+	}
+
+	return analytics.BuildCommunityComparisonResponse(comparison, archetypeComparison), nil
+}
+
+// GetAllCommunityComparisons returns all cached community comparisons.
+func (d *DraftFacade) GetAllCommunityComparisons(ctx context.Context) ([]*analytics.CommunityComparisonResponse, error) {
+	if d.services.Storage == nil {
+		return nil, &AppError{Message: "Database not initialized"}
+	}
+
+	// Create analyzer with default provider
+	provider := analytics.NewDefault17LandsProvider()
+	analyzer := analytics.NewCommunityComparisonAnalyzer(
+		d.services.Storage.DraftRepo(),
+		d.services.Storage.DraftAnalyticsRepo(),
+		provider,
+	)
+
+	comparisons, err := analyzer.GetAllComparisons(ctx)
+	if err != nil {
+		return nil, &AppError{Message: fmt.Sprintf("Failed to get community comparisons: %v", err)}
+	}
+
+	var responses []*analytics.CommunityComparisonResponse
+	for _, comp := range comparisons {
+		responses = append(responses, analytics.BuildCommunityComparisonResponse(comp, nil))
+	}
+
+	return responses, nil
 }

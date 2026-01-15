@@ -112,6 +112,10 @@ export const draftsAdapter = {
     return api.drafts.getActiveDraftSessions();
   },
 
+  async getDraftFormats(): Promise<string[]> {
+    return api.drafts.getDraftFormats();
+  },
+
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async getCompletedDraftSessions(_limit = 100): Promise<models.DraftSession[]> {
     return api.drafts.getCompletedDraftSessions();
@@ -127,6 +131,26 @@ export const draftsAdapter = {
 
   async getCardRatings(setCode: string, format: string): Promise<gui.CardRatingWithTier[]> {
     return api.cards.getCardRatings(setCode, format);
+  },
+
+  async getTemporalTrends(request: api.drafts.TemporalTrendsRequest): Promise<api.drafts.TrendAnalysisResponse> {
+    return api.drafts.getTemporalTrends(request);
+  },
+
+  async getLearningCurve(setCode: string): Promise<api.drafts.LearningCurveResponse> {
+    return api.drafts.getLearningCurve(setCode);
+  },
+
+  async getCommunityComparison(request: api.drafts.CommunityComparisonRequest): Promise<api.drafts.CommunityComparisonResponse> {
+    return api.drafts.getCommunityComparison(request);
+  },
+
+  async getCommunityComparisonBySet(setCode: string, format?: string): Promise<api.drafts.CommunityComparisonResponse> {
+    return api.drafts.getCommunityComparisonBySet(setCode, format);
+  },
+
+  async getAllCommunityComparisons(): Promise<api.drafts.CommunityComparisonResponse[]> {
+    return api.drafts.getAllCommunityComparisons();
   },
 };
 

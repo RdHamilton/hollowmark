@@ -11,6 +11,7 @@ import (
 
 	"github.com/ramonehamilton/MTGA-Companion/internal/api/response"
 	"github.com/ramonehamilton/MTGA-Companion/internal/gui"
+	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/draft/analytics"
 	"github.com/ramonehamilton/MTGA-Companion/internal/storage/models"
 )
 
@@ -577,4 +578,144 @@ func (h *DraftHandler) GetExportableDrafts(w http.ResponseWriter, r *http.Reques
 	}
 
 	response.Success(w, drafts)
+}
+
+// TemporalTrendsRequest represents a request for temporal performance trends.
+type TemporalTrendsRequest struct {
+	PeriodType string  `json:"period_type"` // "weekly" or "monthly"
+	NumPeriods int     `json:"num_periods"` // Number of periods to return (default 12)
+	SetCode    *string `json:"set_code"`    // Optional: filter by set
+}
+
+// GetTemporalTrends returns temporal performance trends (win rate over time).
+func (h *DraftHandler) GetTemporalTrends(w http.ResponseWriter, r *http.Request) {
+	var req TemporalTrendsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, errors.New("invalid request body"))
+		return
+	}
+
+	// Defaults
+	if req.PeriodType == "" {
+		req.PeriodType = "weekly"
+	}
+	if req.NumPeriods <= 0 {
+		req.NumPeriods = 12
+	}
+
+	trends, err := h.facade.GetTemporalTrends(r.Context(), req.PeriodType, req.NumPeriods, req.SetCode)
+	if err != nil {
+		response.InternalError(w, err)
+		return
+	}
+
+	response.Success(w, trends)
+}
+
+// GetLearningCurve returns the learning curve for a specific set.
+func (h *DraftHandler) GetLearningCurve(w http.ResponseWriter, r *http.Request) {
+	setCode := chi.URLParam(r, "setCode")
+	if setCode == "" {
+		response.BadRequest(w, errors.New("set code is required"))
+		return
+	}
+
+	curve, err := h.facade.GetLearningCurve(r.Context(), setCode)
+	if err != nil {
+		response.InternalError(w, err)
+		return
+	}
+
+	response.Success(w, curve)
+}
+
+// CommunityComparisonRequest represents a request for community comparison.
+type CommunityComparisonRequest struct {
+	SetCode     string `json:"set_code"`
+	DraftFormat string `json:"draft_format"` // Optional, defaults to "PremierDraft"
+}
+
+// GetCommunityComparison returns a comparison of user performance vs community averages.
+func (h *DraftHandler) GetCommunityComparison(w http.ResponseWriter, r *http.Request) {
+	var req CommunityComparisonRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, errors.New("invalid request body"))
+		return
+	}
+
+	if req.SetCode == "" {
+		response.BadRequest(w, errors.New("set_code is required"))
+		return
+	}
+
+	comparison, err := h.facade.GetCommunityComparison(r.Context(), req.SetCode, req.DraftFormat)
+	if err != nil {
+		response.InternalError(w, err)
+		return
+	}
+
+	if comparison == nil {
+		// Return empty response with sampleSize=0 for proper frontend handling
+		draftFmt := req.DraftFormat
+		if draftFmt == "" {
+			draftFmt = "PremierDraft"
+		}
+		response.Success(w, &analytics.CommunityComparisonResponse{
+			SetCode:     req.SetCode,
+			DraftFormat: draftFmt,
+			SampleSize:  0,
+			Rank:        "",
+		})
+		return
+	}
+
+	response.Success(w, comparison)
+}
+
+// GetCommunityComparisonBySet returns community comparison for a specific set (from URL param).
+func (h *DraftHandler) GetCommunityComparisonBySet(w http.ResponseWriter, r *http.Request) {
+	setCode := chi.URLParam(r, "setCode")
+	if setCode == "" {
+		response.BadRequest(w, errors.New("set code is required"))
+		return
+	}
+
+	draftFormat := r.URL.Query().Get("format")
+	if draftFormat == "" {
+		draftFormat = "PremierDraft"
+	}
+
+	comparison, err := h.facade.GetCommunityComparison(r.Context(), setCode, draftFormat)
+	if err != nil {
+		response.InternalError(w, err)
+		return
+	}
+
+	if comparison == nil {
+		// Return empty response with sampleSize=0 for proper frontend handling
+		response.Success(w, &analytics.CommunityComparisonResponse{
+			SetCode:     setCode,
+			DraftFormat: draftFormat,
+			SampleSize:  0,
+			Rank:        "",
+		})
+		return
+	}
+
+	response.Success(w, comparison)
+}
+
+// GetAllCommunityComparisons returns all cached community comparisons.
+func (h *DraftHandler) GetAllCommunityComparisons(w http.ResponseWriter, r *http.Request) {
+	comparisons, err := h.facade.GetAllCommunityComparisons(r.Context())
+	if err != nil {
+		response.InternalError(w, err)
+		return
+	}
+
+	if comparisons == nil {
+		comparisons = []*analytics.CommunityComparisonResponse{}
+	}
+
+	response.Success(w, comparisons)
 }

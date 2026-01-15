@@ -4,7 +4,7 @@
  */
 
 import { get, post } from '../apiClient';
-import { models, gui, grading, metrics, insights, pickquality, prediction } from '@/types/models';
+import { models, gui, grading, metrics, insights, pickquality, prediction, analytics } from '@/types/models';
 
 // Re-export types for convenience
 export type DraftSession = models.DraftSession;
@@ -367,4 +367,77 @@ export async function exportDraftTo17Lands(sessionId: string): Promise<ExportDra
 export async function getExportableDrafts(limit?: number): Promise<DraftSession[]> {
   const params = limit ? `?limit=${limit}` : '';
   return get<DraftSession[]>(`/drafts/exportable${params}`);
+}
+
+// Export analytics types for convenience
+export type TrendAnalysisResponse = analytics.TrendAnalysisResponse;
+export type TrendEntry = analytics.TrendEntry;
+export type TrendSummary = analytics.TrendSummary;
+export type LearningCurveResponse = analytics.LearningCurveResponse;
+export type LearningPeriodEntry = analytics.LearningPeriodEntry;
+
+/**
+ * Request for temporal trends analysis.
+ */
+export interface TemporalTrendsRequest {
+  period_type: 'weekly' | 'monthly';
+  num_periods?: number;
+  set_code?: string;
+}
+
+/**
+ * Get temporal performance trends (win rate over time).
+ */
+export async function getTemporalTrends(
+  request: TemporalTrendsRequest
+): Promise<TrendAnalysisResponse> {
+  return post<TrendAnalysisResponse>('/drafts/trends', request);
+}
+
+/**
+ * Get learning curve for a specific set.
+ * Shows improvement over the course of drafting a set.
+ */
+export async function getLearningCurve(setCode: string): Promise<LearningCurveResponse> {
+  return get<LearningCurveResponse>(`/drafts/learning-curve/${setCode}`);
+}
+
+// Export community comparison types for convenience
+export type CommunityComparisonResponse = analytics.CommunityComparisonResponse;
+export type ArchetypeComparisonEntry = analytics.ArchetypeComparisonEntry;
+
+/**
+ * Request for community comparison.
+ */
+export interface CommunityComparisonRequest {
+  set_code: string;
+  draft_format?: string;
+}
+
+/**
+ * Get community comparison for a specific set/format.
+ * Compares user performance vs 17Lands community averages.
+ */
+export async function getCommunityComparison(
+  request: CommunityComparisonRequest
+): Promise<CommunityComparisonResponse> {
+  return post<CommunityComparisonResponse>('/drafts/community-comparison', request);
+}
+
+/**
+ * Get community comparison by set code (from URL).
+ */
+export async function getCommunityComparisonBySet(
+  setCode: string,
+  format?: string
+): Promise<CommunityComparisonResponse> {
+  const params = format ? `?format=${format}` : '';
+  return get<CommunityComparisonResponse>(`/drafts/community-comparison/${setCode}${params}`);
+}
+
+/**
+ * Get all cached community comparisons.
+ */
+export async function getAllCommunityComparisons(): Promise<CommunityComparisonResponse[]> {
+  return get<CommunityComparisonResponse[]>('/drafts/community-comparison');
 }
