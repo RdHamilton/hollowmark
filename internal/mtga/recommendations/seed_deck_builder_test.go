@@ -1230,8 +1230,9 @@ func TestGetArchetypeProfile(t *testing.T) {
 func TestGetAllArchetypeProfiles(t *testing.T) {
 	profiles := GetAllArchetypeProfiles()
 
-	if len(profiles) != 3 {
-		t.Errorf("expected 3 archetype profiles, got %d", len(profiles))
+	// Now includes: aggro, midrange, control, tempo, ramp, combo, tokens, aristocrats
+	if len(profiles) != 8 {
+		t.Errorf("expected 8 archetype profiles, got %d", len(profiles))
 	}
 
 	// Verify all profiles have required fields
@@ -1247,6 +1248,14 @@ func TestGetAllArchetypeProfiles(t *testing.T) {
 		}
 		if profile.Description == "" {
 			t.Errorf("profile %s has empty description", key)
+		}
+		// Verify SplashTendency is in valid range (0.0-1.0)
+		if profile.SplashTendency < 0.0 || profile.SplashTendency > 1.0 {
+			t.Errorf("profile %s has invalid splash tendency: %f (expected 0.0-1.0)", key, profile.SplashTendency)
+		}
+		// Verify Icon is set (emoji for UI display)
+		if profile.Icon == "" {
+			t.Errorf("profile %s has empty icon", key)
 		}
 	}
 }
