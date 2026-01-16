@@ -1,0 +1,327 @@
+.deck-history-modal {
+  background: var(--surface-color);
+  border-radius: 8px;
+  width: 90%;
+  max-width: 900px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.deck-history-modal .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.deck-history-modal .modal-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.deck-history-modal .modal-content {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+  min-height: 300px;
+}
+
+.deck-history-modal .modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-color);
+}
+
+.deck-history-modal .close-button {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 0 4px;
+}
+
+.deck-history-modal .close-button:hover {
+  color: var(--text-primary);
+}
+
+/* Layout */
+.deck-history-modal .history-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 20px;
+  height: 100%;
+}
+
+/* Version list */
+.deck-history-modal .version-list {
+  border-right: 1px solid var(--border-color);
+  padding-right: 20px;
+  overflow-y: auto;
+  max-height: 500px;
+}
+
+.deck-history-modal .version-list h3 {
+  margin: 0 0 12px 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.deck-history-modal .version-item {
+  padding: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 8px;
+  background: var(--background-color);
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.deck-history-modal .version-item:hover {
+  border-color: var(--border-color);
+}
+
+.deck-history-modal .version-item.selected {
+  border-color: var(--accent-color);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.deck-history-modal .version-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.deck-history-modal .version-number {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.deck-history-modal .version-name {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.deck-history-modal .version-name:hover {
+  background: var(--surface-color);
+}
+
+.deck-history-modal .name-edit {
+  display: flex;
+  gap: 4px;
+}
+
+.deck-history-modal .name-edit input {
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--background-color);
+  color: var(--text-primary);
+  width: 100px;
+}
+
+.deck-history-modal .name-edit button {
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  background: var(--accent-color);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.deck-history-modal .version-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.deck-history-modal .version-date,
+.deck-history-modal .version-stats {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+/* Version details */
+.deck-history-modal .version-details {
+  overflow-y: auto;
+}
+
+.deck-history-modal .details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.deck-history-modal .details-header h3 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.deck-history-modal .restore-button {
+  padding: 8px 16px;
+  background: var(--accent-color);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.deck-history-modal .restore-button:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.deck-history-modal .restore-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.deck-history-modal .details-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.deck-history-modal .stat {
+  background: var(--background-color);
+  padding: 12px;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.deck-history-modal .stat-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.deck-history-modal .stat-value {
+  display: block;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* Diff */
+.deck-history-modal .version-diff h4 {
+  margin: 0 0 12px 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.deck-history-modal .diff-section {
+  margin-bottom: 16px;
+}
+
+.deck-history-modal .diff-section h5 {
+  margin: 0 0 8px 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.deck-history-modal .diff-section ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.deck-history-modal .diff-section li {
+  margin-bottom: 4px;
+  font-size: 0.875rem;
+}
+
+.deck-history-modal .diff-section.added h5 {
+  color: var(--win-color, #4caf50);
+}
+
+.deck-history-modal .diff-section.added li {
+  color: var(--win-color, #4caf50);
+}
+
+.deck-history-modal .diff-section.removed h5 {
+  color: var(--loss-color, #f44336);
+}
+
+.deck-history-modal .diff-section.removed li {
+  color: var(--loss-color, #f44336);
+}
+
+.deck-history-modal .diff-section.changed h5 {
+  color: var(--text-secondary);
+}
+
+.deck-history-modal .no-changes,
+.deck-history-modal .no-diff {
+  color: var(--text-secondary);
+  font-style: italic;
+  font-size: 0.875rem;
+}
+
+/* Empty state */
+.deck-history-modal .empty-state {
+  text-align: center;
+  padding: 40px;
+  color: var(--text-secondary);
+}
+
+.deck-history-modal .empty-state .hint {
+  font-size: 0.875rem;
+  margin-top: 8px;
+}
+
+/* Error */
+.deck-history-modal .error-message {
+  background: rgba(244, 67, 54, 0.1);
+  border: 1px solid var(--loss-color, #f44336);
+  border-radius: 6px;
+  padding: 16px;
+  color: var(--loss-color, #f44336);
+}
+
+/* Footer buttons */
+.deck-history-modal .cancel-button {
+  padding: 10px 20px;
+  background: var(--background-color);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.deck-history-modal .cancel-button:hover {
+  background: var(--surface-color);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .deck-history-modal .history-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .deck-history-modal .version-list {
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    padding-right: 0;
+    padding-bottom: 16px;
+    max-height: 200px;
+  }
+
+  .deck-history-modal .details-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

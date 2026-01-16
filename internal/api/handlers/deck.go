@@ -13,6 +13,145 @@ import (
 	"github.com/ramonehamilton/MTGA-Companion/internal/storage/repository"
 )
 
+// GetDeckPermutations returns all permutations for a deck.
+// GET /decks/{deckID}/permutations
+func (h *DeckHandler) GetDeckPermutations(w http.ResponseWriter, r *http.Request) {
+	deckID := chi.URLParam(r, "deckID")
+	if deckID == "" {
+		response.BadRequest(w, errors.New("deck ID is required"))
+		return
+	}
+
+	perms, err := h.facade.GetDeckPermutations(r.Context(), deckID)
+	if err != nil {
+		response.InternalError(w, err)
+		return
+	}
+
+	response.Success(w, perms)
+}
+
+// GetDeckPermutation returns a specific permutation by ID.
+// GET /decks/{deckID}/permutations/{permutationID}
+func (h *DeckHandler) GetDeckPermutation(w http.ResponseWriter, r *http.Request) {
+	permIDStr := chi.URLParam(r, "permutationID")
+	permID, err := strconv.Atoi(permIDStr)
+	if err != nil {
+		response.BadRequest(w, errors.New("invalid permutation ID"))
+		return
+	}
+
+	perm, err := h.facade.GetDeckPermutation(r.Context(), permID)
+	if err != nil {
+		response.InternalError(w, err)
+		return
+	}
+
+	response.Success(w, perm)
+}
+
+// GetDeckPermutationDiff returns the diff between two permutations.
+// GET /decks/{deckID}/permutations/{permutationID}/diff/{otherPermID}
+func (h *DeckHandler) GetDeckPermutationDiff(w http.ResponseWriter, r *http.Request) {
+	fromPermIDStr := chi.URLParam(r, "permutationID")
+	fromPermID, err := strconv.Atoi(fromPermIDStr)
+	if err != nil {
+		response.BadRequest(w, errors.New("invalid permutation ID"))
+		return
+	}
+
+	toPermIDStr := chi.URLParam(r, "otherPermID")
+	toPermID, err := strconv.Atoi(toPermIDStr)
+	if err != nil {
+		response.BadRequest(w, errors.New("invalid other permutation ID"))
+		return
+	}
+
+	diff, err := h.facade.GetDeckPermutationDiff(r.Context(), fromPermID, toPermID)
+	if err != nil {
+		response.InternalError(w, err)
+		return
+	}
+
+	response.Success(w, diff)
+}
+
+// UpdatePermutationNameRequest represents a request to update a permutation name.
+type UpdatePermutationNameRequest struct {
+	Name string `json:"name"`
+}
+
+// UpdateDeckPermutationName updates the name of a permutation.
+// PUT /decks/{deckID}/permutations/{permutationID}/name
+func (h *DeckHandler) UpdateDeckPermutationName(w http.ResponseWriter, r *http.Request) {
+	permIDStr := chi.URLParam(r, "permutationID")
+	permID, err := strconv.Atoi(permIDStr)
+	if err != nil {
+		response.BadRequest(w, errors.New("invalid permutation ID"))
+		return
+	}
+
+	var req UpdatePermutationNameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, errors.New("invalid request body"))
+		return
+	}
+
+	if err := h.facade.UpdateDeckPermutationName(r.Context(), permID, req.Name); err != nil {
+		response.InternalError(w, err)
+		return
+	}
+
+	response.Success(w, map[string]string{"status": "ok"})
+}
+
+// RestoreDeckPermutation restores a deck to a previous permutation.
+// POST /decks/{deckID}/permutations/{permutationID}/restore
+func (h *DeckHandler) RestoreDeckPermutation(w http.ResponseWriter, r *http.Request) {
+	deckID := chi.URLParam(r, "deckID")
+	if deckID == "" {
+		response.BadRequest(w, errors.New("deck ID is required"))
+		return
+	}
+
+	permIDStr := chi.URLParam(r, "permutationID")
+	permID, err := strconv.Atoi(permIDStr)
+	if err != nil {
+		response.BadRequest(w, errors.New("invalid permutation ID"))
+		return
+	}
+
+	if err := h.facade.RestoreDeckPermutation(r.Context(), deckID, permID); err != nil {
+		response.InternalError(w, err)
+		return
+	}
+
+	response.Success(w, map[string]string{"status": "ok"})
+}
+
+// GetCurrentDeckPermutation returns the current permutation for a deck.
+// GET /decks/{deckID}/permutations/current
+func (h *DeckHandler) GetCurrentDeckPermutation(w http.ResponseWriter, r *http.Request) {
+	deckID := chi.URLParam(r, "deckID")
+	if deckID == "" {
+		response.BadRequest(w, errors.New("deck ID is required"))
+		return
+	}
+
+	perm, err := h.facade.GetCurrentDeckPermutation(r.Context(), deckID)
+	if err != nil {
+		response.InternalError(w, err)
+		return
+	}
+
+	if perm == nil {
+		response.Success(w, nil)
+		return
+	}
+
+	response.Success(w, perm)
+}
+
 // DeckHandler handles deck-related API requests.
 type DeckHandler struct {
 	facade *gui.DeckFacade

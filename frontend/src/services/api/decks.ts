@@ -826,3 +826,128 @@ export async function getAllPerformanceRecommendations(
     `/decks/${deckId}/recommendations/all${query ? `?${query}` : ''}`
   );
 }
+
+// ============================================================================
+// Deck Permutation Types and Functions (Issue #889)
+// ============================================================================
+
+/**
+ * Represents a card within a deck permutation snapshot.
+ */
+export interface DeckPermutationCard {
+  card_id: number;
+  quantity: number;
+  board: string;
+}
+
+/**
+ * Represents a change in card quantity between permutations.
+ */
+export interface DeckCardChange {
+  card_id: number;
+  old_quantity: number;
+  new_quantity: number;
+  board: string;
+}
+
+/**
+ * Represents a deck permutation (version).
+ */
+export interface DeckPermutation {
+  id: number;
+  deckID: string;
+  parentPermutationID?: number | null;
+  cards: DeckPermutationCard[];
+  versionNumber: number;
+  versionName?: string | null;
+  changeSummary?: string | null;
+  matchesPlayed: number;
+  matchesWon: number;
+  matchWinRate: number;
+  gamesPlayed: number;
+  gamesWon: number;
+  gameWinRate: number;
+  createdAt: string;
+  lastPlayedAt?: string | null;
+}
+
+/**
+ * Represents the diff between two deck permutations.
+ */
+export interface DeckPermutationDiff {
+  fromPermutationID: number;
+  toPermutationID: number;
+  addedCards: DeckPermutationCard[];
+  removedCards: DeckPermutationCard[];
+  changedCards: DeckCardChange[];
+}
+
+/**
+ * Get all permutations (versions) of a deck.
+ * @param deckId - The deck ID
+ */
+export async function getDeckPermutations(deckId: string): Promise<DeckPermutation[]> {
+  return get<DeckPermutation[]>(`/decks/${deckId}/permutations`);
+}
+
+/**
+ * Get the current permutation of a deck.
+ * @param deckId - The deck ID
+ */
+export async function getCurrentDeckPermutation(deckId: string): Promise<DeckPermutation | null> {
+  return get<DeckPermutation | null>(`/decks/${deckId}/permutations/current`);
+}
+
+/**
+ * Get a specific permutation by ID.
+ * @param deckId - The deck ID
+ * @param permutationId - The permutation ID
+ */
+export async function getDeckPermutation(
+  deckId: string,
+  permutationId: number
+): Promise<DeckPermutation> {
+  return get<DeckPermutation>(`/decks/${deckId}/permutations/${permutationId}`);
+}
+
+/**
+ * Get the diff between two permutations.
+ * @param deckId - The deck ID
+ * @param fromPermutationId - The source permutation ID
+ * @param toPermutationId - The target permutation ID
+ */
+export async function getDeckPermutationDiff(
+  deckId: string,
+  fromPermutationId: number,
+  toPermutationId: number
+): Promise<DeckPermutationDiff> {
+  return get<DeckPermutationDiff>(
+    `/decks/${deckId}/permutations/${fromPermutationId}/diff/${toPermutationId}`
+  );
+}
+
+/**
+ * Update the name of a permutation.
+ * @param deckId - The deck ID
+ * @param permutationId - The permutation ID
+ * @param name - The new name
+ */
+export async function updateDeckPermutationName(
+  deckId: string,
+  permutationId: number,
+  name: string
+): Promise<void> {
+  await put(`/decks/${deckId}/permutations/${permutationId}/name`, { name });
+}
+
+/**
+ * Restore a deck to a previous permutation.
+ * @param deckId - The deck ID
+ * @param permutationId - The permutation ID to restore
+ */
+export async function restoreDeckPermutation(
+  deckId: string,
+  permutationId: number
+): Promise<void> {
+  await post(`/decks/${deckId}/permutations/${permutationId}/restore`, {});
+}

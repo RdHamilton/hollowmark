@@ -12,6 +12,7 @@ import CardSearch from '../components/CardSearch';
 import RecommendationCard from '../components/RecommendationCard';
 import SuggestDecksModal from '../components/SuggestDecksModal';
 import BuildAroundSeedModal from '../components/BuildAroundSeedModal';
+import DeckHistoryModal from '../components/DeckHistoryModal';
 import LegalityBanner from '../components/LegalityBanner';
 import DeckNotesPanel from '../components/DeckNotesPanel';
 import ImprovementSuggestionsPanel from '../components/ImprovementSuggestionsPanel';
@@ -47,6 +48,7 @@ export default function DeckBuilder() {
   const [showLegalityBanner, setShowLegalityBanner] = useState(true);
   const [showNotesPanel, setShowNotesPanel] = useState(false);
   const [showSuggestionsPanel, setShowSuggestionsPanel] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   // Deck validation for legality checking
   const {
@@ -1029,6 +1031,13 @@ export default function DeckBuilder() {
           >
             Insights
           </button>
+          <button
+            className={`action-button ${showHistoryModal ? 'active' : ''}`}
+            title="View deck version history and restore previous versions"
+            onClick={() => setShowHistoryModal(true)}
+          >
+            History
+          </button>
           {deck.Source === 'draft' && deck.DraftEventID && (
             <button
               className="action-button suggest-decks-btn"
@@ -1062,6 +1071,18 @@ export default function DeckBuilder() {
           onDeckApplied={handleDeckApplied}
         />
       )}
+
+      {/* Deck History Modal */}
+      <DeckHistoryModal
+        deckId={deck.ID}
+        deckName={deck.Name}
+        isOpen={showHistoryModal}
+        onClose={() => setShowHistoryModal(false)}
+        onRestore={() => {
+          // Reload the page to refresh deck data after restore
+          window.location.reload();
+        }}
+      />
 
       {/* Build Around Seed Modal */}
       <BuildAroundSeedModal
