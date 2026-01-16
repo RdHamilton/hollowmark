@@ -215,7 +215,7 @@ describe('MatchComparisonPanel', () => {
       await waitFor(() => {
         expect(mockCompareFormats).toHaveBeenCalledWith({
           formats: ['Standard', 'Historic'],
-          base_filter: {},
+          baseFilter: {},
         });
       });
     });

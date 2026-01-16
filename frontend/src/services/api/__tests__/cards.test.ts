@@ -103,7 +103,7 @@ describe('cards API', () => {
       const result = await cards.getCollectionQuantities([12345, 67890]);
 
       expect(post).toHaveBeenCalledWith('/cards/collection-quantities', {
-        arena_ids: [12345, 67890],
+        arenaIDs: [12345, 67890],
       });
       expect(result).toEqual(mockQuantities);
     });
@@ -131,7 +131,7 @@ describe('cards API', () => {
 
       expect(post).toHaveBeenCalledWith('/cards/search-with-collection', {
         query: 'lightning',
-        set_codes: ['MKM'],
+        setCodes: ['MKM'],
         limit: 50,
       });
       expect(result).toEqual(mockCards);
@@ -144,7 +144,7 @@ describe('cards API', () => {
 
       expect(post).toHaveBeenCalledWith('/cards/search-with-collection', {
         query: 'bolt',
-        set_codes: undefined,
+        setCodes: undefined,
         limit: undefined,
       });
     });
