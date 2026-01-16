@@ -1083,9 +1083,45 @@ func (s *Service) CleanupStaleArenaDecks(ctx context.Context, currentDeckIDs []s
 	return s.decks.DeleteBySourceExcluding(ctx, accountID, "arena", currentDeckIDs)
 }
 
-// InferDeckIDsForMatches attempts to link matches to decks based on timestamp proximity.
+// normalizeMatchFormat extracts the base format from match event names.
+// E.g., "Ladder" -> "Standard", "Alchemy_Ladder" -> "Alchemy", "Historic_Play" -> "Historic"
+func normalizeMatchFormat(format string) string {
+	// Handle format-specific event prefixes
+	// NOTE: Order matters - more specific prefixes (HistoricBrawl) must come before less specific (Historic)
+	formatPrefixes := []string{
+		"TraditionalStandard", "Traditional_Standard",
+		"HistoricBrawl", "Brawl", // Brawl formats before Historic
+		"Alchemy", "Historic", "Explorer", "Timeless",
+	}
+
+	for _, prefix := range formatPrefixes {
+		if strings.HasPrefix(format, prefix) {
+			// Return the base format name (without _Play/_Ladder suffix)
+			return prefix
+		}
+	}
+
+	// Generic queue types indicate Standard format
+	genericQueueTypes := []string{"Play", "Ladder", "Traditional_Play", "Traditional_Ladder"}
+	for _, qt := range genericQueueTypes {
+		if format == qt {
+			return "Standard"
+		}
+	}
+
+	// Draft formats
+	if strings.HasPrefix(format, "QuickDraft") || strings.HasPrefix(format, "PremierDraft") ||
+		strings.HasPrefix(format, "TradDraft") || strings.HasPrefix(format, "SealedDeck") {
+		return "Limited"
+	}
+
+	// Return as-is if no mapping found
+	return format
+}
+
+// InferDeckIDsForMatches attempts to link matches to decks based on timestamp proximity and format matching.
 // This is a best-effort approach since MTGA logs don't include deck IDs in match events.
-// It links each match without a deck_id to the deck with the closest lastPlayed timestamp.
+// It links each match without a deck_id to the deck with the closest lastPlayed timestamp that also matches the format.
 func (s *Service) InferDeckIDsForMatches(ctx context.Context) (int, error) {
 	// Get all matches without deck IDs
 	matchesNeedingDecks, err := s.matches.GetMatchesWithoutDeckID(ctx)
@@ -1152,10 +1188,15 @@ func (s *Service) InferDeckIDsForMatches(ctx context.Context) (int, error) {
 
 	for i, match := range matchesNeedingDecks {
 		var bestDeck *models.Deck
+		var bestDeckWithFormat *models.Deck // Best deck that also matches format
 		var minDiff time.Duration
+		var minDiffWithFormat time.Duration
+
+		// Normalize match format for comparison (extract base format from event names like "Ladder", "Play")
+		matchFormat := normalizeMatchFormat(match.Format)
 
 		if i < 3 { // Log first 3 matches for debugging
-			log.Printf("[InferDeckIDs] Match %d: timestamp=%v", i+1, match.Timestamp)
+			log.Printf("[InferDeckIDs] Match %d: timestamp=%v, format=%s (normalized: %s)", i+1, match.Timestamp, match.Format, matchFormat)
 		}
 
 		for j, deck := range decksWithTimestamp {
@@ -1165,24 +1206,44 @@ func (s *Service) InferDeckIDsForMatches(ctx context.Context) (int, error) {
 				diff = -diff
 			}
 
+			// Check format match (case-insensitive)
+			formatMatches := strings.EqualFold(deck.Format, matchFormat)
+
 			if i < 3 && j < 3 { // Log first few comparisons
-				log.Printf("[InferDeckIDs]   Deck '%s': LastPlayed=%v, diff=%v", deck.Name, *deck.LastPlayed, diff)
+				log.Printf("[InferDeckIDs]   Deck '%s': format=%s, LastPlayed=%v, diff=%v, formatMatch=%v", deck.Name, deck.Format, *deck.LastPlayed, diff, formatMatches)
 			}
 
-			// Check if this is the closest deck so far
+			// Track best deck overall (for fallback)
 			if bestDeck == nil || diff < minDiff {
 				bestDeck = deck
 				minDiff = diff
 			}
+
+			// Track best deck that matches format (preferred)
+			if formatMatches && (bestDeckWithFormat == nil || diff < minDiffWithFormat) {
+				bestDeckWithFormat = deck
+				minDiffWithFormat = diff
+			}
+		}
+
+		// Prefer format-matched deck, fall back to closest timestamp if no format match
+		if bestDeckWithFormat != nil {
+			bestDeck = bestDeckWithFormat
+			minDiff = minDiffWithFormat
 		}
 
 		// Determine if we should link this match to the best deck
 		shouldLink := false
 		var linkReason string
+		formatMatched := bestDeckWithFormat != nil
 
 		if bestDeck != nil && minDiff <= maxTimeDiff {
 			shouldLink = true
-			linkReason = fmt.Sprintf("within time window (diff: %v)", minDiff)
+			if formatMatched {
+				linkReason = fmt.Sprintf("format match + within time window (diff: %v)", minDiff)
+			} else {
+				linkReason = fmt.Sprintf("within time window, no format match (diff: %v)", minDiff)
+			}
 		} else if suspiciousBatch && bestDeck != nil {
 			// Fallback for batch replay: link to most recent deck
 			shouldLink = true
