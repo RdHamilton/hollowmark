@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { EventsOn } from '@/services/websocketClient';
 import { matches as matchesApi } from '@/services/api';
 import { models } from '@/types/models';
@@ -9,10 +9,11 @@ import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import MatchDetailsModal from '../components/MatchDetailsModal';
 import MatchNotesModal from '../components/MatchNotesModal';
+import MatchComparisonPanel from '../components/MatchComparisonPanel';
 import { useAppContext } from '../context/AppContext';
 import './MatchHistory.css';
 
-type SortField = 'Timestamp' | 'Result' | 'Format' | 'EventName';
+type SortField = 'Timestamp' | 'Result' | 'Format' | 'EventName' | 'DeckName';
 type SortDirection = 'asc' | 'desc';
 
 const MatchHistory = () => {
@@ -36,6 +37,9 @@ const MatchHistory = () => {
 
   // Match notes modal
   const [notesMatchId, setNotesMatchId] = useState<string | null>(null);
+
+  // Match comparison panel
+  const [showComparisonPanel, setShowComparisonPanel] = useState(false);
 
   useEffect(() => {
     const loadMatches = async () => {
@@ -255,6 +259,30 @@ const MatchHistory = () => {
   const totalPages = Math.ceil(sortedMatches.length / pageSize);
   const paginatedMatches = sortedMatches.slice((page - 1) * pageSize, page * pageSize);
 
+  // Extract unique formats and decks from matches for comparison panel
+  const uniqueFormats = useMemo(() => {
+    const formats = new Set<string>();
+    matchList.forEach(match => {
+      const format = getDisplayFormat(match);
+      if (format && format !== 'Constructed') {
+        formats.add(format);
+      }
+    });
+    return Array.from(formats).sort();
+  }, [matchList]);
+
+  const uniqueDecks = useMemo(() => {
+    const decks = new Map<string, string>(); // id -> name
+    matchList.forEach(match => {
+      if (match.DeckID && match.DeckName) {
+        decks.set(match.DeckID, match.DeckName);
+      }
+    });
+    return Array.from(decks.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [matchList]);
+
   const getSortIcon = (field: SortField) => {
     if (sortField !== field) return '⇅';
     return sortDirection === 'asc' ? '↑' : '↓';
@@ -361,6 +389,18 @@ const MatchHistory = () => {
               </span>
             </div>
           )}
+
+          {/* Compare Button */}
+          {!loading && matchList.length > 0 && (
+            <Tooltip content="Compare performance across formats, decks, or time periods">
+              <button
+                className="compare-btn"
+                onClick={() => setShowComparisonPanel(true)}
+              >
+                Compare
+              </button>
+            </Tooltip>
+          )}
         </div>
 
         {!loading && !error && matchList.length > 0 && (
@@ -437,6 +477,11 @@ const MatchHistory = () => {
                     <span>Opponent</span>
                   </Tooltip>
                 </th>
+                <th onClick={() => handleSort('DeckName')} style={{ cursor: 'pointer' }}>
+                  <Tooltip content="Click to sort by deck name">
+                    <span>Deck {getSortIcon('DeckName')}</span>
+                  </Tooltip>
+                </th>
                 <th>
                   <Tooltip content="Add notes about this match">
                     <span>Notes</span>
@@ -462,6 +507,9 @@ const MatchHistory = () => {
                   <td>{getDisplayEventName(match)}</td>
                   <td>{formatScore(match.PlayerWins, match.OpponentWins)}</td>
                   <td>{match.OpponentName || '—'}</td>
+                  <td className="deck-name-cell" title={match.DeckName || 'Unknown'}>
+                    {match.DeckName || '—'}
+                  </td>
                   <td>
                     <button
                       className="notes-btn"
@@ -535,6 +583,19 @@ const MatchHistory = () => {
         isOpen={!!notesMatchId}
         onClose={() => setNotesMatchId(null)}
       />
+
+      {/* Match Comparison Panel */}
+      {showComparisonPanel && (
+        <div className="comparison-panel-overlay">
+          <div className="comparison-panel-container">
+            <MatchComparisonPanel
+              formats={uniqueFormats}
+              deckIds={uniqueDecks}
+              onClose={() => setShowComparisonPanel(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
