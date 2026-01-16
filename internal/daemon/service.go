@@ -177,6 +177,15 @@ func (s *Service) Stop(ctx context.Context) error {
 	done := make(chan struct{})
 
 	go func() {
+		// Flush any pending play tracking data before shutdown
+		if s.logProcessor != nil && s.logProcessor.HasAccumulatedPlays() {
+			log.Println("Flushing accumulated play tracking data before shutdown...")
+			result := s.logProcessor.FlushAccumulatedPlays(s.ctx)
+			if result.GamePlaysStored > 0 {
+				log.Printf("Flushed %d game plays on shutdown", result.GamePlaysStored)
+			}
+		}
+
 		// Archive Player.log before shutdown (Phase 4)
 		if err := s.archiveOnShutdown(); err != nil {
 			log.Printf("Warning: Failed to archive on shutdown: %v", err)
@@ -711,6 +720,15 @@ func (s *Service) ReplayHistoricalLogs(clearData bool) error {
 		}
 	}
 
+	// Flush any accumulated play tracking data after replay
+	if s.logProcessor.HasAccumulatedPlays() {
+		log.Println("Flushing accumulated play tracking data after replay...")
+		flushResult := s.logProcessor.FlushAccumulatedPlays(s.ctx)
+		if flushResult.GamePlaysStored > 0 {
+			log.Printf("Flushed %d game plays after replay", flushResult.GamePlaysStored)
+		}
+	}
+
 	result := totalResult
 	elapsed := time.Since(startTime)
 	log.Printf("Replay completed in %v: %d entries, %d matches, %d decks, %d quests, %d drafts",
@@ -832,6 +850,15 @@ func (s *Service) StartupRecovery() error {
 			processedCount, totalEntries, totalMatches, skippedCount)
 	} else {
 		log.Printf("Startup recovery complete: all %d file(s) already processed, no new data to recover", skippedCount)
+	}
+
+	// Flush any accumulated play tracking data after startup recovery
+	if s.logProcessor.HasAccumulatedPlays() {
+		log.Println("Flushing accumulated play tracking data after startup recovery...")
+		flushResult := s.logProcessor.FlushAccumulatedPlays(s.ctx)
+		if flushResult.GamePlaysStored > 0 {
+			log.Printf("Flushed %d game plays after startup recovery", flushResult.GamePlaysStored)
+		}
 	}
 
 	return nil

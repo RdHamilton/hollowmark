@@ -1253,3 +1253,269 @@ func BenchmarkProcessLogEntries(b *testing.B) {
 		_, _ = processor.ProcessLogEntries(ctx, entries)
 	}
 }
+
+func TestHasAccumulatedPlays(t *testing.T) {
+	service, cleanup := setupTestService(t)
+	defer cleanup()
+
+	processor := NewService(service)
+
+	// Initially should have no accumulated plays
+	if processor.HasAccumulatedPlays() {
+		t.Error("Expected HasAccumulatedPlays to return false initially")
+	}
+
+	// Set up accumulated plays state
+	processor.activeMatchID = "test-match-123"
+	processor.accumulatedGRECalls = []*logreader.LogEntry{
+		{Raw: "test", IsJSON: true},
+	}
+
+	// Now should have accumulated plays
+	if !processor.HasAccumulatedPlays() {
+		t.Error("Expected HasAccumulatedPlays to return true after setting state")
+	}
+
+	// Clear match ID - should return false
+	processor.activeMatchID = ""
+	if processor.HasAccumulatedPlays() {
+		t.Error("Expected HasAccumulatedPlays to return false without match ID")
+	}
+
+	// Set match ID but clear entries - should return false
+	processor.activeMatchID = "test-match-123"
+	processor.accumulatedGRECalls = nil
+	if processor.HasAccumulatedPlays() {
+		t.Error("Expected HasAccumulatedPlays to return false without entries")
+	}
+}
+
+func TestFlushAccumulatedPlays_NoAccumulatedPlays(t *testing.T) {
+	service, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	processor := NewService(service)
+
+	// Flush with no accumulated plays should return empty result
+	result := processor.FlushAccumulatedPlays(ctx)
+
+	if result == nil {
+		t.Error("Expected non-nil result")
+	}
+	if result.GamePlaysStored != 0 {
+		t.Errorf("Expected 0 game plays stored, got %d", result.GamePlaysStored)
+	}
+}
+
+func TestFlushAccumulatedPlays_NoMatchID(t *testing.T) {
+	service, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	processor := NewService(service)
+
+	// Set up accumulated entries but no match ID
+	processor.accumulatedGRECalls = []*logreader.LogEntry{
+		{Raw: "test", IsJSON: true},
+	}
+
+	// Flush should return early without match ID
+	result := processor.FlushAccumulatedPlays(ctx)
+
+	if result == nil {
+		t.Error("Expected non-nil result")
+	}
+	if result.GamePlaysStored != 0 {
+		t.Errorf("Expected 0 game plays stored, got %d", result.GamePlaysStored)
+	}
+}
+
+func TestDetectMatchCompletion(t *testing.T) {
+	service, cleanup := setupTestService(t)
+	defer cleanup()
+
+	processor := NewService(service)
+
+	tests := []struct {
+		name     string
+		entries  []*logreader.LogEntry
+		expected bool
+	}{
+		{
+			name:     "empty entries",
+			entries:  []*logreader.LogEntry{},
+			expected: false,
+		},
+		{
+			name: "non-JSON entry",
+			entries: []*logreader.LogEntry{
+				{Raw: "test", IsJSON: false},
+			},
+			expected: false,
+		},
+		{
+			name: "JSON without CurrentEventState",
+			entries: []*logreader.LogEntry{
+				{
+					Raw:    "test",
+					IsJSON: true,
+					JSON:   map[string]interface{}{"other": "data"},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "JSON with different CurrentEventState",
+			entries: []*logreader.LogEntry{
+				{
+					Raw:    "test",
+					IsJSON: true,
+					JSON:   map[string]interface{}{"CurrentEventState": "InProgress"},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "JSON with MatchCompleted state",
+			entries: []*logreader.LogEntry{
+				{
+					Raw:    "test",
+					IsJSON: true,
+					JSON:   map[string]interface{}{"CurrentEventState": "MatchCompleted"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "multiple entries with MatchCompleted",
+			entries: []*logreader.LogEntry{
+				{
+					Raw:    "test1",
+					IsJSON: true,
+					JSON:   map[string]interface{}{"other": "data"},
+				},
+				{
+					Raw:    "test2",
+					IsJSON: true,
+					JSON:   map[string]interface{}{"CurrentEventState": "MatchCompleted"},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := processor.detectMatchCompletion(tc.entries)
+			if result != tc.expected {
+				t.Errorf("Expected %v, got %v", tc.expected, result)
+			}
+		})
+	}
+}
+
+func TestProcessGamePlays_MatchTransition(t *testing.T) {
+	service, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	processor := NewService(service)
+
+	// Set up initial match state
+	processor.activeMatchID = "match-1"
+	processor.accumulatedGRECalls = []*logreader.LogEntry{
+		{
+			Raw:    "gre-entry",
+			IsJSON: true,
+			JSON: map[string]interface{}{
+				"greToClientEvent": map[string]interface{}{
+					"greToClientMessages": []interface{}{},
+				},
+			},
+		},
+	}
+
+	// Create entries that indicate a new match (match-2)
+	entries := []*logreader.LogEntry{
+		{
+			Raw:    "new-match-entry",
+			IsJSON: true,
+			JSON: map[string]interface{}{
+				"matchGameRoomStateChangedEvent": map[string]interface{}{
+					"gameRoomInfo": map[string]interface{}{
+						"gameRoomConfig": map[string]interface{}{
+							"matchId": "match-2",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := &ProcessResult{}
+	err := processor.processGamePlays(ctx, entries, result)
+	if err != nil {
+		t.Fatalf("processGamePlays failed: %v", err)
+	}
+
+	// After processing, the active match should be match-2
+	if processor.activeMatchID != "match-2" {
+		t.Errorf("Expected activeMatchID to be 'match-2', got '%s'", processor.activeMatchID)
+	}
+
+	// The old accumulated entries should have been cleared (processed for match-1)
+	// and new entries accumulated for match-2 (the matchGameRoomStateChangedEvent)
+	if len(processor.accumulatedGRECalls) > 1 {
+		t.Errorf("Expected at most 1 accumulated entry after transition, got %d", len(processor.accumulatedGRECalls))
+	}
+}
+
+func TestProcessGamePlays_MatchCompletionDetection(t *testing.T) {
+	service, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	processor := NewService(service)
+
+	// Set up match state with accumulated entries
+	processor.activeMatchID = "match-1"
+	processor.accumulatedGRECalls = []*logreader.LogEntry{
+		{
+			Raw:    "gre-entry",
+			IsJSON: true,
+			JSON: map[string]interface{}{
+				"greToClientEvent": map[string]interface{}{
+					"greToClientMessages": []interface{}{},
+				},
+			},
+		},
+	}
+
+	// Create entries with match completion signal
+	entries := []*logreader.LogEntry{
+		{
+			Raw:    "match-completed-entry",
+			IsJSON: true,
+			JSON: map[string]interface{}{
+				"CurrentEventState": "MatchCompleted",
+			},
+		},
+	}
+
+	result := &ProcessResult{}
+	err := processor.processGamePlays(ctx, entries, result)
+	if err != nil {
+		t.Fatalf("processGamePlays failed: %v", err)
+	}
+
+	// After processing match completion, accumulated entries should be cleared
+	if len(processor.accumulatedGRECalls) != 0 {
+		t.Errorf("Expected accumulated entries to be cleared after match completion, got %d", len(processor.accumulatedGRECalls))
+	}
+
+	// Active match ID should be cleared
+	if processor.activeMatchID != "" {
+		t.Errorf("Expected activeMatchID to be empty after match completion, got '%s'", processor.activeMatchID)
+	}
+}
