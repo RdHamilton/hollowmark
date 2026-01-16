@@ -144,3 +144,52 @@ th[style*="cursor: pointer"]:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Compare Button */
+.compare-btn {
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-left: auto;
+}
+
+.compare-btn:hover {
+  background: linear-gradient(135deg, #7c7ff2 0%, #5e58e8 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+.compare-btn:active {
+  transform: translateY(0);
+}
+
+/* Comparison Panel Overlay */
+.comparison-panel-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.comparison-panel-container {
+  background: var(--surface-color, #1e1e1e);
+  border-radius: 12px;
+  max-width: 900px;
+  max-height: 90vh;
+  width: 100%;
+  overflow: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}

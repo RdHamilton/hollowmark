@@ -1225,4 +1225,48 @@ describe('MatchHistory', () => {
       });
     });
   });
+
+  describe('Match Comparison Panel', () => {
+    it('should show Compare button when matches are loaded', async () => {
+      mockMatches.getMatches.mockResolvedValue([createMockMatch()]);
+
+      renderWithProvider(<MatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Compare' })).toBeInTheDocument();
+      });
+    });
+
+    it('should not show Compare button when no matches', async () => {
+      mockMatches.getMatches.mockResolvedValue([]);
+
+      renderWithProvider(<MatchHistory />);
+
+      await waitFor(() => {
+        // Depends on filter state - either "No matches yet" or "No matches found"
+        const emptyMessage = screen.queryByText('No matches yet') || screen.queryByText('No matches found');
+        expect(emptyMessage).toBeInTheDocument();
+      });
+
+      expect(screen.queryByRole('button', { name: 'Compare' })).not.toBeInTheDocument();
+    });
+
+    it('should open comparison panel when Compare button is clicked', async () => {
+      mockMatches.getMatches.mockResolvedValue([
+        createMockMatch({ DeckFormat: 'Standard', DeckID: 'deck-1', DeckName: 'Test Deck' }),
+      ]);
+
+      renderWithProvider(<MatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Compare' })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Compare Formats')).toBeInTheDocument();
+      });
+    });
+  });
 });
