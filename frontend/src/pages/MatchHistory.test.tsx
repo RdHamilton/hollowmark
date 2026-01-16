@@ -237,7 +237,9 @@ describe('MatchHistory', () => {
       renderWithProvider(<MatchHistory />);
 
       await waitFor(() => {
-        expect(screen.getByText('—')).toBeInTheDocument();
+        // Both opponent name and deck name show '—' when missing
+        const dashes = screen.getAllByText('—');
+        expect(dashes.length).toBeGreaterThanOrEqual(1);
       });
     });
 
@@ -517,7 +519,7 @@ describe('MatchHistory', () => {
 
       // Check headers exist in thead
       const headers = screen.getAllByRole('columnheader');
-      expect(headers.length).toBe(7);
+      expect(headers.length).toBe(8);
 
       // Verify header text content
       const headerTexts = headers.map((h) => h.textContent);
@@ -527,6 +529,7 @@ describe('MatchHistory', () => {
       expect(headerTexts.some((t) => t?.includes('Event'))).toBe(true);
       expect(headerTexts.some((t) => t?.includes('Score'))).toBe(true);
       expect(headerTexts.some((t) => t?.includes('Opponent'))).toBe(true);
+      expect(headerTexts.some((t) => t?.includes('Deck'))).toBe(true);
       expect(headerTexts.some((t) => t?.includes('Notes'))).toBe(true);
     });
   });
@@ -1219,6 +1222,50 @@ describe('MatchHistory', () => {
 
       await waitFor(() => {
         expect(screen.getByText('0-2 (0.0%)')).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('Match Comparison Panel', () => {
+    it('should show Compare button when matches are loaded', async () => {
+      mockMatches.getMatches.mockResolvedValue([createMockMatch()]);
+
+      renderWithProvider(<MatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Compare' })).toBeInTheDocument();
+      });
+    });
+
+    it('should not show Compare button when no matches', async () => {
+      mockMatches.getMatches.mockResolvedValue([]);
+
+      renderWithProvider(<MatchHistory />);
+
+      await waitFor(() => {
+        // Depends on filter state - either "No matches yet" or "No matches found"
+        const emptyMessage = screen.queryByText('No matches yet') || screen.queryByText('No matches found');
+        expect(emptyMessage).toBeInTheDocument();
+      });
+
+      expect(screen.queryByRole('button', { name: 'Compare' })).not.toBeInTheDocument();
+    });
+
+    it('should open comparison panel when Compare button is clicked', async () => {
+      mockMatches.getMatches.mockResolvedValue([
+        createMockMatch({ DeckFormat: 'Standard', DeckID: 'deck-1', DeckName: 'Test Deck' }),
+      ]);
+
+      renderWithProvider(<MatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Compare' })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Compare Formats')).toBeInTheDocument();
       });
     });
   });
