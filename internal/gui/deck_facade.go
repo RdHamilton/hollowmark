@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -3547,4 +3548,242 @@ func (d *DeckFacade) GetOverperformingCards(ctx context.Context, deckID string, 
 	}
 
 	return response, nil
+}
+
+// DeckPermutationResponse represents a deck permutation for API responses.
+type DeckPermutationResponse struct {
+	ID                  int                           `json:"id"`
+	DeckID              string                        `json:"deckID"`
+	ParentPermutationID *int                          `json:"parentPermutationID,omitempty"`
+	Cards               []*models.DeckPermutationCard `json:"cards"`
+	VersionNumber       int                           `json:"versionNumber"`
+	VersionName         *string                       `json:"versionName,omitempty"`
+	ChangeSummary       *string                       `json:"changeSummary,omitempty"`
+	MatchesPlayed       int                           `json:"matchesPlayed"`
+	MatchesWon          int                           `json:"matchesWon"`
+	MatchWinRate        float64                       `json:"matchWinRate"`
+	GamesPlayed         int                           `json:"gamesPlayed"`
+	GamesWon            int                           `json:"gamesWon"`
+	GameWinRate         float64                       `json:"gameWinRate"`
+	CreatedAt           time.Time                     `json:"createdAt"`
+	LastPlayedAt        *time.Time                    `json:"lastPlayedAt,omitempty"`
+}
+
+// DeckPermutationDiffResponse represents the diff between two permutations.
+type DeckPermutationDiffResponse struct {
+	FromPermutationID int                           `json:"fromPermutationID"`
+	ToPermutationID   int                           `json:"toPermutationID"`
+	AddedCards        []*models.DeckPermutationCard `json:"addedCards"`
+	RemovedCards      []*models.DeckPermutationCard `json:"removedCards"`
+	ChangedCards      []*models.DeckCardChange      `json:"changedCards"`
+}
+
+// GetDeckPermutations returns all permutations for a deck.
+func (d *DeckFacade) GetDeckPermutations(ctx context.Context, deckID string) ([]*DeckPermutationResponse, error) {
+	if d.services.Storage == nil {
+		return nil, &AppError{Message: "Database not initialized"}
+	}
+
+	perms, err := d.services.Storage.DeckPermutationRepo().GetByDeckID(ctx, deckID)
+	if err != nil {
+		return nil, &AppError{Message: "Failed to get deck permutations", Err: err}
+	}
+
+	responses := make([]*DeckPermutationResponse, 0, len(perms))
+	for _, perm := range perms {
+		responses = append(responses, d.permutationToResponse(perm))
+	}
+
+	return responses, nil
+}
+
+// GetDeckPermutation returns a specific permutation by ID.
+func (d *DeckFacade) GetDeckPermutation(ctx context.Context, permutationID int) (*DeckPermutationResponse, error) {
+	if d.services.Storage == nil {
+		return nil, &AppError{Message: "Database not initialized"}
+	}
+
+	perm, err := d.services.Storage.DeckPermutationRepo().GetByID(ctx, permutationID)
+	if err != nil {
+		return nil, &AppError{Message: "Failed to get deck permutation", Err: err}
+	}
+	if perm == nil {
+		return nil, &AppError{Message: "Permutation not found"}
+	}
+
+	return d.permutationToResponse(perm), nil
+}
+
+// GetDeckPermutationDiff returns the diff between two permutations.
+func (d *DeckFacade) GetDeckPermutationDiff(ctx context.Context, fromPermID, toPermID int) (*DeckPermutationDiffResponse, error) {
+	if d.services.Storage == nil {
+		return nil, &AppError{Message: "Database not initialized"}
+	}
+
+	diff, err := d.services.Storage.DeckPermutationRepo().GetDiff(ctx, fromPermID, toPermID)
+	if err != nil {
+		return nil, &AppError{Message: "Failed to get permutation diff", Err: err}
+	}
+	if diff == nil {
+		return nil, &AppError{Message: "Could not calculate diff"}
+	}
+
+	// Convert []DeckPermutationCard to []*DeckPermutationCard
+	addedCards := make([]*models.DeckPermutationCard, len(diff.AddedCards))
+	for i := range diff.AddedCards {
+		addedCards[i] = &diff.AddedCards[i]
+	}
+	removedCards := make([]*models.DeckPermutationCard, len(diff.RemovedCards))
+	for i := range diff.RemovedCards {
+		removedCards[i] = &diff.RemovedCards[i]
+	}
+	changedCards := make([]*models.DeckCardChange, len(diff.ChangedCards))
+	for i := range diff.ChangedCards {
+		changedCards[i] = &diff.ChangedCards[i]
+	}
+
+	return &DeckPermutationDiffResponse{
+		FromPermutationID: diff.FromPermutationID,
+		ToPermutationID:   diff.ToPermutationID,
+		AddedCards:        addedCards,
+		RemovedCards:      removedCards,
+		ChangedCards:      changedCards,
+	}, nil
+}
+
+// UpdateDeckPermutationName updates the name of a permutation.
+func (d *DeckFacade) UpdateDeckPermutationName(ctx context.Context, permutationID int, name string) error {
+	if d.services.Storage == nil {
+		return &AppError{Message: "Database not initialized"}
+	}
+
+	// Get the permutation first to verify it exists
+	perm, err := d.services.Storage.DeckPermutationRepo().GetByID(ctx, permutationID)
+	if err != nil {
+		return &AppError{Message: "Failed to get deck permutation", Err: err}
+	}
+	if perm == nil {
+		return &AppError{Message: "Permutation not found"}
+	}
+
+	// Update the name using raw SQL
+	_, err = d.services.Storage.GetDB().ExecContext(ctx,
+		"UPDATE deck_permutations SET version_name = ? WHERE id = ?",
+		name, permutationID)
+	if err != nil {
+		return &AppError{Message: "Failed to update permutation name", Err: err}
+	}
+
+	return nil
+}
+
+// RestoreDeckPermutation restores a deck to a previous permutation.
+func (d *DeckFacade) RestoreDeckPermutation(ctx context.Context, deckID string, permutationID int) error {
+	if d.services.Storage == nil {
+		return &AppError{Message: "Database not initialized"}
+	}
+
+	// Get the permutation to restore
+	perm, err := d.services.Storage.DeckPermutationRepo().GetByID(ctx, permutationID)
+	if err != nil {
+		return &AppError{Message: "Failed to get deck permutation", Err: err}
+	}
+	if perm == nil {
+		return &AppError{Message: "Permutation not found"}
+	}
+
+	// Verify the permutation belongs to this deck
+	if perm.DeckID != deckID {
+		return &AppError{Message: "Permutation does not belong to this deck"}
+	}
+
+	// Parse the cards from the permutation JSON
+	var permCards []models.DeckPermutationCard
+	if err := json.Unmarshal([]byte(perm.Cards), &permCards); err != nil {
+		return &AppError{Message: "Failed to parse permutation cards", Err: err}
+	}
+
+	// Delete existing cards from the deck using raw SQL
+	_, err = d.services.Storage.GetDB().ExecContext(ctx,
+		"DELETE FROM deck_cards WHERE deck_id = ?", deckID)
+	if err != nil {
+		return &AppError{Message: "Failed to clear deck cards", Err: err}
+	}
+
+	// Get the deck repository
+	deckRepo := d.services.Storage.DeckRepo()
+
+	// Add the cards from the permutation
+	for _, permCard := range permCards {
+		card := &models.DeckCard{
+			DeckID:   deckID,
+			CardID:   permCard.CardID,
+			Quantity: permCard.Quantity,
+			Board:    permCard.Board,
+		}
+		if err := deckRepo.AddCard(ctx, card); err != nil {
+			log.Printf("Warning: Failed to add card %d to restored deck: %v", permCard.CardID, err)
+		}
+	}
+
+	// Set this as the current permutation
+	if err := d.services.Storage.DeckPermutationRepo().SetCurrentPermutation(ctx, deckID, permutationID); err != nil {
+		log.Printf("Warning: Failed to set current permutation: %v", err)
+	}
+
+	return nil
+}
+
+// GetCurrentDeckPermutation returns the current permutation for a deck.
+func (d *DeckFacade) GetCurrentDeckPermutation(ctx context.Context, deckID string) (*DeckPermutationResponse, error) {
+	if d.services.Storage == nil {
+		return nil, &AppError{Message: "Database not initialized"}
+	}
+
+	perm, err := d.services.Storage.DeckPermutationRepo().GetCurrent(ctx, deckID)
+	if err != nil {
+		return nil, &AppError{Message: "Failed to get current permutation", Err: err}
+	}
+	if perm == nil {
+		return nil, nil // No current permutation set
+	}
+
+	return d.permutationToResponse(perm), nil
+}
+
+// permutationToResponse converts a DeckPermutation to API response format.
+func (d *DeckFacade) permutationToResponse(perm *models.DeckPermutation) *DeckPermutationResponse {
+	var cards []models.DeckPermutationCard
+	_ = json.Unmarshal([]byte(perm.Cards), &cards)
+	cardPtrs := make([]*models.DeckPermutationCard, len(cards))
+	for i := range cards {
+		cardPtrs[i] = &cards[i]
+	}
+
+	// Calculate win rates
+	var matchWinRate, gameWinRate float64
+	if perm.MatchesPlayed > 0 {
+		matchWinRate = float64(perm.MatchesWon) / float64(perm.MatchesPlayed) * 100
+	}
+	if perm.GamesPlayed > 0 {
+		gameWinRate = float64(perm.GamesWon) / float64(perm.GamesPlayed) * 100
+	}
+
+	return &DeckPermutationResponse{
+		ID:                  perm.ID,
+		DeckID:              perm.DeckID,
+		ParentPermutationID: perm.ParentPermutationID,
+		Cards:               cardPtrs,
+		VersionNumber:       perm.VersionNumber,
+		VersionName:         perm.VersionName,
+		ChangeSummary:       perm.ChangeSummary,
+		MatchesPlayed:       perm.MatchesPlayed,
+		MatchesWon:          perm.MatchesWon,
+		MatchWinRate:        matchWinRate,
+		GamesPlayed:         perm.GamesPlayed,
+		GamesWon:            perm.GamesWon,
+		GameWinRate:         gameWinRate,
+		CreatedAt:           perm.CreatedAt,
+		LastPlayedAt:        perm.LastPlayedAt,
+	}
 }
