@@ -18,6 +18,7 @@ type SetSyncer struct {
 	scryfallClient *scryfall.Client
 	storage        *storage.Service
 	httpClient     *http.Client
+	fetcher        *Fetcher // Optional: if set, will sync set cards for Standard sets
 }
 
 // NewSetSyncer creates a new SetSyncer.
@@ -200,7 +201,7 @@ func (s *SetSyncer) SyncStandardLegality(ctx context.Context) error {
 	return nil
 }
 
-// SyncAll performs a full sync of sets and Standard legality.
+// SyncAll performs a full sync of sets, Standard legality, and optionally set cards.
 func (s *SetSyncer) SyncAll(ctx context.Context) error {
 	if err := s.SyncSets(ctx); err != nil {
 		return fmt.Errorf("failed to sync sets: %w", err)
@@ -208,6 +209,14 @@ func (s *SetSyncer) SyncAll(ctx context.Context) error {
 
 	if err := s.SyncStandardLegality(ctx); err != nil {
 		return fmt.Errorf("failed to sync Standard legality: %w", err)
+	}
+
+	// Sync set cards for Standard-legal sets if fetcher is available
+	if s.fetcher != nil {
+		if _, err := s.SyncStandardSetCards(ctx); err != nil {
+			// Log but don't fail - set card sync is optional
+			log.Printf("[SetSyncer] Warning: Failed to sync Standard set cards: %v", err)
+		}
 	}
 
 	return nil
@@ -232,4 +241,74 @@ func (s *SetSyncer) SyncIfEmpty(ctx context.Context) error {
 // GetStandardSets returns all Standard-legal sets.
 func (s *SetSyncer) GetStandardSets(ctx context.Context) ([]*storage.Set, error) {
 	return s.storage.GetStandardSets(ctx)
+}
+
+// SetFetcher sets the card fetcher for syncing set cards.
+// If set, SyncAll will also sync cards for Standard-legal sets.
+func (s *SetSyncer) SetFetcher(fetcher *Fetcher) {
+	s.fetcher = fetcher
+}
+
+// SyncStandardSetCards syncs cards for all Standard-legal sets.
+// Requires a Fetcher to be set via SetFetcher.
+// Returns the total number of cards synced across all sets.
+func (s *SetSyncer) SyncStandardSetCards(ctx context.Context) (int, error) {
+	if s.fetcher == nil {
+		log.Println("[SetSyncer] No fetcher configured, skipping set card sync")
+		return 0, nil
+	}
+
+	// Get Standard-legal sets
+	standardSets, err := s.storage.GetStandardSets(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get Standard sets: %w", err)
+	}
+
+	if len(standardSets) == 0 {
+		log.Println("[SetSyncer] No Standard-legal sets found, skipping card sync")
+		return 0, nil
+	}
+
+	log.Printf("[SetSyncer] Syncing cards for %d Standard-legal sets", len(standardSets))
+
+	totalCards := 0
+	failedSets := 0
+
+	for i, set := range standardSets {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			log.Printf("[SetSyncer] Context cancelled, stopping after %d/%d sets", i, len(standardSets))
+			return totalCards, ctx.Err()
+		default:
+		}
+
+		log.Printf("[SetSyncer] Syncing set %d/%d: %s (%s)", i+1, len(standardSets), set.Name, set.Code)
+
+		cardCount, err := s.fetcher.FetchAndCacheSet(ctx, set.Code)
+		if err != nil {
+			log.Printf("[SetSyncer] Failed to sync cards for %s: %v", set.Code, err)
+			failedSets++
+			// Continue with other sets instead of failing entirely
+			continue
+		}
+
+		if cardCount > 0 {
+			log.Printf("[SetSyncer] Synced %d cards for %s", cardCount, set.Code)
+		}
+		totalCards += cardCount
+
+		// Rate limiting: wait between API calls to respect Scryfall rate limits
+		// Scryfall allows 10 requests/second, but we're conservative
+		if i < len(standardSets)-1 {
+			time.Sleep(150 * time.Millisecond)
+		}
+	}
+
+	if failedSets > 0 {
+		log.Printf("[SetSyncer] Completed with %d failed sets out of %d", failedSets, len(standardSets))
+	}
+
+	log.Printf("[SetSyncer] Set card sync complete: %d total cards synced", totalCards)
+	return totalCards, nil
 }

@@ -59,6 +59,36 @@ func (s *Service) SetReplayMode(enabled bool) {
 	}
 }
 
+// FlushAccumulatedPlays processes any accumulated GRE entries that haven't been stored yet.
+// This should be called after all historical log processing is complete to ensure plays
+// from matches that were already stored (before daemon started) get their play data.
+func (s *Service) FlushAccumulatedPlays(ctx context.Context) *ProcessResult {
+	result := &ProcessResult{}
+
+	if len(s.accumulatedGRECalls) == 0 {
+		return result
+	}
+
+	if s.activeMatchID == "" {
+		log.Printf("[PlayTracking] No active match ID, cannot flush accumulated plays")
+		return result
+	}
+
+	log.Printf("[PlayTracking] Flushing %d accumulated GRE entries for match %s", len(s.accumulatedGRECalls), s.activeMatchID)
+	s.processAccumulatedPlays(ctx, result)
+
+	// Clear accumulation
+	s.accumulatedGRECalls = nil
+	s.activeMatchID = ""
+
+	return result
+}
+
+// HasAccumulatedPlays returns true if there are accumulated GRE entries waiting to be processed.
+func (s *Service) HasAccumulatedPlays() bool {
+	return len(s.accumulatedGRECalls) > 0 && s.activeMatchID != ""
+}
+
 // ProcessResult contains the results of processing log entries.
 type ProcessResult struct {
 	MatchesStored        int
@@ -1411,6 +1441,14 @@ func (s *Service) processGamePlays(ctx context.Context, entries []*logreader.Log
 	// Detect match start from matchGameRoomStateChangedEvent
 	matchID := s.detectMatchIDFromEntries(entries)
 	if matchID != "" && matchID != s.activeMatchID {
+		// Process accumulated plays from PREVIOUS match before starting new one
+		// This handles the case where matches complete without triggering MatchesStored > 0
+		// (e.g., historical matches that were already stored before daemon started)
+		if s.activeMatchID != "" && len(s.accumulatedGRECalls) > 0 {
+			log.Printf("[PlayTracking] Match changed from %s to %s, processing accumulated plays", s.activeMatchID, matchID)
+			s.processAccumulatedPlays(ctx, result)
+		}
+
 		log.Printf("[PlayTracking] New match detected: %s", matchID)
 		s.activeMatchID = matchID
 		s.accumulatedGRECalls = nil // Clear entries from previous match
@@ -1455,7 +1493,37 @@ func (s *Service) processGamePlays(ctx context.Context, entries []*logreader.Log
 		s.activeMatchID = ""
 	}
 
+	// Check for match completion signal (handles historical matches already in DB)
+	// This triggers when we see "MatchCompleted" event state, even if MatchesStored = 0
+	if s.detectMatchCompletion(entries) && len(s.accumulatedGRECalls) > 0 {
+		log.Printf("[PlayTracking] Match completion detected via event state, processing %d accumulated GRE entries", len(s.accumulatedGRECalls))
+		s.processAccumulatedPlays(ctx, result)
+
+		// Clear accumulation for next match
+		s.accumulatedGRECalls = nil
+		s.activeMatchID = ""
+	}
+
 	return nil
+}
+
+// detectMatchCompletion checks if any entry signals match completion.
+// This is used to detect when a match is over for historical matches
+// that are already stored in the database.
+func (s *Service) detectMatchCompletion(entries []*logreader.LogEntry) bool {
+	for _, entry := range entries {
+		if !entry.IsJSON {
+			continue
+		}
+
+		// Check for CurrentEventState: "MatchCompleted"
+		if eventState, ok := entry.JSON["CurrentEventState"].(string); ok {
+			if eventState == "MatchCompleted" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // detectMatchIDFromEntries extracts match ID from log entries.

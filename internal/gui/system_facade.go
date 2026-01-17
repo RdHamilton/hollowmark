@@ -135,8 +135,15 @@ func (s *SystemFacade) Initialize(ctx context.Context, dbPath string) error {
 
 	// Initialize SetSyncer and sync sets if table is empty (async to not block startup)
 	setSyncer := setcache.NewSetSyncer(scryfallClient, s.services.Storage)
+
+	// Create a Fetcher for syncing set cards during set sync
+	// This enables auto-syncing of Standard set cards when set metadata is synced
+	setCardFetcher := setcache.NewFetcher(scryfallClient, setCardRepo, draftRatingsRepo)
+	setSyncer.SetFetcher(setCardFetcher)
+
 	go func() {
-		syncCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		// Give longer timeout to allow for card syncing (5 minutes)
+		syncCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		if err := setSyncer.SyncIfEmpty(syncCtx); err != nil {
 			log.Printf("Warning: Failed to sync sets: %v", err)

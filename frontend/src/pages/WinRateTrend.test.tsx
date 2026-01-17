@@ -354,7 +354,7 @@ describe('WinRateTrend', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const calls = mockMatches.getTrendAnalysis.mock.calls as any[][];
       const call = calls[0][0];
-      expect(call.period_type).toBe('daily'); // periodType for 7days
+      expect(call.periodType).toBe('daily'); // periodType for 7days
       expect(call.formats).toBeUndefined(); // formats for 'all' is undefined
     });
 

@@ -142,6 +142,14 @@ func (s *Server) setupRoutes() {
 			r.Get("/{deckID}/recommendations/remove", deckHandler.GetPerformanceRemoveRecommendations)
 			r.Get("/{deckID}/recommendations/swap", deckHandler.GetPerformanceSwapRecommendations)
 			r.Get("/{deckID}/recommendations/all", deckHandler.GetAllPerformanceRecommendations)
+
+			// Deck permutation routes (Issue #889)
+			r.Get("/{deckID}/permutations", deckHandler.GetDeckPermutations)
+			r.Get("/{deckID}/permutations/current", deckHandler.GetCurrentDeckPermutation)
+			r.Get("/{deckID}/permutations/{permutationID}", deckHandler.GetDeckPermutation)
+			r.Get("/{deckID}/permutations/{permutationID}/diff/{otherPermID}", deckHandler.GetDeckPermutationDiff)
+			r.Put("/{deckID}/permutations/{permutationID}/name", deckHandler.UpdateDeckPermutationName)
+			r.Post("/{deckID}/permutations/{permutationID}/restore", deckHandler.RestoreDeckPermutation)
 		})
 
 		// Card routes

@@ -2318,6 +2318,11 @@ func (s *Service) NewCFBRatingsRepo() repository.CFBRatingsRepository {
 	return repository.NewCFBRatingsRepository(s.db.Conn())
 }
 
+// DeckPermutationRepo creates a new deck permutation repository using the service's database connection.
+func (s *Service) DeckPermutationRepo() repository.DeckPermutationRepository {
+	return repository.NewDeckPermutationRepository(s.db.Conn())
+}
+
 // Close closes the database connection.
 func (s *Service) Close() error {
 	return s.db.Close()

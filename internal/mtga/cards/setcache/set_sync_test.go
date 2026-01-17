@@ -276,3 +276,38 @@ func TestSetSyncer_ExitDateLogic(t *testing.T) {
 		})
 	}
 }
+
+// TestSetSyncer_SetFetcher tests the SetFetcher method.
+func TestSetSyncer_SetFetcher(t *testing.T) {
+	syncer := NewSetSyncer(nil, nil)
+
+	// Initially no fetcher
+	if syncer.fetcher != nil {
+		t.Error("expected fetcher to be nil initially")
+	}
+
+	// Set a fetcher
+	fetcher := &Fetcher{}
+	syncer.SetFetcher(fetcher)
+
+	if syncer.fetcher == nil {
+		t.Error("expected fetcher to be set")
+	}
+	if syncer.fetcher != fetcher {
+		t.Error("expected fetcher to be the same instance")
+	}
+}
+
+// TestSetSyncer_SyncStandardSetCards_NoFetcher tests that SyncStandardSetCards returns early when no fetcher is set.
+func TestSetSyncer_SyncStandardSetCards_NoFetcher(t *testing.T) {
+	syncer := NewSetSyncer(nil, nil)
+	// No fetcher set
+
+	count, err := syncer.SyncStandardSetCards(context.Background())
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 cards synced, got: %d", count)
+	}
+}
