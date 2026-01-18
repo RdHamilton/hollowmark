@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/cards"
+	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/recommendations/core"
 	"github.com/ramonehamilton/MTGA-Companion/internal/storage/repository"
 )
 
@@ -138,6 +139,11 @@ var basicLandsByColor = map[string]struct {
 	"B": {ArenaID: 95195, Name: "Swamp"},
 	"R": {ArenaID: 95197, Name: "Mountain"},
 	"G": {ArenaID: 95199, Name: "Forest"},
+}
+
+// poolToDeckAnalysis creates a core.DeckAnalysis from a pool of cards.
+func poolToDeckAnalysis(poolCards []*cards.Card) *core.DeckAnalysis {
+	return core.AnalyzeDeck(poolCards)
 }
 
 // scoredCard holds a card with its calculated score.
@@ -352,8 +358,8 @@ func (s *DeckSuggester) isViable(candidates []*cards.Card) bool {
 	return creatureCount >= 6
 }
 
-// scoreCardForDeck scores a card specifically for deck building.
-// Uses modified weights: Quality (40%), ManaCurve (30%), Synergy (20%), ColorFit (10%).
+// scoreCardForDeck scores a card specifically for deck building using the unified engine.
+// Uses Limited weights optimized for draft deck construction.
 func (s *DeckSuggester) scoreCardForDeck(
 	ctx context.Context,
 	card *cards.Card,
@@ -361,159 +367,41 @@ func (s *DeckSuggester) scoreCardForDeck(
 	setCode string,
 	draftFormat string,
 ) (float64, string) {
-	reasons := make([]string, 0)
+	// Create deck analysis from the pool
+	deckAnalysis := poolToDeckAnalysis(poolCards)
 
-	// Factor 1: Quality from 17Lands (40% weight)
-	qualityScore := s.scoreQuality(ctx, card, setCode, draftFormat)
-	if qualityScore >= 0.7 {
+	// Get rating data for quality scoring
+	var ratingData *core.RatingData
+	if s.ratingsRepo != nil && setCode != "" && draftFormat != "" {
+		arenaIDStr := fmt.Sprintf("%d", card.ArenaID)
+		rating, err := s.ratingsRepo.GetCardRatingByArenaID(ctx, setCode, draftFormat, arenaIDStr)
+		if err == nil && rating != nil {
+			ratingData = core.RatingDataFromSeventeenLands(rating)
+		}
+	}
+
+	// Use the Limited-optimized unified scorer
+	scorer := core.NewLimitedUnifiedScorer()
+	cardScore := scorer.ScoreCard(card, deckAnalysis, ratingData)
+
+	// Build reasoning from the unified score factors
+	reasons := make([]string, 0)
+	if cardScore.Factors.CardQuality >= 0.7 {
 		reasons = append(reasons, "high-quality card")
 	}
-
-	// Factor 2: Mana curve fit (30% weight)
-	curveScore := s.scoreCurve(card, poolCards)
-	if curveScore >= 0.7 {
+	if cardScore.Factors.ManaCurve >= 0.7 {
 		reasons = append(reasons, fmt.Sprintf("good %d-drop", int(card.CMC)))
 	}
-
-	// Factor 3: Synergy with pool (20% weight)
-	synergyScore := s.scoreSynergyWithPool(card, poolCards)
-	if synergyScore >= 0.6 {
+	if cardScore.Factors.Synergy >= 0.6 {
 		reasons = append(reasons, "synergizes with pool")
 	}
-
-	// Factor 4: Color fit bonus (10% weight)
-	// Mono-color cards score higher than multi-color to avoid mana issues
-	colorFitScore := 1.0
-	if len(card.Colors) > 1 {
-		colorFitScore = 0.85
-	}
-
-	// Calculate weighted score
-	score := (qualityScore * 0.40) +
-		(curveScore * 0.30) +
-		(synergyScore * 0.20) +
-		(colorFitScore * 0.10)
 
 	reasoning := "Standard playable"
 	if len(reasons) > 0 {
 		reasoning = strings.Join(reasons, ", ")
 	}
 
-	return score, reasoning
-}
-
-// scoreQuality returns the quality score based on 17Lands data.
-func (s *DeckSuggester) scoreQuality(ctx context.Context, card *cards.Card, setCode, draftFormat string) float64 {
-	if s.ratingsRepo == nil || setCode == "" || draftFormat == "" {
-		return s.fallbackQualityScore(card)
-	}
-
-	arenaIDStr := fmt.Sprintf("%d", card.ArenaID)
-	rating, err := s.ratingsRepo.GetCardRatingByArenaID(ctx, setCode, draftFormat, arenaIDStr)
-	if err != nil || rating == nil {
-		return s.fallbackQualityScore(card)
-	}
-
-	// Normalize GIHWR: 45% -> 0.0, 55% -> 0.5, 65%+ -> 1.0
-	gihScore := (rating.GIHWR - 0.45) / 0.20
-	if gihScore < 0 {
-		gihScore = 0
-	} else if gihScore > 1 {
-		gihScore = 1
-	}
-
-	return gihScore
-}
-
-// fallbackQualityScore returns quality based on rarity when ratings unavailable.
-func (s *DeckSuggester) fallbackQualityScore(card *cards.Card) float64 {
-	switch strings.ToLower(card.Rarity) {
-	case "mythic":
-		return 0.85
-	case "rare":
-		return 0.75
-	case "uncommon":
-		return 0.60
-	default:
-		return 0.50
-	}
-}
-
-// scoreCurve scores how well a card fits the mana curve.
-func (s *DeckSuggester) scoreCurve(card *cards.Card, poolCards []*cards.Card) float64 {
-	cmc := int(card.CMC)
-
-	// Count cards at each CMC in the pool (non-land)
-	cmcCounts := make(map[int]int)
-	for _, c := range poolCards {
-		if !containsTypeInTypeLine(c.TypeLine, "Land") {
-			cmcCounts[int(c.CMC)]++
-		}
-	}
-
-	// Ideal curve for limited (23 non-land cards)
-	idealCounts := map[int]int{
-		1: 2,
-		2: 5,
-		3: 5,
-		4: 4,
-		5: 3,
-		6: 2,
-		7: 2,
-	}
-
-	ideal := idealCounts[cmc]
-	if cmc > 7 {
-		ideal = 1 // Very high CMC cards are rarely needed
-	}
-
-	current := cmcCounts[cmc]
-
-	// Score higher for CMC slots that are underfilled
-	if current < ideal {
-		gap := ideal - current
-		return 0.7 + (float64(gap) * 0.1)
-	} else if current == ideal {
-		return 0.6
-	} else {
-		// Over-filled slot
-		return 0.4
-	}
-}
-
-// scoreSynergyWithPool calculates synergy with other cards in the pool.
-func (s *DeckSuggester) scoreSynergyWithPool(card *cards.Card, poolCards []*cards.Card) float64 {
-	if card.OracleText == nil {
-		return 0.5
-	}
-
-	cardKeywords := extractKeywordsFromText(*card.OracleText)
-	if len(cardKeywords) == 0 {
-		return 0.5
-	}
-
-	// Count how many other cards share keywords
-	synergyCount := 0
-	for _, other := range poolCards {
-		if other.ArenaID == card.ArenaID || other.OracleText == nil {
-			continue
-		}
-		otherKeywords := extractKeywordsFromText(*other.OracleText)
-		for kw := range cardKeywords {
-			if otherKeywords[kw] {
-				synergyCount++
-				break
-			}
-		}
-	}
-
-	// Normalize: 5+ synergistic cards = max score
-	score := float64(synergyCount) / 5.0
-	if score > 1.0 {
-		score = 1.0
-	}
-
-	return score*0.5 + 0.5 // Range: 0.5 to 1.0
+	return cardScore.Score, reasoning
 }
 
 // selectBestCards selects the best cards with curve constraints using greedy selection.
@@ -1085,7 +973,7 @@ func (s *DeckSuggester) buildArchetypeDeck(
 	}
 }
 
-// scoreCardForArchetype scores a card with archetype-specific weights.
+// scoreCardForArchetype scores a card with archetype-specific weights using the unified engine.
 func (s *DeckSuggester) scoreCardForArchetype(
 	ctx context.Context,
 	card *cards.Card,
@@ -1094,22 +982,51 @@ func (s *DeckSuggester) scoreCardForArchetype(
 	draftFormat string,
 	target archetypeTarget,
 ) (float64, string) {
-	reasons := make([]string, 0)
+	// Create deck analysis from the pool
+	deckAnalysis := poolToDeckAnalysis(poolCards)
 
-	// Quality score (35%)
-	qualityScore := s.scoreQuality(ctx, card, setCode, draftFormat)
-	if qualityScore >= 0.7 {
-		reasons = append(reasons, "high-quality card")
+	// Get rating data for quality scoring
+	var ratingData *core.RatingData
+	if s.ratingsRepo != nil && setCode != "" && draftFormat != "" {
+		arenaIDStr := fmt.Sprintf("%d", card.ArenaID)
+		rating, err := s.ratingsRepo.GetCardRatingByArenaID(ctx, setCode, draftFormat, arenaIDStr)
+		if err == nil && rating != nil {
+			ratingData = core.RatingDataFromSeventeenLands(rating)
+		}
 	}
 
-	// CMC fit for archetype (30%)
+	// Select the appropriate scorer based on archetype
+	var scorer *core.UnifiedScorer
+	switch {
+	case target.MaxAvgCMC <= 2.5: // Aggro
+		scorer = core.NewAggroUnifiedScorer()
+	case target.CreatureMax <= 12: // Control
+		scorer = core.NewControlUnifiedScorer()
+	default: // Midrange/Balanced
+		scorer = core.NewLimitedUnifiedScorer()
+	}
+
+	// Get unified score
+	cardScore := scorer.ScoreCard(card, deckAnalysis, ratingData)
+
+	// Apply archetype-specific CMC and type adjustments
 	cmcScore := s.scoreCMCForArchetype(card, target)
+	typeScore := s.scoreTypeForArchetype(card, target)
+
+	// Blend unified score (60%) with archetype-specific adjustments (40%)
+	adjustedScore := (cardScore.Score * 0.60) + (cmcScore * 0.25) + (typeScore * 0.15)
+	if adjustedScore > 1.0 {
+		adjustedScore = 1.0
+	}
+
+	// Build reasoning from factors
+	reasons := make([]string, 0)
+	if cardScore.Factors.CardQuality >= 0.7 {
+		reasons = append(reasons, "high-quality card")
+	}
 	if cmcScore >= 0.8 {
 		reasons = append(reasons, fmt.Sprintf("great %d-drop for %s", int(card.CMC), target.Name))
 	}
-
-	// Type fit for archetype (20%)
-	typeScore := s.scoreTypeForArchetype(card, target)
 	if typeScore >= 0.8 {
 		isCreature := containsTypeInTypeLine(card.TypeLine, "Creature")
 		if isCreature && target.CreatureMax >= 16 {
@@ -1118,21 +1035,16 @@ func (s *DeckSuggester) scoreCardForArchetype(
 			reasons = append(reasons, "spell for control")
 		}
 	}
-
-	// Synergy (15%)
-	synergyScore := s.scoreSynergyWithPool(card, poolCards)
-	if synergyScore >= 0.7 {
+	if cardScore.Factors.Synergy >= 0.7 {
 		reasons = append(reasons, "synergy bonus")
 	}
-
-	score := (qualityScore * 0.35) + (cmcScore * 0.30) + (typeScore * 0.20) + (synergyScore * 0.15)
 
 	reasoning := fmt.Sprintf("Good for %s", target.Name)
 	if len(reasons) > 0 {
 		reasoning = strings.Join(reasons, ", ")
 	}
 
-	return score, reasoning
+	return adjustedScore, reasoning
 }
 
 // scoreCMCForArchetype scores a card's CMC fit for the archetype.
