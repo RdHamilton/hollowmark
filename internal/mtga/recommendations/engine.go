@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/cards"
-	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/cards/seventeenlands"
+	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/recommendations/core"
 	"github.com/ramonehamilton/MTGA-Companion/internal/storage/models"
 	"github.com/ramonehamilton/MTGA-Companion/internal/storage/repository"
 )
@@ -337,26 +337,36 @@ func (e *RuleBasedEngine) RecordAcceptance(ctx context.Context, deckID string, c
 	return nil
 }
 
-// scoreCard calculates recommendation score for a card.
+// scoreCard calculates recommendation score for a card using the unified scoring engine.
 func (e *RuleBasedEngine) scoreCard(ctx context.Context, card *cards.Card, deck *DeckContext, analysis *DeckAnalysis) *CardRecommendation {
 	factors := &ScoreFactors{}
 
-	// Factor 1: Color fit (30% weight)
-	factors.ColorFit = scoreColorFit(card, analysis)
+	// Convert to core analysis for unified scoring
+	coreAnalysis := analysis.toCoreAnalysis()
 
-	// Factor 2: Mana curve (25% weight)
-	factors.ManaCurve = scoreManaCurve(card, analysis)
+	// Get rating data for unified quality scoring
+	ratingData := e.getRatingDataForCard(ctx, card, deck)
 
-	// Factor 3: Card quality from ratings (25% weight)
-	factors.Quality = e.scoreCardQuality(ctx, card, deck)
+	// Select the appropriate scorer based on format
+	scorer := e.getScorerForFormat(deck.Format)
 
-	// Factor 4: Synergy (15% weight) - combines rule-based, co-occurrence, EDHREC, archetype, and embedding analysis
+	// Get unified score for color, curve, and quality
+	cardScore := scorer.ScoreCard(card, coreAnalysis, ratingData)
+
+	// Use unified scores for color fit, curve, and quality
+	factors.ColorFit = cardScore.Factors.ColorFit
+	factors.ManaCurve = cardScore.Factors.ManaCurve
+	factors.Quality = cardScore.Factors.CardQuality
+
+	// Keep enhanced synergy calculation (uses co-occurrence, EDHREC, embeddings)
+	// This provides richer synergy data than the core engine
 	factors.Synergy = e.scoreSynergyEnhanced(ctx, card, deck, analysis)
 
-	// Factor 5: Playability (5% weight)
+	// Keep existing playability scoring
 	factors.Playable = scorePlayability(card, deck)
 
-	// Calculate weighted overall score
+	// Calculate weighted overall score using RuleBasedEngine weights
+	// (30% color, 25% curve, 25% quality, 15% synergy, 5% playability)
 	score := (factors.ColorFit * 0.30) +
 		(factors.ManaCurve * 0.25) +
 		(factors.Quality * 0.25) +
@@ -382,6 +392,50 @@ func (e *RuleBasedEngine) scoreCard(ctx context.Context, card *cards.Card, deck 
 	}
 }
 
+// getRatingDataForCard retrieves rating data for unified quality scoring.
+func (e *RuleBasedEngine) getRatingDataForCard(ctx context.Context, card *cards.Card, deck *DeckContext) *core.RatingData {
+	var ratingData *core.RatingData
+
+	// Try to get 17Lands rating
+	if e.ratingsRepo != nil && deck.SetCode != "" && deck.DraftFormat != "" {
+		arenaIDStr := fmt.Sprintf("%d", card.ArenaID)
+		rating, err := e.ratingsRepo.GetCardRatingByArenaID(ctx, deck.SetCode, deck.DraftFormat, arenaIDStr)
+		if err == nil && rating != nil {
+			ratingData = core.RatingDataFromSeventeenLands(rating)
+		}
+	}
+
+	// Add CFB rating if available
+	if e.cfbRatingsRepo != nil {
+		cfbRating, err := e.cfbRatingsRepo.GetRatingByArenaID(ctx, card.ArenaID)
+		if err == nil && cfbRating != nil {
+			// Use the pre-normalized limited score (already 0-1)
+			cfbScore := cfbRating.LimitedScore
+			if ratingData == nil {
+				ratingData = &core.RatingData{
+					CFBLimitedScore: cfbScore,
+					HasCFBRating:    true,
+				}
+			} else {
+				ratingData.CFBLimitedScore = cfbScore
+				ratingData.HasCFBRating = true
+			}
+		}
+	}
+
+	return ratingData
+}
+
+// getScorerForFormat returns the appropriate UnifiedScorer for the deck format.
+func (e *RuleBasedEngine) getScorerForFormat(format string) *core.UnifiedScorer {
+	switch strings.ToLower(format) {
+	case "limited", "draft", "sealed":
+		return core.NewLimitedUnifiedScorer()
+	default:
+		return core.NewUnifiedScorer()
+	}
+}
+
 // DeckAnalysis contains analyzed deck composition data.
 type DeckAnalysis struct {
 	Colors        map[string]int // Color distribution
@@ -394,6 +448,65 @@ type DeckAnalysis struct {
 	PrimaryColors []string       // Most common colors
 	Keywords      map[string]int // Keyword counts (Flying, Trample, etc.)
 	CreatureTypes map[string]int // Creature type distribution
+}
+
+// toCoreAnalysis converts a DeckAnalysis to core.DeckAnalysis for unified scoring.
+func (da *DeckAnalysis) toCoreAnalysis() *core.DeckAnalysis {
+	if da == nil {
+		return core.NewDeckAnalysis()
+	}
+
+	coreAnalysis := core.NewDeckAnalysis()
+
+	// Copy color information
+	coreAnalysis.ColorIdentity = da.ColorIdentity
+	for color, count := range da.Colors {
+		coreAnalysis.ColorCounts[color] = count
+	}
+
+	// Copy mana curve
+	for cmc, count := range da.ManaCurve {
+		if cmc >= 0 && cmc < len(coreAnalysis.ManaCurve) {
+			coreAnalysis.ManaCurve[cmc] = count
+		}
+	}
+
+	// Copy keywords
+	for keyword, count := range da.Keywords {
+		coreAnalysis.Keywords[keyword] = count
+	}
+
+	// Copy creature types
+	for ct, count := range da.CreatureTypes {
+		coreAnalysis.CreatureTypes[ct] = count
+	}
+
+	// Set totals
+	coreAnalysis.TotalCards = da.TotalCards
+	coreAnalysis.AverageCMC = da.AverageCMC
+	coreAnalysis.LandCount = da.TotalCards - da.TotalNonLands
+
+	// Set card type counts from CardTypes map
+	if count, ok := da.CardTypes["Creature"]; ok {
+		coreAnalysis.CreatureCount = count
+	}
+	if count, ok := da.CardTypes["Instant"]; ok {
+		coreAnalysis.InstantCount = count
+	}
+	if count, ok := da.CardTypes["Sorcery"]; ok {
+		coreAnalysis.SorceryCount = count
+	}
+	if count, ok := da.CardTypes["Enchantment"]; ok {
+		coreAnalysis.EnchantmentCount = count
+	}
+	if count, ok := da.CardTypes["Artifact"]; ok {
+		coreAnalysis.ArtifactCount = count
+	}
+	if count, ok := da.CardTypes["Planeswalker"]; ok {
+		coreAnalysis.PlaneswalkerCount = count
+	}
+
+	return coreAnalysis
 }
 
 // analyzeDeck performs comprehensive deck analysis for recommendations.
@@ -562,89 +675,6 @@ func scoreManaCurve(card *cards.Card, analysis *DeckAnalysis) float64 {
 		score = 0.1 // Minimum score
 	}
 	return score
-}
-
-// scoreCardQuality calculates intrinsic card quality based on ratings.
-// Uses 17Lands data as primary source and CFB ratings as secondary/supplementary.
-func (e *RuleBasedEngine) scoreCardQuality(ctx context.Context, card *cards.Card, deck *DeckContext) float64 {
-	// Track which rating sources we have
-	seventeenLandsScore := -1.0
-	cfbScore := -1.0
-
-	// Try to get 17Lands score
-	if e.ratingsRepo != nil && deck.SetCode != "" && deck.DraftFormat != "" {
-		arenaIDStr := fmt.Sprintf("%d", card.ArenaID)
-		rating, err := e.ratingsRepo.GetCardRatingByArenaID(ctx, deck.SetCode, deck.DraftFormat, arenaIDStr)
-		if err == nil && rating != nil {
-			seventeenLandsScore = e.calculate17LandsScore(rating)
-		}
-	}
-
-	// Try to get CFB score
-	if e.cfbRatingsRepo != nil {
-		cfbRating, err := e.cfbRatingsRepo.GetRatingByArenaID(ctx, card.ArenaID)
-		if err == nil && cfbRating != nil {
-			cfbScore = cfbRating.LimitedScore
-		}
-	}
-
-	// Blend scores based on availability
-	// If both available: 70% 17Lands + 30% CFB (17Lands is data-driven, CFB is expert opinion)
-	// If only 17Lands: 100% 17Lands
-	// If only CFB: 100% CFB
-	// If neither: fallback to rarity
-
-	if seventeenLandsScore >= 0 && cfbScore >= 0 {
-		return (seventeenLandsScore * 0.70) + (cfbScore * 0.30)
-	} else if seventeenLandsScore >= 0 {
-		return seventeenLandsScore
-	} else if cfbScore >= 0 {
-		return cfbScore
-	}
-
-	return e.fallbackQualityScore(card)
-}
-
-// calculate17LandsScore calculates quality score from 17Lands metrics.
-func (e *RuleBasedEngine) calculate17LandsScore(rating *seventeenlands.CardRating) float64 {
-	// Weight: 50% GIHWR, 30% OHWR, 10% ATA, 10% ALSA
-
-	// Normalize GIHWR and OHWR (they're percentages, typically 45-60% range)
-	// Map 45% → 0.0, 55% → 0.5, 65%+ → 1.0
-	gihScore := (rating.GIHWR - 0.45) / 0.20 // 0.45-0.65 → 0.0-1.0
-	if gihScore < 0 {
-		gihScore = 0
-	} else if gihScore > 1 {
-		gihScore = 1
-	}
-
-	ohScore := (rating.OHWR - 0.45) / 0.20
-	if ohScore < 0 {
-		ohScore = 0
-	} else if ohScore > 1 {
-		ohScore = 1
-	}
-
-	// ATA (Average Taken At): Lower is better. Typical range 1-14
-	// Map 1 → 1.0, 5 → 0.7, 10 → 0.3, 14 → 0.0
-	ataScore := 1.0 - ((rating.ATA - 1.0) / 13.0)
-	if ataScore < 0 {
-		ataScore = 0
-	} else if ataScore > 1 {
-		ataScore = 1
-	}
-
-	// ALSA (Average Last Seen At): Higher means it wheels more (less valuable)
-	// Map 1 → 1.0, 5 → 0.7, 10 → 0.3, 14 → 0.0
-	alsaScore := 1.0 - ((rating.ALSA - 1.0) / 13.0)
-	if alsaScore < 0 {
-		alsaScore = 0
-	} else if alsaScore > 1 {
-		alsaScore = 1
-	}
-
-	// Weighted combination
-	return (gihScore * 0.50) + (ohScore * 0.30) + (ataScore * 0.10) + (alsaScore * 0.10)
 }
 
 // fallbackQualityScore provides quality score based on rarity when ratings unavailable.

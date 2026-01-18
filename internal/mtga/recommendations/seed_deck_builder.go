@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/cards"
+	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/recommendations/core"
 	"github.com/ramonehamilton/MTGA-Companion/internal/storage/models"
 	"github.com/ramonehamilton/MTGA-Companion/internal/storage/repository"
 )
@@ -349,6 +350,171 @@ func GetAllArchetypeProfiles() map[string]*ArchetypeProfile {
 	return archetypeProfiles
 }
 
+// seedCardToDeckAnalysis converts a SeedCardAnalysis to a core.DeckAnalysis.
+// This creates a deck analysis based on the seed card's properties for initial scoring.
+func seedCardToDeckAnalysis(seedAnalysis *SeedCardAnalysis) *core.DeckAnalysis {
+	if seedAnalysis == nil || seedAnalysis.Card == nil {
+		return core.NewDeckAnalysis()
+	}
+
+	analysis := core.NewDeckAnalysis()
+
+	// Set color identity from seed card
+	analysis.ColorIdentity = seedAnalysis.Colors
+	for _, color := range seedAnalysis.Colors {
+		analysis.ColorCounts[color] = 1
+	}
+
+	// Set creature types from seed card
+	for _, ct := range seedAnalysis.CreatureTypes {
+		analysis.CreatureTypes[ct] = 1
+	}
+
+	// Extract keywords from seed card's keywords
+	for _, kw := range seedAnalysis.Keywords {
+		analysis.Keywords[kw.Keyword] = 1
+	}
+
+	// Set themes
+	analysis.Themes = seedAnalysis.Themes
+
+	// Count the seed card
+	analysis.TotalCards = 1
+	if seedAnalysis.IsCreature {
+		analysis.CreatureCount = 1
+	}
+
+	// Set mana curve from seed card's CMC
+	cmc := seedAnalysis.CMC
+	if cmc >= 0 && cmc < len(analysis.ManaCurve) {
+		analysis.ManaCurve[cmc] = 1
+	}
+	analysis.AverageCMC = float64(cmc)
+
+	return analysis
+}
+
+// collectiveToCoreAnalysis converts a CollectiveDeckAnalysis to a core.DeckAnalysis.
+func collectiveToCoreAnalysis(collective *CollectiveDeckAnalysis) *core.DeckAnalysis {
+	if collective == nil {
+		return core.NewDeckAnalysis()
+	}
+
+	analysis := core.NewDeckAnalysis()
+
+	// Convert colors
+	for color, count := range collective.Colors {
+		analysis.ColorCounts[color] = count
+		if count > 0 && !core.ContainsString(analysis.ColorIdentity, color) {
+			analysis.ColorIdentity = append(analysis.ColorIdentity, color)
+		}
+	}
+
+	// Convert mana curve
+	for cmc, count := range collective.ManaCurve {
+		if cmc >= 0 && cmc < len(analysis.ManaCurve) {
+			analysis.ManaCurve[cmc] = count
+		}
+	}
+
+	// Convert creature types
+	for ct, count := range collective.CreatureTypes {
+		analysis.CreatureTypes[ct] = count
+	}
+
+	// Convert keywords
+	for _, kw := range collective.Keywords {
+		analysis.Keywords[kw.Keyword]++
+	}
+
+	// Convert themes
+	for theme, count := range collective.Themes {
+		if count > 0 {
+			analysis.Themes = append(analysis.Themes, theme)
+		}
+	}
+
+	analysis.TotalCards = collective.TotalCards
+
+	// Count card types from deck cards
+	for _, card := range collective.DeckCards {
+		if card == nil {
+			continue
+		}
+		if containsTypeInTypeLine(card.TypeLine, "Creature") {
+			analysis.CreatureCount++
+		}
+		if containsTypeInTypeLine(card.TypeLine, "Land") {
+			analysis.LandCount++
+		}
+		if containsTypeInTypeLine(card.TypeLine, "Instant") {
+			analysis.InstantCount++
+		}
+		if containsTypeInTypeLine(card.TypeLine, "Sorcery") {
+			analysis.SorceryCount++
+		}
+		if containsTypeInTypeLine(card.TypeLine, "Enchantment") {
+			analysis.EnchantmentCount++
+		}
+		if containsTypeInTypeLine(card.TypeLine, "Artifact") {
+			analysis.ArtifactCount++
+		}
+		if containsTypeInTypeLine(card.TypeLine, "Planeswalker") {
+			analysis.PlaneswalkerCount++
+		}
+	}
+
+	// Calculate average CMC
+	totalCMC := 0
+	nonLandCount := 0
+	for _, card := range collective.DeckCards {
+		if card != nil && !containsTypeInTypeLine(card.TypeLine, "Land") {
+			totalCMC += int(card.CMC)
+			nonLandCount++
+		}
+	}
+	if nonLandCount > 0 {
+		analysis.AverageCMC = float64(totalCMC) / float64(nonLandCount)
+	}
+
+	return analysis
+}
+
+// getScorerForArchetype returns the appropriate UnifiedScorer for an archetype.
+func getScorerForArchetype(archetype string) *core.UnifiedScorer {
+	switch strings.ToLower(archetype) {
+	case "aggro":
+		return core.NewAggroUnifiedScorer()
+	case "control":
+		return core.NewControlUnifiedScorer()
+	case "midrange", "tempo", "ramp", "combo", "tokens", "aristocrats":
+		// Midrange and similar archetypes use default constructed weights
+		return core.NewUnifiedScorer()
+	default:
+		return core.NewUnifiedScorer()
+	}
+}
+
+// coreScoreToBreakdown converts a core.CardScore to a ScoreBreakdown.
+func coreScoreToBreakdown(cardScore *core.CardScore) *ScoreBreakdown {
+	if cardScore == nil {
+		return &ScoreBreakdown{
+			ColorFit: 0.5,
+			CurveFit: 0.5,
+			Synergy:  0.5,
+			Quality:  0.5,
+			Overall:  0.5,
+		}
+	}
+	return &ScoreBreakdown{
+		ColorFit: cardScore.Factors.ColorFit,
+		CurveFit: cardScore.Factors.ManaCurve,
+		Synergy:  cardScore.Factors.Synergy,
+		Quality:  cardScore.Factors.CardQuality,
+		Overall:  cardScore.Score,
+	}
+}
+
 // BuildAroundSeed generates deck suggestions based on a seed card.
 func (s *SeedDeckBuilder) BuildAroundSeed(ctx context.Context, req *SeedDeckBuilderRequest) (*SeedDeckBuilderResponse, error) {
 	if req == nil {
@@ -602,23 +768,36 @@ func (s *SeedDeckBuilder) getCardsFromSet(ctx context.Context, setCode string) (
 	return result, nil
 }
 
-// scoreAndRankCandidates scores all candidates against the seed card.
+// scoreAndRankCandidates scores all candidates against the seed card using the unified engine.
 func (s *SeedDeckBuilder) scoreAndRankCandidates(candidates []*cards.Card, seedAnalysis *SeedCardAnalysis) []*scoredCard {
 	scored := make([]*scoredCard, 0, len(candidates))
 
+	// Convert seed analysis to core.DeckAnalysis for unified scoring
+	deckAnalysis := seedCardToDeckAnalysis(seedAnalysis)
+
+	// Use the default constructed scorer for standard deck building
+	scorer := core.NewUnifiedScorer()
+
 	for _, card := range candidates {
-		score, reasoning, breakdown, synergyDetails := s.scoreCardForSeed(card, seedAnalysis)
+		// Use unified scorer for main scoring
+		cardScore := scorer.ScoreCard(card, deckAnalysis, nil)
 
 		// Skip cards with very low scores
-		if score < 0.3 {
+		if cardScore.Score < 0.3 {
 			continue
 		}
 
+		// Get detailed synergy information for UI display
+		_, synergyDetails := s.scoreSynergyWithSeedDetailed(card, seedAnalysis)
+
+		// Build reasoning from the unified scorer
+		reasoning := s.buildReasoningFromScore(cardScore, card)
+
 		scored = append(scored, &scoredCard{
 			card:           card,
-			score:          score,
+			score:          cardScore.Score,
 			reasoning:      reasoning,
-			scoreBreakdown: breakdown,
+			scoreBreakdown: coreScoreToBreakdown(cardScore),
 			synergyDetails: synergyDetails,
 		})
 	}
@@ -629,6 +808,46 @@ func (s *SeedDeckBuilder) scoreAndRankCandidates(candidates []*cards.Card, seedA
 	})
 
 	return scored
+}
+
+// buildReasoningFromScore creates a human-readable reasoning string from a CardScore.
+func (s *SeedDeckBuilder) buildReasoningFromScore(cardScore *core.CardScore, card *cards.Card) string {
+	if cardScore == nil {
+		return "This card could work in your deck."
+	}
+
+	reasons := make([]string, 0)
+
+	if cardScore.Factors.ColorFit >= 0.8 {
+		reasons = append(reasons, "matches your colors")
+	}
+	if cardScore.Factors.ManaCurve >= 0.7 {
+		reasons = append(reasons, fmt.Sprintf("good curve fit at %d CMC", int(card.CMC)))
+	}
+	if cardScore.Factors.Synergy >= 0.7 {
+		reasons = append(reasons, "synergizes with your strategy")
+	}
+	if cardScore.Factors.CardQuality >= 0.7 {
+		reasons = append(reasons, "high-quality card")
+	}
+
+	if len(reasons) == 0 {
+		return "This card could work in your deck."
+	}
+
+	reasoning := "This card "
+	for i, r := range reasons {
+		if i == 0 {
+			reasoning += r
+		} else if i == len(reasons)-1 {
+			reasoning += ", and " + r
+		} else {
+			reasoning += ", " + r
+		}
+	}
+	reasoning += "."
+
+	return reasoning
 }
 
 // scoreCardForSeed calculates how well a card fits with the seed card.
@@ -742,35 +961,6 @@ func (s *SeedDeckBuilder) scoreColorCompatibility(card *cards.Card, seedAnalysis
 
 	// Partial match
 	return float64(matchingColors) / float64(len(card.Colors)) * 0.7
-}
-
-// scoreColorCompatibilityWithSplash scores color fit considering archetype's splash tendency.
-// Archetypes with higher splash tendency are more forgiving of off-color cards.
-func (s *SeedDeckBuilder) scoreColorCompatibilityWithSplash(card *cards.Card, seedAnalysis *SeedCardAnalysis, profile *ArchetypeProfile) float64 {
-	baseScore := s.scoreColorCompatibility(card, seedAnalysis)
-
-	// Perfect matches or colorless cards don't need adjustment
-	if baseScore >= 0.9 || baseScore == 0.5 {
-		return baseScore
-	}
-
-	// No overlap - apply splash tendency to allow some off-color splashes
-	// High splash archetypes (Control 0.6) can consider 1-off color cards
-	// Low splash archetypes (Aggro 0.1) stay strict
-	if baseScore == 0.0 {
-		// Only allow splash for single-color cards (easier to splash)
-		if len(card.Colors) == 1 && profile.SplashTendency >= 0.4 {
-			// Return a small score based on splash tendency
-			// Control (0.6) gets 0.24, Midrange (0.4) gets 0.16
-			return profile.SplashTendency * 0.4
-		}
-		return 0.0
-	}
-
-	// Partial match - boost score based on splash tendency
-	// The more splashable the archetype, the less penalty for partial matches
-	splashBonus := (1.0 - baseScore) * profile.SplashTendency * 0.3
-	return baseScore + splashBonus
 }
 
 // scoreManaCurveFit scores how well a card fits the ideal mana curve.
@@ -1397,9 +1587,15 @@ func (s *SeedDeckBuilder) getCandidatesFromDeckAnalysis(ctx context.Context, req
 	return finalCandidates, nil
 }
 
-// scoreAndRankForDeck scores candidates against the collective deck analysis.
+// scoreAndRankForDeck scores candidates against the collective deck analysis using the unified engine.
 func (s *SeedDeckBuilder) scoreAndRankForDeck(candidates []*cards.Card, deckAnalysis *CollectiveDeckAnalysis, excludeSet map[int]bool) []*scoredCard {
 	scored := make([]*scoredCard, 0, len(candidates))
+
+	// Convert collective analysis to core.DeckAnalysis for unified scoring
+	coreAnalysis := collectiveToCoreAnalysis(deckAnalysis)
+
+	// Use the default constructed scorer
+	scorer := core.NewUnifiedScorer()
 
 	for _, card := range candidates {
 		// Skip excluded cards
@@ -1407,18 +1603,45 @@ func (s *SeedDeckBuilder) scoreAndRankForDeck(candidates []*cards.Card, deckAnal
 			continue
 		}
 
-		score, reasoning, breakdown, synergyDetails := s.scoreCardForDeck(card, deckAnalysis)
+		// Use unified scorer for main scoring
+		cardScore := scorer.ScoreCard(card, coreAnalysis, nil)
+
+		// Get detailed synergy information for UI display
+		_, synergyDetails := s.scoreSynergyWithDeckDetailed(card, deckAnalysis)
+
+		// Apply package-based synergy bonus
+		packageBonus, packageReasons := ScoreCardForPackages(card, deckAnalysis.PackageAnalyses)
+		if packageBonus > 0 {
+			// Blend package bonus into the score (capped at 1.0)
+			adjustedScore := cardScore.Score + (packageBonus * 0.15) // 15% weight for package synergy
+			if adjustedScore > 1.0 {
+				adjustedScore = 1.0
+			}
+			cardScore.Score = adjustedScore
+
+			// Add package synergy details
+			for _, reason := range packageReasons {
+				synergyDetails = append(synergyDetails, SynergyDetail{
+					Type:        "package",
+					Name:        "Synergy Package",
+					Description: reason,
+				})
+			}
+		}
 
 		// Skip cards with very low scores
-		if score < 0.3 {
+		if cardScore.Score < 0.3 {
 			continue
 		}
 
+		// Build reasoning from the unified scorer
+		reasoning := s.buildReasoningFromScoreForDeck(cardScore, card, packageReasons)
+
 		scored = append(scored, &scoredCard{
 			card:           card,
-			score:          score,
+			score:          cardScore.Score,
 			reasoning:      reasoning,
-			scoreBreakdown: breakdown,
+			scoreBreakdown: coreScoreToBreakdown(cardScore),
 			synergyDetails: synergyDetails,
 		})
 	}
@@ -1429,6 +1652,49 @@ func (s *SeedDeckBuilder) scoreAndRankForDeck(candidates []*cards.Card, deckAnal
 	})
 
 	return scored
+}
+
+// buildReasoningFromScoreForDeck creates a reasoning string for deck-based scoring.
+func (s *SeedDeckBuilder) buildReasoningFromScoreForDeck(cardScore *core.CardScore, card *cards.Card, packageReasons []string) string {
+	if cardScore == nil {
+		return "This card could work in your deck."
+	}
+
+	reasons := make([]string, 0)
+
+	if cardScore.Factors.ColorFit >= 0.8 {
+		reasons = append(reasons, "matches deck colors")
+	}
+	if cardScore.Factors.ManaCurve >= 0.7 {
+		reasons = append(reasons, fmt.Sprintf("fills curve gap at %d CMC", int(card.CMC)))
+	}
+	if cardScore.Factors.Synergy >= 0.7 {
+		reasons = append(reasons, "synergizes with deck strategy")
+	}
+	if cardScore.Factors.CardQuality >= 0.7 {
+		reasons = append(reasons, "high-quality card")
+	}
+
+	// Add package reasons
+	reasons = append(reasons, packageReasons...)
+
+	if len(reasons) == 0 {
+		return "This card could work in your deck."
+	}
+
+	reasoning := "This card "
+	for i, r := range reasons {
+		if i == 0 {
+			reasoning += r
+		} else if i == len(reasons)-1 {
+			reasoning += ", and " + r
+		} else {
+			reasoning += ", " + r
+		}
+	}
+	reasoning += "."
+
+	return reasoning
 }
 
 // scoreCardForDeck calculates how well a card fits with the current deck.
@@ -1988,21 +2254,50 @@ func (s *SeedDeckBuilder) GenerateCompleteDeck(ctx context.Context, req *Generat
 	}, nil
 }
 
-// scoreForArchetype scores candidates with archetype-specific curve weighting.
+// scoreForArchetype scores candidates with archetype-specific curve weighting using the unified engine.
 func (s *SeedDeckBuilder) scoreForArchetype(candidates []*cards.Card, seedAnalysis *SeedCardAnalysis, profile *ArchetypeProfile) []*scoredCard {
 	scored := make([]*scoredCard, 0, len(candidates))
 
+	// Convert seed analysis to core.DeckAnalysis
+	deckAnalysis := seedCardToDeckAnalysis(seedAnalysis)
+
+	// Get archetype-specific unified scorer
+	scorer := getScorerForArchetype(profile.Name)
+
 	for _, card := range candidates {
-		score, reasoning, breakdown, synergyDetails := s.scoreCardForArchetype(card, seedAnalysis, profile)
+		// Use unified scorer for main scoring
+		cardScore := scorer.ScoreCard(card, deckAnalysis, nil)
+
+		// Apply archetype-specific type fit adjustment
+		typeScore := s.scoreTypeForArchetype(card, profile)
+		archetypeCurveScore := s.scoreArchetypeCurveFit(card, profile)
+
+		// Blend unified score with archetype-specific adjustments
+		// Unified score: 70%, archetype type fit: 15%, archetype curve: 15%
+		adjustedScore := (cardScore.Score * 0.70) + (typeScore * 0.15) + (archetypeCurveScore * 0.15)
+		if adjustedScore > 1.0 {
+			adjustedScore = 1.0
+		}
 
 		// Skip cards with very low scores
-		if score < 0.25 {
+		if adjustedScore < 0.25 {
 			continue
 		}
 
+		// Get detailed synergy information for UI display
+		_, synergyDetails := s.scoreSynergyWithSeedDetailed(card, seedAnalysis)
+
+		// Build reasoning from the unified scorer
+		reasoning := s.buildReasoningForArchetype(cardScore, card, profile, typeScore)
+
+		// Update breakdown with adjusted curve score
+		breakdown := coreScoreToBreakdown(cardScore)
+		breakdown.CurveFit = archetypeCurveScore
+		breakdown.Overall = adjustedScore
+
 		scored = append(scored, &scoredCard{
 			card:           card,
-			score:          score,
+			score:          adjustedScore,
 			reasoning:      reasoning,
 			scoreBreakdown: breakdown,
 			synergyDetails: synergyDetails,
@@ -2017,75 +2312,46 @@ func (s *SeedDeckBuilder) scoreForArchetype(candidates []*cards.Card, seedAnalys
 	return scored
 }
 
-// scoreCardForArchetype calculates how well a card fits with the seed card and archetype.
-func (s *SeedDeckBuilder) scoreCardForArchetype(card *cards.Card, seedAnalysis *SeedCardAnalysis, profile *ArchetypeProfile) (float64, string, *ScoreBreakdown, []SynergyDetail) {
-	reasons := make([]string, 0)
-	synergyDetails := make([]SynergyDetail, 0)
+// buildReasoningForArchetype creates reasoning for archetype-based scoring.
+func (s *SeedDeckBuilder) buildReasoningForArchetype(cardScore *core.CardScore, card *cards.Card, profile *ArchetypeProfile, typeScore float64) string {
+	if cardScore == nil {
+		return "This card could work in your deck."
+	}
 
-	// Factor 1: Color Compatibility (25%) - with archetype-aware splashing
-	colorScore := s.scoreColorCompatibilityWithSplash(card, seedAnalysis, profile)
-	if colorScore >= 0.8 {
+	reasons := make([]string, 0)
+
+	if cardScore.Factors.ColorFit >= 0.8 {
 		reasons = append(reasons, "matches your colors")
-	} else if colorScore > 0.0 && colorScore < 0.5 {
+	} else if cardScore.Factors.ColorFit > 0.0 && cardScore.Factors.ColorFit < 0.5 {
 		reasons = append(reasons, "splash candidate")
 	}
-
-	// Factor 2: Archetype Curve Fit (25%) - higher weight than normal
-	curveScore := s.scoreArchetypeCurveFit(card, profile)
-	if curveScore >= 0.7 {
+	if cardScore.Factors.ManaCurve >= 0.7 {
 		reasons = append(reasons, fmt.Sprintf("fits %s curve at %d CMC", profile.Name, int(card.CMC)))
 	}
-
-	// Factor 3: Synergy with Seed (25%)
-	synergyScore, cardSynergyDetails := s.scoreSynergyWithSeedDetailed(card, seedAnalysis)
-	synergyDetails = append(synergyDetails, cardSynergyDetails...)
-	if synergyScore >= 0.7 {
+	if cardScore.Factors.Synergy >= 0.7 {
 		reasons = append(reasons, "synergizes with your strategy")
 	}
-
-	// Factor 4: Card Type Fit (15%) - does it match archetype's creature ratio?
-	typeScore := s.scoreTypeForArchetype(card, profile)
 	if typeScore >= 0.8 {
 		reasons = append(reasons, fmt.Sprintf("good for %s", strings.ToLower(profile.Name)))
 	}
 
-	// Factor 5: Card Quality (10%)
-	qualityScore := s.scoreCardQuality(card)
-
-	// Calculate weighted score
-	score := (colorScore * 0.25) +
-		(curveScore * 0.25) +
-		(synergyScore * 0.25) +
-		(typeScore * 0.15) +
-		(qualityScore * 0.10)
-
-	// Build score breakdown
-	breakdown := &ScoreBreakdown{
-		ColorFit: colorScore,
-		CurveFit: curveScore,
-		Synergy:  synergyScore,
-		Quality:  qualityScore,
-		Overall:  score,
-	}
-
-	// Build reasoning string
-	reasoning := "This card "
 	if len(reasons) == 0 {
-		reasoning = "This card could work in your deck."
-	} else {
-		for i, r := range reasons {
-			if i == 0 {
-				reasoning += r
-			} else if i == len(reasons)-1 {
-				reasoning += ", and " + r
-			} else {
-				reasoning += ", " + r
-			}
-		}
-		reasoning += "."
+		return "This card could work in your deck."
 	}
 
-	return score, reasoning, breakdown, synergyDetails
+	reasoning := "This card "
+	for i, r := range reasons {
+		if i == 0 {
+			reasoning += r
+		} else if i == len(reasons)-1 {
+			reasoning += ", and " + r
+		} else {
+			reasoning += ", " + r
+		}
+	}
+	reasoning += "."
+
+	return reasoning
 }
 
 // scoreArchetypeCurveFit scores how well a card fits the archetype's ideal curve.
