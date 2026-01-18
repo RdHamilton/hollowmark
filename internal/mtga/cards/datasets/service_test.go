@@ -87,6 +87,53 @@ func TestGetCardRatings_S3Dataset(t *testing.T) {
 	t.Logf("BLB data source: %s", source)
 }
 
+func TestGetCardRatings_HasArenaIDs(t *testing.T) {
+	// Test that ratings returned always have Arena IDs (#896)
+	// CSV files don't contain Arena IDs, so they must be merged from web API
+	service, err := NewService(DefaultServiceOptions())
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Test with BLB which uses S3 CSV (needs Arena ID merge)
+	ratings, err := service.GetCardRatings(ctx, "BLB", "PremierDraft")
+	if err != nil {
+		t.Fatalf("Failed to get BLB ratings: %v", err)
+	}
+
+	if len(ratings) == 0 {
+		t.Fatal("Expected ratings for BLB, got 0")
+	}
+
+	// Verify that ratings have Arena IDs
+	cardsWithArenaID := 0
+	cardsWithoutArenaID := 0
+	for _, r := range ratings {
+		if r.MTGAID > 0 {
+			cardsWithArenaID++
+		} else {
+			cardsWithoutArenaID++
+		}
+	}
+
+	t.Logf("BLB ratings: %d with Arena ID, %d without", cardsWithArenaID, cardsWithoutArenaID)
+
+	// All or most ratings should have Arena IDs
+	// The fix ensures we fall back to web API if merge fails
+	if cardsWithArenaID == 0 {
+		t.Error("Expected ratings to have Arena IDs after merge, but all were 0")
+	}
+
+	// Verify most cards have Arena IDs (some might not match by name)
+	ratio := float64(cardsWithArenaID) / float64(len(ratings))
+	if ratio < 0.8 {
+		t.Errorf("Expected at least 80%% of ratings to have Arena IDs, got %.1f%%", ratio*100)
+	}
+}
+
 func TestCheckDatasetAvailability(t *testing.T) {
 	service, err := NewService(DefaultServiceOptions())
 	if err != nil {

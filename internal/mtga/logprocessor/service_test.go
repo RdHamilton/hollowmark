@@ -1519,3 +1519,168 @@ func TestProcessGamePlays_MatchCompletionDetection(t *testing.T) {
 		t.Errorf("Expected activeMatchID to be empty after match completion, got '%s'", processor.activeMatchID)
 	}
 }
+
+func TestLinkDraftSessionToMatches(t *testing.T) {
+	// Test that draft matches are linked to their sessions (#911)
+	service, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create a completed draft session
+	endTime := time.Now().Add(-1 * time.Hour)
+	draftSession := &models.DraftSession{
+		ID:         "QuickDraft_TLA_20251127",
+		EventName:  "QuickDraft_TLA_20251127",
+		SetCode:    "TLA",
+		DraftType:  "QuickDraft",
+		StartTime:  time.Now().Add(-3 * time.Hour),
+		EndTime:    &endTime,
+		Status:     "completed",
+		TotalPicks: 42,
+		CreatedAt:  time.Now().Add(-3 * time.Hour),
+		UpdatedAt:  time.Now().Add(-1 * time.Hour),
+	}
+	if err := service.DraftRepo().CreateSession(ctx, draftSession); err != nil {
+		t.Fatalf("Failed to create draft session: %v", err)
+	}
+
+	// Create a draft match that should be linked (within 24 hours, matching event name)
+	draftMatch := &models.Match{
+		ID:           "match-draft-001",
+		EventName:    "QuickDraft_TLA_20251127",
+		Format:       "QuickDraft",
+		Result:       "win",
+		PlayerWins:   2,
+		OpponentWins: 1,
+		Timestamp:    time.Now().Add(-30 * time.Minute), // After draft end
+	}
+	if err := service.MatchRepo().Create(ctx, draftMatch); err != nil {
+		t.Fatalf("Failed to create draft match: %v", err)
+	}
+
+	// Create a non-draft match that should NOT be linked
+	nonDraftMatch := &models.Match{
+		ID:           "match-standard-001",
+		EventName:    "Ladder_Standard_2024",
+		Format:       "Ladder",
+		Result:       "loss",
+		PlayerWins:   1,
+		OpponentWins: 2,
+		Timestamp:    time.Now().Add(-20 * time.Minute),
+	}
+	if err := service.MatchRepo().Create(ctx, nonDraftMatch); err != nil {
+		t.Fatalf("Failed to create non-draft match: %v", err)
+	}
+
+	// Create a draft match from a different set (should NOT be linked)
+	differentSetMatch := &models.Match{
+		ID:           "match-draft-002",
+		EventName:    "QuickDraft_DSK_20251127",
+		Format:       "QuickDraft",
+		Result:       "win",
+		PlayerWins:   2,
+		OpponentWins: 0,
+		Timestamp:    time.Now().Add(-15 * time.Minute),
+	}
+	if err := service.MatchRepo().Create(ctx, differentSetMatch); err != nil {
+		t.Fatalf("Failed to create different set match: %v", err)
+	}
+
+	// Run the linking
+	processor := NewService(service)
+	processor.linkDraftSessionToMatches(ctx, draftSession.ID, draftSession)
+
+	// Verify the correct match was linked
+	results, err := service.DraftAnalyticsRepo().GetDraftMatchResults(ctx, draftSession.ID)
+	if err != nil {
+		t.Fatalf("Failed to get draft match results: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("Expected 1 match to be linked, got %d", len(results))
+	}
+
+	if len(results) > 0 && results[0].MatchID != "match-draft-001" {
+		t.Errorf("Expected match 'match-draft-001' to be linked, got '%s'", results[0].MatchID)
+	}
+}
+
+func TestIsMatchFromDraft(t *testing.T) {
+	service, cleanup := setupTestService(t)
+	defer cleanup()
+
+	processor := NewService(service)
+
+	endTime := time.Now().Add(-1 * time.Hour)
+	session := &models.DraftSession{
+		ID:        "QuickDraft_TLA_20251127",
+		SetCode:   "TLA",
+		StartTime: time.Now().Add(-3 * time.Hour),
+		EndTime:   &endTime,
+	}
+
+	tests := []struct {
+		name     string
+		match    *models.Match
+		expected bool
+	}{
+		{
+			name: "QuickDraft match with matching set",
+			match: &models.Match{
+				EventName: "QuickDraft_TLA_20251127",
+				Timestamp: time.Now().Add(-30 * time.Minute),
+			},
+			expected: true,
+		},
+		{
+			name: "PremierDraft match with matching set",
+			match: &models.Match{
+				EventName: "PremierDraft_TLA_20251127",
+				Timestamp: time.Now().Add(-30 * time.Minute),
+			},
+			expected: true,
+		},
+		{
+			name: "Standard ladder match (not draft)",
+			match: &models.Match{
+				EventName: "Ladder_Standard_2024",
+				Timestamp: time.Now().Add(-30 * time.Minute),
+			},
+			expected: false,
+		},
+		{
+			name: "Draft match with different set",
+			match: &models.Match{
+				EventName: "QuickDraft_DSK_20251127",
+				Timestamp: time.Now().Add(-30 * time.Minute),
+			},
+			expected: false,
+		},
+		{
+			name: "Draft match too old (before draft end)",
+			match: &models.Match{
+				EventName: "QuickDraft_TLA_20251127",
+				Timestamp: time.Now().Add(-5 * time.Hour), // Before draft end
+			},
+			expected: false,
+		},
+		{
+			name: "Draft match too far after draft (>24 hours)",
+			match: &models.Match{
+				EventName: "QuickDraft_TLA_20251127",
+				Timestamp: time.Now().Add(25 * time.Hour), // More than 24 hours after
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := processor.isMatchFromDraft(tt.match, session)
+			if result != tt.expected {
+				t.Errorf("isMatchFromDraft() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
