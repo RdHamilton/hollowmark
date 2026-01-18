@@ -119,7 +119,7 @@ func AnalyzeDeck(deckCards []*cards.Card) *DeckAnalysis {
 			}
 			seenColors[color] = true
 			analysis.ColorCounts[color]++
-			if !containsString(analysis.ColorIdentity, color) {
+			if !ContainsString(analysis.ColorIdentity, color) {
 				analysis.ColorIdentity = append(analysis.ColorIdentity, color)
 			}
 		}
@@ -225,8 +225,8 @@ func detectThemes(analysis *DeckAnalysis) []string {
 	return themes
 }
 
-// containsString checks if a slice contains a string.
-func containsString(slice []string, s string) bool {
+// ContainsString checks if a slice contains a string.
+func ContainsString(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {
 			return true
