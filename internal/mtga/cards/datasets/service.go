@@ -54,11 +54,15 @@ func NewService(options ServiceOptions) (*Service, error) {
 // Strategy:
 // 1. Try S3 public datasets first (recommended approach)
 // 2. If S3 data is found, merge Arena IDs and Scryfall URLs from web API
-// 3. If S3 fails or dataset doesn't exist, fall back to web API
+// 3. If S3 fails, dataset doesn't exist, or merge fails, fall back to web API
 //
 // This ensures we use the recommended datasets when available while
 // still supporting newer sets like TLA that only have web API data.
 // The web API provides Arena IDs (mtga_id) and Scryfall URLs that CSV doesn't have.
+//
+// IMPORTANT: CSV ratings without Arena IDs are NOT returned, since they can't
+// be matched to cards and would be skipped during save. If the merge fails,
+// we fall back to the web API which includes Arena IDs.
 func (s *Service) GetCardRatings(ctx context.Context, setCode, format string) ([]seventeenlands.CardRating, error) {
 	log.Printf("[DatasetService] Fetching card ratings for %s / %s", setCode, format)
 
@@ -71,22 +75,35 @@ func (s *Service) GetCardRatings(ctx context.Context, setCode, format string) ([
 		// This is needed because CSV files don't contain card identifiers
 		mergedRatings, mergeErr := s.mergeWebAPIMetadata(ctx, ratings, setCode, format)
 		if mergeErr != nil {
-			log.Printf("[DatasetService] Warning: failed to merge web API metadata: %v", mergeErr)
-			// Return CSV ratings without identifiers as fallback
-			return ratings, nil
+			log.Printf("[DatasetService] Warning: failed to merge web API metadata: %v, falling back to web API", mergeErr)
+			// Don't return CSV ratings without Arena IDs - they can't be matched to cards
+			// Fall through to web API fallback below
+		} else {
+			// Check that we actually got Arena IDs for most cards
+			cardsWithArenaID := 0
+			for _, r := range mergedRatings {
+				if r.MTGAID > 0 {
+					cardsWithArenaID++
+				}
+			}
+
+			if cardsWithArenaID > 0 {
+				log.Printf("[DatasetService] Merged %d/%d ratings with Arena IDs from web API", cardsWithArenaID, len(mergedRatings))
+				return mergedRatings, nil
+			}
+
+			log.Printf("[DatasetService] Warning: merge succeeded but no Arena IDs found, falling back to web API")
 		}
-		log.Printf("[DatasetService] Merged %d ratings with web API metadata", len(mergedRatings))
-		return mergedRatings, nil
-	}
-
-	// Log S3 failure but continue to fallback
-	if err != nil {
-		log.Printf("[DatasetService] S3 dataset unavailable: %v, falling back to web API", err)
 	} else {
-		log.Printf("[DatasetService] S3 dataset returned no data, falling back to web API")
+		// Log S3 failure but continue to fallback
+		if err != nil {
+			log.Printf("[DatasetService] S3 dataset unavailable: %v, falling back to web API", err)
+		} else {
+			log.Printf("[DatasetService] S3 dataset returned no data, falling back to web API")
+		}
 	}
 
-	// Strategy 2: Fall back to web API (for sets like TLA)
+	// Strategy 2: Fall back to web API (for sets like TLA, or when CSV merge failed)
 	ratings, err = s.webScraper.FetchCardRatings(ctx, setCode, format)
 	if err != nil {
 		return nil, fmt.Errorf("both S3 and web API failed: web API error: %w", err)

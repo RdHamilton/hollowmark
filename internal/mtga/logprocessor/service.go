@@ -1283,6 +1283,13 @@ func (s *Service) storeDraftSession(ctx context.Context, data *draftSessionData)
 				log.Printf("Warning: Failed to mark draft session as completed: %v", err)
 			} else {
 				log.Printf("✓ Draft session %s marked as completed (%d/%d picks)", data.SessionID, len(picks), expectedPicks)
+
+				// Link draft session to any matching draft matches (#911)
+				// Fetch the updated session with end time for linking
+				updatedSession, getErr := s.storage.DraftRepo().GetSession(ctx, data.SessionID)
+				if getErr == nil && updatedSession != nil {
+					s.linkDraftSessionToMatches(ctx, data.SessionID, updatedSession)
+				}
 			}
 		}
 
@@ -1750,4 +1757,100 @@ func (s *Service) storeGameSnapshots(ctx context.Context, snapshots []*logreader
 		}
 		log.Printf("✓ Stored %d game snapshot(s) for match %s", result.GameSnapshotsStored, logMatchID)
 	}
+}
+
+// linkDraftSessionToMatches links a completed draft session to any matching draft matches.
+// This populates the draft_match_results table by finding matches that:
+// 1. Occurred after the draft completed
+// 2. Have event names containing draft-related terms (QuickDraft, PremierDraft, etc.)
+// 3. Match the draft's set code
+// Issue #911: This enables proper draft analytics by linking matches to their draft sessions.
+func (s *Service) linkDraftSessionToMatches(ctx context.Context, sessionID string, session *models.DraftSession) {
+	if session == nil {
+		return
+	}
+
+	// Find the start time for match search (use draft end time if available)
+	startTime := session.StartTime
+	if session.EndTime != nil {
+		startTime = *session.EndTime
+	}
+
+	// Search for draft matches after the session
+	filter := models.StatsFilter{
+		StartDate: &startTime,
+	}
+
+	matches, err := s.storage.MatchRepo().GetMatches(ctx, filter)
+	if err != nil {
+		log.Printf("[DraftMatchLink] Failed to get matches for session %s: %v", sessionID, err)
+		return
+	}
+
+	linkedCount := 0
+	for _, match := range matches {
+		// Check if this match is from our draft
+		if !s.isMatchFromDraft(match, session) {
+			continue
+		}
+
+		result := &models.DraftMatchResult{
+			SessionID:      sessionID,
+			MatchID:        match.ID,
+			Result:         match.Result,
+			GameWins:       match.PlayerWins,
+			GameLosses:     match.OpponentWins,
+			MatchTimestamp: match.Timestamp,
+		}
+
+		if err := s.storage.DraftAnalyticsRepo().SaveDraftMatchResult(ctx, result); err != nil {
+			// Likely duplicate - not an error
+			continue
+		}
+		linkedCount++
+	}
+
+	if linkedCount > 0 {
+		log.Printf("✓ Linked %d match(es) to draft session %s (%s)", linkedCount, sessionID, session.SetCode)
+	}
+}
+
+// isMatchFromDraft checks if a match appears to be from a specific draft session.
+// Matches are linked based on:
+// 1. Event name contains draft-related terms
+// 2. Match occurred within 24 hours after draft completed
+// 3. Event name contains the draft's set code
+func (s *Service) isMatchFromDraft(match *models.Match, session *models.DraftSession) bool {
+	eventName := match.EventName
+
+	// Check for draft-related event names
+	draftTerms := []string{"Draft", "Sealed", "Limited", "QuickDraft", "PremierDraft"}
+	isDraftEvent := false
+	for _, term := range draftTerms {
+		if strings.Contains(strings.ToLower(eventName), strings.ToLower(term)) {
+			isDraftEvent = true
+			break
+		}
+	}
+
+	if !isDraftEvent {
+		return false
+	}
+
+	// Check time window (within 24 hours after draft)
+	maxTimeDiff := 24 * time.Hour
+	if session.EndTime != nil {
+		timeDiff := match.Timestamp.Sub(*session.EndTime)
+		if timeDiff < 0 || timeDiff > maxTimeDiff {
+			return false
+		}
+	} else {
+		timeDiff := match.Timestamp.Sub(session.StartTime)
+		if timeDiff < 0 || timeDiff > maxTimeDiff {
+			return false
+		}
+	}
+
+	// Check set code matches
+	return strings.Contains(strings.ToLower(eventName), strings.ToLower(session.SetCode))
 }
