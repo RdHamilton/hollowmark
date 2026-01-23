@@ -142,18 +142,18 @@ type SyncProgressEvent struct {
 // SyncCompletedEvent is the payload for sync:completed events.
 // Sent when synchronization finishes successfully.
 type SyncCompletedEvent struct {
-	TaskID      string `json:"taskId"`      // Unique task identifier
-	SetsSynced  int    `json:"setsSynced"`  // Number of sets synced
-	TotalCards  int    `json:"totalCards"`  // Total cards synced
-	SetsFailed  int    `json:"setsFailed"`  // Number of sets that failed
+	TaskID      string  `json:"taskId"`      // Unique task identifier
+	SetsSynced  int     `json:"setsSynced"`  // Number of sets synced
+	TotalCards  int     `json:"totalCards"`  // Total cards synced
+	SetsFailed  int     `json:"setsFailed"`  // Number of sets that failed
 	DurationSec float64 `json:"durationSec"` // Duration in seconds
 }
 
 // SyncErrorEvent is the payload for sync:error events.
 // Sent when synchronization encounters an error.
 type SyncErrorEvent struct {
-	TaskID  string `json:"taskId"`          // Unique task identifier
-	Error   string `json:"error"`           // Error message
+	TaskID  string `json:"taskId"`            // Unique task identifier
+	Error   string `json:"error"`             // Error message
 	SetCode string `json:"setCode,omitempty"` // Set that failed (if applicable)
 }
 
