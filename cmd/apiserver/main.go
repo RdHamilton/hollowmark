@@ -226,6 +226,28 @@ func main() {
 		fmt.Println("Registered daemon event forwarder to API server WebSocket")
 	}
 
+	// Register WebSocket observer with the EventDispatcher to forward sync events to frontend
+	// This enables the loading bar to show progress for card syncing operations
+	// IMPORTANT: Must register BEFORE starting sync goroutine to avoid race condition
+	wsObserver := server.NewWebSocketObserver()
+	eventDispatcher.Register(wsObserver)
+	fmt.Println("Registered WebSocket observer for sync progress events")
+
+	// Start background sync of Standard set card data
+	// NOTE: This must happen AFTER WebSocket observer is registered so progress events are forwarded
+	go func() {
+		// Wait for browser/frontend to connect before starting sync
+		// This ensures progress events are received by at least one WebSocket client
+		time.Sleep(3 * time.Second)
+
+		// Give longer timeout to allow for card syncing (10 minutes for full Standard sync)
+		syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		// Check if Standard set cards are incomplete and sync them
+		systemFacade.SyncIncompleteStandardCards(syncCtx, setFetcher)
+	}()
+
 	// Start API server
 	if err := server.Start(); err != nil {
 		log.Fatalf("Failed to start API server: %v", err)
