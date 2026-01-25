@@ -377,7 +377,8 @@ func (r *deckPermutationRepository) ResetPerformance(ctx context.Context, permut
 		SET matches_played = 0,
 		    matches_won = 0,
 		    games_played = 0,
-		    games_won = 0
+		    games_won = 0,
+		    last_played_at = NULL
 		WHERE id = ?
 	`
 
@@ -396,7 +397,8 @@ func (r *deckPermutationRepository) ResetAllPerformanceForDeck(ctx context.Conte
 		SET matches_played = 0,
 		    matches_won = 0,
 		    games_played = 0,
-		    games_won = 0
+		    games_won = 0,
+		    last_played_at = NULL
 		WHERE deck_id = ?
 	`
 
