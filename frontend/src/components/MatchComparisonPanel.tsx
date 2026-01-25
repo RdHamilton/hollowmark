@@ -280,12 +280,15 @@ export default function MatchComparisonPanel({
     const bestMatches = best.MatchCount || 0;
     const worstMatches = worst.MatchCount || 0;
 
-    const insights: string[] = [];
+    const insights: React.ReactNode[] = [];
 
     // Primary comparison insight
     if (comparisonType === 'decks') {
       insights.push(
-        `<strong>${bestName}</strong> outperforms <strong>${worstName}</strong> by <span class="highlight">${winRateDiff.toFixed(1)} percentage points</span> in match win rate.`
+        <>
+          <strong>{bestName}</strong> outperforms <strong>{worstName}</strong> by{' '}
+          <span className="highlight">{winRateDiff.toFixed(1)} percentage points</span> in match win rate.
+        </>
       );
 
       // Sample size warning
@@ -293,7 +296,9 @@ export default function MatchComparisonPanel({
         const lowSampleDeck = bestMatches < worstMatches ? bestName : worstName;
         const lowCount = Math.min(bestMatches, worstMatches);
         insights.push(
-          `<em>Note:</em> ${lowSampleDeck} has only ${lowCount} matches — results may change with more games.`
+          <>
+            <em>Note:</em> {lowSampleDeck} has only {lowCount} matches — results may change with more games.
+          </>
         );
       }
 
@@ -304,11 +309,15 @@ export default function MatchComparisonPanel({
       if (Math.abs(bestGameMatchDiff) > 5) {
         if (bestGameMatchDiff > 5) {
           insights.push(
-            `${bestName}'s game win rate is higher than match win rate, suggesting you're winning games but losing close matches — consider sideboard adjustments.`
+            <>
+              {bestName}&apos;s game win rate is higher than match win rate, suggesting you&apos;re winning games but losing close matches — consider sideboard adjustments.
+            </>
           );
         } else if (bestGameMatchDiff < -5) {
           insights.push(
-            `${bestName} converts games to match wins efficiently — you're strong in best-of-three scenarios.`
+            <>
+              {bestName} converts games to match wins efficiently — you&apos;re strong in best-of-three scenarios.
+            </>
           );
         }
       }
@@ -316,7 +325,9 @@ export default function MatchComparisonPanel({
       if (Math.abs(worstGameMatchDiff) > 5 && worstMatches >= 10) {
         if (worstGameMatchDiff > 5) {
           insights.push(
-            `${worstName} wins individual games but struggles to close out matches — sideboard strategy may need work.`
+            <>
+              {worstName} wins individual games but struggles to close out matches — sideboard strategy may need work.
+            </>
           );
         }
       }
@@ -324,35 +335,49 @@ export default function MatchComparisonPanel({
       // Recommendation based on data
       if (winRateDiff > 20 && bestMatches >= 10) {
         insights.push(
-          `With a ${winRateDiff.toFixed(0)}%+ advantage, <strong>${bestName}</strong> appears to be significantly stronger in your hands. Consider what makes it work for you.`
+          <>
+            With a {winRateDiff.toFixed(0)}%+ advantage, <strong>{bestName}</strong> appears to be significantly stronger in your hands. Consider what makes it work for you.
+          </>
         );
       } else if (winRateDiff > 10 && worstMatches >= 15) {
         insights.push(
-          `<strong>${worstName}</strong> might benefit from more practice or meta adjustments — the sample size suggests this isn't just variance.`
+          <>
+            <strong>{worstName}</strong> might benefit from more practice or meta adjustments — the sample size suggests this isn&apos;t just variance.
+          </>
         );
       }
     } else if (comparisonType === 'formats') {
       insights.push(
-        `You perform best in <strong>${bestName}</strong> (${formatWinRate(bestWinRate)}) compared to <strong>${worstName}</strong> (${formatWinRate(worstWinRate)}).`
+        <>
+          You perform best in <strong>{bestName}</strong> ({formatWinRate(bestWinRate)}) compared to <strong>{worstName}</strong> ({formatWinRate(worstWinRate)}).
+        </>
       );
 
       if (winRateDiff > 15) {
         insights.push(
-          `Consider focusing on ${bestName} for climbing — your ${winRateDiff.toFixed(0)}% edge is significant.`
+          <>
+            Consider focusing on {bestName} for climbing — your {winRateDiff.toFixed(0)}% edge is significant.
+          </>
         );
       }
     } else if (comparisonType === 'time-periods') {
       insights.push(
-        `Your win rate was highest during <strong>${bestName}</strong> (${formatWinRate(bestWinRate)}).`
+        <>
+          Your win rate was highest during <strong>{bestName}</strong> ({formatWinRate(bestWinRate)}).
+        </>
       );
 
       if (bestWinRate > worstWinRate) {
         insights.push(
-          `Performance improved by ${winRateDiff.toFixed(1)} percentage points compared to ${worstName}.`
+          <>
+            Performance improved by {winRateDiff.toFixed(1)} percentage points compared to {worstName}.
+          </>
         );
       } else {
         insights.push(
-          `Recent performance in ${worstName} shows room for improvement.`
+          <>
+            Recent performance in {worstName} shows room for improvement.
+          </>
         );
       }
     }
@@ -360,7 +385,7 @@ export default function MatchComparisonPanel({
     return (
       <>
         {insights.map((insight, index) => (
-          <p key={index} dangerouslySetInnerHTML={{ __html: insight }} />
+          <p key={index}>{insight}</p>
         ))}
       </>
     );

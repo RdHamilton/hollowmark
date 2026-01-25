@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -1270,10 +1272,14 @@ func (h *DeckHandler) GetAllPerformanceRecommendations(w http.ResponseWriter, r 
 }
 
 // RecalculateDeckPerformance recalculates all deck and permutation performance statistics
-// from the historical match data.
+// from the historical match data. This is a long-running operation that may take several minutes.
 // POST /admin/recalculate-deck-performance
 func (h *DeckHandler) RecalculateDeckPerformance(w http.ResponseWriter, r *http.Request) {
-	result, err := h.facade.RecalculateDeckPerformance(r.Context())
+	// Use a longer timeout for this long-running operation (10 minutes)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+
+	result, err := h.facade.RecalculateDeckPerformance(ctx)
 	if err != nil {
 		response.InternalError(w, err)
 		return

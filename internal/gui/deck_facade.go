@@ -3619,7 +3619,12 @@ func (d *DeckFacade) GetDeckPermutations(ctx context.Context, deckID string) ([]
 	}
 
 	// Get the deck to find the current permutation ID
-	deck, err := d.services.Storage.DeckRepo().GetByID(ctx, deckID)
+	var deck *models.Deck
+	err = storage.RetryOnBusy(func() error {
+		var err error
+		deck, err = d.services.Storage.DeckRepo().GetByID(ctx, deckID)
+		return err
+	})
 	if err != nil {
 		return nil, &AppError{Message: "Failed to get deck", Err: err}
 	}
