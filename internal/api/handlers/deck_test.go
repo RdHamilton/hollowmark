@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -212,6 +213,11 @@ func (h *testDeckHandler) CreateDeck(w http.ResponseWriter, r *http.Request) {
 
 	if req.Name == "" {
 		http.Error(w, `{"error":"deck name is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.Source == "draft" && (req.DraftEventID == nil || strings.TrimSpace(*req.DraftEventID) == "") {
+		http.Error(w, `{"error":"draft_event_id is required for draft decks"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -563,6 +569,27 @@ func TestDeckHandler_CreateDeck(t *testing.T) {
 		{
 			name:           "invalid JSON",
 			requestBody:    `{invalid`,
+			mockDeck:       nil,
+			mockErr:        nil,
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "draft deck missing draft_event_id",
+			requestBody:    `{"name":"ECL Draft","format":"limited","source":"draft"}`,
+			mockDeck:       nil,
+			mockErr:        nil,
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "draft deck empty draft_event_id",
+			requestBody:    `{"name":"ECL Draft","format":"limited","source":"draft","draft_event_id":""}`,
+			mockDeck:       nil,
+			mockErr:        nil,
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "draft deck whitespace draft_event_id",
+			requestBody:    `{"name":"ECL Draft","format":"limited","source":"draft","draft_event_id":"  "}`,
 			mockDeck:       nil,
 			mockErr:        nil,
 			expectedStatus: http.StatusBadRequest,
