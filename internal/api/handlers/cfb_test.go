@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -31,6 +32,7 @@ func setupTestStorage(t *testing.T) (*storage.Service, func()) {
 	service := storage.NewService(db)
 	cleanup := func() {
 		_ = service.Close()
+		_ = db.Close()
 	}
 
 	return service, cleanup
@@ -77,10 +79,25 @@ func TestCFBHandler_GetCFBRatings_WithPreseededData(t *testing.T) {
 		t.Errorf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	// Verify response contains the rating
-	body := rec.Body.String()
-	if body == "" || body == "null" {
-		t.Error("expected non-empty response body with ratings")
+	// Verify response contains the seeded rating
+	var resp struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response body: %v", err)
+	}
+	if len(resp.Data) == 0 {
+		t.Fatal("expected at least one rating in response, got empty slice")
+	}
+	found := false
+	for _, r := range resp.Data {
+		if name, ok := r["cardName"].(string); ok && name == "Lightning Bolt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected seeded card 'Lightning Bolt' in response, got: %s", rec.Body.String())
 	}
 }
 
