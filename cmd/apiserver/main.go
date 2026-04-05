@@ -161,9 +161,10 @@ func main() {
 	recommendationEngine := recommendations.NewRuleBasedEngineWithSetRepo(cardService, setCardRepo, ratingsRepo)
 
 	// Initialize MTGAZoneFetcher for expert ratings (CFB/MTG Arena Zone)
+	cfbRepo := storageService.NewCFBRatingsRepo()
 	mtgazoneFetcher := mtgazone.NewFetcher(
-		storageService.NewCFBRatingsRepo(),
-		storageService.SetCardRepo(),
+		cfbRepo,
+		setCardRepo,
 		mtgazone.FetcherOptions{
 			ScraperOptions: mtgazone.DefaultScraperOptions(),
 		},

@@ -345,6 +345,7 @@ func (h *testDeckHandler) SuggestDecks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.SessionID = strings.TrimSpace(req.SessionID)
 	if req.SessionID == "" {
 		http.Error(w, `{"error":"session_id is required"}`, http.StatusBadRequest)
 		return
@@ -1115,6 +1116,12 @@ func TestDeckHandler_SuggestDecks(t *testing.T) {
 		{
 			name:           "empty session_id returns bad request",
 			requestBody:    `{"session_id": ""}`,
+			mockErr:        nil,
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "whitespace session_id returns bad request",
+			requestBody:    `{"session_id": "   "}`,
 			mockErr:        nil,
 			expectedStatus: http.StatusBadRequest,
 		},

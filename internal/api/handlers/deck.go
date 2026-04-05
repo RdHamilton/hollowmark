@@ -489,7 +489,8 @@ func (h *DeckHandler) SuggestDecks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.TrimSpace(req.SessionID) == "" {
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	if req.SessionID == "" {
 		response.BadRequest(w, errors.New("missing required field: session_id"))
 		return
 	}
