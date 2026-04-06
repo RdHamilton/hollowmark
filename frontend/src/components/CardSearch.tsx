@@ -283,7 +283,7 @@ export default function CardSearch({
         <input
           type="text"
           className="search-input"
-          placeholder={isDraftDeck ? 'Filter draft pool...' : 'Search cards (min 2 characters)...'}
+          placeholder={isDraftDeck ? 'Filter draft pool...' : 'Search cards (t:type, o:text, k:keyword)...'}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           autoComplete="off"
