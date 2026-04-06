@@ -165,7 +165,7 @@ describe('CardSearch Component', () => {
         />
       );
 
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
       await userEvent.type(searchInput, 'lig');
 
       await waitFor(() => {
@@ -236,7 +236,7 @@ describe('CardSearch Component', () => {
       await userEvent.click(collectionToggle);
 
       // Search for a card
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
       await userEvent.type(searchInput, 'owned');
 
       await waitFor(() => {
@@ -259,7 +259,7 @@ describe('CardSearch Component', () => {
         />
       );
 
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
       await userEvent.type(searchInput, 'test');
 
       await waitFor(() => {
@@ -282,7 +282,7 @@ describe('CardSearch Component', () => {
         />
       );
 
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
       await userEvent.type(searchInput, 'test');
 
       await waitFor(() => {
@@ -309,7 +309,7 @@ describe('CardSearch Component', () => {
       await userEvent.click(collectionToggle);
 
       // Search for a card
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
       await userEvent.type(searchInput, 'nonexistent');
 
       await waitFor(() => {
@@ -999,7 +999,7 @@ describe('CardSearch Component', () => {
         />
       );
 
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
       await userEvent.type(searchInput, 'firebending');
 
       await waitFor(() => {
@@ -1029,7 +1029,7 @@ describe('CardSearch Component', () => {
         />
       );
 
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
       await userEvent.type(searchInput, 'firebending');
 
       await waitFor(() => {
@@ -1058,7 +1058,7 @@ describe('CardSearch Component', () => {
         />
       );
 
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
       await userEvent.type(searchInput, 'fire');
 
       await waitFor(() => {
@@ -1085,7 +1085,7 @@ describe('CardSearch Component', () => {
         />
       );
 
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
       await userEvent.type(searchInput, 'card');
 
       await waitFor(() => {
@@ -1111,7 +1111,7 @@ describe('CardSearch Component', () => {
         />
       );
 
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
       await userEvent.type(searchInput, 'test');
 
       await waitFor(() => {
@@ -1137,7 +1137,7 @@ describe('CardSearch Component', () => {
         />
       );
 
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
       await userEvent.type(searchInput, 'searchable');
 
       await waitFor(() => {
@@ -1164,7 +1164,7 @@ describe('CardSearch Component', () => {
         />
       );
 
-      const searchInput = screen.getByPlaceholderText('Search cards (min 2 characters)...');
+      const searchInput = screen.getByPlaceholderText('Search cards (t:type, o:text, k:keyword)...');
 
       // Type quickly - should debounce
       await userEvent.type(searchInput, 'fire');

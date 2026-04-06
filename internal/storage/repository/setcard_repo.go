@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 
+	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/cards/search"
 	"github.com/ramonehamilton/MTGA-Companion/internal/storage/models"
 )
 
@@ -52,8 +54,9 @@ type SetCardRepository interface {
 	// GetCardsBySet retrieves all cards for a given set code.
 	GetCardsBySet(ctx context.Context, setCode string) ([]*models.SetCard, error)
 
-	// SearchCards searches for cards by name across all cached sets.
-	// Optionally filter by set codes. Returns up to limit results.
+	// SearchCards searches for cards by name, oracle text, or type across all cached sets.
+	// Supports prefix syntax: t:type, o:text, k:keyword. Optionally filter by set codes.
+	// Returns up to limit results.
 	SearchCards(ctx context.Context, query string, setCodes []string, limit int) ([]*models.SetCard, error)
 
 	// IsSetCached checks if a set has been cached.
@@ -437,9 +440,10 @@ func (r *setCardRepository) DeleteSet(ctx context.Context, setCode string) error
 	return err
 }
 
-// SearchCards searches for cards by name or oracle text across all cached sets.
+// SearchCards searches for cards by name, oracle text, or type across all cached sets.
+// Supports prefix syntax: t:type, o:text, k:keyword. If no prefix is used, all fields are searched.
 // If setCodes is empty, searches all sets. Returns up to limit results.
-// Cards matching by name are prioritized over those matching only by text.
+// Cards matching by name are prioritized over those matching only by text or type.
 func (r *setCardRepository) SearchCards(ctx context.Context, query string, setCodes []string, limit int) ([]*models.SetCard, error) {
 	if limit <= 0 {
 		limit = 50 // Default limit
@@ -448,46 +452,63 @@ func (r *setCardRepository) SearchCards(ctx context.Context, query string, setCo
 		limit = 200 // Max limit to prevent performance issues
 	}
 
-	var sqlQuery string
-	var args []interface{}
-	searchPattern := "%" + query + "%"
+	parsed := search.Parse(query)
+	if parsed.IsEmpty() {
+		return []*models.SetCard{}, nil
+	}
 
+	var conditions []string
+	var args []interface{}
+
+	for _, term := range parsed.Terms {
+		pattern := "%" + term.Value + "%"
+		switch term.Field {
+		case search.FieldAll:
+			conditions = append(conditions, "(name LIKE ? OR text LIKE ? OR types LIKE ?)")
+			args = append(args, pattern, pattern, pattern)
+		case search.FieldType:
+			conditions = append(conditions, "types LIKE ?")
+			args = append(args, pattern)
+		case search.FieldText, search.FieldKeyword:
+			conditions = append(conditions, "text LIKE ?")
+			args = append(args, pattern)
+		}
+	}
+
+	whereClause := strings.Join(conditions, " AND ")
+
+	// Set code filter
 	if len(setCodes) > 0 {
-		// Build placeholders for IN clause
 		placeholders := make([]string, len(setCodes))
 		for i, code := range setCodes {
 			placeholders[i] = "?"
 			args = append(args, code)
 		}
-		sqlQuery = `
-			SELECT id, set_code, arena_id, scryfall_id, name, mana_cost, cmc, types, colors,
-				   rarity, text, power, toughness, image_url, image_url_small, image_url_art, fetched_at,
-				   price_usd, price_usd_foil, price_eur, price_eur_foil, price_tix, prices_updated_at, legalities
-			FROM set_cards
-			WHERE (name LIKE ? OR text LIKE ?) AND set_code IN (` + joinStrings(placeholders, ",") + `)
-			ORDER BY
-				CASE WHEN name LIKE ? THEN 0 ELSE 1 END,
-				name
-			LIMIT ?
-		`
-		// Prepend the search patterns, append the limit
-		// Arguments: searchPattern (name), searchPattern (text), setCodes..., searchPattern (ORDER BY), limit
-		args = append([]interface{}{searchPattern, searchPattern}, args...)
-		args = append(args, searchPattern, limit)
-	} else {
-		sqlQuery = `
-			SELECT id, set_code, arena_id, scryfall_id, name, mana_cost, cmc, types, colors,
-				   rarity, text, power, toughness, image_url, image_url_small, image_url_art, fetched_at,
-				   price_usd, price_usd_foil, price_eur, price_eur_foil, price_tix, prices_updated_at, legalities
-			FROM set_cards
-			WHERE name LIKE ? OR text LIKE ?
-			ORDER BY
-				CASE WHEN name LIKE ? THEN 0 ELSE 1 END,
-				name
-			LIMIT ?
-		`
-		args = []interface{}{searchPattern, searchPattern, searchPattern, limit}
+		whereClause += " AND set_code IN (" + joinStrings(placeholders, ",") + ")"
 	}
+
+	// ORDER BY: prioritize name matches for the first FieldAll term
+	orderClause := "name"
+	for _, term := range parsed.Terms {
+		if term.Field == search.FieldAll {
+			namePattern := "%" + term.Value + "%"
+			orderClause = "CASE WHEN name LIKE ? THEN 0 ELSE 1 END, name"
+			args = append(args, namePattern)
+			break
+		}
+	}
+
+	args = append(args, limit)
+
+	sqlQuery := `
+		SELECT id, set_code, arena_id, scryfall_id, name, mana_cost, cmc, types, colors,
+			   rarity, text, power, toughness, image_url, image_url_small, image_url_art, fetched_at,
+			   price_usd, price_usd_foil, price_eur, price_eur_foil, price_tix, prices_updated_at, legalities
+		FROM set_cards
+		WHERE ` + whereClause + `
+		ORDER BY ` + orderClause + `
+		LIMIT ?
+	`
 
 	rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
