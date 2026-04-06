@@ -233,6 +233,18 @@ func TestCardHandler_SearchCards(t *testing.T) {
 			expectedQuery:  "Test",
 			expectedLimit:  50,
 		},
+		{
+			name:        "search by type prefix returns results",
+			queryParams: "?q=t:creature",
+			mockResults: []*models.SetCard{
+				{ArenaID: "1", Name: "Goblin Guide", SetCode: "TLA", Types: []string{"Creature", "Goblin"}},
+			},
+			mockErr:        nil,
+			expectedStatus: http.StatusOK,
+			expectedLen:    1,
+			expectedQuery:  "t:creature",
+			expectedLimit:  50,
+		},
 	}
 
 	for _, tt := range tests {

@@ -680,6 +680,194 @@ func TestSetCardRepository_SearchCards_EmptyResults(t *testing.T) {
 	}
 }
 
+func TestSetCardRepository_SearchCards_ByType(t *testing.T) {
+	db := setupSetCardTestDB(t)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Error closing database: %v", err)
+		}
+	}()
+
+	repo := NewSetCardRepository(db)
+	ctx := context.Background()
+
+	now := time.Now()
+	cards := []*models.SetCard{
+		{SetCode: "TLA", ArenaID: "20001", Name: "Goblin Guide", Types: []string{"Creature", "Goblin", "Scout"}, Colors: []string{"R"}, Rarity: "rare", Text: "Haste\nWhenever Goblin Guide attacks, defending player reveals the top card of their library.", FetchedAt: now},
+		{SetCode: "TLA", ArenaID: "20002", Name: "Lightning Bolt", Types: []string{"Instant"}, Colors: []string{"R"}, Rarity: "common", Text: "Lightning Bolt deals 3 damage to any target.", FetchedAt: now},
+		{SetCode: "TLA", ArenaID: "20003", Name: "Enchanted Evening", Types: []string{"Enchantment"}, Colors: []string{"W", "U"}, Rarity: "rare", Text: "All permanents are enchantments in addition to their other types.", FetchedAt: now},
+	}
+
+	for _, card := range cards {
+		if err := repo.SaveCard(ctx, card); err != nil {
+			t.Fatalf("failed to save card: %v", err)
+		}
+	}
+
+	// Search by subtype "goblin" — should match Goblin Guide via types column
+	results, err := repo.SearchCards(ctx, "goblin", nil, 50)
+	if err != nil {
+		t.Fatalf("failed to search cards: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for 'goblin', got %d", len(results))
+	}
+	if results[0].Name != "Goblin Guide" {
+		t.Errorf("expected 'Goblin Guide', got '%s'", results[0].Name)
+	}
+
+	// Search by subtype "scout" — should match Goblin Guide via types column
+	results, err = repo.SearchCards(ctx, "scout", nil, 50)
+	if err != nil {
+		t.Fatalf("failed to search cards: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for 'scout', got %d", len(results))
+	}
+	if results[0].Name != "Goblin Guide" {
+		t.Errorf("expected 'Goblin Guide', got '%s'", results[0].Name)
+	}
+
+	// Search by type "enchantment" — should match Enchanted Evening
+	results, err = repo.SearchCards(ctx, "enchantment", nil, 50)
+	if err != nil {
+		t.Fatalf("failed to search cards: %v", err)
+	}
+	if len(results) < 1 {
+		t.Fatal("expected at least 1 result for 'enchantment'")
+	}
+	// Enchanted Evening should be first (name match priority)
+	if results[0].Name != "Enchanted Evening" {
+		t.Errorf("expected 'Enchanted Evening' first (name match), got '%s'", results[0].Name)
+	}
+}
+
+func TestSetCardRepository_SearchCards_ByKeywordInText(t *testing.T) {
+	db := setupSetCardTestDB(t)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Error closing database: %v", err)
+		}
+	}()
+
+	repo := NewSetCardRepository(db)
+	ctx := context.Background()
+
+	now := time.Now()
+	cards := []*models.SetCard{
+		{SetCode: "TLA", ArenaID: "20010", Name: "Serra Angel", Types: []string{"Creature", "Angel"}, Colors: []string{"W"}, Rarity: "uncommon", Text: "Flying, vigilance", FetchedAt: now},
+		{SetCode: "TLA", ArenaID: "20011", Name: "Grizzly Bears", Types: []string{"Creature", "Bear"}, Colors: []string{"G"}, Rarity: "common", Text: "", FetchedAt: now},
+	}
+
+	for _, card := range cards {
+		if err := repo.SaveCard(ctx, card); err != nil {
+			t.Fatalf("failed to save card: %v", err)
+		}
+	}
+
+	// Search for "flying" — should find Serra Angel via oracle text
+	results, err := repo.SearchCards(ctx, "flying", nil, 50)
+	if err != nil {
+		t.Fatalf("failed to search cards: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for 'flying', got %d", len(results))
+	}
+	if results[0].Name != "Serra Angel" {
+		t.Errorf("expected 'Serra Angel', got '%s'", results[0].Name)
+	}
+
+	// Search for "vigilance" — should find Serra Angel via oracle text
+	results, err = repo.SearchCards(ctx, "vigilance", nil, 50)
+	if err != nil {
+		t.Fatalf("failed to search cards: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for 'vigilance', got %d", len(results))
+	}
+	if results[0].Name != "Serra Angel" {
+		t.Errorf("expected 'Serra Angel', got '%s'", results[0].Name)
+	}
+}
+
+func TestSetCardRepository_SearchCards_WithPrefix(t *testing.T) {
+	db := setupSetCardTestDB(t)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Error closing database: %v", err)
+		}
+	}()
+
+	repo := NewSetCardRepository(db)
+	ctx := context.Background()
+
+	now := time.Now()
+	cards := []*models.SetCard{
+		{SetCode: "TLA", ArenaID: "20020", Name: "Goblin Guide", Types: []string{"Creature", "Goblin", "Scout"}, Colors: []string{"R"}, Rarity: "rare", Text: "Haste\nWhenever Goblin Guide attacks, defending player reveals the top card.", FetchedAt: now},
+		{SetCode: "TLA", ArenaID: "20021", Name: "Lightning Bolt", Types: []string{"Instant"}, Colors: []string{"R"}, Rarity: "common", Text: "Lightning Bolt deals 3 damage to any target.", FetchedAt: now},
+		{SetCode: "TLA", ArenaID: "20022", Name: "Shock", Types: []string{"Instant"}, Colors: []string{"R"}, Rarity: "common", Text: "Shock deals 2 damage to any target.", FetchedAt: now},
+		{SetCode: "TLA", ArenaID: "20023", Name: "Creature Feature", Types: []string{"Enchantment"}, Colors: []string{"G"}, Rarity: "uncommon", Text: "Enchanted creature gets +2/+2.", FetchedAt: now},
+	}
+
+	for _, card := range cards {
+		if err := repo.SaveCard(ctx, card); err != nil {
+			t.Fatalf("failed to save card: %v", err)
+		}
+	}
+
+	// t:creature — only cards with "Creature" in types, NOT cards with "creature" only in name/text
+	results, err := repo.SearchCards(ctx, "t:creature", nil, 50)
+	if err != nil {
+		t.Fatalf("failed to search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for 't:creature', got %d", len(results))
+	}
+	if results[0].Name != "Goblin Guide" {
+		t.Errorf("expected 'Goblin Guide', got '%s'", results[0].Name)
+	}
+
+	// o:damage — only cards with "damage" in oracle text
+	results, err = repo.SearchCards(ctx, "o:damage", nil, 50)
+	if err != nil {
+		t.Fatalf("failed to search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results for 'o:damage', got %d", len(results))
+	}
+
+	// t:instant o:damage — AND: instants with "damage" in text
+	results, err = repo.SearchCards(ctx, "t:instant o:damage", nil, 50)
+	if err != nil {
+		t.Fatalf("failed to search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results for 't:instant o:damage', got %d", len(results))
+	}
+
+	// k:haste — keyword search via oracle text
+	results, err = repo.SearchCards(ctx, "k:haste", nil, 50)
+	if err != nil {
+		t.Fatalf("failed to search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for 'k:haste', got %d", len(results))
+	}
+	if results[0].Name != "Goblin Guide" {
+		t.Errorf("expected 'Goblin Guide', got '%s'", results[0].Name)
+	}
+
+	// t:goblin bolt — mixed: type matches "goblin" AND bare term matches "bolt" in name/text/types
+	results, err = repo.SearchCards(ctx, "t:goblin bolt", nil, 50)
+	if err != nil {
+		t.Fatalf("failed to search: %v", err)
+	}
+	// Goblin Guide doesn't contain "bolt" in name/text/types, so 0 results
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for 't:goblin bolt', got %d", len(results))
+	}
+}
+
 func TestSetCardRepository_LegalitiesStorage(t *testing.T) {
 	db := setupSetCardTestDB(t)
 	defer func() {
