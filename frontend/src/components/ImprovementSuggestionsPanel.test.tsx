@@ -41,11 +41,11 @@ describe('ImprovementSuggestionsPanel', () => {
 
       render(<ImprovementSuggestionsPanel deckId="deck-1" />);
 
-      expect(screen.getByText('Loading suggestions...')).toBeInTheDocument();
+      expect(screen.getByTestId('suggestions-loading')).toBeInTheDocument();
 
       resolvePromise!([createMockSuggestion()]);
       await waitFor(() => {
-        expect(screen.queryByText('Loading suggestions...')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('suggestions-loading')).not.toBeInTheDocument();
       });
     });
   });
@@ -57,7 +57,7 @@ describe('ImprovementSuggestionsPanel', () => {
       render(<ImprovementSuggestionsPanel deckId="deck-1" />);
 
       await waitFor(() => {
-        expect(screen.getByText('No suggestions yet.')).toBeInTheDocument();
+        expect(screen.getByTestId('suggestions-empty-state')).toBeInTheDocument();
       });
     });
 
@@ -177,10 +177,10 @@ describe('ImprovementSuggestionsPanel', () => {
       render(<ImprovementSuggestionsPanel deckId="deck-1" />);
 
       await waitFor(() => {
-        expect(screen.getByText('Generate New Suggestions')).toBeInTheDocument();
+        expect(screen.getByTestId('suggestions-generate-button')).toBeInTheDocument();
       });
 
-      fireEvent.click(screen.getByText('Generate New Suggestions'));
+      fireEvent.click(screen.getByTestId('suggestions-generate-button'));
 
       await waitFor(() => {
         expect(mockNotes.generateSuggestions).toHaveBeenCalledWith('deck-1');
@@ -198,7 +198,7 @@ describe('ImprovementSuggestionsPanel', () => {
       render(<ImprovementSuggestionsPanel deckId="deck-1" />);
 
       await waitFor(() => {
-        fireEvent.click(screen.getByText('Generate New Suggestions'));
+        fireEvent.click(screen.getByTestId('suggestions-generate-button'));
       });
 
       expect(screen.getByText('Analyzing...')).toBeInTheDocument();
@@ -216,7 +216,7 @@ describe('ImprovementSuggestionsPanel', () => {
       render(<ImprovementSuggestionsPanel deckId="deck-1" />);
 
       await waitFor(() => {
-        fireEvent.click(screen.getByText('Generate New Suggestions'));
+        fireEvent.click(screen.getByTestId('suggestions-generate-button'));
       });
 
       await waitFor(() => {
@@ -262,7 +262,7 @@ describe('ImprovementSuggestionsPanel', () => {
       });
 
       // Filter by curve
-      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'curve' } });
+      fireEvent.change(screen.getByTestId('suggestions-type-filter'), { target: { value: 'curve' } });
 
       await waitFor(() => {
         expect(screen.getByText('Curve Issue')).toBeInTheDocument();
@@ -298,10 +298,10 @@ describe('ImprovementSuggestionsPanel', () => {
       render(<ImprovementSuggestionsPanel deckId="deck-1" onClose={onClose} />);
 
       await waitFor(() => {
-        expect(screen.getByTitle('Close')).toBeInTheDocument();
+        expect(screen.getByTestId('suggestions-close-button')).toBeInTheDocument();
       });
 
-      fireEvent.click(screen.getByTitle('Close'));
+      fireEvent.click(screen.getByTestId('suggestions-close-button'));
 
       expect(onClose).toHaveBeenCalled();
     });
@@ -335,7 +335,7 @@ describe('ImprovementSuggestionsPanel', () => {
       render(<ImprovementSuggestionsPanel deckId="deck-1" />);
 
       await waitFor(() => {
-        fireEvent.click(screen.getByText('Generate New Suggestions'));
+        fireEvent.click(screen.getByTestId('suggestions-generate-button'));
       });
 
       await waitFor(() => {

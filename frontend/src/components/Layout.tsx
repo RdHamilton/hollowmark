@@ -100,61 +100,69 @@ const Layout = ({ children }: LayoutProps) => {
   };
 
   return (
-    <div className="app-container">
+    <div className="app-container" data-testid="app-container">
       {/* Top Navigation Tabs */}
-      <div className="tab-bar">
+      <div className="tab-bar" data-testid="nav-tab-bar">
         <div className="tab-links">
           <Link
             to="/match-history"
             className={`tab ${activeTab === 'match-history' ? 'active' : ''}`}
+            data-testid="nav-tab-match-history"
           >
             Match History
           </Link>
           <Link
             to="/quests"
             className={`tab ${activeTab === 'quests' ? 'active' : ''}`}
+            data-testid="nav-tab-quests"
           >
             Quests
           </Link>
           <Link
             to="/draft"
             className={`tab ${activeTab === 'draft' ? 'active' : ''}`}
+            data-testid="nav-tab-draft"
           >
             Draft
           </Link>
           <Link
             to="/decks"
             className={`tab ${activeTab === 'decks' ? 'active' : ''}`}
+            data-testid="nav-tab-decks"
           >
             Decks
           </Link>
           <Link
             to="/collection"
             className={`tab ${activeTab === 'collection' ? 'active' : ''}`}
+            data-testid="nav-tab-collection"
           >
             Collection
           </Link>
           <Link
             to="/meta"
             className={`tab ${activeTab === 'meta' ? 'active' : ''}`}
+            data-testid="nav-tab-meta"
           >
             Meta
           </Link>
           <Link
             to="/charts/win-rate-trend"
             className={`tab ${activeTab === 'charts' ? 'active' : ''}`}
+            data-testid="nav-tab-charts"
           >
             Charts
           </Link>
           <Link
             to="/settings"
             className={`tab ${isActive('/settings') ? 'active' : ''}`}
+            data-testid="nav-tab-settings"
           >
             Settings
           </Link>
         </div>
         <div className="connection-status-indicator">
-          <div className={`status-badge-compact status-${connectionStatus.status}`} title={connectionStatus.status}>
+          <div className={`status-badge-compact status-${connectionStatus.status}`} title={connectionStatus.status} data-testid="connection-status-badge">
             <span className="status-dot-compact"></span>
           </div>
         </div>
@@ -162,16 +170,18 @@ const Layout = ({ children }: LayoutProps) => {
 
       {/* Sub-navigation for Draft */}
       {activeTab === 'draft' && (
-        <div className="sub-tab-bar">
+        <div className="sub-tab-bar" data-testid="draft-sub-tab-bar">
           <Link
             to="/draft"
             className={`sub-tab ${isActive('/draft') ? 'active' : ''}`}
+            data-testid="sub-tab-current-draft"
           >
             Current Draft
           </Link>
           <Link
             to="/draft-analytics"
             className={`sub-tab ${isActive('/draft-analytics') ? 'active' : ''}`}
+            data-testid="sub-tab-analytics"
           >
             Analytics
           </Link>
@@ -180,7 +190,7 @@ const Layout = ({ children }: LayoutProps) => {
 
       {/* Sub-navigation for Charts */}
       {activeTab === 'charts' && (
-        <div className="sub-tab-bar">
+        <div className="sub-tab-bar" data-testid="charts-sub-tab-bar">
           <Link
             to="/charts/win-rate-trend"
             className={`sub-tab ${isActive('/charts/win-rate-trend') ? 'active' : ''}`}
@@ -231,9 +241,10 @@ const Layout = ({ children }: LayoutProps) => {
           gap: '16px',
           fontWeight: 'bold',
         }}>
-          <span>⏸️ Replay Paused</span>
+          <span data-testid="replay-paused-label">⏸️ Replay Paused</span>
           <button
             onClick={handleResumeReplay}
+            data-testid="replay-resume-button"
             style={{
               background: '#00c853',
               color: 'white',
@@ -248,6 +259,7 @@ const Layout = ({ children }: LayoutProps) => {
           </button>
           <button
             onClick={handleStopReplay}
+            data-testid="replay-stop-button"
             style={{
               background: '#f44336',
               color: 'white',
@@ -262,6 +274,7 @@ const Layout = ({ children }: LayoutProps) => {
           </button>
           <button
             onClick={() => navigate('/settings')}
+            data-testid="replay-settings-button"
             style={{
               background: 'transparent',
               color: 'white',
@@ -277,7 +290,7 @@ const Layout = ({ children }: LayoutProps) => {
       )}
 
       {/* Main Content */}
-      <div className="content">
+      <div className="content" data-testid="main-content">
         {children}
       </div>
 

@@ -133,7 +133,7 @@ const TemporalTrends: React.FC<TemporalTrendsProps> = ({
 
   if (loading) {
     return (
-      <div className="temporal-trends temporal-trends--loading">
+      <div className="temporal-trends temporal-trends--loading" data-testid="temporal-trends-loading">
         <div className="temporal-trends__spinner" />
         <span>Loading trend data...</span>
       </div>
@@ -142,16 +142,16 @@ const TemporalTrends: React.FC<TemporalTrendsProps> = ({
 
   if (error) {
     return (
-      <div className="temporal-trends temporal-trends--error">
+      <div className="temporal-trends temporal-trends--error" data-testid="temporal-trends-error">
         <span>Error: {error}</span>
-        <button onClick={fetchTrends}>Retry</button>
+        <button onClick={fetchTrends} data-testid="temporal-trends-retry-button">Retry</button>
       </div>
     );
   }
 
   if (!trendData || trendData.trends.length === 0) {
     return (
-      <div className="temporal-trends temporal-trends--empty">
+      <div className="temporal-trends temporal-trends--empty" data-testid="temporal-trends-empty">
         <span>No trend data available yet. Complete some drafts to see your performance over time.</span>
       </div>
     );
@@ -161,7 +161,7 @@ const TemporalTrends: React.FC<TemporalTrendsProps> = ({
   const learningChartData = learningData ? formatLearningData(learningData) : [];
 
   return (
-    <div className="temporal-trends">
+    <div className="temporal-trends" data-testid="temporal-trends">
       <div className="temporal-trends__header">
         <h3>Draft Performance Trends</h3>
         <div className="temporal-trends__controls">
@@ -169,17 +169,18 @@ const TemporalTrends: React.FC<TemporalTrendsProps> = ({
             value={selectedPeriodType}
             onChange={(e) => setSelectedPeriodType(e.target.value as 'weekly' | 'monthly')}
             className="temporal-trends__select"
+            data-testid="temporal-trends-period-select"
           >
             <option value="weekly">Weekly</option>
             <option value="monthly">Monthly</option>
           </select>
-          <button onClick={fetchTrends} className="temporal-trends__refresh">
+          <button onClick={fetchTrends} className="temporal-trends__refresh" data-testid="temporal-trends-refresh-button">
             Refresh
           </button>
         </div>
       </div>
 
-      <div className="temporal-trends__summary">
+      <div className="temporal-trends__summary" data-testid="temporal-trends-summary">
         <div className="temporal-trends__stat">
           <span className="temporal-trends__stat-value">{trendData.summary.totalDrafts}</span>
           <span className="temporal-trends__stat-label">Total Drafts</span>

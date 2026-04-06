@@ -36,7 +36,7 @@ test.describe('Data Pipeline - Log to UI', () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to app and wait for it to load
     await page.goto('/');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
     // Give the daemon time to process the log file
     await page.waitForTimeout(2000);

@@ -269,7 +269,7 @@ export default function Collection() {
 
   if (loading && cards.length === 0) {
     return (
-      <div className="collection-page loading-state">
+      <div className="collection-page loading-state" data-testid="collection-loading">
         <div className="loading-spinner"></div>
         <p>Loading collection...</p>
       </div>
@@ -278,11 +278,11 @@ export default function Collection() {
 
   if (error) {
     return (
-      <div className="collection-page error-state">
+      <div className="collection-page error-state" data-testid="collection-error">
         <div className="error-icon">!</div>
         <h2>Error Loading Collection</h2>
         <p>{error}</p>
-        <button onClick={() => loadCollection()} className="retry-button">
+        <button onClick={() => loadCollection()} className="retry-button" data-testid="collection-retry-button">
           Retry
         </button>
       </div>
@@ -290,12 +290,12 @@ export default function Collection() {
   }
 
   return (
-    <div className="collection-page">
+    <div className="collection-page" data-testid="collection-page">
       {/* Header with stats */}
-      <div className="collection-header">
+      <div className="collection-header" data-testid="collection-header">
         <div className="header-title">
           <h1>Collection</h1>
-          <div className="collection-stats-summary">
+          <div className="collection-stats-summary" data-testid="collection-stats">
             <span className="stat-item">
               <span className="stat-label">Cards in Set:</span>
               <span className="stat-value">{filterCount}</span>
@@ -322,6 +322,7 @@ export default function Collection() {
           <button
             className="set-completion-button"
             onClick={() => setShowSetCompletion(!showSetCompletion)}
+            data-testid="collection-toggle-set-completion"
           >
             {showSetCompletion ? 'Hide' : 'Show'} Set Completion
           </button>
@@ -339,6 +340,7 @@ export default function Collection() {
               value={filters.searchTerm}
               onChange={(e) => handleFilterChange('searchTerm', e.target.value)}
               className="search-input"
+              data-testid="collection-search-input"
             />
           </div>
 
@@ -348,6 +350,7 @@ export default function Collection() {
               value={filters.setCode}
               onChange={(e) => handleFilterChange('setCode', e.target.value)}
               className="filter-select"
+              data-testid="collection-set-filter"
             >
               <option value="">All Sets</option>
               {sets.map((set) => (
@@ -364,6 +367,7 @@ export default function Collection() {
               value={filters.rarity}
               onChange={(e) => handleFilterChange('rarity', e.target.value)}
               className="filter-select"
+              data-testid="collection-rarity-filter"
             >
               <option value="">All Rarities</option>
               <option value="common">Common</option>
@@ -383,6 +387,7 @@ export default function Collection() {
                 handleFilterChange('sortDesc', direction === 'desc');
               }}
               className="filter-select"
+              data-testid="collection-sort-select"
             >
               <option value="name-asc">Name (A-Z)</option>
               <option value="name-desc">Name (Z-A)</option>
@@ -408,6 +413,7 @@ export default function Collection() {
                 className={`color-button ${filters.colors.includes(color) ? 'active' : ''}`}
                 onClick={() => handleColorToggle(color)}
                 title={color === 'W' ? 'White' : color === 'U' ? 'Blue' : color === 'B' ? 'Black' : color === 'R' ? 'Red' : 'Green'}
+                data-testid={`collection-color-button-${color}`}
               >
                 <img src={colorIcons[color]} alt={color} className="color-icon" />
               </button>
@@ -420,6 +426,7 @@ export default function Collection() {
               type="checkbox"
               checked={filters.ownedOnly}
               onChange={(e) => handleFilterChange('ownedOnly', e.target.checked)}
+              data-testid="collection-owned-only-checkbox"
             />
             Owned only
           </label>
@@ -443,7 +450,7 @@ export default function Collection() {
 
       {/* Card Grid */}
       {processedCards.length === 0 ? (
-        <div className="empty-state">
+        <div className="empty-state" data-testid="collection-empty">
           <div className="empty-icon">!</div>
           <h2>No Cards Found</h2>
           <p>
@@ -454,7 +461,7 @@ export default function Collection() {
         </div>
       ) : (
         <>
-          <div className="card-grid">
+          <div className="card-grid" data-testid="collection-card-grid">
             {paginatedCards.map((card) => {
               // Check if we have a real card image (not the card back placeholder)
               const isCardBackPlaceholder = card.imageUri?.includes('back.png');
@@ -521,6 +528,7 @@ export default function Collection() {
                 className="page-button"
                 disabled={currentPage === 1}
                 onClick={() => setCurrentPage(1)}
+                data-testid="collection-pagination-first"
               >
                 First
               </button>
@@ -528,6 +536,7 @@ export default function Collection() {
                 className="page-button"
                 disabled={currentPage === 1}
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                data-testid="collection-pagination-prev"
               >
                 Previous
               </button>
@@ -538,6 +547,7 @@ export default function Collection() {
                 className="page-button"
                 disabled={currentPage === totalPages}
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                data-testid="collection-pagination-next"
               >
                 Next
               </button>
@@ -545,6 +555,7 @@ export default function Collection() {
                 className="page-button"
                 disabled={currentPage === totalPages}
                 onClick={() => setCurrentPage(totalPages)}
+                data-testid="collection-pagination-last"
               >
                 Last
               </button>

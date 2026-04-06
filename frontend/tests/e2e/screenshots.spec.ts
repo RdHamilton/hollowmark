@@ -34,7 +34,7 @@ test.describe('Documentation Screenshots', () => {
 
   test('capture Match History page', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
     // Wait for data to load
     await page.waitForLoadState('networkidle');
@@ -48,7 +48,7 @@ test.describe('Documentation Screenshots', () => {
 
   test('capture Draft History page', async ({ page }) => {
     await page.goto('/draft');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
     // Wait for draft list to load
     await page.waitForLoadState('networkidle');
@@ -62,7 +62,7 @@ test.describe('Documentation Screenshots', () => {
 
   test('capture Decks page', async ({ page }) => {
     await page.goto('/decks');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
     // Wait for decks to load
     await page.waitForLoadState('networkidle');
@@ -76,7 +76,7 @@ test.describe('Documentation Screenshots', () => {
 
   test('capture Quests page', async ({ page }) => {
     await page.goto('/quests');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
     // Wait for quest data to load
     await page.waitForLoadState('networkidle');
@@ -90,7 +90,7 @@ test.describe('Documentation Screenshots', () => {
 
   test('capture Collection page', async ({ page }) => {
     await page.goto('/collection');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
     // Wait for collection data to load
     await page.waitForLoadState('networkidle');
@@ -104,7 +104,7 @@ test.describe('Documentation Screenshots', () => {
 
   test('capture Meta Dashboard', async ({ page }) => {
     await page.goto('/meta');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
     // Wait for meta data to load
     await page.waitForLoadState('networkidle');
@@ -118,7 +118,7 @@ test.describe('Documentation Screenshots', () => {
 
   test('capture Charts - Deck Performance', async ({ page }) => {
     await page.goto('/charts/deck-performance');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
     // Wait for chart to render
     await page.waitForLoadState('networkidle');
@@ -132,7 +132,7 @@ test.describe('Documentation Screenshots', () => {
 
   test('capture Charts - Format Distribution', async ({ page }) => {
     await page.goto('/charts/format-distribution');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
     // Wait for chart to render
     await page.waitForLoadState('networkidle');
@@ -146,7 +146,7 @@ test.describe('Documentation Screenshots', () => {
 
   test('capture Charts - Result Breakdown', async ({ page }) => {
     await page.goto('/charts/result-breakdown');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
     // Wait for chart to render
     await page.waitForLoadState('networkidle');
@@ -160,7 +160,7 @@ test.describe('Documentation Screenshots', () => {
 
   test('capture Settings page', async ({ page }) => {
     await page.goto('/settings');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
     // Wait for settings to load
     await page.waitForLoadState('networkidle');

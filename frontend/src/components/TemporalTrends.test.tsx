@@ -115,7 +115,7 @@ describe('TemporalTrends Component', () => {
 
       render(<TemporalTrends />);
 
-      expect(screen.getByText('Loading trend data...')).toBeInTheDocument();
+      expect(screen.getByTestId('temporal-trends-loading')).toBeInTheDocument();
     });
 
     it('should display error message when fetching fails', async () => {
@@ -124,7 +124,7 @@ describe('TemporalTrends Component', () => {
       render(<TemporalTrends />);
 
       await waitFor(() => {
-        expect(screen.getByText(/Error: Failed to load trend data/i)).toBeInTheDocument();
+        expect(screen.getByTestId('temporal-trends-error')).toBeInTheDocument();
       });
     });
 
@@ -135,9 +135,7 @@ describe('TemporalTrends Component', () => {
       render(<TemporalTrends />);
 
       await waitFor(() => {
-        expect(
-          screen.getByText(/No trend data available yet/i)
-        ).toBeInTheDocument();
+        expect(screen.getByTestId('temporal-trends-empty')).toBeInTheDocument();
       });
     });
   });
@@ -237,7 +235,7 @@ describe('TemporalTrends Component', () => {
         expect(screen.getByText('Draft Performance Trends')).toBeInTheDocument();
       });
 
-      const select = screen.getByRole('combobox');
+      const select = screen.getByTestId('temporal-trends-period-select');
       fireEvent.change(select, { target: { value: 'monthly' } });
 
       // Should trigger a re-fetch with monthly period type
@@ -305,7 +303,7 @@ describe('TemporalTrends Component', () => {
       mockDrafts.getTemporalTrends.mockClear();
 
       // Click refresh button
-      const refreshButton = screen.getByText('Refresh');
+      const refreshButton = screen.getByTestId('temporal-trends-refresh-button');
       fireEvent.click(refreshButton);
 
       await waitFor(() => {
