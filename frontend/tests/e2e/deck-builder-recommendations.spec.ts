@@ -14,7 +14,7 @@ test.describe('Deck Builder Recommendations', () => {
   test.describe('Deck Validation (#903)', () => {
     test.beforeEach(async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('.app-container')).toBeVisible({ timeout: 10000 });
+      await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 10000 });
     });
 
     test('should display correct card count in validation banner', async ({ page }) => {
@@ -119,7 +119,7 @@ test.describe('Deck Builder Recommendations', () => {
   test.describe('Card Recommendations (#904)', () => {
     test.beforeEach(async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('.app-container')).toBeVisible({ timeout: 10000 });
+      await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 10000 });
     });
 
     test('should show recommendations button for decks with cards', async ({ page }) => {
@@ -206,7 +206,7 @@ test.describe('Deck Builder Recommendations', () => {
   test.describe('Suggest Decks for Draft (#902)', () => {
     test.beforeEach(async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('.app-container')).toBeVisible({ timeout: 10000 });
+      await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 10000 });
     });
 
     test('should show Suggest Decks button for draft decks', async ({ page }) => {
@@ -349,7 +349,7 @@ test.describe('Deck Builder Recommendations', () => {
   test.describe('Navigation and Integration', () => {
     test.beforeEach(async ({ page }) => {
       await page.goto('/');
-      await expect(page.locator('.app-container')).toBeVisible({ timeout: 10000 });
+      await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 10000 });
     });
 
     test('should navigate between decks and draft pages', async ({ page }) => {

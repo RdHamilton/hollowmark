@@ -10,7 +10,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Draft Analytics', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 10000 });
 
     // Navigate to Draft tab first
     await page.click('a[href="/draft"]');

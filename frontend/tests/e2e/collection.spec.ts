@@ -13,7 +13,7 @@ test.describe.skip('Collection', () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to home first, then to collection
     await page.goto('/');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
     await page.goto('/collection');
   });
 
@@ -35,13 +35,13 @@ test.describe.skip('Collection', () => {
 
   test.describe('Collection Header', () => {
     test('should display collection header', async ({ page }) => {
-      const header = page.locator('.collection-header');
+      const header = page.locator('[data-testid="collection-header"]');
       await expect(header).toBeVisible({ timeout: 10000 });
     });
 
     test('should display collection stats summary', async ({ page }) => {
       // Wait for stats to load
-      const stats = page.locator('.collection-stats-summary');
+      const stats = page.locator('[data-testid="collection-stats"]');
       await expect(stats).toBeVisible({ timeout: 10000 });
     });
   });

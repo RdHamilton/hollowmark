@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Draft', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 10000 });
 
     await page.click('a[href="/draft"]');
     await page.waitForURL('**/draft');
@@ -18,7 +18,7 @@ test.describe('Draft', () => {
   test.describe('Navigation and Page Load', () => {
     test('@smoke should navigate to Draft page', async ({ page }) => {
       // Wait for page content to load
-      const appContainer = page.locator('.app-container');
+      const appContainer = page.locator('[data-testid="app-container"]');
       await expect(appContainer).toBeVisible();
 
       // Verify we're on the draft page
