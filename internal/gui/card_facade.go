@@ -15,13 +15,15 @@ import (
 
 // CardFacade handles all card data operations including set cards and ratings.
 type CardFacade struct {
-	services *Services
+	services           *Services
+	cfbFetchFailedSets map[string]time.Time // tracks sets where auto-fetch failed to avoid retrying
 }
 
 // NewCardFacade creates a new CardFacade with the given services.
 func NewCardFacade(services *Services) *CardFacade {
 	return &CardFacade{
-		services: services,
+		services:           services,
+		cfbFetchFailedSets: make(map[string]time.Time),
 	}
 }
 
@@ -645,18 +647,23 @@ func (c *CardFacade) GetCFBRatings(ctx context.Context, setCode string) ([]*mode
 		return nil, err
 	}
 
-	// If no ratings and we have a fetcher, try to auto-fetch
+	// If no ratings and we have a fetcher, try to auto-fetch (with cooldown to avoid repeated failures)
 	if len(ratings) == 0 && c.services.MTGAZoneFetcher != nil {
+		if failedAt, ok := c.cfbFetchFailedSets[setCode]; ok && time.Since(failedAt) < 30*time.Minute {
+			// Skip auto-fetch: recently failed for this set
+			return ratings, nil
+		}
+
 		log.Printf("[CardFacade] No CFB ratings for %s, attempting auto-fetch from MTG Arena Zone", setCode)
 		count, fetchErr := c.services.MTGAZoneFetcher.FetchAndStoreRatings(ctx, setCode)
 		if fetchErr != nil {
 			log.Printf("[CardFacade] Auto-fetch failed for %s: %v", setCode, fetchErr)
-			// Return empty list, don't fail the request
+			c.cfbFetchFailedSets[setCode] = time.Now()
 			return ratings, nil
 		}
 		if count > 0 {
 			log.Printf("[CardFacade] Auto-fetched %d ratings for %s", count, setCode)
-			// Re-fetch from DB
+			delete(c.cfbFetchFailedSets, setCode)
 			ratings, err = cfbRepo.GetRatingsForSet(ctx, setCode)
 			if err != nil {
 				return nil, err
