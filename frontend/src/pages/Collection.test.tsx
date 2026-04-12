@@ -100,11 +100,11 @@ describe('Collection', () => {
 
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(screen.getByText('Loading collection...')).toBeInTheDocument();
+      expect(screen.getByTestId('collection-loading')).toBeInTheDocument();
 
       resolvePromise!(createMockCollectionResponse([]));
       await waitFor(() => {
-        expect(screen.queryByText('Loading collection...')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('collection-loading')).not.toBeInTheDocument();
       });
     });
   });
@@ -120,7 +120,7 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByText('Error Loading Collection')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-error')).toBeInTheDocument();
       });
       expect(screen.getByText('Database error')).toBeInTheDocument();
     });
@@ -135,7 +135,7 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByText('Error Loading Collection')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-error')).toBeInTheDocument();
       });
       expect(screen.getByText('Failed to load collection')).toBeInTheDocument();
     });
@@ -150,11 +150,11 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByText('Error Loading Collection')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-error')).toBeInTheDocument();
       });
 
       // Verify retry button exists
-      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+      expect(screen.getByTestId('collection-retry-button')).toBeInTheDocument();
     });
   });
 
@@ -169,7 +169,7 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByText('No Cards Found')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-empty')).toBeInTheDocument();
       });
     });
   });
@@ -280,7 +280,7 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('Search by name...')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-search-input')).toBeInTheDocument();
       });
     });
 
@@ -297,7 +297,7 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByText('All Sets')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-set-filter')).toBeInTheDocument();
       });
     });
 
@@ -311,7 +311,7 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByText('All Rarities')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-rarity-filter')).toBeInTheDocument();
       });
     });
 
@@ -327,12 +327,12 @@ describe('Collection', () => {
       await waitFor(() => {
         expect(screen.getByText('Colors:')).toBeInTheDocument();
       });
-      // Check for color buttons by their title attributes
-      expect(screen.getByTitle('White')).toBeInTheDocument();
-      expect(screen.getByTitle('Blue')).toBeInTheDocument();
-      expect(screen.getByTitle('Black')).toBeInTheDocument();
-      expect(screen.getByTitle('Red')).toBeInTheDocument();
-      expect(screen.getByTitle('Green')).toBeInTheDocument();
+      // Check for color buttons by their data-testid attributes
+      expect(screen.getByTestId('collection-color-button-W')).toBeInTheDocument();
+      expect(screen.getByTestId('collection-color-button-U')).toBeInTheDocument();
+      expect(screen.getByTestId('collection-color-button-B')).toBeInTheDocument();
+      expect(screen.getByTestId('collection-color-button-R')).toBeInTheDocument();
+      expect(screen.getByTestId('collection-color-button-G')).toBeInTheDocument();
     });
 
     it('should have owned only checkbox', async () => {
@@ -359,10 +359,10 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByTitle('Red')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-color-button-R')).toBeInTheDocument();
       });
 
-      const redButton = screen.getByTitle('Red');
+      const redButton = screen.getByTestId('collection-color-button-R');
       expect(redButton).not.toHaveClass('active');
 
       fireEvent.click(redButton);
@@ -403,14 +403,14 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('Search by name...')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-search-input')).toBeInTheDocument();
       });
 
       // Verify both cards are shown initially
       expect(screen.getByAltText('Lightning Bolt')).toBeInTheDocument();
       expect(screen.getByAltText('Counterspell')).toBeInTheDocument();
 
-      const searchInput = screen.getByPlaceholderText('Search by name...');
+      const searchInput = screen.getByTestId('collection-search-input');
       fireEvent.change(searchInput, { target: { value: 'Bolt' } });
 
       // Wait for debounce
@@ -586,7 +586,7 @@ describe('Collection', () => {
       });
 
       // Select a set from the dropdown
-      const setSelect = screen.getByDisplayValue('All Sets');
+      const setSelect = screen.getByTestId('collection-set-filter');
       fireEvent.change(setSelect, { target: { value: 'sta' } });
 
       await vi.advanceTimersByTimeAsync(100);
@@ -613,7 +613,7 @@ describe('Collection', () => {
       });
 
       // Select a set
-      const setSelect = screen.getByDisplayValue('All Sets');
+      const setSelect = screen.getByTestId('collection-set-filter');
       fireEvent.change(setSelect, { target: { value: 'sta' } });
 
       await vi.advanceTimersByTimeAsync(100);
@@ -645,7 +645,7 @@ describe('Collection', () => {
       });
 
       // Select a set first
-      const setSelect = screen.getByDisplayValue('All Sets');
+      const setSelect = screen.getByTestId('collection-set-filter');
       fireEvent.change(setSelect, { target: { value: 'sta' } });
 
       await vi.advanceTimersByTimeAsync(100);
@@ -678,7 +678,7 @@ describe('Collection', () => {
       });
 
       // Select a set first
-      const setSelect = screen.getByDisplayValue('All Sets');
+      const setSelect = screen.getByTestId('collection-set-filter');
       fireEvent.change(setSelect, { target: { value: 'sta' } });
 
       await vi.advanceTimersByTimeAsync(100);
@@ -756,7 +756,7 @@ describe('Collection', () => {
       });
 
       // Toggle a color filter
-      const redButton = screen.getByTitle('Red');
+      const redButton = screen.getByTestId('collection-color-button-R');
       fireEvent.click(redButton);
 
       await vi.advanceTimersByTimeAsync(350);
@@ -882,7 +882,7 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByText('Name (A-Z)')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-sort-select')).toBeInTheDocument();
       });
     });
 
@@ -896,11 +896,11 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByText('Name (A-Z)')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-sort-select')).toBeInTheDocument();
       });
 
-      // Find the sort dropdown by its default value
-      const sortSelect = screen.getByDisplayValue('Name (A-Z)') as HTMLSelectElement;
+      // Find the sort dropdown by its data-testid
+      const sortSelect = screen.getByTestId('collection-sort-select') as HTMLSelectElement;
       const options = Array.from(sortSelect.options).map((opt) => opt.text);
 
       expect(options).toContain('Name (A-Z)');
@@ -930,11 +930,11 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByDisplayValue('Name (A-Z)')).toBeInTheDocument();
+        expect(screen.getByTestId('collection-sort-select')).toBeInTheDocument();
       });
 
       // Change sort to Price (High)
-      const sortSelect = screen.getByDisplayValue('Name (A-Z)');
+      const sortSelect = screen.getByTestId('collection-sort-select');
       fireEvent.change(sortSelect, { target: { value: 'price-desc' } });
 
       await vi.advanceTimersByTimeAsync(100);

@@ -66,7 +66,7 @@ describe('CommunityComparison Component', () => {
 
       render(<CommunityComparison setCode="DSK" />);
 
-      expect(screen.getByText('Loading community comparison...')).toBeInTheDocument();
+      expect(screen.getByTestId('community-comparison-loading')).toBeInTheDocument();
     });
 
     it('should display error message when fetching fails', async () => {
@@ -75,7 +75,8 @@ describe('CommunityComparison Component', () => {
       render(<CommunityComparison setCode="DSK" />);
 
       await waitFor(() => {
-        expect(screen.getByText(/Error: Failed to load comparison/i)).toBeInTheDocument();
+        expect(screen.getByTestId('community-comparison-error')).toBeInTheDocument();
+        expect(screen.getByTestId('community-comparison-retry-button')).toBeInTheDocument();
       });
     });
 
@@ -86,9 +87,7 @@ describe('CommunityComparison Component', () => {
       render(<CommunityComparison setCode="DSK" />);
 
       await waitFor(() => {
-        expect(
-          screen.getByText(/No draft data available for DSK/i)
-        ).toBeInTheDocument();
+        expect(screen.getByTestId('community-comparison-empty')).toBeInTheDocument();
       });
     });
   });
@@ -204,7 +203,7 @@ describe('CommunityComparison Component', () => {
       render(<CommunityComparison setCode="DSK" />);
 
       await waitFor(() => {
-        expect(screen.getByText('Archetype Performance vs Community')).toBeInTheDocument();
+        expect(screen.getByTestId('community-comparison-archetypes')).toBeInTheDocument();
       });
     });
 

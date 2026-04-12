@@ -138,7 +138,7 @@ export default function ImprovementSuggestionsPanel({
 
   if (loading) {
     return (
-      <div className="suggestions-panel loading">
+      <div className="suggestions-panel loading" data-testid="suggestions-loading">
         <div className="loading-spinner"></div>
         <p>Loading suggestions...</p>
       </div>
@@ -146,7 +146,7 @@ export default function ImprovementSuggestionsPanel({
   }
 
   return (
-    <div className="suggestions-panel">
+    <div className="suggestions-panel" data-testid="suggestions-panel">
       <div className="suggestions-header">
         <h3>
           Improvement Suggestions{' '}
@@ -173,6 +173,7 @@ export default function ImprovementSuggestionsPanel({
             value={filterType}
             onChange={(e) => setFilterType(e.target.value as SuggestionType | 'all')}
             className="type-filter"
+            data-testid="suggestions-type-filter"
           >
             {SUGGESTION_TYPE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -181,7 +182,7 @@ export default function ImprovementSuggestionsPanel({
             ))}
           </select>
           {onClose && (
-            <button className="close-button" onClick={onClose} title="Close">
+            <button className="close-button" onClick={onClose} title="Close" data-testid="suggestions-close-button">
               x
             </button>
           )}
@@ -189,9 +190,9 @@ export default function ImprovementSuggestionsPanel({
       </div>
 
       {error && (
-        <div className="error-banner">
+        <div className="error-banner" data-testid="suggestions-error">
           <span>{error}</span>
-          <button onClick={() => setError(null)}>Dismiss</button>
+          <button onClick={() => setError(null)} data-testid="suggestions-error-dismiss">Dismiss</button>
         </div>
       )}
 
@@ -200,6 +201,7 @@ export default function ImprovementSuggestionsPanel({
           className="generate-btn"
           onClick={handleGenerate}
           disabled={generating}
+          data-testid="suggestions-generate-button"
         >
           {generating ? 'Analyzing...' : 'Generate New Suggestions'}
         </button>
@@ -208,14 +210,15 @@ export default function ImprovementSuggestionsPanel({
             type="checkbox"
             checked={showDismissed}
             onChange={(e) => setShowDismissed(e.target.checked)}
+            data-testid="suggestions-show-dismissed-checkbox"
           />
           Show dismissed
         </label>
       </div>
 
-      <div className="suggestions-list">
+      <div className="suggestions-list" data-testid="suggestions-list">
         {sortedSuggestions.length === 0 ? (
-          <div className="empty-state">
+          <div className="empty-state" data-testid="suggestions-empty-state">
             <p>No suggestions yet.</p>
             <p>Click &quot;Generate New Suggestions&quot; to analyze your play patterns!</p>
             <p className="hint">Requires at least 5 games played with this deck.</p>
@@ -227,6 +230,7 @@ export default function ImprovementSuggestionsPanel({
               className={`suggestion-item ${suggestion.isDismissed ? 'dismissed' : ''} ${
                 expandedId === suggestion.id ? 'expanded' : ''
               }`}
+              data-testid={`suggestion-item-${suggestion.id}`}
             >
               <div
                 className="suggestion-main"

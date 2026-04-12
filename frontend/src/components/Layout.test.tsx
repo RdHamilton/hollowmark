@@ -66,11 +66,11 @@ describe('Layout Component', () => {
         { initialRoute: '/' }
       );
 
-      expect(screen.getByText('Match History')).toBeInTheDocument();
-      expect(screen.getByText('Quests')).toBeInTheDocument();
-      expect(screen.getByText('Draft')).toBeInTheDocument();
-      expect(screen.getByText('Charts')).toBeInTheDocument();
-      expect(screen.getByText('Settings')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-tab-match-history')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-tab-quests')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-tab-draft')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-tab-charts')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-tab-settings')).toBeInTheDocument();
     });
 
     it('should highlight active tab based on current route', () => {
@@ -81,7 +81,7 @@ describe('Layout Component', () => {
         { initialRoute: '/draft' }
       );
 
-      const draftTab = screen.getByText('Draft').closest('.tab');
+      const draftTab = screen.getByTestId('nav-tab-draft');
       expect(draftTab).toHaveClass('active');
     });
 
@@ -93,11 +93,11 @@ describe('Layout Component', () => {
         { initialRoute: '/' }
       );
 
-      const questsTab = screen.getByText('Quests');
+      const questsTab = screen.getByTestId('nav-tab-quests');
       await userEvent.click(questsTab);
 
       await waitFor(() => {
-        expect(questsTab.closest('.tab')).toHaveClass('active');
+        expect(questsTab).toHaveClass('active');
       });
     });
 
@@ -127,8 +127,8 @@ describe('Layout Component', () => {
       );
 
       // Sub-navigation should not be present
-      const subTabBar = document.querySelector('.sub-tab-bar');
-      expect(subTabBar).not.toBeInTheDocument();
+      expect(screen.queryByTestId('charts-sub-tab-bar')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('draft-sub-tab-bar')).not.toBeInTheDocument();
     });
   });
 
@@ -146,7 +146,7 @@ describe('Layout Component', () => {
       );
 
       await waitFor(() => {
-        const statusBadge = document.querySelector('.status-badge-compact');
+        const statusBadge = screen.getByTestId('connection-status-badge');
         expect(statusBadge).toBeInTheDocument();
         expect(statusBadge).toHaveClass('status-connected');
       });
@@ -170,7 +170,7 @@ describe('Layout Component', () => {
       );
 
       await waitFor(() => {
-        const statusBadge = document.querySelector('.status-badge-compact');
+        const statusBadge = screen.getByTestId('connection-status-badge');
         expect(statusBadge).toHaveClass('status-standalone');
       });
 
@@ -178,7 +178,7 @@ describe('Layout Component', () => {
       mockEventEmitter.emit('daemon:connected');
 
       await waitFor(() => {
-        const statusBadge = document.querySelector('.status-badge-compact');
+        const statusBadge = screen.getByTestId('connection-status-badge');
         expect(statusBadge).toHaveClass('status-connected');
       });
     });
@@ -192,7 +192,7 @@ describe('Layout Component', () => {
         </Layout>
       );
 
-      expect(screen.queryByText('⏸️ Replay Paused')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('replay-paused-label')).not.toBeInTheDocument();
     });
 
     it('should show replay controls when replay is active and paused', async () => {
@@ -207,9 +207,9 @@ describe('Layout Component', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('⏸️ Replay Paused')).toBeInTheDocument();
-        expect(screen.getByText('▶️ Resume')).toBeInTheDocument();
-        expect(screen.getByText('⏹️ Stop')).toBeInTheDocument();
+        expect(screen.getByTestId('replay-paused-label')).toBeInTheDocument();
+        expect(screen.getByTestId('replay-resume-button')).toBeInTheDocument();
+        expect(screen.getByTestId('replay-stop-button')).toBeInTheDocument();
       });
     });
 
@@ -224,7 +224,7 @@ describe('Layout Component', () => {
         { initialRoute: '/settings' }
       );
 
-      expect(screen.queryByText('⏸️ Replay Paused')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('replay-paused-label')).not.toBeInTheDocument();
     });
 
     it('should not show replay controls on draft page', () => {
@@ -238,7 +238,7 @@ describe('Layout Component', () => {
         { initialRoute: '/draft' }
       );
 
-      expect(screen.queryByText('⏸️ Replay Paused')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('replay-paused-label')).not.toBeInTheDocument();
     });
 
     it('should have ResumeReplay function available', () => {
@@ -318,7 +318,7 @@ describe('Layout Component', () => {
       );
 
       // Component should still render
-      expect(screen.getByText('Match History')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-tab-match-history')).toBeInTheDocument();
     });
 
     it('should handle connection status error without crashing', async () => {
@@ -333,7 +333,7 @@ describe('Layout Component', () => {
       }).not.toThrow();
 
       // Layout should still render
-      expect(screen.getByText('Match History')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-tab-match-history')).toBeInTheDocument();
     });
   });
 });
