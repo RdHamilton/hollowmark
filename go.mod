@@ -2,7 +2,7 @@ module github.com/ramonehamilton/MTGA-Companion
 
 go 1.25.0
 
-toolchain go1.25.5
+toolchain go1.25.9
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
@@ -12,13 +12,13 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/kardianos/service v1.2.4
-	github.com/mattn/go-sqlite3 v1.14.38
+	github.com/mattn/go-sqlite3 v1.14.40
 	github.com/stretchr/testify v1.11.1
 	github.com/wailsapp/wails/v2 v2.11.0
 	golang.org/x/crypto v0.49.0
 	golang.org/x/net v0.51.0
 	golang.org/x/time v0.15.0
-	modernc.org/sqlite v1.48.0
+	modernc.org/sqlite v1.48.1
 )
 
 require (
