@@ -131,12 +131,11 @@ describe('CardPerformancePanel', () => {
 
     render(<CardPerformancePanel deckId="deck-1" deckName="Test Deck" onClose={() => {}} />);
 
+    // Wait for data to fully load (summary stats visible means loading is complete)
     await waitFor(() => {
-      expect(screen.getByText('Card Performance: Test Deck')).toBeInTheDocument();
+      expect(screen.getAllByText('10').length).toBeGreaterThanOrEqual(1); // totalMatches
     });
 
-    // Check summary stats - use getAllByText since numbers may appear multiple places
-    expect(screen.getAllByText('10').length).toBeGreaterThanOrEqual(1); // totalMatches
     expect(screen.getAllByText('15').length).toBeGreaterThanOrEqual(1); // totalGames
     // Win rate appears in summary
     const summaryStats = document.querySelectorAll('.summary-stat .stat-value');

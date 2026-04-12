@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Decks', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('.app-container')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 10000 });
 
     await page.click('a[href="/decks"]');
     await page.waitForURL('**/decks');

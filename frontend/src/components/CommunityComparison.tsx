@@ -77,7 +77,7 @@ const CommunityComparison: React.FC<CommunityComparisonProps> = ({
 
   if (loading) {
     return (
-      <div className="community-comparison community-comparison--loading">
+      <div className="community-comparison community-comparison--loading" data-testid="community-comparison-loading">
         <div className="community-comparison__spinner" />
         <span>Loading community comparison...</span>
       </div>
@@ -86,37 +86,37 @@ const CommunityComparison: React.FC<CommunityComparisonProps> = ({
 
   if (error) {
     return (
-      <div className="community-comparison community-comparison--error">
+      <div className="community-comparison community-comparison--error" data-testid="community-comparison-error">
         <span>Error: {error}</span>
-        <button onClick={fetchComparison}>Retry</button>
+        <button onClick={fetchComparison} data-testid="community-comparison-retry-button">Retry</button>
       </div>
     );
   }
 
   if (!comparison || comparison.sampleSize === 0) {
     return (
-      <div className="community-comparison community-comparison--empty">
+      <div className="community-comparison community-comparison--empty" data-testid="community-comparison-empty">
         <span>No draft data available for {setCode}. Complete some drafts to see your comparison.</span>
       </div>
     );
   }
 
   return (
-    <div className="community-comparison">
+    <div className="community-comparison" data-testid="community-comparison">
       <div className="community-comparison__header">
         <h3>Community Comparison</h3>
         <span className="community-comparison__set">{comparison.setCode}</span>
       </div>
 
-      <div className="community-comparison__main">
-        <div className={`community-comparison__rank ${getRankClass(comparison.rank)}`}>
+      <div className="community-comparison__main" data-testid="community-comparison-main">
+        <div className={`community-comparison__rank ${getRankClass(comparison.rank)}`} data-testid="community-comparison-rank">
           <span className="community-comparison__rank-label">{comparison.rank}</span>
           <span className="community-comparison__percentile">
             {Math.round(comparison.percentileRank)}th percentile
           </span>
         </div>
 
-        <div className="community-comparison__stats">
+        <div className="community-comparison__stats" data-testid="community-comparison-stats">
           <div className="community-comparison__stat">
             <span className="community-comparison__stat-label">Your Win Rate</span>
             <span className="community-comparison__stat-value community-comparison__stat-value--primary">
@@ -149,7 +149,7 @@ const CommunityComparison: React.FC<CommunityComparisonProps> = ({
       </div>
 
       {comparison.archetypeComparison && comparison.archetypeComparison.length > 0 && (
-        <div className="community-comparison__archetypes">
+        <div className="community-comparison__archetypes" data-testid="community-comparison-archetypes">
           <h4>Archetype Performance vs Community</h4>
           <div className="community-comparison__archetype-list">
             {comparison.archetypeComparison
