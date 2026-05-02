@@ -89,6 +89,19 @@ Every code change requires:
 
 Run tests: `cd services/daemon && go test ./...`
 
+## Finding Your Next Ticket
+
+Query tickets assigned to the **daemon** agent on the v2.0 project board (Agent field option ID `97db5f54`):
+
+```bash
+gh project item-list 27 --owner RdHamilton --format json --limit 100 | python3 -c "
+import json,sys
+for i in json.load(sys.stdin)['items']:
+    if i.get('agent','')=='daemon' and i.get('status','')=='Todo':
+        print(i['number'], i['title'])
+"
+```
+
 ## Ticket Workflow
 
 Every ticket assigned to this agent must follow this status progression on the v2.0 project board (project #27, repo RdHamilton/MTGA-Companion):
