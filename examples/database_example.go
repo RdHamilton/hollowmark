@@ -6,8 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-
 	"github.com/ramonehamilton/MTGA-Companion/internal/mtga/logreader"
 	"github.com/ramonehamilton/MTGA-Companion/internal/storage"
 )

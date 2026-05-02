@@ -759,7 +759,6 @@ func runDaemonCommand() {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	port := fs.Int("port", 9999, "WebSocket server port")
 	logPath := fs.String("log-path", "", "MTGA log file path (auto-detect if empty)")
-	dbPath := fs.String("db-path", "", "Database path (default: ~/.mtga-companion/data.db)")
 	pollInterval := fs.Duration("poll-interval", 2*time.Second, "Log polling interval")
 	useFSNotify := fs.Bool("use-fsnotify", false, "Use file system events for log watching")
 	enableMetrics := fs.Bool("enable-metrics", false, "Enable metrics")
@@ -796,7 +795,7 @@ func runDaemonCommand() {
 	// Create daemon configuration
 	daemonConfig := daemon.DefaultConfig()
 	daemonConfig.Port = *port
-	daemonConfig.DBPath = finalDBPath
+	daemonConfig.DBPath = ""
 	daemonConfig.LogPath = *logPath
 	daemonConfig.PollInterval = *pollInterval
 	daemonConfig.UseFSNotify = *useFSNotify
@@ -838,7 +837,6 @@ func runReplayCommand() {
 	file := fs.String("file", "", "Path to log file to replay (required)")
 	speed := fs.Float64("speed", 1.0, "Replay speed multiplier (1.0 = real-time, 2.0 = 2x speed, etc.)")
 	filter := fs.String("filter", "all", "Filter entries by type: all, draft, match, event")
-	dbPath := fs.String("db-path", "", "Database path (default: ~/.mtga-companion/data.db)")
 	port := fs.Int("port", 9999, "Daemon port for replay")
 
 	fs.Usage = func() {
@@ -934,7 +932,7 @@ func runReplayCommand() {
 	// Create daemon config (for replay engine)
 	daemonConfig := daemon.DefaultConfig()
 	daemonConfig.Port = *port
-	daemonConfig.DBPath = finalDBPath
+	daemonConfig.DBPath = ""
 	daemonConfig.CORSConfig = daemon.CORSConfigFromEnv()
 
 	// Create daemon service
