@@ -131,6 +131,16 @@ When creating tickets that will be implemented by other agents, set the **Agent*
 | `dba` | Schema design, PostgreSQL migrations, RDS config |
 | `testing` | Test coverage gaps, integration tests, E2E test strategy |
 
+## Go Workspace Rules
+
+These rules apply when working in **Approach B (Go workspace multi-module)** — the chosen architecture for the cloud SaaS split.
+
+1. **`replace` directives are for local development only.** A `go.work` file may use `replace` directives to point inter-service imports at local paths while developing locally. This is expected and correct for local builds.
+2. **Never commit a `go.work` with a local `replace` in a production PR.** Before opening any PR that touches `go.work`, verify that all `replace` directives have been removed or point to published module versions (e.g., `github.com/ramonehamilton/mtga-contract v0.x.y`). A `go.work` with a `replace` pointing to an absolute local path (e.g., `replace github.com/ramonehamilton/mtga-contract => ../contract`) must never reach `main`.
+3. **All inter-service imports in CI use the published module path.** Each service's `go.mod` pins a tagged release of `mtga-contract`. The CI build does not use `go.work` — each service is built independently from its own `go.mod`.
+4. **Tag `mtga-contract` before depending on a new type.** When a new shared type is added to `services/contract`, publish a new tag (`v0.x.y`) and update consumer `go.mod` files in the same PR.
+5. **Enforcement**: PR reviewers (and CI) must reject any `go.work` diff that contains a `replace` pointing to a local filesystem path.
+
 ## Rules
 
 1. Never implement features — design them and create tickets for implementation agents
