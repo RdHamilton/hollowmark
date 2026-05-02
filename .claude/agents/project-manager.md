@@ -131,14 +131,21 @@ Cached project metadata for fast status transitions (no need to re-query field I
 - **Project ID**: `PVT_kwHOABsZ684BMSNn`
 - **Status Field ID**: `PVTSSF_lAHOABsZ684BMSNnzg7nLOc`
 - **Milestone Field ID**: `PVTF_lAHOABsZ684BMSNnzg7nLOo`
-- **Agent Field ID**: query with `gh project field-list 27 --owner RdHamilton --format json` after creating the Agent field (see Agent Field Setup below)
+- **Agent Field ID**: `PVTSSF_lAHOABsZ684BMSNnzhRxETM`
 - **Status Option IDs**:
   - Todo: `6263f412`
   - In Progress: `9fd907f0`
   - PR Review: `0ca4880d`
   - Done: `7729b7fe`
   - Released: `21c7bb87`
-- **Agent Option IDs**: query after field creation, cache here
+- **Agent Option IDs**:
+  - architect: `58bcb7a8`
+  - backend: `4ca9f6a0`
+  - daemon: `97db5f54`
+  - frontend: `8c10861b`
+  - infrastructure: `bd45f9c7`
+  - dba: `b1653f24`
+  - testing: `66f2dd97`
 
 Note: Status options were re-created via `updateProjectV2Field` mutation (adding PR Review + Released reset all option IDs).
 
@@ -337,9 +344,11 @@ gh project field-list <NUMBER> --owner RdHamilton --format json
 ## Commands Reference
 
 ```bash
-# Create issue — ALWAYS follow immediately with item-add (two-step, no exceptions)
+# Create issue — ALWAYS follow with item-add + Agent field set (three-step, no exceptions)
 ISSUE_URL=$(gh issue create --title "<title>" --body "<body>" --label "<label1>,<label2>" --json url -q .url)
-gh project item-add 27 --owner RdHamilton --url "$ISSUE_URL"
+ITEM_ID=$(gh project item-add 27 --owner RdHamilton --url "$ISSUE_URL" --format json -q .id)
+# Set Agent field immediately — use option IDs from Project Registry
+gh api graphql -f query='mutation { updateProjectV2ItemFieldValue(input: { projectId: "PVT_kwHOABsZ684BMSNn" itemId: "'"$ITEM_ID"'" fieldId: "PVTSSF_lAHOABsZ684BMSNnzhRxETM" value: { singleSelectOptionId: "<AGENT_OPTION_ID>" } }) { projectV2Item { id } } }'
 
 # Create project
 gh project create --owner RdHamilton --title "<title>"
@@ -388,7 +397,7 @@ gh api repos/RdHamilton/MTGA-Companion/milestones --method POST \
 
 ## Rules
 
-1. NEVER create an issue without at least one label and an **Agent** field value in the body
+1. NEVER create an issue without at least one label, an **Agent** line in the body, AND the Agent project field set on the board — all three are required
 2. NEVER create a project without all 5 status columns configured
 3. Always use the existing label if one fits - check the list above first
 4. **ALWAYS add every new issue to the v2.0 project board immediately after creating it** — run `gh project item-add 27 --owner RdHamilton --url <issue_url>` as the very next command after `gh issue create`. This is non-negotiable; issues not on the board are invisible to the team.
