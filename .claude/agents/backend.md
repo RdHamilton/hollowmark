@@ -71,6 +71,44 @@ Every code change requires:
 
 Run tests: `cd services/bff && go test ./...`
 
+## Finding Your Next Ticket
+
+Query tickets assigned to the **backend** agent on the v2.0 project board (Agent field option ID `4ca9f6a0`):
+
+```bash
+gh api graphql -f query='{
+  node(id: "PVT_kwHOABsZ684BMSNn") {
+    ... on ProjectV2 {
+      items(first: 100) {
+        nodes {
+          id
+          fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+          fieldValueByName(name: "Agent")  { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+          content { ... on Issue { number title } }
+        }
+      }
+    }
+  }
+}' | python3 -c "
+import json,sys
+items=json.load(sys.stdin)['data']['node']['items']['nodes']
+for i in items:
+    agent=i.get('fieldValueByName',{})
+    # need two separate field reads — filter by Agent=backend, Status=Todo
+    pass
+" 
+```
+
+Simpler: filter by Agent label `backend` and status `Todo`:
+```bash
+gh project item-list 27 --owner RdHamilton --format json --limit 100 | python3 -c "
+import json,sys
+for i in json.load(sys.stdin)['items']:
+    if i.get('agent','')=='backend' and i.get('status','')=='Todo':
+        print(i['number'], i['title'])
+"
+```
+
 ## Ticket Workflow
 
 Every ticket assigned to this agent must follow this status progression on the v2.0 project board (project #27, repo RdHamilton/MTGA-Companion):
