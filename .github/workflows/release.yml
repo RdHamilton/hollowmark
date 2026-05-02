@@ -151,3 +151,23 @@ jobs:
         done
         echo "Timed out waiting for SSM command"
         exit 1
+
+    - name: Smoke test — health endpoint
+      run: |
+        EC2_HOST="${{ secrets.EC2_HOST }}"
+        if [ -z "$EC2_HOST" ]; then
+          echo "EC2_HOST secret not set — skipping smoke test"
+          exit 0
+        fi
+        echo "Checking https://${EC2_HOST}/health ..."
+        for i in $(seq 1 12); do
+          HTTP_STATUS=$(curl -sk -o /dev/null -w "%{http_code}" "https://${EC2_HOST}/health" || echo "000")
+          echo "[$i/12] HTTP $HTTP_STATUS"
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "Health check passed."
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "Health check failed — service did not return 200 after 60s"
+        exit 1
