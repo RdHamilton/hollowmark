@@ -22,16 +22,20 @@ The goal is to split this into 4 independently deployable services for a cloud S
 | Service | Deployment target | Responsibility |
 |---|---|---|
 | **Daemon** | User's machine (local binary) | Read `Player.log`, POST events to BFF |
-| **BFF** | EC2 | REST API + WebSocket, owns all DB writes |
-| **Sync/Poller** | EC2 or Lambda | 17Lands ratings, card metadata on schedule |
-| **Frontend** | EC2/nginx or S3+CloudFront | React SPA |
+| **BFF** | EC2 | REST API + SSE (or WebSocket), owns all DB writes |
+| **Sync/Poller** | **Lambda + EventBridge Scheduler** | 17Lands ratings, card metadata on schedule |
+| **Frontend** | **EC2/nginx** | React SPA served from existing EC2 instance |
 
 ### Hard Constraints
 
 - Daemon **must** stay local — `Player.log` is only accessible on the user's machine
-- BFF **must** expose a WebSocket endpoint — live draft pick recommendations require it
+- BFF **must** expose a real-time push endpoint for draft pick updates — protocol TBD (see BFF section below)
 - All services **must** be deployable via the existing GitHub Actions CI pipeline
 - Module path: `github.com/ramonehamilton/MTGA-Companion`
+
+### Known Risks
+
+**Log loss — MTGA overwrites `Player.log` on startup.** If the daemon was not running when MTGA started, all draft/match events written since the last daemon run are lost. A log preservation mechanism was attempted but is not functioning correctly. The data model may also not accurately represent the draft log format, requiring a longer investigation and refinement phase before the feature is reliable. This is flagged for the **daemon agent** (fix log preservation) and the **DBA agent** (review whether the schema fits the draft log event structure). See GitHub issue: `daemon: investigate log preservation and MTGA log overwrite on startup`.
 
 ---
 
@@ -71,6 +75,78 @@ cmd/
 
 frontend/src/          → Frontend service
 ```
+
+---
+
+## BFF Real-Time Protocol: SSE vs WebSocket
+
+### Background
+
+ADR-001 originally listed "BFF must expose a WebSocket endpoint" as a hard constraint. That assumption was made in the context of a local app where the BFF and browser are on the same machine. In the cloud context the tradeoff changes.
+
+### Comparison
+
+| | Server-Sent Events (SSE) | WebSocket |
+|---|---|---|
+| Direction | Server → client only | Bidirectional |
+| Protocol | Standard HTTP/1.1 or HTTP/2 | HTTP Upgrade to `ws://` / `wss://` |
+| nginx config | No special config needed | Requires `Upgrade` and `Connection` headers |
+| Reconnection | Built-in (`EventSource` API) | Manual reconnect logic |
+| Proxying | Transparent through any HTTP proxy | Requires nginx `proxy_http_version 1.1` + upgrade headers |
+| Browser support | All modern browsers | All modern browsers |
+| Use in draft UI | Sufficient — BFF pushes pick events; browser sends picks via REST | Overcomplicated — bidirectional not needed |
+
+### Decision
+
+**Use SSE** for BFF → browser push of draft pick events. The browser sends pick confirmations as regular REST `POST` requests; SSE delivers real-time recommendations and draft state updates back to the browser. This is strictly server-to-client, which is all the draft UI requires.
+
+WebSocket should be revisited **only if** a future feature requires client-initiated server push (e.g., multiplayer draft) that cannot be handled by REST polling or long-poll. If that arises, upgrade to WebSocket at that point.
+
+The existing `Hub + DaemonEventForwarder` pattern in `internal/api/websocket/` will be refactored to use SSE during the BFF migration.
+
+---
+
+## Sync/Poller: Lambda + EventBridge (Not EC2 Process)
+
+Card metadata updates occur every few months; 17Lands ratings refresh daily. These are batch jobs with bounded runtimes — not long-running services.
+
+### Decision
+
+**Deploy Sync as Lambda functions triggered by EventBridge Scheduler**, not as a persistent EC2 process.
+
+| Factor | EC2 process | Lambda + EventBridge |
+|---|---|---|
+| Idle cost | EC2 always running | Zero idle cost |
+| Retries | Manual | Built-in Lambda retry + DLQ |
+| Max runtime | Unlimited | 15 min (not a constraint for daily batch) |
+| Process management | systemd service | None |
+| Cold start | None | Acceptable for scheduled jobs |
+
+The existing `refresh/scheduler.go` ticker loop is replaced with a Lambda handler that runs the same fetch+store logic on schedule. The `setcache` package moves to `services/sync` (see SetCache ownership below).
+
+---
+
+## Frontend Serving: EC2/nginx (Not S3+CloudFront)
+
+### Decision
+
+**Serve the React static build from nginx on the existing EC2 instance.**
+
+EC2 is already deployed and paid for. Adding nginx as a static file server on that instance has zero marginal cost. S3+CloudFront adds per-request and data-transfer fees with no performance or reliability benefit at current traffic levels.
+
+**Migration path**: If traffic grows to a level where CloudFront CDN caching or geographic distribution provides meaningful benefit, the static files can be moved to S3+CloudFront at that point. The React build process is identical in both cases — only the deploy step changes.
+
+---
+
+## SetCache Ownership and Sync/BFF Contract
+
+`internal/mtga/cards/setcache` is read by the BFF (draft ratings lookups) and written by Sync (card data refresh). Ownership rules:
+
+1. **Sync owns writes.** Set cache data is the authoritative source for future deck-building models; only the Sync service may update it.
+2. **BFF reads via `DraftRatingsRepository`.** The BFF queries Postgres directly — it does not import the `setcache` package after the module split.
+3. **Draft UI must never block on Sync.** If the Sync Lambda is running, failing, or delayed, the BFF must fall back to the last known good cache data in Postgres. A feature flag or fallback mechanism must be designed so that cache ownership can be flipped (BFF serves stale data from its own read path) without operator intervention.
+
+The feature flag / fallback design is tracked in GitHub issue: `arch: design SetCache ownership flip mechanism for sync/BFF`.
 
 ---
 
@@ -124,8 +200,8 @@ MTGA-Companion/
   .github/workflows/
     daemon.yml    ← cross-compile win/mac, attach to GH Release
     bff.yml       ← Docker build, push ECR, deploy EC2
-    sync.yml      ← Docker or Lambda zip deploy
-    frontend.yml  ← npm build, S3 upload or nginx deploy
+    sync.yml      ← Lambda zip deploy (EventBridge Scheduler)
+    frontend.yml  ← npm build, nginx deploy on EC2
 ```
 
 Workflows use `paths` filters so only changed services rebuild.
@@ -188,7 +264,7 @@ MTGA-Companion/
         mtga/cards/      ← seventeenlands, draftdata, refresh, datasets, mtgjson, mtgazone, cfb
   frontend/              ← unchanged
   .github/workflows/
-    daemon.yml  bff.yml  sync.yml  frontend.yml
+    daemon.yml  bff.yml  sync.yml  frontend.yml  # frontend: nginx deploy; sync: Lambda zip
 ```
 
 ### Shared Code Strategy
@@ -325,8 +401,8 @@ Approach A is viable if velocity is the immediate priority — it can land in a 
 
 ## Consequences
 
-- **Daemon**: cross-compiled (Windows + macOS) and attached to GitHub Releases; users download alongside MTGA. Authentication via per-install JWT issued at first registration with BFF.
-- **BFF**: Dockerized, deployed to EC2. Shares a single Postgres instance with Sync. WebSocket hub remains in `internal/api/websocket/` — no change to the existing `Hub + DaemonEventForwarder` pattern, only the transport (daemon now POSTs over HTTP instead of calling in-process).
-- **Sync**: runs as a long-lived EC2 process using the existing `ticker`-based `refresh/scheduler.go`, or wrapped as a Lambda handler triggered by EventBridge cron with minimal changes to the scheduler interface.
-- **Frontend**: static build uploaded to S3 + CloudFront (or served from EC2 nginx). No code changes required; the API base URL becomes an environment variable at build time.
+- **Daemon**: cross-compiled (Windows + macOS) and attached to GitHub Releases; users download alongside MTGA. Authentication via per-install JWT issued at first registration with BFF. Log preservation must be fixed — MTGA overwrites `Player.log` on startup and the current preservation mechanism is broken (see Known Risks above).
+- **BFF**: Dockerized, deployed to EC2. Shares a single Postgres instance with Sync. The existing `Hub + DaemonEventForwarder` WebSocket pattern is **replaced with SSE** — the `internal/api/websocket/` package is refactored to use `text/event-stream` responses. Daemon POSTs events over HTTP; BFF fans them out to browsers via SSE.
+- **Sync**: deployed as **Lambda functions triggered by EventBridge Scheduler** (daily for ratings, on-demand for card metadata). The `ticker`-based `refresh/scheduler.go` is replaced by a Lambda handler calling the same fetch+store logic. `setcache` package moves to `services/sync`. Sync owns all writes; BFF reads via `DraftRatingsRepository`. A fallback/feature-flag mechanism ensures draft UI never blocks if Sync is unavailable.
+- **Frontend**: static build served from **nginx on the existing EC2 instance** — zero extra cost. Can be migrated to S3+CloudFront if traffic justifies CDN distribution. No code changes required; the API base URL is an environment variable at build time.
 - **Database migrations**: the 30+ SQL migration files stay with `services/bff`. Sync uses a Postgres role scoped to `card_metadata`, `draft_ratings`, and related tables only, enforced via `GRANT` statements added to the migration that initializes the sync role.
