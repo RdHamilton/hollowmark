@@ -1,23 +1,28 @@
 // Package config loads daemon configuration from a local file and environment variables.
-// The BFF URL is never hardcoded — it must be supplied via config file or environment.
+// The cloud API URL is never hardcoded — it must be supplied via config file or environment.
 package config
 
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"time"
 )
 
 // Config holds all daemon configuration.
 type Config struct {
-	// BFFURL is the base URL of the Backend for Frontend service.
-	// Required. Never hardcoded. Read from config file or MTGA_DAEMON_BFF_URL env var.
-	BFFURL string `json:"bff_url"`
+	// CloudAPIURL is the base URL of the Backend for Frontend service.
+	// Required. Never hardcoded. Read from config file or MTGA_DAEMON_CLOUD_API_URL env var.
+	CloudAPIURL string `json:"cloud_api_url"`
 
-	// DaemonJWT is the bearer token used to authenticate with the BFF.
-	// Read from config file or MTGA_DAEMON_JWT env var.
-	DaemonJWT string `json:"daemon_jwt"`
+	// APIKey is the bearer token used to authenticate with the BFF.
+	// Read from config file or MTGA_DAEMON_API_KEY env var.
+	APIKey string `json:"api_key"`
+
+	// SyncEnabled controls whether events are dispatched to the cloud API.
+	// Default: true.
+	SyncEnabled bool `json:"sync_enabled"`
 
 	// LogPath is the path to the MTGA Player.log file.
 	// Optional: auto-detected from the platform if empty.
@@ -63,6 +68,7 @@ func Load(path string) (*Config, error) {
 
 func defaults() *Config {
 	return &Config{
+		SyncEnabled:  true,
 		PollInterval: 2 * time.Second,
 		UseFSNotify:  true,
 		IngestPath:   "/v1/ingest/events",
@@ -83,11 +89,11 @@ func loadFile(cfg *Config, path string) error {
 }
 
 func applyEnv(cfg *Config) {
-	if v := os.Getenv("MTGA_DAEMON_BFF_URL"); v != "" {
-		cfg.BFFURL = v
+	if v := os.Getenv("MTGA_DAEMON_CLOUD_API_URL"); v != "" {
+		cfg.CloudAPIURL = v
 	}
-	if v := os.Getenv("MTGA_DAEMON_JWT"); v != "" {
-		cfg.DaemonJWT = v
+	if v := os.Getenv("MTGA_DAEMON_API_KEY"); v != "" {
+		cfg.APIKey = v
 	}
 	if v := os.Getenv("MTGA_DAEMON_LOG_PATH"); v != "" {
 		cfg.LogPath = v
@@ -98,8 +104,11 @@ func applyEnv(cfg *Config) {
 }
 
 func (c *Config) validate() error {
-	if c.BFFURL == "" {
-		return fmt.Errorf("bff_url is required (set MTGA_DAEMON_BFF_URL or provide config file)")
+	if c.CloudAPIURL == "" {
+		return fmt.Errorf("cloud_api_url is required (set MTGA_DAEMON_CLOUD_API_URL or provide config file)")
+	}
+	if c.SyncEnabled && c.APIKey == "" {
+		log.Printf("[config] warning: sync_enabled is true but api_key is not set; events will be sent without authentication")
 	}
 	return nil
 }
