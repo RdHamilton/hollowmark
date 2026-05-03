@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,7 +36,7 @@ func TestDispatcherSendsValidDaemonEvent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d := dispatch.New(srv.URL, "/v1/ingest/events", "test-jwt-token")
+	d := dispatch.New(srv.URL, "/v1/ingest/events", "test-api-key")
 
 	payload := map[string]interface{}{"draftPack": []string{"card1", "card2"}}
 	evt, err := dispatch.BuildEvent("draft.pack", "account-123", "session-abc", payload)
@@ -46,7 +47,7 @@ func TestDispatcherSendsValidDaemonEvent(t *testing.T) {
 
 	require.NoError(t, d.Send(ctx, evt))
 
-	assert.Equal(t, "Bearer test-jwt-token", authHeader)
+	assert.Equal(t, "Bearer test-api-key", authHeader)
 	assert.Equal(t, "draft.pack", received.Type)
 	assert.Equal(t, "account-123", received.AccountID)
 	assert.Equal(t, "session-abc", received.SessionID)
@@ -55,8 +56,11 @@ func TestDispatcherSendsValidDaemonEvent(t *testing.T) {
 }
 
 // TestDispatcherHandlesBFFError verifies that non-2xx responses are returned as errors.
+// With retry logic the dispatcher will attempt 3 times before returning an error.
 func TestDispatcherHandlesBFFError(t *testing.T) {
+	var requestCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
@@ -68,6 +72,27 @@ func TestDispatcherHandlesBFFError(t *testing.T) {
 	err = d.Send(context.Background(), evt)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
+	assert.EqualValues(t, 3, requestCount.Load(), "expected 3 attempts before giving up")
+}
+
+// TestDispatcherRetriesOnFailure verifies the dispatcher retries exactly 3 times on
+// server errors before returning an error, and that the server received all 3 requests.
+func TestDispatcherRetriesOnFailure(t *testing.T) {
+	var requestCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	d := dispatch.New(srv.URL, "/v1/ingest/events", "test-api-key")
+	evt, err := dispatch.BuildEvent("test.event", "acc", "sess", map[string]string{"k": "v"})
+	require.NoError(t, err)
+
+	err = d.Send(context.Background(), evt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "all 3 attempts failed")
+	assert.EqualValues(t, 3, requestCount.Load(), "server should have received exactly 3 requests")
 }
 
 // TestBuildEvent verifies that BuildEvent correctly populates all fields.
