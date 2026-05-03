@@ -25,7 +25,7 @@ type Service struct {
 
 // New creates a Service from cfg.
 func New(cfg *config.Config) *Service {
-	d := dispatch.New(cfg.BFFURL, cfg.IngestPath, cfg.DaemonJWT)
+	d := dispatch.New(cfg.CloudAPIURL, cfg.IngestPath, cfg.APIKey)
 	return &Service{
 		cfg:        cfg,
 		dispatcher: d,
@@ -59,7 +59,7 @@ func (s *Service) Run(ctx context.Context) error {
 	updates := poller.Start()
 	errs := poller.Errors()
 
-	log.Printf("[daemon] started (session=%s bff=%s)", s.sessionID, s.cfg.BFFURL)
+	log.Printf("[daemon] started (session=%s cloud_api=%s)", s.sessionID, s.cfg.CloudAPIURL)
 
 	for {
 		select {
