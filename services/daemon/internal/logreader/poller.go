@@ -243,6 +243,10 @@ func (p *Poller) pollWithEvents() {
 				}
 			case event.Has(fsnotify.Remove), event.Has(fsnotify.Rename):
 				fmt.Printf("[INFO] Log file rotation detected (%s event): %s\n", event.Op, event.Name)
+				// Drain any bytes written to the old file before it disappears.
+				if err := p.checkForUpdates(); err != nil {
+					p.sendError(err)
+				}
 				p.mu.Lock()
 				p.lastPos = 0
 				p.lastSize = 0
