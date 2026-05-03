@@ -783,7 +783,8 @@ CREATE TABLE IF NOT EXISTS inventory_history (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_inventory_history_account_id ON inventory_history(account_id);
+-- idx_inventory_history_account_id omitted: account_id was never added to inventory_history
+-- in the incremental migration chain (000023 created it without account_id).
 CREATE INDEX IF NOT EXISTS idx_inventory_history_field      ON inventory_history(field);
 CREATE INDEX IF NOT EXISTS idx_inventory_history_created_at ON inventory_history(created_at);
 
@@ -809,7 +810,8 @@ CREATE TABLE IF NOT EXISTS quests (
     UNIQUE(account_id, quest_id, assigned_at)
 );
 
-CREATE INDEX IF NOT EXISTS idx_quests_account_id  ON quests(account_id);
+-- idx_quests_account_id omitted: account_id was never added to quests in the incremental
+-- migration chain (000010 created it without account_id).
 CREATE INDEX IF NOT EXISTS idx_quests_completed   ON quests(completed);
 CREATE INDEX IF NOT EXISTS idx_quests_assigned_at ON quests(assigned_at);
 CREATE INDEX IF NOT EXISTS idx_quests_completed_at ON quests(completed_at);
