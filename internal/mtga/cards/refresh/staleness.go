@@ -221,7 +221,7 @@ func (st *StalenessTracker) GetStaleCards(ctx context.Context, limit int) ([]Ref
 
 	var items []RefreshItem
 	for _, card := range staleCards {
-		lastUpdated, _ := time.Parse("2006-01-02 15:04:05", card.LastUpdated)
+		lastUpdated := card.LastUpdated
 		staleDays := int(time.Since(lastUpdated).Hours() / 24)
 
 		// Convert ArenaID string to int
