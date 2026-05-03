@@ -32,15 +32,30 @@ var (
 	databaseURL = flag.String("database-url", os.Getenv("DATABASE_URL"), "PostgreSQL connection string")
 )
 
+func runMigrationsWithRetry(dsn string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		log.Println("Running database migrations...")
+		err := storage.RunMigrations(dsn)
+		if err == nil {
+			log.Println("Migrations complete.")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("migration init: %w", err)
+		}
+		log.Printf("Database not ready, retrying in 1s: %v", err)
+		time.Sleep(time.Second)
+	}
+}
+
 func main() {
 	flag.Parse()
 
 	if *databaseURL != "" {
-		log.Println("Running database migrations...")
-		if err := storage.RunMigrations(*databaseURL); err != nil {
+		if err := runMigrationsWithRetry(*databaseURL, 30*time.Second); err != nil {
 			log.Fatalf("migrations failed: %v", err)
 		}
-		log.Println("Migrations complete.")
 	} else {
 		log.Println("DATABASE_URL not set — skipping migrations.")
 	}

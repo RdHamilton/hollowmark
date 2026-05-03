@@ -41,6 +41,33 @@ Rules:
 - Never modify an existing migration — always add a new one
 - Test the down migration before marking the ticket done
 
+## Migration Correctness — Fresh Install vs Incremental
+
+**Every migration must work correctly under both scenarios:**
+
+1. **Fresh install** — a developer spins up a clean database and runs all migrations from 000001 to HEAD in sequence. This is the standard dev environment setup.
+2. **Incremental apply** — a migration is applied to an existing production database that already has all prior migrations.
+
+**Pre-commit checklist for every migration:**
+
+### Column types
+- Never use `= TRUE` or `= FALSE` in WHERE clauses, partial indexes, or UPDATEs on columns that are declared `INTEGER` (SQLite-style 0/1 booleans). Use `= 1` or `= 0` instead.
+- Check the column's type as defined in the migration that CREATED it, not how it appears in the consolidated schema. If it was created as `INTEGER`, it is `INTEGER` in all subsequent migrations.
+
+### DROP statements
+- Always use `DROP TABLE IF EXISTS ... CASCADE` for tables that may have dependents (FK references, indexes). `DROP TABLE IF EXISTS` without `CASCADE` will fail in PostgreSQL if any object depends on it.
+
+### CREATE INDEX CONCURRENTLY
+- Never use `CREATE INDEX CONCURRENTLY` inside a migration file. golang-migrate wraps each migration in a transaction, and `CONCURRENTLY` cannot run inside a transaction block. Use `CREATE INDEX` without `CONCURRENTLY`.
+
+### Table existence gaps
+- If a migration creates an index or inserts data into a table, verify that table still EXISTS at the point the migration runs. A table created in migration N may be dropped in migration M (M > N) and recreated later. If your migration falls between the drop and the recreate, it will fail on a fresh install even if it worked incrementally.
+- To check: scan all `.up.sql` files for `DROP TABLE` statements referencing the table you depend on. If any exist with a lower migration number than yours, the table may not be present.
+
+### Consolidated schema migrations (e.g. 000054)
+- If a migration uses `CREATE TABLE IF NOT EXISTS` for tables that already exist, the CREATE is a no-op — but subsequent index creation statements still run against the **actual** column types in the database, not the types declared in the IF NOT EXISTS block.
+- Partial indexes (`WHERE column = value`) must use a value compatible with the column's actual type at migration time, which may differ from what the consolidated schema declares.
+
 ## Multi-Tenancy Isolation
 
 The schema enforces multi-tenancy through a `users → accounts → data` FK hierarchy:
@@ -114,3 +141,5 @@ gh api graphql -f query='mutation { updateProjectV2ItemFieldValue(input: { proje
 5. `DeletionPolicy: Snapshot` applies to RDS — never recommend dropping the RDS instance without a snapshot
 6. Do NOT add Claude Code references to PRs or comments
 7. Always follow the Ticket Workflow above
+8. Every migration must pass the fresh-install checklist: no `CONCURRENTLY`, no `= TRUE/FALSE` on INTEGER columns, no `DROP TABLE` without `CASCADE`, no index/insert on a table that may not exist at that migration sequence point
+9. When in doubt about a column's type, grep for the migration that first created it — that is the authoritative type, not the consolidated schema
