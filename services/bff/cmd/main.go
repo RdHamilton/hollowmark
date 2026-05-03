@@ -1,11 +1,3 @@
-// Package main is the entry point for the MTGA Companion BFF (Backend For Frontend) service.
-// The BFF owns the HTTP API and WebSocket hub used by the React frontend. It receives
-// parsed game events from the daemon via POST /v1/ingest/events and broadcasts them to
-// connected frontend clients in real time.
-//
-// Migration note: this binary currently provides only the ingest endpoint and an
-// in-process WebSocket hub. The full REST API (matches, drafts, decks, etc.) will be
-// added incrementally as packages are migrated from the root module into this service.
 package main
 
 import (
@@ -26,13 +18,25 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/gorilla/websocket"
 	"github.com/ramonehamilton/mtga-bff/internal/api/handlers"
+	"github.com/ramonehamilton/mtga-bff/internal/storage"
 	contract "github.com/ramonehamilton/mtga-contract"
 )
 
 var port = flag.Int("port", 8080, "HTTP server port")
+var databaseURL = flag.String("database-url", os.Getenv("DATABASE_URL"), "PostgreSQL connection string")
 
 func main() {
 	flag.Parse()
+
+	if *databaseURL != "" {
+		log.Println("Running database migrations...")
+		if err := storage.RunMigrations(*databaseURL); err != nil {
+			log.Fatalf("migrations failed: %v", err)
+		}
+		log.Println("Migrations complete.")
+	} else {
+		log.Println("DATABASE_URL not set — skipping migrations.")
+	}
 
 	fmt.Println("MTGA Companion BFF")
 	fmt.Println("==================")

@@ -759,7 +759,6 @@ func runDaemonCommand() {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	port := fs.Int("port", 9999, "WebSocket server port")
 	logPath := fs.String("log-path", "", "MTGA log file path (auto-detect if empty)")
-	dbPath := fs.String("db-path", "", "Database path (default: ~/.mtga-companion/data.db)")
 	pollInterval := fs.Duration("poll-interval", 2*time.Second, "Log polling interval")
 	useFSNotify := fs.Bool("use-fsnotify", false, "Use file system events for log watching")
 	enableMetrics := fs.Bool("enable-metrics", false, "Enable metrics")
@@ -773,14 +772,8 @@ func runDaemonCommand() {
 	fmt.Println("=============================")
 	fmt.Println()
 
-	// Setup database path
-	finalDBPath := *dbPath
-	if finalDBPath == "" {
-		finalDBPath = getDBPath()
-	}
-
-	// Open database
-	config := storage.DefaultConfig(finalDBPath)
+	// Open database (connection configured via DATABASE_URL env var or storage defaults)
+	config := storage.DefaultConfig()
 	config.AutoMigrate = true
 	db, err := storage.Open(config)
 	if err != nil {
@@ -802,7 +795,7 @@ func runDaemonCommand() {
 	// Create daemon configuration
 	daemonConfig := daemon.DefaultConfig()
 	daemonConfig.Port = *port
-	daemonConfig.DBPath = finalDBPath
+	daemonConfig.DBPath = ""
 	daemonConfig.LogPath = *logPath
 	daemonConfig.PollInterval = *pollInterval
 	daemonConfig.UseFSNotify = *useFSNotify
@@ -844,7 +837,6 @@ func runReplayCommand() {
 	file := fs.String("file", "", "Path to log file to replay (required)")
 	speed := fs.Float64("speed", 1.0, "Replay speed multiplier (1.0 = real-time, 2.0 = 2x speed, etc.)")
 	filter := fs.String("filter", "all", "Filter entries by type: all, draft, match, event")
-	dbPath := fs.String("db-path", "", "Database path (default: ~/.mtga-companion/data.db)")
 	port := fs.Int("port", 9999, "Daemon port for replay")
 
 	fs.Usage = func() {
@@ -914,16 +906,11 @@ func runReplayCommand() {
 	fmt.Printf("Filter: %s\n", *filter)
 	fmt.Println()
 
-	// Setup database
-	finalDBPath := *dbPath
-	if finalDBPath == "" {
-		finalDBPath = getDBPath()
-	}
-
-	fmt.Printf("Opening database: %s\n", finalDBPath)
+	// Open database (connection configured via DATABASE_URL env var or storage defaults)
+	fmt.Println("Opening database connection...")
 
 	// Open database
-	storageConfig := storage.DefaultConfig(finalDBPath)
+	storageConfig := storage.DefaultConfig()
 	storageConfig.AutoMigrate = true
 	db, err := storage.Open(storageConfig)
 	if err != nil {
@@ -945,7 +932,7 @@ func runReplayCommand() {
 	// Create daemon config (for replay engine)
 	daemonConfig := daemon.DefaultConfig()
 	daemonConfig.Port = *port
-	daemonConfig.DBPath = finalDBPath
+	daemonConfig.DBPath = ""
 	daemonConfig.CORSConfig = daemon.CORSConfigFromEnv()
 
 	// Create daemon service
