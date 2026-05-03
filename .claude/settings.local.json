@@ -67,7 +67,8 @@
       "Bash(aws configure list-profiles *)",
       "mcp__plugin_context-mode_context-mode__ctx_batch_execute",
       "Read(//Users/ramonehamilton/.claude/plans/**)",
-      "Bash(git diff *)"
+      "Bash(git diff *)",
+      "Bash(~/go/bin/gofumpt *)"
     ],
     "deny": [],
     "ask": []
