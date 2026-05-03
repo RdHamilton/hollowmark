@@ -20,12 +20,25 @@ func Snapshot(src, archiveDir string) (string, error) {
 		return "", fmt.Errorf("stat source: %w", err)
 	}
 
-	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+	if err := os.MkdirAll(archiveDir, 0o700); err != nil {
 		return "", fmt.Errorf("create archive dir: %w", err)
 	}
 
 	ts := time.Now().UTC().Format("20060102T150405Z")
-	dst := filepath.Join(archiveDir, "Player_"+ts+".log")
+	base := filepath.Join(archiveDir, fmt.Sprintf("Player_%s.log", ts))
+	dst := base
+	for i := 1; ; i++ {
+		f, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			// Claimed the name exclusively — close and let copyFile fill it.
+			_ = f.Close()
+			break
+		}
+		if !os.IsExist(err) {
+			return "", fmt.Errorf("create snapshot file: %w", err)
+		}
+		dst = filepath.Join(archiveDir, fmt.Sprintf("Player_%s_%d.log", ts, i))
+	}
 
 	if err := copyFile(src, dst); err != nil {
 		return "", fmt.Errorf("copy file: %w", err)
@@ -97,7 +110,7 @@ func copyFile(src, dst string) error {
 	}
 	defer func() { _ = in.Close() }()
 
-	out, err := os.Create(dst)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("create dst: %w", err)
 	}
