@@ -33,11 +33,8 @@ CREATE INDEX IF NOT EXISTS idx_decks_account_id_modified_at
 CREATE INDEX IF NOT EXISTS idx_decks_account_id_format
     ON decks (account_id, format);
 
--- currency_history: queries by account + timestamp range
--- (account_id, timestamp) composite already exists as idx_currency_history_account_timestamp
--- but it lacks DESC ordering; add a covering index for DESC queries
-CREATE INDEX IF NOT EXISTS idx_currency_history_account_id_timestamp_desc
-    ON currency_history (account_id, timestamp DESC);
+-- currency_history index is intentionally omitted here: the table is dropped in
+-- 000025 and recreated in 000054, so the index is added there instead.
 
 -- matchup_statistics: queries by account + format + archetype
 CREATE INDEX IF NOT EXISTS idx_matchup_stats_account_id_format
