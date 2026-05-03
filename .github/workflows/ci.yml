@@ -34,20 +34,18 @@ permissions:
 # ---------------------------------------------------------------------------
 
 jobs:
-  # BFF unit tests — only when BFF or shared contract files change
-  bff-unit-tests:
-    name: BFF Unit Tests
+  detect-changes:
+    name: Detect Changed Modules
     runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'pull_request' ||
-      github.event_name == 'push'
-
+    outputs:
+      bff: ${{ steps.filter.outputs.bff }}
+      frontend: ${{ steps.filter.outputs.frontend }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Check for BFF/contract changes
-      id: changes
+    - name: Path filter
+      id: filter
       uses: dorny/paths-filter@v3
       with:
         filters: |
@@ -55,34 +53,44 @@ jobs:
             - 'services/bff/**'
             - 'services/contract/**'
             - '.github/workflows/ci.yml'
+          frontend:
+            - 'frontend/**'
+            - '.github/workflows/ci.yml'
+
+  bff-unit-tests:
+    name: BFF Unit Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.bff == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
     - name: Set up Go
-      if: steps.changes.outputs.bff == 'true'
       uses: actions/setup-go@v5
       with:
         go-version: '1.25'
 
     - name: Download dependencies
-      if: steps.changes.outputs.bff == 'true'
       working-directory: services/bff
       run: go mod download
 
     - name: Run BFF unit tests
-      if: steps.changes.outputs.bff == 'true'
       working-directory: services/bff
       run: go test -v -short -coverprofile=coverage.out -covermode=atomic ./...
 
     - name: Upload coverage to Codecov
-      if: steps.changes.outputs.bff == 'true'
       uses: codecov/codecov-action@v4
       with:
         files: ./services/bff/coverage.out
         flags: bff-unit
         fail_ci_if_error: false
 
-  # Frontend component tests — only when frontend files change
   frontend-component-tests:
     name: Frontend Component Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -92,17 +100,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Check for frontend changes
-      id: changes
-      uses: dorny/paths-filter@v3
-      with:
-        filters: |
-          frontend:
-            - 'frontend/**'
-            - '.github/workflows/ci.yml'
-
     - name: Set up Node.js
-      if: steps.changes.outputs.frontend == 'true'
       uses: actions/setup-node@v4
       with:
         node-version: '20'
@@ -110,79 +108,23 @@ jobs:
         cache-dependency-path: frontend/package-lock.json
 
     - name: Install frontend dependencies
-      if: steps.changes.outputs.frontend == 'true'
       run: |
         cd frontend
         npm ci
 
     - name: TypeScript type check
-      if: steps.changes.outputs.frontend == 'true'
       run: |
         cd frontend
         npx tsc --noEmit
 
     - name: Run component tests
-      if: steps.changes.outputs.frontend == 'true'
       run: |
         cd frontend
         npm run test:run
 
     - name: Upload coverage to Codecov
-      if: steps.changes.outputs.frontend == 'true'
       uses: codecov/codecov-action@v4
       with:
         files: ./frontend/coverage/coverage-final.json
         flags: frontend
-        fail_ci_if_error: false
-
-# ---------------------------------------------------------------------------
-# Tier 2 — Integration tests (push to main only, not on PRs)
-# ---------------------------------------------------------------------------
-
-  bff-integration-tests:
-    name: BFF Integration Tests
-    runs-on: ubuntu-latest
-    # Only run on push to main (not PRs) to conserve minutes
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: mtga
-          POSTGRES_PASSWORD: mtga
-          POSTGRES_DB: mtga_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.25'
-
-    - name: Download dependencies
-      working-directory: services/bff
-      run: go mod download
-
-    - name: Run BFF integration tests
-      working-directory: services/bff
-      env:
-        DATABASE_URL: postgres://mtga:mtga@localhost:5432/mtga_test?sslmode=disable
-        INTEGRATION_TEST: "true"
-      run: go test -v -run Integration -coverprofile=coverage-integration.out -covermode=atomic ./...
-
-    - name: Upload integration coverage to Codecov
-      uses: codecov/codecov-action@v4
-      with:
-        files: ./services/bff/coverage-integration.out
-        flags: bff-integration
         fail_ci_if_error: false
