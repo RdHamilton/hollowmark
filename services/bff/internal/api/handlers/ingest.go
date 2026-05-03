@@ -28,8 +28,8 @@ func NewIngestHandler(broadcaster EventBroadcaster) *IngestHandler {
 }
 
 // IngestEvent handles POST /v1/ingest/events.
-// Authentication is enforced by the APIKeyAuth middleware upstream;
-// by the time this handler runs the request is already verified.
+// Authentication is enforced by the APIKeyAuth middleware upstream; by the time
+// this handler runs the request is already verified.
 func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	var event contract.DaemonEvent
 	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
