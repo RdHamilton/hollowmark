@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 	apiwebsocket "github.com/ramonehamilton/MTGA-Companion/internal/api/websocket"
 	"github.com/ramonehamilton/MTGA-Companion/internal/gui"
+	contract "github.com/ramonehamilton/mtga-contract"
 )
 
 func TestNewServer(t *testing.T) {
@@ -120,12 +121,6 @@ func TestServer_NewDaemonEventForwarder_Type(t *testing.T) {
 	}
 }
 
-// MockDaemonEvent simulates a daemon.Event for testing the forwarder.
-type MockDaemonEvent struct {
-	Type string
-	Data interface{}
-}
-
 func TestServer_NewDaemonEventForwarder_UsesServerHub(t *testing.T) {
 	facades := &Facades{}
 	server := NewServer(nil, nil, facades)
@@ -164,11 +159,12 @@ func TestServer_NewDaemonEventForwarder_UsesServerHub(t *testing.T) {
 	}
 clientRegistered:
 
-	// Create a forwarder and forward an event
+	// Create a forwarder and forward a contract.DaemonEvent
 	forwarder := server.NewDaemonEventForwarder()
-	testEvent := MockDaemonEvent{
-		Type: "test:hub_wiring",
-		Data: map[string]interface{}{"verified": true},
+	payload, _ := json.Marshal(map[string]interface{}{"verified": true})
+	testEvent := contract.DaemonEvent{
+		Type:    "test:hub_wiring",
+		Payload: json.RawMessage(payload),
 	}
 	forwarder.ForwardEvent(testEvent)
 
@@ -189,13 +185,30 @@ clientRegistered:
 		t.Errorf("Expected event type 'test:hub_wiring', got '%s'", received.Type)
 	}
 
+	// Data is the full contract.DaemonEvent; verify the payload was preserved
 	dataMap, ok := received.Data.(map[string]interface{})
 	if !ok {
-		t.Fatal("Expected Data to be a map")
+		t.Fatalf("Expected Data to be a map, got %T", received.Data)
 	}
 
-	if dataMap["verified"] != true {
-		t.Errorf("Expected verified=true, got %v", dataMap["verified"])
+	rawPayload, ok := dataMap["payload"]
+	if !ok {
+		t.Fatal("Expected 'payload' key in Data map")
+	}
+
+	// payload is base64-encoded JSON (json.RawMessage marshals as a JSON string
+	// when nested inside interface{}); unmarshal the inner JSON to verify content
+	payloadBytes, err := json.Marshal(rawPayload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
+	var inner map[string]interface{}
+	if err := json.Unmarshal(payloadBytes, &inner); err != nil {
+		t.Fatalf("Failed to unmarshal inner payload: %v", err)
+	}
+
+	if inner["verified"] != true {
+		t.Errorf("Expected verified=true in payload, got %v", inner["verified"])
 	}
 }
 
