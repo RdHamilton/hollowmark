@@ -24,9 +24,14 @@ func (f *stubFetcher) FetchCardRatings(_ context.Context, _, _ string) ([]sevent
 	return f.cards, nil
 }
 
-// stubStore records upserted ratings.
+// stubStore records upserted ratings and returns a configurable set list from the DB.
 type stubStore struct {
+	dbSets   []string
 	upserted []draftdata.SetRatings
+}
+
+func (s *stubStore) GetActiveSets(_ context.Context) ([]string, error) {
+	return s.dbSets, nil
 }
 
 func (s *stubStore) UpsertRatings(_ context.Context, r draftdata.SetRatings) error {
@@ -66,11 +71,33 @@ func TestScheduler_ImmediateFetchOnStart(t *testing.T) {
 	assert.Len(t, store.upserted[0].Cards, 1)
 }
 
+func TestScheduler_FetchesFromDB_WhenNoOverride(t *testing.T) {
+	t.Setenv("SYNC_ACTIVE_SETS", "") // no override — should fall through to DB
+	t.Setenv("SYNC_REFRESH_HOUR", "2")
+
+	fetcher := &stubFetcher{
+		cards: []seventeenlands.CardRating{{Name: "Forest", ALSA: 9.0}},
+	}
+	store := &stubStore{dbSets: []string{"BLB", "DSK"}}
+
+	sched := refresh.New(fetcher, store)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	sched.Start(ctx)
+
+	require.Equal(t, 2, fetcher.called, "expected one fetch per active set from DB")
+	require.Len(t, store.upserted, 2)
+	codes := []string{store.upserted[0].SetCode, store.upserted[1].SetCode}
+	assert.ElementsMatch(t, []string{"BLB", "DSK"}, codes)
+}
+
 func TestScheduler_NoSetsSkipsFetch(t *testing.T) {
 	t.Setenv("SYNC_ACTIVE_SETS", "")
 
 	fetcher := &stubFetcher{}
-	store := &stubStore{}
+	store := &stubStore{} // empty dbSets
 
 	sched := refresh.New(fetcher, store)
 

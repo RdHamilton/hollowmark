@@ -2,6 +2,7 @@ package datasets_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,14 @@ type mockStore struct {
 
 func newMockStore() *mockStore {
 	return &mockStore{data: make(map[string]*draftdata.SetRatings)}
+}
+
+func (m *mockStore) GetActiveSets(_ context.Context) ([]string, error) {
+	var codes []string
+	for k := range m.data {
+		codes = append(codes, strings.SplitN(k, "/", 2)[0])
+	}
+	return codes, nil
 }
 
 func (m *mockStore) UpsertRatings(_ context.Context, ratings draftdata.SetRatings) error {

@@ -19,6 +19,26 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 	return &PostgresStore{pool: pool}
 }
 
+// GetActiveSets returns set codes where is_standard_legal = TRUE.
+func (s *PostgresStore) GetActiveSets(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT code FROM sets WHERE is_standard_legal = TRUE ORDER BY code`)
+	if err != nil {
+		return nil, fmt.Errorf("query active sets: %w", err)
+	}
+	defer rows.Close()
+
+	var codes []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return nil, fmt.Errorf("scan code: %w", err)
+		}
+		codes = append(codes, code)
+	}
+
+	return codes, rows.Err()
+}
+
 // UpsertRatings inserts or updates card ratings for the given set in draft_card_ratings.
 func (s *PostgresStore) UpsertRatings(ctx context.Context, ratings draftdata.SetRatings) error {
 	tx, err := s.pool.Begin(ctx)
