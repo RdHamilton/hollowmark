@@ -12,13 +12,48 @@ on:
         default: 'false'
         type: choice
         options: ['false', 'true']
+      skip_e2e:
+        description: 'Skip E2E smoke tests (emergency releases only)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+  # Allow other workflows to call this as a reusable workflow
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        required: false
+        default: 'false'
+        type: string
+      skip_e2e:
+        required: false
+        default: 'false'
+        type: string
 
 permissions:
   contents: write
   id-token: write  # required for OIDC-based AWS auth in deploy job
 
+# ---------------------------------------------------------------------------
+# Tier 3 — E2E smoke gate before release (release workflow only)
+# ---------------------------------------------------------------------------
+
 jobs:
+  # Run E2E smoke tests before cutting the release artifact.
+  # Skippable via input for emergency hotfix releases only.
+  e2e-smoke-gate:
+    name: E2E Smoke Gate
+    uses: ./.github/workflows/e2e-smoke.yml
+    if: inputs.skip_e2e != 'true'
+
   release:
+    needs: [e2e-smoke-gate]
+    # Run if smoke passed OR if smoke was skipped
+    if: always() && (needs.e2e-smoke-gate.result == 'success' || needs.e2e-smoke-gate.result == 'skipped')
     name: Create Release
     runs-on: ubuntu-latest
 
