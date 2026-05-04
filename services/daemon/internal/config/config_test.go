@@ -117,3 +117,53 @@ func TestLogArchiveDirEnvOverride(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/custom/archive/dir", cfg.LogArchiveDir)
 }
+
+// TestLoadFromFileAllFields verifies the canonical JSON round-trip for every
+// key name documented in config.go.  This is the format written by the install
+// scripts on both platforms.
+func TestLoadFromFileAllFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.json")
+	content := `{
+		"cloud_api_url":         "https://bff.example.com",
+		"api_key":               "tok-abc123",
+		"sync_enabled":          false,
+		"log_path":              "/tmp/Player.log",
+		"ingest_path":           "/v1/ingest/events",
+		"account_id":            "acc-42",
+		"log_archive_dir":       "/tmp/archives",
+		"log_preserve_on_start": false
+	}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "https://bff.example.com", cfg.CloudAPIURL)
+	assert.Equal(t, "tok-abc123", cfg.APIKey)
+	assert.False(t, cfg.SyncEnabled)
+	assert.Equal(t, "/tmp/Player.log", cfg.LogPath)
+	assert.Equal(t, "/v1/ingest/events", cfg.IngestPath)
+	assert.Equal(t, "acc-42", cfg.AccountID)
+	assert.Equal(t, "/tmp/archives", cfg.LogArchiveDir)
+	assert.False(t, cfg.LogPreserveOnStart)
+}
+
+// TestOldKeyNamesIgnored confirms that the old installer key names (bff_url,
+// daemon_auth_token) written by the pre-fix Windows installer are silently
+// ignored by the JSON decoder — they do not satisfy cloud_api_url/api_key.
+// The test captures that these stale configs should fail validation so users
+// get a clear error rather than a silent misconfiguration.
+func TestOldKeyNamesIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.json")
+	// Simulate a JSON file with the old key names (bff_url, daemon_auth_token).
+	// Note: plain YAML (e.g. "bff_url: foo") is not valid JSON, so this tests
+	// the JSON-with-wrong-keys scenario.
+	content := `{"bff_url":"https://bff.example.com","daemon_auth_token":"tok-old"}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	_, err := config.Load(path)
+	// cloud_api_url will be empty because "bff_url" is unknown; validation fails.
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cloud_api_url")
+}
