@@ -8,6 +8,7 @@ import (
 	"github.com/ramonehamilton/mtga-sync/internal/datasets"
 	"github.com/ramonehamilton/mtga-sync/internal/draftdata"
 	"github.com/ramonehamilton/mtga-sync/internal/handler"
+	"github.com/ramonehamilton/mtga-sync/internal/scryfall"
 	"github.com/ramonehamilton/mtga-sync/internal/seventeenlands"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,6 +48,10 @@ func (s *stubStore) UpsertRatings(_ context.Context, r draftdata.SetRatings) err
 
 func (s *stubStore) GetRatings(_ context.Context, _, _ string) (*draftdata.SetRatings, error) {
 	return nil, nil
+}
+
+func (s *stubStore) UpsertSets(_ context.Context, _ []scryfall.ScryfallSet) error {
+	return nil
 }
 
 // Compile-time check that stubStore satisfies datasets.Store.
