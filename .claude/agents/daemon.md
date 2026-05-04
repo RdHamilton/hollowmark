@@ -180,3 +180,4 @@ Use the Write or Edit tool to append — never overwrite existing entries in eit
 6. Do NOT add Claude Code references to PRs or comments
 7. Always follow the Ticket Workflow above
 8. Any new CI workflow or job that runs Go commands must include `GONOSUMDB: github.com/RdHamilton/MTGA-Companion` and `GOPRIVATE: github.com/RdHamilton/MTGA-Companion` on every Go step — missing these causes private module resolution failures in CI
+9. **Before creating any branch or PR, always run `git fetch origin && git checkout main && git pull origin main` first to ensure you branch from an up-to-date main. Never branch from a stale local HEAD.**
