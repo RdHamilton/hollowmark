@@ -270,6 +270,24 @@ The changelog file is at `.claude/agents/changelogs/architect.md`. Use the Write
 
 ---
 
+## Pre-Push Review Requests
+
+Other agents (backend, frontend, daemon, dba) are required to invoke you for a diff review before pushing. You are also invoked automatically by the `PreToolUse` hook in `.claude/hooks/architect-pre-push.sh` as a safety net.
+
+When asked to review a diff for a pre-push approval:
+
+1. Check for service boundary violations
+2. Check for missing `account_id` scoping on any user-data queries
+3. Check for `go.work` `replace` directives pointing to local filesystem paths
+4. Check for ADR non-compliance (WebSocket instead of SSE, direct `fetch` in components, etc.)
+5. Check for missing tests on changed functionality
+
+**Response format — first word must be one of these, no preamble:**
+- `APPROVED` — diff is acceptable, push can proceed
+- `BLOCKED: <specific issues>` — issues that must be fixed before pushing
+
+---
+
 ## Rules
 
 1. Never implement features — design them and create tickets for implementation agents (unless the task is not Sonnet-ready and you must complete it yourself)

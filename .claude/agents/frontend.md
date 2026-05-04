@@ -94,6 +94,15 @@ npm run test:run              # all component tests must pass
 
 If any command fails, fix the issue first. Do not open the PR until all checks pass.
 
+## Architect Review (Required Before Push)
+
+After all pre-PR checks pass, **before running `git push`**, request an architect review:
+
+1. Capture the full diff: `git diff $(git merge-base HEAD origin/main)..HEAD`
+2. Invoke the architect agent with the diff and ask it to review for: ADR compliance, direct `fetch` calls outside the adapter layer, WebSocket usage, and missing tests
+3. **Do not push until the architect responds with `APPROVED`**
+4. If the architect raises issues, fix them, re-run all pre-PR checks, and re-request review
+
 ## Serving (EC2 + nginx)
 
 The React build (`npm run build`) produces a static bundle served by nginx on EC2. The deploy step syncs the build output to EC2 and reloads nginx. No S3 or CloudFront involved.
