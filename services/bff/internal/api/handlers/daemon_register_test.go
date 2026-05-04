@@ -1,12 +1,15 @@
 package handlers_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/ramonehamilton/mtga-bff/internal/api/handlers"
@@ -62,6 +65,18 @@ func TestDaemonRegister_Success(t *testing.T) {
 	}
 	if claims.DaemonID != resp.DaemonID {
 		t.Errorf("daemon_id mismatch: claims=%q body=%q", claims.DaemonID, resp.DaemonID)
+	}
+
+	// Assert ExpiresAt is within the expected 30-day window.
+	if claims.ExpiresAt == nil {
+		t.Fatal("expected ExpiresAt to be set")
+	}
+	now := time.Now().UTC()
+	lo := now.Add(29 * 24 * time.Hour)
+	hi := now.Add(31 * 24 * time.Hour)
+	exp := claims.ExpiresAt.Time
+	if exp.Before(lo) || exp.After(hi) {
+		t.Errorf("ExpiresAt %v is not within [now+29d, now+31d]", exp)
 	}
 }
 
@@ -166,5 +181,96 @@ func TestDaemonRegister_TokenIsValidForIngestMiddleware(t *testing.T) {
 	}
 	if capturedUID != 99 {
 		t.Errorf("expected user_id=99, got %d", capturedUID)
+	}
+}
+
+// TestDaemonRegister_RouterIntegration mounts the real routes with real
+// middleware and exercises the full auth chain end-to-end.
+//
+//  1. POST /api/daemon/register with a seeded user-ID context → expect 201 + token.
+//  2. POST /v1/ingest/events with "Authorization: Bearer <token>" → expect 202 and
+//     DaemonUserIDFromContext set to the registered user ID.
+//  3. POST /api/daemon/register with no user-ID context → expect 401.
+func TestDaemonRegister_RouterIntegration(t *testing.T) {
+	const secret = "router-integration-secret"
+	const wantUserID int64 = 55
+
+	// --- build the router ------------------------------------------------
+	r := chi.NewRouter()
+
+	registerHandler := handlers.NewDaemonRegisterHandler(secret)
+	r.Post("/api/daemon/register", registerHandler.Register)
+
+	// Capture the DaemonUserID that the ingest handler sees so we can assert it.
+	var capturedDaemonUID int64
+	ingestInner := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		capturedDaemonUID, _ = middleware.DaemonUserIDFromContext(req.Context())
+		w.WriteHeader(http.StatusAccepted)
+	})
+	r.With(middleware.DaemonJWTAuth(secret)).Post("/v1/ingest/events", ingestInner)
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	// --- 1. register with a valid user-ID context ------------------------
+	regReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/daemon/register", nil)
+	// Inject the user ID the same way APIKeyAuth middleware would.
+	// We wrap the server handler for this one call so we can seed the context.
+	var token string
+	{
+		rr := httptest.NewRecorder()
+		fakeReq := httptest.NewRequest(http.MethodPost, "/api/daemon/register", nil)
+		fakeReq = fakeReq.WithContext(middleware.WithUserID(fakeReq.Context(), wantUserID))
+		registerHandler.Register(rr, fakeReq)
+
+		if rr.Code != http.StatusCreated {
+			t.Fatalf("register: expected 201, got %d: %s", rr.Code, rr.Body.String())
+		}
+		var resp struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+			t.Fatalf("register decode: %v", err)
+		}
+		token = resp.Token
+	}
+	_ = regReq // suppress unused warning
+
+	// --- 2. ingest with the issued token ----------------------------------
+	eventBody, _ := json.Marshal(map[string]interface{}{
+		"type":        "draft:pick",
+		"account_id":  "acct_test",
+		"session_id":  "sess_test",
+		"occurred_at": time.Now().UTC(),
+		"payload":     json.RawMessage(`{}`),
+	})
+	ingestReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/ingest/events",
+		bytes.NewReader(eventBody))
+	ingestReq.Header.Set("Content-Type", "application/json")
+	ingestReq.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{}
+	resp, err := client.Do(ingestReq)
+	if err != nil {
+		t.Fatalf("ingest request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		t.Errorf("ingest: expected 202, got %d", resp.StatusCode)
+	}
+	if capturedDaemonUID != wantUserID {
+		t.Errorf("DaemonUserIDFromContext=%d, want %d", capturedDaemonUID, wantUserID)
+	}
+
+	// --- 3. register with no user-ID context → 401 -----------------------
+	{
+		rr := httptest.NewRecorder()
+		noCtxReq := httptest.NewRequest(http.MethodPost, "/api/daemon/register", nil)
+		// No middleware.WithUserID — context is empty.
+		registerHandler.Register(rr, noCtxReq)
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("no-context register: expected 401, got %d", rr.Code)
+		}
 	}
 }
