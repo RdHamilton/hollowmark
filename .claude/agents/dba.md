@@ -204,3 +204,4 @@ After completing all migration correctness checks, **before running `git push`**
 7. Always follow the Ticket Workflow above
 8. Every migration must pass the fresh-install checklist: no `CONCURRENTLY`, no `= TRUE/FALSE` on INTEGER columns, no `DROP TABLE` without `CASCADE`, no index/insert on a table that may not exist at that migration sequence point
 9. When in doubt about a column's type, grep for the migration that first created it — that is the authoritative type, not the consolidated schema
+10. **Before creating any branch or PR, always run `git fetch origin && git checkout main && git pull origin main` first to ensure you branch from an up-to-date main. Never branch from a stale local HEAD.**

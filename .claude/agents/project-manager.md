@@ -440,3 +440,4 @@ gh api repos/RdHamilton/MTGA-Companion/milestones --method POST \
 11. When you discover a reusable efficiency, update your own definition file
 12. When creating a new project or label, cache the metadata in your definition
 13. **Never use `cd` in compound `&&` commands that also contain pipes or redirections** (`|`, `2>/dev/null`). This triggers a Claude Code security prompt. Run `gh` commands directly without a leading `cd` — they work from any directory.
+14. **Before creating any branch or PR, always run `git fetch origin && git checkout main && git pull origin main` first to ensure you branch from an up-to-date main. Never branch from a stale local HEAD.**
