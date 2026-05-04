@@ -12,4 +12,6 @@ DROP INDEX IF EXISTS idx_draft_events_status;
 
 DROP TABLE IF EXISTS cards;
 DROP TABLE IF EXISTS currency_history;
-DROP TABLE IF EXISTS draft_events;
+-- CASCADE drops the decks_draft_event_id_fkey FK constraint added by migration 000022.
+-- draft_events is replaced by draft_sessions; no data needs to be preserved.
+DROP TABLE IF EXISTS draft_events CASCADE;
