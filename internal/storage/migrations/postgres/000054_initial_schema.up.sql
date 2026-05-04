@@ -785,6 +785,11 @@ CREATE TABLE IF NOT EXISTS inventory_history (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Guard: inventory and inventory_history were created in migration 000023 without account_id.
+-- Add the column if it is missing (CREATE TABLE IF NOT EXISTS above skips the column addition).
+ALTER TABLE inventory         ADD COLUMN IF NOT EXISTS account_id BIGINT REFERENCES accounts(id) ON DELETE CASCADE;
+ALTER TABLE inventory_history ADD COLUMN IF NOT EXISTS account_id BIGINT REFERENCES accounts(id) ON DELETE CASCADE;
+
 CREATE INDEX IF NOT EXISTS idx_inventory_history_account_id ON inventory_history(account_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_history_field      ON inventory_history(field);
 CREATE INDEX IF NOT EXISTS idx_inventory_history_created_at ON inventory_history(created_at);
@@ -810,6 +815,9 @@ CREATE TABLE IF NOT EXISTS quests (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(account_id, quest_id, assigned_at)
 );
+
+-- Guard: quests was created in migration 000010 without account_id.
+ALTER TABLE quests ADD COLUMN IF NOT EXISTS account_id BIGINT REFERENCES accounts(id) ON DELETE CASCADE;
 
 CREATE INDEX IF NOT EXISTS idx_quests_account_id  ON quests(account_id);
 CREATE INDEX IF NOT EXISTS idx_quests_completed   ON quests(completed);
