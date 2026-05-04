@@ -37,10 +37,10 @@ if [ -z "$DIFF" ]; then
 fi
 
 DIFF_LINES=$(echo "$DIFF" | wc -l | tr -d ' ')
-DIFF_TRUNCATED=$(echo "$DIFF" | head -400)
+DIFF_TRUNCATED=$(echo "$DIFF" | head -1200)
 TRUNCATED_NOTE=""
-if [ "$DIFF_LINES" -gt 400 ]; then
-    TRUNCATED_NOTE=" (showing first 400 of $DIFF_LINES lines)"
+if [ "$DIFF_LINES" -gt 1200 ]; then
+    TRUNCATED_NOTE=" (showing first 1200 of $DIFF_LINES lines)"
 fi
 
 PROMPT="You are the MTGA Companion architect agent. A sub-agent is requesting pre-push approval. Review this git diff$TRUNCATED_NOTE for architectural concerns.
