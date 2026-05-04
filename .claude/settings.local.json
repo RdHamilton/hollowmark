@@ -92,7 +92,22 @@
       "Write(/Users/ramonehamilton/Documents/Personal Projects/mtga-companion-infra/**)",
       "Read(//Users/ramonehamilton/Documents/Personal Projects/mtga-companion-web/**)",
       "Write(//Users/ramonehamilton/Documents/Personal Projects/mtga-companion-web/**)",
-      "Bash(git log *)"
+      "Bash(git log *)",
+      "Bash(aws ec2 describe-network-interfaces *)",
+      "Bash(aws sts *)",
+      "Bash(aws lambda list-functions *)",
+      "Bash(aws lambda update-function-configuration *)",
+      "Bash(aws lambda delete-function *)",
+      "Bash(aws ec2 *)",
+      "Bash(aws cloudformation *)",
+      "Bash(aws s3 *)",
+      "Bash(GOOS=linux GOARCH=arm64 CGO_ENABLED=0 GONOSUMDB=github.com/RdHamilton/MTGA-Companion GOPRIVATE=github.com/RdHamilton/MTGA-Companion go build -tags lambda.norpc -trimpath -o /tmp/bootstrap ./cmd/lambda/)",
+      "Bash(zip -j sync-lambda.zip bootstrap)",
+      "Bash(aws iam list-roles *)",
+      "Bash(aws iam create-role *)",
+      "Bash(aws iam *)",
+      "Bash(aws lambda create-function *)",
+      "Bash(aws lambda *)"
     ],
     "deny": [],
     "ask": []
