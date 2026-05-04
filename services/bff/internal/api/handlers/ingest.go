@@ -3,10 +3,13 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
 	contract "github.com/RdHamilton/MTGA-Companion/services/contract"
+
+	"github.com/ramonehamilton/mtga-bff/internal/api/middleware"
 )
 
 // EventBroadcaster is implemented by any type that can broadcast a daemon event
@@ -40,6 +43,13 @@ func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	if event.Type == "" {
 		http.Error(w, "event type is required", http.StatusBadRequest)
 		return
+	}
+
+	// Scope the event to the authenticated user when JWT auth is in use.
+	// DaemonUserIDFromContext returns (0, false) when the API-key middleware
+	// was used instead, in which case AccountID is trusted from the payload.
+	if userID, ok := middleware.DaemonUserIDFromContext(r.Context()); ok {
+		event.AccountID = fmt.Sprintf("user:%d", userID)
 	}
 
 	if h.broadcaster != nil {
