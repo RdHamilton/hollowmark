@@ -163,3 +163,4 @@ Use the Write or Edit tool to append — never overwrite existing entries in eit
 6. `VITE_API_BASE_URL` is the only BFF coupling point — never hardcode the API URL
 7. Do NOT add Claude Code references to PRs or comments
 8. Always follow the Ticket Workflow above
+9. **Before creating any branch or PR, always run `git fetch origin && git checkout main && git pull origin main` first to ensure you branch from an up-to-date main. Never branch from a stale local HEAD.**
