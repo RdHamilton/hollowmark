@@ -6,7 +6,7 @@
 # Steps:
 #   1. Resolves the latest daemon GitHub Release (or uses $Env:RELEASE_TAG).
 #   2. Downloads the Windows amd64 binary to %ProgramFiles%\MTGA-Companion\.
-#   3. Writes BFF_URL and DAEMON_AUTH_TOKEN to a config file next to the binary.
+#   3. Writes cloud_api_url and api_key as JSON to %APPDATA%\mtga-companion\daemon.json.
 #   4. Registers a Task Scheduler startup task for the current user so the
 #      daemon starts at logon without requiring UAC elevation.
 

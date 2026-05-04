@@ -61,3 +61,9 @@ This is the system-wide record of all changes made across the project. Every age
 - `services/daemon/internal/daemon/service.go` — wired `Snapshot` + `PruneSnapshots` into `Run()` before poller starts
 **Summary**: Fixed log preservation so the daemon snapshots Player.log on startup before MTGA can overwrite it; fixed a drain bug where unread bytes were discarded on fsnotify rotation events; filed follow-on issue #1041 for dead `models.go` structs needing alignment with actual MTGA JSON keys.
 **Merged**: 2026-05-03 — PR #1042 merged into main.
+
+## 2026-05-04 — [frontend] Issue #1139: feat(frontend): add Authorization header to all BFF requests
+**PR**: #1150
+**Files changed**:
+- `frontend/src/adapters/` — added Authorization header injection to all BFF fetch calls via the REST API adapter layer
+**Summary**: Wired the auth token into every outbound BFF request so authenticated endpoints receive the Authorization header; implemented at the adapter layer to keep components free of auth concerns.
