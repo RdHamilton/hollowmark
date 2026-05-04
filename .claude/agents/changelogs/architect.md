@@ -11,6 +11,38 @@ This is the system-wide record of all changes made across the project. Every age
 **Summary**: One sentence summary of what was done and why.
 -->
 
+## 2026-05-04 — [architect] Issue #1025: Vercel→BFF connectivity ADR and CORS update
+**PR**: #1174 (merged)
+**ADR**: N/A
+**Summary**: PR #1174 merged covering ticket #1025 (Vercel→BFF connectivity ADR and CORS update); ticket moved to Done on project board #27.
+
+## 2026-05-04 — [backend] Issue #1172: implement DaemonEventsRepository [#1126-B]
+**PR**: #1176
+**Files changed**:
+- `services/bff/internal/storage/repository/daemon_events_repo.go` — DaemonEventsRepository with Insert and ListByUserID; all queries scoped by user_id
+- `services/bff/internal/storage/migrations/postgres/` — migration adding daemon_events table
+- `services/bff/internal/storage/repository/daemon_events_repo_test.go` — integration tests
+**Summary**: Implemented DaemonEventsRepository as the data-access layer for persisting daemon ingest events, completing sub-task B of the #1126 ingest pipeline decomposition.
+
+## 2026-05-04 — [backend] Issue #1173: wire IngestHandler to persist events before broadcast [#1126-C]
+**PR**: #1178
+**Files changed**:
+- `services/bff/internal/storage/repository/daemon_events_repo.go` — DaemonEventsRepository with Insert and ListByUserID; DaemonEventRow struct; all queries scoped by user_id
+- `services/bff/internal/api/handlers/ingest.go` — DaemonEventInserter interface; repo field on IngestHandler; WithRepository setter; persistence before broadcast with non-fatal error logging
+- `services/bff/internal/api/handlers/ingest_test.go` — mockDaemonEventsRepo; three new tests covering persist-when-wired, broadcast-on-failure, nil-repo modes
+- `services/bff/cmd/main.go` — wire DaemonEventsRepository inside cfg.DatabaseURL != "" block
+**Summary**: Wired DaemonEventsRepository to IngestHandler so daemon events are persisted before broadcasting; persistence failures are logged but never drop live SSE events, completing sub-task C of the #1126 ingest pipeline.
+
+## 2026-05-04 — [frontend] Issue #1136 #1142: fix(frontend): add BFF draft-ratings and API key adapters
+**PR**: #1177
+**Files changed**:
+- `frontend/src/services/api/bffDraftRatings.ts` — new adapter: getDraftRatings() targeting GET /api/v1/draft-ratings/{setCode}/{format} with cache-degraded header support
+- `frontend/src/services/api/bffDraftRatings.test.ts` — 10 MSW tests covering URL, response shape, header parsing, URL encoding, error handling
+- `frontend/src/services/api/bffAuth.ts` — new adapter: createAPIKey() targeting POST /api/keys with daemon JWT auth
+- `frontend/src/services/api/bffAuth.test.ts` — 9 MSW tests covering URL, Authorization header, response shape, error handling
+- `frontend/src/services/api/index.ts` — exported both new modules and their TypeScript types
+**Summary**: Added two BFF-only adapter modules for the draft-ratings and API key endpoints; both use direct fetch (not apiClient wrappers) because the BFF returns raw JSON rather than the data-wrapped envelope shape.
+
 ## 2026-05-03 — [architect] Issue #1050: architecture review — sync service deployment drift
 **PR**: N/A — ADR only
 **ADR**: docs/adr/003-sync-service-deployment-strategy.md
@@ -48,6 +80,15 @@ This is the system-wide record of all changes made across the project. Every age
 - `services/daemon/install/windows/uninstall.ps1` — Windows Task Scheduler uninstaller
 - `services/daemon/install/README.md` — install documentation
 **Summary**: Platform install scripts for the daemon; macOS uses launchd, Windows uses Task Scheduler (AtLogon, no UAC elevation); binary sourced from GitHub Releases with automatic latest-tag resolution.
+
+## 2026-05-04 — [daemon] Issue #1131: fix(daemon): JWT mid-session expiry refresh + CI and binary naming cleanup
+**PR**: #1175
+**Files changed**:
+- `services/daemon/internal/dispatcher/dispatcher.go` — added 401 detection and JWT refresh logic for mid-session token expiry
+- `services/daemon/internal/dispatcher/dispatcher_test.go` — unit tests for 401 refresh path
+- `.github/workflows/release.yml` — consolidated dual CI workflow confusion; standardized binary naming
+**Summary**: Fixed mid-session JWT expiry by adding 401-triggered refresh in the dispatcher, cleaned up dual CI workflow confusion, and standardized daemon binary naming across platforms.
+**Merged**: 2026-05-04 — PR #1175 merged into main.
 
 ## 2026-05-03 — [daemon] Issue #1014: daemon: investigate log preservation and MTGA log overwrite on startup
 **PR**: #1042
