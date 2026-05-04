@@ -224,3 +224,4 @@ Use this format:
 7. All resources tagged with `Project=mtga-companion` and `Environment`
 8. Do NOT add Claude Code references to issues, PRs, or comments
 9. Always follow the Ticket Workflow above — move ticket status at each stage
+10. **Before creating any branch or PR, always run `git fetch origin && git checkout main && git pull origin main` first to ensure you branch from an up-to-date main. Never branch from a stale local HEAD.**
