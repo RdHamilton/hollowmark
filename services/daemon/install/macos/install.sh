@@ -96,6 +96,10 @@ echo "Binary installed: ${INSTALL_DIR}/${BINARY_NAME}"
 # Key names must match the json struct tags in
 # services/daemon/internal/config/config.go.
 # Default path matches main.go: ~/.mtga-companion/daemon.json
+#
+# jq is used to produce safe JSON — values are escaped properly even if they
+# contain quotes, backslashes, or newlines.  python3 is the fallback because
+# macOS ships it but not jq by default.
 # ---------------------------------------------------------------------------
 mkdir -p "${CONFIG_DIR}"
 
@@ -107,12 +111,16 @@ if [[ ! -f "${CONFIG_FILE}" ]]; then
   printf "Enter daemon auth token (daemon JWT from first registration): "
   read -r DAEMON_AUTH_TOKEN
 
-  cat > "${CONFIG_FILE}" <<JSON
-{
-  "cloud_api_url": "${BFF_URL}",
-  "api_key": "${DAEMON_AUTH_TOKEN}"
-}
-JSON
+  if command -v jq >/dev/null 2>&1; then
+    jq -n --arg cloud "${BFF_URL}" --arg key "${DAEMON_AUTH_TOKEN}" \
+      '{"cloud_api_url":$cloud,"api_key":$key}' > "${CONFIG_FILE}"
+  else
+    python3 -c "
+import json, sys
+print(json.dumps({'cloud_api_url': sys.argv[1], 'api_key': sys.argv[2]}, indent=2))
+" "${BFF_URL}" "${DAEMON_AUTH_TOKEN}" > "${CONFIG_FILE}"
+  fi
+
   chmod 600 "${CONFIG_FILE}"
   echo "Config written: ${CONFIG_FILE}"
 else
