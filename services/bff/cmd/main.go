@@ -19,6 +19,7 @@ import (
 	"github.com/ramonehamilton/mtga-bff/internal/api/handlers"
 	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
 	"github.com/ramonehamilton/mtga-bff/internal/api/sse"
+	"github.com/ramonehamilton/mtga-bff/internal/config"
 	"github.com/ramonehamilton/mtga-bff/internal/storage"
 	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
 
@@ -50,6 +51,11 @@ func runMigrationsWithRetry(dsn string, timeout time.Duration) error {
 func main() {
 	flag.Parse()
 
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+
 	if *databaseURL != "" {
 		if err := runMigrationsWithRetry(*databaseURL, 30*time.Second); err != nil {
 			log.Fatalf("migrations failed: %v", err)
@@ -69,8 +75,9 @@ func main() {
 
 	// Wire API key handler and auth middleware when a database is available.
 	var (
-		apiKeysHandler  *handlers.APIKeysHandler
-		apiKeyAuthMiddl func(http.Handler) http.Handler
+		apiKeysHandler      *handlers.APIKeysHandler
+		apiKeyAuthMiddl     func(http.Handler) http.Handler
+		draftRatingsHandler *handlers.DraftRatingsHandler
 	)
 
 	if *databaseURL != "" {
@@ -82,6 +89,9 @@ func main() {
 		apiKeyRepo := repository.NewAPIKeyRepository(sqlDB)
 		apiKeysHandler = handlers.NewAPIKeysHandler(apiKeyRepo)
 		apiKeyAuthMiddl = bffmiddleware.APIKeyAuth(apiKeyRepo)
+
+		draftRatingsRepo := repository.NewDraftRatingsRepository(sqlDB)
+		draftRatingsHandler = handlers.NewDraftRatingsHandler(draftRatingsRepo, cfg)
 	}
 
 	r := chi.NewRouter()
@@ -120,6 +130,11 @@ func main() {
 		r.With(apiKeyAuthMiddl).Post("/v1/ingest/events", ingestHandler.IngestEvent)
 	} else {
 		r.Post("/v1/ingest/events", ingestHandler.IngestEvent)
+	}
+
+	// GET /api/v1/draft-ratings/{setCode}/{format} — draft card and color ratings.
+	if draftRatingsHandler != nil {
+		r.Get("/api/v1/draft-ratings/{setCode}/{format}", draftRatingsHandler.GetDraftRatings)
 	}
 
 	srv := &http.Server{
