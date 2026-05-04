@@ -92,7 +92,11 @@ Write-Host "Binary installed: $BinaryPath"
 
 # ---------------------------------------------------------------------------
 # Write the config file.
-# The daemon reads this YAML on startup for the BFF URL and auth token.
+# Key names must match the json struct tags in
+# services/daemon/internal/config/config.go.
+# ConvertTo-Json is used to safely serialise the values — special characters
+# (quotes, backslashes, control chars) are escaped by the JSON encoder, so
+# the file is always valid JSON regardless of what the user types.
 # Prompt the user for values not provided via environment variables.
 # ---------------------------------------------------------------------------
 if (-not $BffUrl) {
@@ -102,16 +106,10 @@ if (-not $AuthToken) {
     $AuthToken = Read-Host 'Enter DAEMON_AUTH_TOKEN (daemon JWT from first registration)'
 }
 
-# Write a minimal JSON config file.  Key names must match the json struct tags
-# in services/daemon/internal/config/config.go.
 New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
 
-@"
-{
-  "cloud_api_url": "$BffUrl",
-  "api_key": "$AuthToken"
-}
-"@ | Set-Content -Path $ConfigFile -Encoding UTF8
+$config = [ordered]@{ cloud_api_url = $BffUrl; api_key = $AuthToken }
+$config | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding UTF8
 
 Write-Host "Config written: $ConfigFile"
 
