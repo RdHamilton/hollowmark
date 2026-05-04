@@ -8,6 +8,23 @@
 **Summary**: One sentence summary of what was done and why.
 -->
 
+## 2026-05-04 — Issue #1172: implement DaemonEventsRepository [#1126-B]
+**PR**: #1176
+**Files changed**:
+- `services/bff/internal/storage/repository/daemon_events_repo.go` — DaemonEventsRepository with Insert and ListByUserID; DaemonEventRow struct; all queries scoped by user_id
+- `services/bff/internal/storage/migrations/postgres/` — migration adding daemon_events table
+- `services/bff/internal/storage/repository/daemon_events_repo_test.go` — integration tests for Insert and ListByUserID
+**Summary**: Implemented DaemonEventsRepository as the data-access layer for persisting daemon ingest events, completing sub-task B of the #1126 ingest pipeline decomposition.
+
+## 2026-05-04 — Issue #1173: wire IngestHandler to persist events before broadcast [#1126-C]
+**PR**: #1178
+**Files changed**:
+- `services/bff/internal/storage/repository/daemon_events_repo.go` — DaemonEventsRepository with Insert and ListByUserID; DaemonEventRow struct; all queries scoped by user_id
+- `services/bff/internal/api/handlers/ingest.go` — DaemonEventInserter interface; repo field on IngestHandler; WithRepository setter; persistence call before broadcast with error-logged-but-non-fatal failure mode
+- `services/bff/internal/api/handlers/ingest_test.go` — mockDaemonEventsRepo stub; three new tests (persist-when-wired, broadcast-even-on-insert-failure, nil-repo-broadcast-only)
+- `services/bff/cmd/main.go` — wire NewDaemonEventsRepository and ingestHandler.WithRepository inside cfg.DatabaseURL != "" block
+**Summary**: Wired DaemonEventsRepository to IngestHandler so daemon events are persisted to the database before broadcasting; persistence failures are logged but never drop the live SSE event, completing sub-task C of the #1126 ingest pipeline decomposition.
+
 ## 2026-05-03 — Issue #1045: sync service — fetch active standard sets from Scryfall
 **PR**: #1051
 **Files changed**:

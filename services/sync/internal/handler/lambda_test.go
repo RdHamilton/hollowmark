@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ramonehamilton/mtga-sync/internal/datasets"
 	"github.com/ramonehamilton/mtga-sync/internal/draftdata"
@@ -281,6 +282,30 @@ func TestHandle_ColorRatingsEmptySkipsUpsert(t *testing.T) {
 	assert.Equal(t, 2, fetcher.called)          // card ratings fetched
 	assert.Equal(t, 2, fetcher.colorsCalled)    // color ratings attempted
 	assert.Empty(t, store.upsertedColorRatings) // but not stored
+}
+
+// TestHandle_FetchedAtIsNonZero verifies that the SetRatings passed to UpsertRatings
+// always has a non-zero FetchedAt, so cached_at is stored correctly in Postgres.
+// A zero FetchedAt would result in cached_at = 0001-01-01, making the BFF staleness
+// check always fire X-Cache-Degraded: true.
+func TestHandle_FetchedAtIsNonZero(t *testing.T) {
+	before := time.Now().UTC()
+
+	fetcher := &stubFetcher{
+		cards: []seventeenlands.CardRating{{Name: "Plains", MtgaID: 1, ALSA: 9.0}},
+	}
+	store := &stubStore{}
+
+	h := handler.New(fetcher, store, []string{"BLB"})
+	err := h.Handle(context.Background(), nil)
+
+	require.NoError(t, err)
+	require.Len(t, store.upserted, 2)
+
+	sr := store.upserted[0]
+	assert.False(t, sr.FetchedAt.IsZero(), "FetchedAt must not be zero — cached_at would be 0001-01-01 in Postgres")
+	assert.True(t, sr.FetchedAt.After(before) || sr.FetchedAt.Equal(before),
+		"FetchedAt should be >= time before Handle was called")
 }
 
 // --- helpers ---
