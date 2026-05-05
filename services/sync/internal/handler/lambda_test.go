@@ -399,7 +399,6 @@ func TestHandle_SyncFormatsEnvVar(t *testing.T) {
 	assert.ElementsMatch(t, []string{"PremierDraft", "QuickDraft", "Sealed"}, gotFormats)
 }
 
-
 // --- helpers ---
 
 // formatTrackingFetcher records the (setCode, format) pairs it was called with.
@@ -413,6 +412,10 @@ func (f *formatTrackingFetcher) FetchCardRatings(_ context.Context, setCode, for
 	f.called++
 	f.calls = append(f.calls, struct{ setCode, format string }{setCode, format})
 	return f.cards, nil
+}
+
+func (f *formatTrackingFetcher) FetchColorRatings(_ context.Context, _, _ string) ([]seventeenlands.ColorRating, error) {
+	return nil, nil
 }
 
 type fetchResult struct {
