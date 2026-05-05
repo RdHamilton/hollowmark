@@ -8,6 +8,12 @@
 **Summary**: One sentence summary of what was done and why.
 -->
 
+## 2026-05-05 — Issue #1179: fix(infra): move vercel.json to repo root so ignoreCommand takes effect
+**PR**: #1233 (in RdHamilton/MTGA-Companion)
+**Files changed**:
+- `vercel.json` — moved from `frontend/vercel.json` to repo root; no content change
+**Summary**: PR #1215 placed vercel.json inside frontend/ which Vercel's native Git integration never reads; moving it to the repo root activates the ignoreCommand that cancels builds when no frontend/ files changed.
+
 ## 2026-05-05 — Issue #1068: feat(infra): deploy React SPA to nginx on EC2 (ADR-001 frontend serving)
 **PR**: #1184 (in RdHamilton/MTGA-Companion)
 **Files changed**:
