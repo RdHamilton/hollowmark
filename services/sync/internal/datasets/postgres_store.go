@@ -139,6 +139,55 @@ func (s *PostgresStore) UpsertSets(ctx context.Context, sets []scryfall.Scryfall
 	return nil
 }
 
+// UpsertColorRatings replaces all color-combination ratings for the given
+// set/format in draft_color_ratings using a DELETE + batch INSERT transaction.
+func (s *PostgresStore) UpsertColorRatings(ctx context.Context, setCode, draftFormat string, ratings []seventeenlands.ColorRating) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(
+		ctx,
+		`DELETE FROM draft_color_ratings WHERE set_code = $1 AND draft_format = $2`,
+		setCode,
+		draftFormat,
+	); err != nil {
+		return fmt.Errorf("delete stale color ratings for %s/%s: %w", setCode, draftFormat, err)
+	}
+
+	const insertQuery = `
+		INSERT INTO draft_color_ratings (set_code, draft_format, color_combination, win_rate, games_played, cached_at)
+		VALUES ($1, $2, $3, $4, $5, NOW())
+	`
+
+	for _, r := range ratings {
+		if r.ColorCombination == "" {
+			continue
+		}
+
+		if _, err := tx.Exec(
+			ctx, insertQuery,
+			setCode,
+			draftFormat,
+			r.ColorCombination,
+			r.WinRate,
+			r.GamesPlayed,
+		); err != nil {
+			return fmt.Errorf("insert color rating %q: %w", r.ColorCombination, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	log.Printf("[sync] UpsertColorRatings: inserted %d rows for %s/%s", len(ratings), setCode, draftFormat)
+
+	return nil
+}
+
 // GetRatings retrieves all card ratings for a set/format combination.
 func (s *PostgresStore) GetRatings(ctx context.Context, setCode, draftFormat string) (*draftdata.SetRatings, error) {
 	const query = `
