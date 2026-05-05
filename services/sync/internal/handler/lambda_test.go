@@ -514,6 +514,35 @@ func TestHandle_NoStoredHash_SyncProceeds(t *testing.T) {
 	assert.Equal(t, expectedHash, store.setHashCalls[0].hash)
 }
 
+// TestHandle_HashDeterministicAcrossOrdering verifies that two identical card sets
+// in different order produce the same stored hash. This is AC #2 of #1100: the hash
+// must be computed on a sorted (by MtgaID ascending) payload so that API response
+// ordering does not affect whether a sync is skipped.
+func TestHandle_HashDeterministicAcrossOrdering(t *testing.T) {
+	// Two cards defined in ascending MtgaID order.
+	cardA := seventeenlands.CardRating{MtgaID: 100, Name: "Lightning Bolt", ALSA: 1.5}
+	cardB := seventeenlands.CardRating{MtgaID: 200, Name: "Island", ALSA: 8.0}
+
+	// First run: cards arrive in ascending order.
+	fetcherAsc := &stubFetcher{cards: []seventeenlands.CardRating{cardA, cardB}}
+	storeAsc := &stubStore{}
+	h1 := handler.NewWithFormats(fetcherAsc, storeAsc, []string{"FDN"}, []string{"PremierDraft"})
+	require.NoError(t, h1.Handle(context.Background(), nil))
+	require.Len(t, storeAsc.setHashCalls, 1, "SetHash must be called on first run")
+	hashAsc := storeAsc.setHashCalls[0].hash
+
+	// Second run: same cards but in descending order (reversed).
+	fetcherDesc := &stubFetcher{cards: []seventeenlands.CardRating{cardB, cardA}}
+	storeDesc := &stubStore{}
+	h2 := handler.NewWithFormats(fetcherDesc, storeDesc, []string{"FDN"}, []string{"PremierDraft"})
+	require.NoError(t, h2.Handle(context.Background(), nil))
+	require.Len(t, storeDesc.setHashCalls, 1, "SetHash must be called on first run")
+	hashDesc := storeDesc.setHashCalls[0].hash
+
+	assert.Equal(t, hashAsc, hashDesc,
+		"hash must be identical regardless of API response ordering (sorted by MtgaID before hashing)")
+}
+
 // --- helpers ---
 
 // formatTrackingFetcher records the (setCode, format) pairs it was called with.
