@@ -333,6 +333,15 @@ Ensure you're using `ResponsiveContainer`:
 </ResponsiveContainer>
 ```
 
+## Deployment
+
+Production traffic is served by **Vercel** (canonical frontend host). Vercel builds from `frontend/**` on every push to `main` and provides global CDN, preview deploys per PR, and zero-config TLS.
+
+The EC2 nginx static-serve path is **DR/preview only** and is not the production frontend. See the architectural decisions for details:
+
+- [ADR-006: Vercel BFF Connectivity](../docs/adr/006-vercel-bff-connectivity.md) — how the Vercel-hosted SPA connects to the Go BFF
+- [ADR-007: Frontend Serving Model](../docs/adr/007-frontend-serving-model.md) — rationale for Vercel as the canonical host
+
 ## Resources
 
 - [React Documentation](https://react.dev/)

@@ -9,6 +9,10 @@ This directory contains all technical documentation for the MTGA-Companion proje
 - **[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md)** - Architectural Decision Records (ADRs)
 - **[MIGRATION_TO_SERVICE_ARCHITECTURE.md](MIGRATION_TO_SERVICE_ARCHITECTURE.md)** - Service architecture migration guide
 
+### Architectural Decision Records (ADRs)
+- **[ADR-006: Vercel BFF Connectivity](adr/006-vercel-bff-connectivity.md)** - How the Vercel frontend connects to the Go BFF on EC2
+- **[ADR-007: Frontend Serving Model](adr/007-frontend-serving-model.md)** - Vercel is the canonical production frontend; EC2 nginx is DR/preview only
+
 ### Development Guides
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** - Development setup and workflow
 - **[DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md)** - Current development status and progress tracking
