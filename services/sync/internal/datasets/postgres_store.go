@@ -2,10 +2,12 @@ package datasets
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ramonehamilton/mtga-sync/internal/draftdata"
 	"github.com/ramonehamilton/mtga-sync/internal/scryfall"
@@ -189,6 +191,37 @@ func (s *PostgresStore) UpsertColorRatings(ctx context.Context, setCode, draftFo
 	}
 
 	log.Printf("[sync] UpsertColorRatings: inserted %d rows for %s/%s", len(ratings), setCode, draftFormat)
+
+	return nil
+}
+
+// GetHash returns the stored hash for the given key, or ("", nil) if none exists.
+func (s *PostgresStore) GetHash(ctx context.Context, key string) (string, error) {
+	var hash string
+	err := s.pool.QueryRow(ctx, `SELECT hash FROM sync_hashes WHERE key = $1`, key).Scan(&hash)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+
+		return "", fmt.Errorf("get hash %q: %w", key, err)
+	}
+
+	return hash, nil
+}
+
+// SetHash upserts the hash for the given key.
+func (s *PostgresStore) SetHash(ctx context.Context, key string, hash string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO sync_hashes (key, hash, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (key) DO UPDATE SET
+			hash       = EXCLUDED.hash,
+			updated_at = NOW()
+	`, key, hash)
+	if err != nil {
+		return fmt.Errorf("set hash %q: %w", key, err)
+	}
 
 	return nil
 }

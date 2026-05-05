@@ -21,4 +21,9 @@ type Store interface {
 	// UpsertColorRatings replaces all color-combination ratings for the given
 	// set/format in draft_color_ratings.
 	UpsertColorRatings(ctx context.Context, setCode, draftFormat string, ratings []seventeenlands.ColorRating) error
+	// GetHash returns the stored hash for the given key (e.g. a set code).
+	// Returns ("", nil) when no hash has been stored for that key.
+	GetHash(ctx context.Context, key string) (string, error)
+	// SetHash stores a hash for the given key, replacing any existing value.
+	SetHash(ctx context.Context, key string, hash string) error
 }
