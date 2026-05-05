@@ -12,18 +12,6 @@
             "command": "bash .claude/hooks/architect-pre-push.sh"
           }
         ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "agent",
-            "if": "Bash(gh pr create*)",
-            "prompt": "You are the lead-engineer code reviewer. An agent is about to open a pull request. First, run: git diff main...HEAD --name-only to list all changed files. If ALL changed files are inside the `.claude/` directory (agent definitions, hooks, settings, changelogs, etc.), output ONLY: {\"continue\": true} — no review needed for Claude config-only changes. Otherwise, run: git diff main...HEAD and git log main...HEAD --oneline. Check against CLAUDE.md rules — flag over-engineering, scope creep, unnecessary complexity, missing tests, or any violations of project conventions.\n\nIf the PR is ready, output ONLY this exact JSON: {\"continue\": true}\nIf the PR should be blocked, output ONLY this exact JSON: {\"continue\": false, \"stopReason\": \"Lead Engineer BLOCKED: <your specific reason>\"}\n\nOutput nothing else.",
-            "timeout": 120,
-            "statusMessage": "Lead Engineer reviewing changes before PR..."
-          }
-        ]
       }
     ],
     "PostToolUse": [
@@ -33,7 +21,7 @@
           {
             "type": "agent",
             "if": "Bash(gh pr create*)",
-            "prompt": "A pull request was just created. Run: git diff main...HEAD --name-only to list all changed files on this branch. If ANY files are inside the `frontend/` or `mtga-companion/` directories, you must act as the ui-tester agent and run all frontend tests:\n1. cd frontend && npm run test:run (Vitest component tests)\n2. cd frontend && npx tsc --noEmit (TypeScript type check)\n3. cd frontend && npx playwright test (Playwright E2E tests)\nReport pass/fail results for each. If no files changed inside frontend/ or mtga-companion/, do nothing and exit silently.",
+            "prompt": "A pull request was just created. Get the PR number by running: gh pr view --json number --jq '.number'\n\nRun: git diff main...HEAD --name-only to list all changed files on this branch.\n\nIf ANY files are inside the `frontend/` directory, act as the ui-tester agent and run all frontend tests:\n1. cd frontend && npm run test:run\n2. cd frontend && npx tsc --noEmit\n3. cd frontend && npx playwright test\n\nIf any tests fail, post a comment on the PR with the failures: gh pr comment <number> --body \"## UI Tester Report\\n<findings>\"\n\nIf all tests pass, exit silently. If no frontend/ files changed, exit silently.",
             "timeout": 300,
             "statusMessage": "UI Tester running frontend tests..."
           }
@@ -45,9 +33,9 @@
           {
             "type": "agent",
             "if": "Bash(gh pr create*)",
-            "prompt": "A pull request was just created. Run: git diff main...HEAD --name-only to list all changed files on this branch. If ANY files are outside both `frontend/` and `.github/` directories (i.e. backend services, .claude config, Go code, etc.), you must act as the lead-engineer agent and run the appropriate tests for those changed modules:\n1. For any changed Go module directories: cd <module> && go vet ./... && go test -race ./...\n2. Run gofumpt on any changed .go files\n3. Flag any CLAUDE.md violations, missing tests, over-engineering, or scope creep\nReport pass/fail results. If all changed files are only inside frontend/ or .github/, do nothing and exit silently.",
+            "prompt": "A pull request was just created. Get the PR number by running: gh pr view --json number --jq '.number'\n\nRun: git diff main...HEAD --name-only to list all changed files on this branch.\n\nIf ALL changed files are inside `frontend/` or `.github/`, exit silently — frontend changes are handled by the UI Tester.\n\nOtherwise (any backend, .claude config, Go code, or other non-frontend changes exist), act as the lead-engineer agent:\n1. For any changed Go module directories: cd <module> && go vet ./... && go test -race ./...\n2. Run gofumpt on any changed .go files\n3. Review git diff main...HEAD against CLAUDE.md rules — flag over-engineering, scope creep, missing tests, or violations\n\nIf any issues are found, post a comment on the PR: gh pr comment <number> --body \"## Lead Engineer Review\\n<findings>\"\n\nIf everything passes, exit silently.",
             "timeout": 300,
-            "statusMessage": "Lead Engineer testing backend/config changes..."
+            "statusMessage": "Lead Engineer reviewing backend/config changes..."
           }
         ]
       }
