@@ -1,11 +1,8 @@
 name: Deploy Frontend to EC2
+# EC2 frontend deploy is preview/DR only -- see ADR-007.
+# Production frontend is served by Vercel.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend.yml'
   workflow_dispatch: {}
 
 permissions:
