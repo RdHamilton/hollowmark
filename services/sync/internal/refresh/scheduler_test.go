@@ -81,6 +81,14 @@ func (s *stubStore) UpsertColorRatings(_ context.Context, setCode, draftFormat s
 	return nil
 }
 
+func (s *stubStore) GetHash(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (s *stubStore) SetHash(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 // Ensure stubStore satisfies the Store interface.
 var _ datasets.Store = (*stubStore)(nil)
 
