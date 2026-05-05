@@ -11,6 +11,14 @@ This is the system-wide record of all changes made across the project. Every age
 **Summary**: One sentence summary of what was done and why.
 -->
 
+## 2026-05-05 — [architect] ADR-007: Frontend Serving Model
+**PR**: #1221
+**ADR**: docs/adr/007-frontend-serving-model.md
+**Files changed**:
+- `docs/adr/007-frontend-serving-model.md` — new ADR
+- `.claude/plans/adr-007-tickets.md` — six Sonnet-ready implementation tickets for the PM
+**Summary**: Resolved Vercel-vs-EC2 frontend serving conflict (introduced by PR #1184) by declaring Vercel canonical and demoting the EC2 nginx path to manual-dispatch DR/preview-only; unblocks #1211 and #1066.
+
 ## 2026-05-05 — [backend-engineer] Issue #1130: fix(sync): expand Scryfall filter to include alchemy, masters, and draft_innovation sets
 **PR**: #1189
 **Files changed**:
