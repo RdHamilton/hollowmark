@@ -1,8 +1,7 @@
 ---
 name: backend-engineer
-description: Use this agent when building server-side APIs, microservices, and backend systems that require robust architecture, scalability planning, and production-ready implementation.
+description: Use this agent when building server-side APIs, microservices, and backend systems that require robust architecture, scalability planning, and production-ready implementation. Owns the Go BFF service, daemon binary, repositories, migrations, and middleware for MTGA Companion.
 model: claude-sonnet-4-6
-maxConcurrentTasks: 1
 tools:
   - Bash
   - Read
