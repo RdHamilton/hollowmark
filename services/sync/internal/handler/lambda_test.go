@@ -90,9 +90,9 @@ func TestHandle_WithOverrideSets(t *testing.T) {
 	err := h.Handle(context.Background(), nil)
 
 	require.NoError(t, err)
-	// 2 sets × 2 default formats = 4 card-rating calls.
-	assert.Equal(t, 4, fetcher.called)
-	require.Len(t, store.upserted, 4)
+	// 2 sets × 1 format = 2 card-rating calls.
+	assert.Equal(t, 2, fetcher.called)
+	require.Len(t, store.upserted, 2)
 	setCodes := map[string]bool{}
 	for _, u := range store.upserted {
 		setCodes[u.SetCode] = true
@@ -113,9 +113,9 @@ func TestHandle_WithDBSets(t *testing.T) {
 	err := h.Handle(context.Background(), nil)
 
 	require.NoError(t, err)
-	// 1 set × 2 default formats = 2 calls.
-	assert.Equal(t, 2, fetcher.called)
-	require.Len(t, store.upserted, 2)
+	// 1 set × 1 format = 1 call.
+	assert.Equal(t, 1, fetcher.called)
+	require.Len(t, store.upserted, 1)
 	for _, u := range store.upserted {
 		assert.Equal(t, "DSK", u.SetCode)
 	}
@@ -163,10 +163,10 @@ func TestHandle_FetchErrorContinues(t *testing.T) {
 	err := h.Handle(context.Background(), nil)
 
 	require.NoError(t, err)
-	// 2 sets × 2 formats = 4 card-fetch calls.
-	assert.Equal(t, 4, custom.called)
-	// Only SET2 should have been upserted (twice — once per format).
-	require.Len(t, store.upserted, 2)
+	// 2 sets × 1 format = 2 card-fetch calls.
+	assert.Equal(t, 2, custom.called)
+	// Only SET2 should have been upserted (once — single format).
+	require.Len(t, store.upserted, 1)
 	for _, u := range store.upserted {
 		assert.Equal(t, "SET2", u.SetCode)
 	}
@@ -181,7 +181,7 @@ func TestHandle_EmptyCardsSkipsUpsert(t *testing.T) {
 	err := h.Handle(context.Background(), nil)
 
 	require.NoError(t, err)
-	assert.Equal(t, 2, fetcher.called) // 1 set × 2 formats
+	assert.Equal(t, 1, fetcher.called) // 1 set × 1 format
 	assert.Empty(t, store.upserted)
 }
 
@@ -209,10 +209,10 @@ func TestHandle_UpsertErrorContinues(t *testing.T) {
 	err := h.Handle(context.Background(), nil)
 
 	require.NoError(t, err)
-	// 2 sets × 2 formats = 4 upsert attempts.
-	assert.Equal(t, 4, upsertCalls)
-	// Only SET2 rows succeed (2 formats).
-	require.Len(t, upserted, 2)
+	// 2 sets × 1 format = 2 upsert attempts.
+	assert.Equal(t, 2, upsertCalls)
+	// Only SET2 row succeeds (1 format).
+	require.Len(t, upserted, 1)
 	for _, u := range upserted {
 		assert.Equal(t, "SET2", u.SetCode)
 	}
