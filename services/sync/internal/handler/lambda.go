@@ -4,12 +4,14 @@
 package handler
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -124,8 +126,16 @@ func (h *SyncHandler) syncSetFormat(ctx context.Context, setCode, format string)
 
 	// Compute a SHA-256 hash of the fetched card ratings. If the data matches
 	// the last stored hash we skip the upsert -- upstream data is unchanged.
+	//
+	// Sort a copy of ratings by MtgaID ascending before marshalling so that the
+	// hash is deterministic regardless of the order in which the upstream API
+	// returns cards. The original slice is left untouched.
 	hashKey := fmt.Sprintf("%s/%s", setCode, format)
-	rawBytes, marshalErr := json.Marshal(ratings)
+	sorted := slices.Clone(ratings)
+	slices.SortFunc(sorted, func(a, b seventeenlands.CardRating) int {
+		return cmp.Compare(a.MtgaID, b.MtgaID)
+	})
+	rawBytes, marshalErr := json.Marshal(sorted)
 	if marshalErr != nil {
 		log.Printf("[sync] marshal %s/%s for hash: %v -- proceeding with sync", setCode, format, marshalErr)
 		rawBytes = nil
