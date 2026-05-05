@@ -694,6 +694,20 @@ MTGA Companion leverages Go 1.25's new features for improved performance and deb
 
 For a complete list of dependencies, see [`go.mod`](go.mod) and [`frontend/package.json`](frontend/package.json).
 
+## Deployment
+
+### Frontend Serving Model
+
+Production traffic for `https://mtgacompanion.com` is served by **Vercel** (the canonical frontend host). Vercel provides global CDN, atomic preview deploys per PR, and zero-config TLS.
+
+The EC2 nginx static-serve path is **DR/preview only** — it is not the production frontend. Do not treat EC2 nginx as the authoritative serving path.
+
+See [ADR-007: Frontend Serving Model](docs/adr/007-frontend-serving-model.md) for the full decision record and rationale. See [ADR-006](docs/adr/006-vercel-bff-connectivity.md) for Vercel → BFF connectivity details.
+
+### Backend (BFF)
+
+The Go BFF runs on EC2 behind nginx (`/api/v1/` proxy). The daemon binary ships via GitHub Releases for Windows (amd64) and macOS (arm64/amd64). See [Daemon Installation](docs/DAEMON_INSTALLATION.md) for setup instructions.
+
 ## Contributing
 
 Contributions are welcome! Please ensure:
