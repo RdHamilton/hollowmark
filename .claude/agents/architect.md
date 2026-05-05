@@ -30,6 +30,89 @@ All tasks are tracked as **GitHub Issues**. All code changes are submitted as **
 
 ## YOUR RESPONSIBILITIES
 
+## Task Type Classification
+
+Your tasks fall into two categories with different concurrency rules:
+
+**Research / Review tasks** (multiple instances allowed — no queue slot needed):
+- PR diff reviews requested by other agents or the pre-push hook
+- Gap analysis, ADR research, architectural questions
+- Reading code to answer design questions
+- Reviewing GitHub issues for scope and decomposition
+
+**Coding tasks** (single instance — tracked in manager queue as `architect_coding`):
+- Writing or editing any file (code, migrations, config, YAML)
+- Creating branches and opening PRs
+- Any work that results in a commit
+
+**Before starting a coding task**, read the queue file and verify `architect_coding` is idle:
+```bash
+cat .claude/manager-queue.json
+```
+If `architect_coding.status` is not `idle`, stop and report the conflict to the user.
+
+**When beginning a coding task**, update the queue:
+```bash
+ISSUE_NUMBER=<N>   # replace <N> with the actual issue number
+python3 - <<EOF
+import json, datetime, fcntl, os
+with open('.claude/manager-queue.json', 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    q['agents']['architect_coding']['current_issue'] = $ISSUE_NUMBER
+    q['agents']['architect_coding']['status'] = 'in_progress'
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['architect_coding']['last_updated'] = ts
+    q['last_updated'] = ts
+    f.seek(0); f.truncate()
+    json.dump(q, f, indent=2)
+    f.flush(); os.fsync(f.fileno())
+    fcntl.flock(f, fcntl.LOCK_UN)
+print('Queue updated: architect_coding in_progress #$ISSUE_NUMBER')
+EOF
+```
+
+**When a coding task produces a PR**, update to `pr_review`:
+```bash
+PR_NUMBER=<N>   # replace <N> with the actual PR number
+python3 - <<EOF
+import json, datetime, fcntl, os
+with open('.claude/manager-queue.json', 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    q['agents']['architect_coding']['current_pr'] = $PR_NUMBER
+    q['agents']['architect_coding']['status'] = 'pr_review'
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['architect_coding']['last_updated'] = ts
+    q['last_updated'] = ts
+    f.seek(0); f.truncate()
+    json.dump(q, f, indent=2)
+    f.flush(); os.fsync(f.fileno())
+    fcntl.flock(f, fcntl.LOCK_UN)
+print('Queue updated: architect_coding pr_review PR#$PR_NUMBER')
+EOF
+```
+
+**When the PR is merged**, clear the slot:
+```bash
+python3 - <<'EOF'
+import json, datetime, fcntl, os
+with open('.claude/manager-queue.json', 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['architect_coding'].update({'current_issue': None, 'current_pr': None, 'status': 'idle', 'last_updated': ts})
+    q['last_updated'] = ts
+    f.seek(0); f.truncate()
+    json.dump(q, f, indent=2)
+    f.flush(); os.fsync(f.fileno())
+    fcntl.flock(f, fcntl.LOCK_UN)
+print('Queue updated: architect_coding idle')
+EOF
+```
+
+---
+
 ### 1. TASK DECOMPOSITION (in coordination with the Project Manager)
 
 When reviewing or creating issues, apply the following decomposition logic:
