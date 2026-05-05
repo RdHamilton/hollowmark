@@ -101,8 +101,28 @@ Agents report to you when they complete a phase. When you receive a report:
 
 1. Read `.claude/manager-queue.json`
 2. Update the agent's entry: `current_pr: N`, `status: "pr_review"`, `last_updated`
-3. Update GitHub project board — move to "PR Review":
+3. Resolve the project item ID for issue #M, then move to "PR Review":
    ```bash
+   ISSUE_NUMBER=<M>
+   ITEM_ID=$(gh api graphql -f query='{
+     node(id: "PVT_kwHOABsZ684BMSNn") {
+       ... on ProjectV2 {
+         items(first: 100) {
+           nodes {
+             id
+             content { ... on Issue { number } }
+           }
+         }
+       }
+     }
+   }' | python3 -c "
+   import json,sys
+   data=json.load(sys.stdin)
+   items=data['data']['node']['items']['nodes']
+   for i in items:
+       if i.get('content',{}).get('number') == ${ISSUE_NUMBER}:
+           print(i['id']); break
+   ")
    gh api graphql -f query="mutation {
      updateProjectV2ItemFieldValue(input: {
        projectId: \"PVT_kwHOABsZ684BMSNn\"
@@ -117,9 +137,30 @@ Agents report to you when they complete a phase. When you receive a report:
 ### Agent reports: "Issue #M is Done — PR merged"
 
 1. Read `.claude/manager-queue.json`
-2. Update the agent's entry: `current_issue: null`, `current_pr: null`, `status: "idle"`, `last_updated`
-3. Update GitHub project board — move to "Done":
+2. Run Completion Verification (see section below) before proceeding
+3. If `VERIFIED`: update the agent's entry: `current_issue: null`, `current_pr: null`, `status: "idle"`, `last_updated`
+4. Resolve the project item ID for issue #M, then move to "Done":
    ```bash
+   ISSUE_NUMBER=<M>
+   ITEM_ID=$(gh api graphql -f query='{
+     node(id: "PVT_kwHOABsZ684BMSNn") {
+       ... on ProjectV2 {
+         items(first: 100) {
+           nodes {
+             id
+             content { ... on Issue { number } }
+           }
+         }
+       }
+     }
+   }' | python3 -c "
+   import json,sys
+   data=json.load(sys.stdin)
+   items=data['data']['node']['items']['nodes']
+   for i in items:
+       if i.get('content',{}).get('number') == ${ISSUE_NUMBER}:
+           print(i['id']); break
+   ")
    gh api graphql -f query="mutation {
      updateProjectV2ItemFieldValue(input: {
        projectId: \"PVT_kwHOABsZ684BMSNn\"
@@ -129,7 +170,7 @@ Agents report to you when they complete a phase. When you receive a report:
      }) { projectV2Item { id } }
    }"
    ```
-4. Confirm: "Issue #M marked Done. `<agent>` is now idle."
+5. Confirm: "Issue #M marked Done. `<agent>` is now idle."
 
 ### Agent reports: "Blocked — <reason>"
 

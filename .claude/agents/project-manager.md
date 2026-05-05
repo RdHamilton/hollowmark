@@ -328,42 +328,62 @@ If your slot shows a different `current_issue`, stop and report the conflict to 
 
 **When you begin work**, update your queue entry:
 ```bash
-python3 -c "
-import json, datetime
-with open('.claude/manager-queue.json') as f: q = json.load(f)
-q['agents']['project-manager']['current_issue'] = <ISSUE_NUMBER>
-q['agents']['project-manager']['status'] = 'in_progress'
-q['agents']['project-manager']['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-q['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-with open('.claude/manager-queue.json', 'w') as f: json.dump(q, f, indent=2)
-print('Queue updated: project-manager in_progress #<ISSUE_NUMBER>')
-"
+ISSUE_NUMBER=<N>   # replace <N> with the actual issue number
+python3 - <<EOF
+import json, datetime, fcntl, os, tempfile
+QUEUE = '.claude/manager-queue.json'
+with open(QUEUE, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    q['agents']['project-manager']['current_issue'] = $ISSUE_NUMBER
+    q['agents']['project-manager']['status'] = 'in_progress'
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['project-manager']['last_updated'] = ts
+    q['last_updated'] = ts
+    tmp = tempfile.NamedTemporaryFile('w', dir='.claude', delete=False, suffix='.tmp')
+    json.dump(q, tmp, indent=2); tmp.flush(); os.fsync(tmp.fileno()); tmp.close()
+    os.replace(tmp.name, QUEUE)
+print('Queue updated: project-manager in_progress #$ISSUE_NUMBER')
+EOF
 ```
 
 **When you open a PR** (for your own code-touching tickets), update status to `pr_review`:
 ```bash
-python3 -c "
-import json, datetime
-with open('.claude/manager-queue.json') as f: q = json.load(f)
-q['agents']['project-manager']['current_pr'] = <PR_NUMBER>
-q['agents']['project-manager']['status'] = 'pr_review'
-q['agents']['project-manager']['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-q['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-with open('.claude/manager-queue.json', 'w') as f: json.dump(q, f, indent=2)
-print('Queue updated: project-manager pr_review PR#<PR_NUMBER>')
-"
+PR_NUMBER=<N>   # replace <N> with the actual PR number
+python3 - <<EOF
+import json, datetime, fcntl, os, tempfile
+QUEUE = '.claude/manager-queue.json'
+with open(QUEUE, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    q['agents']['project-manager']['current_pr'] = $PR_NUMBER
+    q['agents']['project-manager']['status'] = 'pr_review'
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['project-manager']['last_updated'] = ts
+    q['last_updated'] = ts
+    tmp = tempfile.NamedTemporaryFile('w', dir='.claude', delete=False, suffix='.tmp')
+    json.dump(q, tmp, indent=2); tmp.flush(); os.fsync(tmp.fileno()); tmp.close()
+    os.replace(tmp.name, QUEUE)
+print('Queue updated: project-manager pr_review PR#$PR_NUMBER')
+EOF
 ```
 
 **When done**, clear your slot:
 ```bash
-python3 -c "
-import json, datetime
-with open('.claude/manager-queue.json') as f: q = json.load(f)
-q['agents']['project-manager'].update({'current_issue': None, 'current_pr': None, 'status': 'idle', 'last_updated': datetime.datetime.utcnow().isoformat() + 'Z'})
-q['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-with open('.claude/manager-queue.json', 'w') as f: json.dump(q, f, indent=2)
+python3 - <<'EOF'
+import json, datetime, fcntl, os, tempfile
+QUEUE = '.claude/manager-queue.json'
+with open(QUEUE, 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['project-manager'].update({'current_issue': None, 'current_pr': None, 'status': 'idle', 'last_updated': ts})
+    q['last_updated'] = ts
+    tmp = tempfile.NamedTemporaryFile('w', dir='.claude', delete=False, suffix='.tmp')
+    json.dump(q, tmp, indent=2); tmp.flush(); os.fsync(tmp.fileno()); tmp.close()
+    os.replace(tmp.name, QUEUE)
 print('Queue updated: project-manager idle')
-"
+EOF
 ```
 
 ## Ticket Workflow (Required for All Agents)

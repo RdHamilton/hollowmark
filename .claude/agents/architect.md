@@ -53,18 +53,63 @@ If `architect_coding.status` is not `idle`, stop and report the conflict to the 
 
 **When beginning a coding task**, update the queue:
 ```bash
-python3 -c "
-import json, datetime
-with open('.claude/manager-queue.json') as f: q = json.load(f)
-q['agents']['architect_coding']['current_issue'] = <ISSUE_NUMBER>
-q['agents']['architect_coding']['status'] = 'in_progress'
-q['agents']['architect_coding']['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-q['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-with open('.claude/manager-queue.json', 'w') as f: json.dump(q, f, indent=2)
-"
+ISSUE_NUMBER=<N>   # replace <N> with the actual issue number
+python3 - <<EOF
+import json, datetime, fcntl, os
+with open('.claude/manager-queue.json', 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    q['agents']['architect_coding']['current_issue'] = $ISSUE_NUMBER
+    q['agents']['architect_coding']['status'] = 'in_progress'
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['architect_coding']['last_updated'] = ts
+    q['last_updated'] = ts
+    f.seek(0); f.truncate()
+    json.dump(q, f, indent=2)
+    f.flush(); os.fsync(f.fileno())
+    fcntl.flock(f, fcntl.LOCK_UN)
+print('Queue updated: architect_coding in_progress #$ISSUE_NUMBER')
+EOF
 ```
 
-**When a coding task produces a PR**, update to `pr_review` with the PR number. **When done**, clear the slot (set `current_issue: null`, `current_pr: null`, `status: idle`).
+**When a coding task produces a PR**, update to `pr_review`:
+```bash
+PR_NUMBER=<N>   # replace <N> with the actual PR number
+python3 - <<EOF
+import json, datetime, fcntl, os
+with open('.claude/manager-queue.json', 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    q['agents']['architect_coding']['current_pr'] = $PR_NUMBER
+    q['agents']['architect_coding']['status'] = 'pr_review'
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['architect_coding']['last_updated'] = ts
+    q['last_updated'] = ts
+    f.seek(0); f.truncate()
+    json.dump(q, f, indent=2)
+    f.flush(); os.fsync(f.fileno())
+    fcntl.flock(f, fcntl.LOCK_UN)
+print('Queue updated: architect_coding pr_review PR#$PR_NUMBER')
+EOF
+```
+
+**When the PR is merged**, clear the slot:
+```bash
+python3 - <<'EOF'
+import json, datetime, fcntl, os
+with open('.claude/manager-queue.json', 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['architect_coding'].update({'current_issue': None, 'current_pr': None, 'status': 'idle', 'last_updated': ts})
+    q['last_updated'] = ts
+    f.seek(0); f.truncate()
+    json.dump(q, f, indent=2)
+    f.flush(); os.fsync(f.fileno())
+    fcntl.flock(f, fcntl.LOCK_UN)
+print('Queue updated: architect_coding idle')
+EOF
+```
 
 ---
 

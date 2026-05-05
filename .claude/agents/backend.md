@@ -152,42 +152,62 @@ If your slot shows a different `current_issue`, stop and report the conflict to 
 
 **When you begin work** (immediately on starting a ticket), update your queue entry:
 ```bash
-python3 -c "
-import json, datetime
-with open('.claude/manager-queue.json') as f: q = json.load(f)
-q['agents']['backend']['current_issue'] = <ISSUE_NUMBER>
-q['agents']['backend']['status'] = 'in_progress'
-q['agents']['backend']['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-q['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-with open('.claude/manager-queue.json', 'w') as f: json.dump(q, f, indent=2)
-print('Queue updated: backend in_progress #<ISSUE_NUMBER>')
-"
+ISSUE_NUMBER=<N>   # replace <N> with the actual issue number
+python3 - <<EOF
+import json, datetime, fcntl, os
+with open('.claude/manager-queue.json', 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    q['agents']['backend']['current_issue'] = $ISSUE_NUMBER
+    q['agents']['backend']['status'] = 'in_progress'
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['backend']['last_updated'] = ts
+    q['last_updated'] = ts
+    f.seek(0); f.truncate()
+    json.dump(q, f, indent=2)
+    f.flush(); os.fsync(f.fileno())
+    fcntl.flock(f, fcntl.LOCK_UN)
+print('Queue updated: backend in_progress #$ISSUE_NUMBER')
+EOF
 ```
 
 **When you open a PR**, update status to `pr_review` and record the PR number:
 ```bash
-python3 -c "
-import json, datetime
-with open('.claude/manager-queue.json') as f: q = json.load(f)
-q['agents']['backend']['current_pr'] = <PR_NUMBER>
-q['agents']['backend']['status'] = 'pr_review'
-q['agents']['backend']['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-q['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-with open('.claude/manager-queue.json', 'w') as f: json.dump(q, f, indent=2)
-print('Queue updated: backend pr_review PR#<PR_NUMBER>')
-"
+PR_NUMBER=<N>   # replace <N> with the actual PR number
+python3 - <<EOF
+import json, datetime, fcntl, os
+with open('.claude/manager-queue.json', 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    q['agents']['backend']['current_pr'] = $PR_NUMBER
+    q['agents']['backend']['status'] = 'pr_review'
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['backend']['last_updated'] = ts
+    q['last_updated'] = ts
+    f.seek(0); f.truncate()
+    json.dump(q, f, indent=2)
+    f.flush(); os.fsync(f.fileno())
+    fcntl.flock(f, fcntl.LOCK_UN)
+print('Queue updated: backend pr_review PR#$PR_NUMBER')
+EOF
 ```
 
 **When the PR is merged and the ticket is Done**, clear your slot:
 ```bash
-python3 -c "
-import json, datetime
-with open('.claude/manager-queue.json') as f: q = json.load(f)
-q['agents']['backend'].update({'current_issue': None, 'current_pr': None, 'status': 'idle', 'last_updated': datetime.datetime.utcnow().isoformat() + 'Z'})
-q['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-with open('.claude/manager-queue.json', 'w') as f: json.dump(q, f, indent=2)
+python3 - <<'EOF'
+import json, datetime, fcntl, os
+with open('.claude/manager-queue.json', 'r+') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    q = json.load(f)
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    q['agents']['backend'].update({'current_issue': None, 'current_pr': None, 'status': 'idle', 'last_updated': ts})
+    q['last_updated'] = ts
+    f.seek(0); f.truncate()
+    json.dump(q, f, indent=2)
+    f.flush(); os.fsync(f.fileno())
+    fcntl.flock(f, fcntl.LOCK_UN)
 print('Queue updated: backend idle')
-"
+EOF
 ```
 
 ## Ticket Workflow
