@@ -18,12 +18,14 @@ import (
 type mockStore struct {
 	data         map[string]*draftdata.SetRatings
 	colorRatings map[string][]seventeenlands.ColorRating
+	hashes       map[string]string
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
 		data:         make(map[string]*draftdata.SetRatings),
 		colorRatings: make(map[string][]seventeenlands.ColorRating),
+		hashes:       make(map[string]string),
 	}
 }
 
@@ -53,6 +55,15 @@ func (m *mockStore) UpsertSets(_ context.Context, _ []scryfall.ScryfallSet) erro
 func (m *mockStore) UpsertColorRatings(_ context.Context, setCode, draftFormat string, ratings []seventeenlands.ColorRating) error {
 	key := setCode + "/" + draftFormat
 	m.colorRatings[key] = ratings
+	return nil
+}
+
+func (m *mockStore) GetHash(_ context.Context, key string) (string, error) {
+	return m.hashes[key], nil
+}
+
+func (m *mockStore) SetHash(_ context.Context, key string, hash string) error {
+	m.hashes[key] = hash
 	return nil
 }
 
@@ -181,6 +192,67 @@ func TestMockStore_ZeroFetchedAt_AcceptedByMock(t *testing.T) {
 	// FetchedAt in the mock is stored as-is (zero) — the real defensive default
 	// lives in PostgresStore.UpsertRatings and is covered by integration tests.
 	assert.True(t, got.FetchedAt.IsZero(), "mock store stores FetchedAt as provided (zero)")
+}
+
+// TestMockStore_GetHash_MissingKey verifies that GetHash returns ("", nil) for
+// a key that has never been stored — callers treat the empty string as "no hash".
+func TestMockStore_GetHash_MissingKey(t *testing.T) {
+	store := newMockStore()
+	ctx := context.Background()
+
+	hash, err := store.GetHash(ctx, "FDN")
+	require.NoError(t, err)
+	assert.Empty(t, hash, "missing key must return empty string")
+}
+
+// TestMockStore_SetHash_ThenGetHash verifies a round-trip: store a hash and
+// read it back unchanged.
+func TestMockStore_SetHash_ThenGetHash(t *testing.T) {
+	store := newMockStore()
+	ctx := context.Background()
+
+	const key = "BLB"
+	const want = "sha256:abc123"
+
+	require.NoError(t, store.SetHash(ctx, key, want))
+
+	got, err := store.GetHash(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+// TestMockStore_SetHash_OverwritesPreviousHash verifies that a second SetHash
+// call for the same key replaces the stored value, not appends.
+func TestMockStore_SetHash_OverwritesPreviousHash(t *testing.T) {
+	store := newMockStore()
+	ctx := context.Background()
+
+	const key = "TST"
+
+	require.NoError(t, store.SetHash(ctx, key, "hash-v1"))
+	require.NoError(t, store.SetHash(ctx, key, "hash-v2"))
+
+	got, err := store.GetHash(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, "hash-v2", got, "second SetHash must overwrite the first")
+}
+
+// TestMockStore_SetHash_IndependentKeys verifies that two different keys store
+// independent hashes and do not interfere with each other.
+func TestMockStore_SetHash_IndependentKeys(t *testing.T) {
+	store := newMockStore()
+	ctx := context.Background()
+
+	require.NoError(t, store.SetHash(ctx, "FDN", "hash-fdn"))
+	require.NoError(t, store.SetHash(ctx, "BLB", "hash-blb"))
+
+	fdn, err := store.GetHash(ctx, "FDN")
+	require.NoError(t, err)
+	assert.Equal(t, "hash-fdn", fdn)
+
+	blb, err := store.GetHash(ctx, "BLB")
+	require.NoError(t, err)
+	assert.Equal(t, "hash-blb", blb)
 }
 
 // Compile-time assertion that PostgresStore satisfies the Store interface.
