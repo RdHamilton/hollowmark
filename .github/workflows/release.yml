@@ -4,18 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v1.0.0)'
+        description: 'Tag to release (e.g. v1.5.0)'
         required: true
+        type: string
       prerelease:
-        description: 'Mark as pre-release'
-        required: false
-        default: 'false'
-        type: choice
-        options: ['false', 'true']
+        description: 'Mark as prerelease'
+        type: boolean
+        default: false
       skip_e2e:
         description: 'Emergency override -- skip E2E smoke gate. Requires justification in run name.'
         type: boolean
         default: false
+
+  release:
+    types: [published]
+
   # Allow other workflows to call this as a reusable workflow
   workflow_call:
     inputs:
@@ -32,6 +35,11 @@ on:
         default: 'false'
         type: string
 
+env:
+  RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+  IS_PRERELEASE: ${{ github.event_name == 'release' && github.event.release.prerelease || inputs.prerelease }}
+  SKIP_E2E: ${{ github.event_name == 'release' && contains(github.event.release.name, '[noe2e]') || inputs.skip_e2e }}
+
 permissions:
   contents: write
   id-token: write  # required for OIDC-based AWS auth in deploy job
@@ -47,7 +55,7 @@ jobs:
   e2e-smoke-gate:
     name: E2E Smoke Gate
     uses: ./.github/workflows/e2e-smoke.yml
-    if: inputs.skip_e2e != true && inputs.skip_e2e != 'true'
+    if: env.SKIP_E2E != 'true'
 
   # Run BFF integration tests after E2E smoke passes.
   # Blocks the release if any integration test fails.
@@ -71,12 +79,13 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Create and push tag
+    - name: Push tag
+      if: github.event_name == 'workflow_dispatch'
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag ${{ inputs.tag }}
-        git push origin ${{ inputs.tag }}
+        git tag ${{ env.RELEASE_TAG }}
+        git push origin ${{ env.RELEASE_TAG }}
 
     - name: Set up Go
       uses: actions/setup-go@v5
@@ -100,12 +109,12 @@ jobs:
         echo "## What's Changed" > changelog.md
         git log $(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD)..HEAD --pretty=format:"* %s (%h)" >> changelog.md || echo "* Initial release" >> changelog.md
         echo "" >> changelog.md
-        echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || echo 'v0.0.0')...${{ inputs.tag }}" >> changelog.md
+        echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || echo 'v0.0.0')...${{ env.RELEASE_TAG }}" >> changelog.md
 
     - name: Create Release
       uses: softprops/action-gh-release@v3
       with:
-        tag_name: ${{ inputs.tag }}
+        tag_name: ${{ env.RELEASE_TAG }}
         files: |
           bin/mtga-companion-linux-amd64
           bin/mtga-companion-linux-arm64
@@ -115,7 +124,7 @@ jobs:
           bin/mtga-companion-windows-arm64.exe
         body_path: changelog.md
         draft: false
-        prerelease: ${{ inputs.prerelease == 'true' }}
+        prerelease: ${{ env.IS_PRERELEASE == 'true' }}
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -417,3 +426,10 @@ jobs:
         done
         echo "Timed out waiting for health check"
         exit 1
+
+  deploy-spa:
+    name: Deploy SPA
+    needs: [release]
+    if: needs.release.result == 'success'
+    uses: ./.github/workflows/deploy-spa.yml
+    secrets: inherit
