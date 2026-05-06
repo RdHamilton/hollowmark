@@ -7,6 +7,11 @@
 **Key insight**: [the one thing PM most needs to know]
 -->
 
+## 2026-05-06 — Beta access model recommendation (PRD Open Question #4)
+**Type**: feedback synthesis
+**Output**: Inline recommendation delivered to multi-agent PRD planning session
+**Key insight**: Recommend invite-only (25 users) with explicit numeric gates (80% daemon connection success) before any batch expansion; fully open beta is not viable until silent daemon failure has a visible error state and self-serve troubleshooting doc exists
+
 ## 2026-05-06 — Beta user expectations research
 **Type**: feedback synthesis
 **Output**: Delivered inline report to multi-agent planning session
