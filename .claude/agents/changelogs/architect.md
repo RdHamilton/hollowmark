@@ -11,6 +11,13 @@ This is the system-wide record of all changes made across the project. Every age
 **Summary**: One sentence summary of what was done and why.
 -->
 
+## 2026-05-06 — [architect] ADR-009: User Auth Provider = Clerk
+**PR**: N/A — ADR only
+**ADR**: docs/adr/ADR-009-user-auth-provider-clerk.md
+**Files changed**:
+- `docs/adr/ADR-009-user-auth-provider-clerk.md` — new ADR selecting Clerk over Supabase Auth, with explicit forbidden patterns for the React+Vite integration (`@clerk/react@latest`, `VITE_CLERK_PUBLISHABLE_KEY`, `<ClerkProvider afterSignOutUrl="/">` in `main.tsx` only, `<Show when="signed-in">`, no `frontendApi`/`publishableKey` props, no `<SignedIn>`/`<SignedOut>`)
+**Summary**: Recorded the Phase 3 user-auth decision (Clerk) with concrete frontend/backend integration patterns, daemon API-key migration plan, and a list of nine implementation tickets the Project Manager must file.
+
 ## 2026-05-05 — [architect] ADR-007: Frontend Serving Model
 **PR**: #1221
 **ADR**: docs/adr/007-frontend-serving-model.md
