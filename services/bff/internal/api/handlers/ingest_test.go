@@ -36,6 +36,7 @@ type insertCall struct {
 	eventType  string
 	payload    json.RawMessage
 	occurredAt time.Time
+	eventID    string
 }
 
 // mockDaemonEventsRepo is a test double for DaemonEventInserter.
@@ -51,6 +52,7 @@ func (m *mockDaemonEventsRepo) Insert(
 	eventType string,
 	payload json.RawMessage,
 	occurredAt time.Time,
+	eventID string,
 ) error {
 	m.calls = append(m.calls, insertCall{
 		userID:     userID,
@@ -58,6 +60,7 @@ func (m *mockDaemonEventsRepo) Insert(
 		eventType:  eventType,
 		payload:    payload,
 		occurredAt: occurredAt,
+		eventID:    eventID,
 	})
 
 	return m.err
@@ -409,5 +412,44 @@ func TestIngestEvent_NilRepo_BroadcastOnly(t *testing.T) {
 
 	if broadcaster.calls[0].userID != wantUserID {
 		t.Errorf("broadcast userID=%d, want %d", broadcaster.calls[0].userID, wantUserID)
+	}
+}
+
+// TestIngestEvent_EventIDPropagatedToRepo verifies that the event_id from the
+// contract is forwarded to the repository Insert call so it can be persisted in
+// the daemon_events.event_id column for idempotency (ticket #1405).
+func TestIngestEvent_EventIDPropagatedToRepo(t *testing.T) {
+	const token = "eventid-token"
+	const wantEventID = "evt_01HXYZ"
+
+	keyRepo := &mockKeyLister{keys: []repository.APIKey{
+		{ID: 11, KeyHash: mustHash(t, token), UserID: 20},
+	}}
+
+	eventsRepo := &mockDaemonEventsRepo{}
+	ih := handlers.NewIngestHandler(&mockBroadcaster{}).WithRepository(eventsRepo)
+	handler := middleware.APIKeyAuth(keyRepo)(http.HandlerFunc(ih.IngestEvent))
+
+	payload, _ := json.Marshal(map[string]string{"key": "value"})
+	event := contract.DaemonEvent{
+		Type:       "match.completed",
+		AccountID:  "acct_test",
+		EventID:    wantEventID,
+		OccurredAt: time.Now().UTC(),
+		Payload:    payload,
+	}
+	req, rr := ingestRequest(t, token, event)
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rr.Code)
+	}
+
+	if len(eventsRepo.calls) != 1 {
+		t.Fatalf("expected 1 Insert call, got %d", len(eventsRepo.calls))
+	}
+
+	if got := eventsRepo.calls[0].eventID; got != wantEventID {
+		t.Errorf("Insert eventID=%q, want %q", got, wantEventID)
 	}
 }
