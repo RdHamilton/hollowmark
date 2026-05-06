@@ -264,12 +264,77 @@ jobs:
           sleep 10
         done
 
+    # Fetches the RDS master credential from Secrets Manager ON the EC2 instance
+    # so the plaintext password never touches the workflow runner or GitHub logs.
+    # The instance IAM role must have secretsmanager:GetSecretValue on the secret ARN
+    # (already granted via the EC2 CloudFormation stack).
+    # The DATABASE_URL is built with URL-encoded password to handle special characters.
+    #
+    # PREREQUISITE: /mtga-companion/production/db-secret-arn SSM parameter must exist:
+    #   aws ssm put-parameter \
+    #     --name /mtga-companion/production/db-secret-arn \
+    #     --value "<RDS secret ARN from rds stack output DBSecretArn>" \
+    #     --type String --region us-east-1
+    - name: Provision DATABASE_URL on EC2
+      run: |
+        DB_SECRET_ARN=$(aws ssm get-parameter \
+          --name /mtga-companion/production/db-secret-arn \
+          --region us-east-1 \
+          --query Parameter.Value \
+          --output text)
+
+        DB_ENDPOINT=$(aws ssm get-parameter \
+          --name /mtga-companion/production/db-endpoint \
+          --region us-east-1 \
+          --query Parameter.Value \
+          --output text)
+
+        DB_NAME=$(aws ssm get-parameter \
+          --name /mtga-companion/production/db-name \
+          --region us-east-1 \
+          --query Parameter.Value \
+          --output text)
+
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+          --document-name "AWS-RunShellScript" \
+          --parameters "commands=[\"SECRET=\\$(aws secretsmanager get-secret-value --secret-id ${DB_SECRET_ARN} --region us-east-1 --query SecretString --output text) && DB_USER=\\$(echo \\$SECRET | python3 -c \\\"import sys,json; d=json.load(sys.stdin); print(d['username'])\\\") && DB_PASS=\\$(echo \\$SECRET | python3 -c \\\"import sys,json,urllib.parse; d=json.load(sys.stdin); print(urllib.parse.quote(d['password'], safe=''))\\\") && DATABASE_URL=\\\"postgres://\\${DB_USER}:\\${DB_PASS}@${DB_ENDPOINT}:5432/${DB_NAME}\\\" && if grep -q '^DATABASE_URL=' /etc/mtga-companion/env 2>/dev/null; then sed -i \\\"s|^DATABASE_URL=.*|DATABASE_URL=\\${DATABASE_URL}|\\\" /etc/mtga-companion/env; else echo \\\"DATABASE_URL=\\${DATABASE_URL}\\\" >> /etc/mtga-companion/env; fi && chmod 600 /etc/mtga-companion/env\"]" \
+          --region us-east-1 \
+          --query "Command.CommandId" \
+          --output text)
+
+        echo "DATABASE_URL provision SSM Command ID: $COMMAND_ID"
+
+        for i in $(seq 1 18); do
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region us-east-1 \
+            --query "Status" \
+            --output text 2>/dev/null || echo "Pending")
+          echo "[$i/18] Status: $STATUS"
+          if [ "$STATUS" = "Success" ]; then
+            echo "DATABASE_URL provisioned."
+            break
+          elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+            echo "DATABASE_URL provision failed with status: $STATUS"
+            aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+              --region us-east-1 \
+              --query "StandardErrorContent" \
+              --output text
+            exit 1
+          fi
+          sleep 10
+        done
+
     - name: Deploy to EC2 via SSM
       run: |
         COMMAND_ID=$(aws ssm send-command \
           --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
           --document-name "AWS-RunShellScript" \
-          --parameters 'commands=["aws s3 cp s3://${{ secrets.DEPLOY_BUCKET }}/releases/${{ github.sha }}/mtga-bff /usr/local/bin/mtga-bff && chmod +x /usr/local/bin/mtga-bff && systemctl restart mtga-companion"]' \
+          --parameters 'commands=["aws s3 cp s3://${{ secrets.DEPLOY_BUCKET }}/releases/${{ github.sha }}/mtga-bff /usr/local/bin/mtga-bff && chmod +x /usr/local/bin/mtga-bff && systemctl restart mtga-bff"]' \
           --region us-east-1 \
           --query "Command.CommandId" \
           --output text)
