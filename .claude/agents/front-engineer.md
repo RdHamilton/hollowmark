@@ -103,7 +103,17 @@ If any command fails, fix the issue first. Do not open the PR until all checks p
 
 ## Post-PR Review Protocol (Required)
 
-After opening a PR with `gh pr create`, the lead-engineer agent automatically reviews it via the `PostToolUse` hook. You do not need to invoke it manually — it fires on every `gh pr create` call.
+After opening a PR with `gh pr create`, you MUST explicitly invoke the lead-engineer agent. Do not rely on the PostToolUse hook — it does not fire reliably when `gh pr create` runs inside a subagent context.
+
+**Required: spawn the lead-engineer immediately after `gh pr create` succeeds:**
+```bash
+# Capture the PR number first
+PR_NUMBER=$(gh pr view --json number -q '.number')
+```
+Then invoke the lead-engineer agent (subagent_type: "lead-engineer") with:
+- The PR number
+- The ticket number(s)
+- The branch name
 
 The lead-engineer will:
 1. Review the diff for CLAUDE.md compliance
