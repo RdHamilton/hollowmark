@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { drafts, cards, bffDraftRatings } from '@/services/api';
-import { BffColorRating } from '@/services/api/bffDraftRatings';
+import type { BffColorRating } from '@/services/api/bffDraftRatings';
 import { models, pickquality, grading, gui } from '@/types/models';
 
 // Helper to get completed drafts with limit support

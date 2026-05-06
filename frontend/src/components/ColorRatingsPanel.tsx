@@ -1,5 +1,5 @@
 import React from 'react';
-import { BffColorRating } from '@/services/api/bffDraftRatings';
+import type { BffColorRating } from '@/services/api/bffDraftRatings';
 import './ColorRatingsPanel.css';
 
 interface ColorRatingsPanelProps {
