@@ -8,13 +8,15 @@ import (
 
 // DaemonEventRow is a single row from the daemon_events table.
 type DaemonEventRow struct {
-	ID         int64
-	UserID     int64
-	AccountID  string
-	EventType  string
-	Payload    json.RawMessage
-	OccurredAt time.Time
-	ReceivedAt time.Time
+	ID          int64
+	UserID      int64
+	AccountID   string
+	EventType   string
+	Payload     json.RawMessage
+	OccurredAt  time.Time
+	ReceivedAt  time.Time
+	EventID     *string
+	ProjectedAt *time.Time
 }
 
 // DaemonEventsRepository persists daemon events to the daemon_events table.
@@ -29,6 +31,8 @@ func NewDaemonEventsRepository(db DB) *DaemonEventsRepository {
 
 // Insert writes a daemon event row scoped to the given user_id and account_id.
 // occurred_at is stored as-is; received_at defaults to NOW() via the column default.
+// eventID is the daemon-issued idempotency key (may be empty string for legacy rows).
+// When eventID is non-empty the unique index (user_id, event_id) prevents duplicate inserts.
 func (r *DaemonEventsRepository) Insert(
 	ctx context.Context,
 	userID int64,
@@ -36,12 +40,21 @@ func (r *DaemonEventsRepository) Insert(
 	eventType string,
 	payload json.RawMessage,
 	occurredAt time.Time,
+	eventID string,
 ) error {
-	const q = `
-		INSERT INTO daemon_events (user_id, account_id, event_type, payload, occurred_at)
-		VALUES ($1, $2, $3, $4, $5)`
+	// Normalise empty eventID to NULL so the partial unique index
+	// (WHERE event_id IS NOT NULL) does not deduplicate rows without a key.
+	var nullableEventID *string
+	if eventID != "" {
+		nullableEventID = &eventID
+	}
 
-	_, err := r.db.ExecContext(ctx, q, userID, accountID, eventType, payload, occurredAt)
+	const q = `
+		INSERT INTO daemon_events (user_id, account_id, event_type, payload, occurred_at, event_id)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT DO NOTHING`
+
+	_, err := r.db.ExecContext(ctx, q, userID, accountID, eventType, payload, occurredAt, nullableEventID)
 
 	return err
 }
@@ -54,7 +67,8 @@ func (r *DaemonEventsRepository) ListByUserID(
 	limit int,
 ) ([]DaemonEventRow, error) {
 	const q = `
-		SELECT id, user_id, account_id, event_type, payload, occurred_at, received_at
+		SELECT id, user_id, account_id, event_type, payload, occurred_at, received_at,
+		       event_id, projected_at
 		FROM daemon_events
 		WHERE user_id = $1
 		ORDER BY occurred_at DESC
@@ -74,6 +88,7 @@ func (r *DaemonEventsRepository) ListByUserID(
 		if err := rows.Scan(
 			&e.ID, &e.UserID, &e.AccountID, &e.EventType,
 			&e.Payload, &e.OccurredAt, &e.ReceivedAt,
+			&e.EventID, &e.ProjectedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -82,4 +97,51 @@ func (r *DaemonEventsRepository) ListByUserID(
 	}
 
 	return events, rows.Err()
+}
+
+// ListPendingProjection returns up to limit daemon_events rows that have not
+// yet been projected (projected_at IS NULL), ordered by received_at ASC so
+// events are projected in ingest order.
+func (r *DaemonEventsRepository) ListPendingProjection(
+	ctx context.Context,
+	limit int,
+) ([]DaemonEventRow, error) {
+	const q = `
+		SELECT id, user_id, account_id, event_type, payload, occurred_at, received_at,
+		       event_id, projected_at
+		FROM daemon_events
+		WHERE projected_at IS NULL
+		ORDER BY received_at ASC
+		LIMIT $1`
+
+	rows, err := r.db.QueryContext(ctx, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []DaemonEventRow
+
+	for rows.Next() {
+		var e DaemonEventRow
+
+		if err := rows.Scan(
+			&e.ID, &e.UserID, &e.AccountID, &e.EventType,
+			&e.Payload, &e.OccurredAt, &e.ReceivedAt,
+			&e.EventID, &e.ProjectedAt,
+		); err != nil {
+			return nil, err
+		}
+
+		events = append(events, e)
+	}
+
+	return events, rows.Err()
+}
+
+// MarkProjected sets projected_at = NOW() for the given daemon_events row.
+func (r *DaemonEventsRepository) MarkProjected(ctx context.Context, id int64) error {
+	const q = `UPDATE daemon_events SET projected_at = NOW() WHERE id = $1`
+	_, err := r.db.ExecContext(ctx, q, id)
+	return err
 }

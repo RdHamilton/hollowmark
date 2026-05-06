@@ -22,7 +22,7 @@ type EventBroadcaster interface {
 // DaemonEventInserter is implemented by any type that can persist a daemon event
 // to durable storage.  It is satisfied by *repository.DaemonEventsRepository.
 type DaemonEventInserter interface {
-	Insert(ctx context.Context, userID int64, accountID string, eventType string, payload json.RawMessage, occurredAt time.Time) error
+	Insert(ctx context.Context, userID int64, accountID string, eventType string, payload json.RawMessage, occurredAt time.Time, eventID string) error
 }
 
 // IngestHandler accepts daemon events posted by the daemon service and
@@ -73,7 +73,7 @@ func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	// but does not drop the live event — the broadcast still proceeds so the
 	// frontend receives the event even when the database is degraded.
 	if h.repo != nil {
-		if err := h.repo.Insert(r.Context(), userID, event.AccountID, event.Type, event.Payload, event.OccurredAt); err != nil {
+		if err := h.repo.Insert(r.Context(), userID, event.AccountID, event.Type, event.Payload, event.OccurredAt, event.EventID); err != nil {
 			log.Printf("[IngestHandler] ERROR persisting event %q for userID=%d account=%q: %v", event.Type, userID, event.AccountID, err)
 		}
 	}
