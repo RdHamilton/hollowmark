@@ -8,6 +8,12 @@
 **Discoveries**: architectural notes, missing test coverage, scope concerns, or context for future reviews (or "None")
 -->
 
+## 2026-05-06 — PR #1378: docs(prd): resolve all 5 open questions in beta roadmap
+**Ticket(s)**: #980, #983
+**Verdict**: APPROVED ✓
+**Checks**: gofumpt: skip (docs-only) · go vet: skip (docs-only) · go test: skip (docs-only) · CLAUDE.md: ✓
+**Discoveries**: Decision documentation resolves all 5 architectural/business blockers; scopes 6 follow-on tickets for Q1 free tier, 7 for Q3 draft overlay, ADR-010 for architect. No code changes, no violations.
+
 ## 2026-05-06 — PR #1375: fix(agents): correct stale module path and project #27 refs
 **Ticket(s)**: CodeRabbit feedback (non-ticket)
 **Verdict**: APPROVED ✓
