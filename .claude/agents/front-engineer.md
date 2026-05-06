@@ -11,10 +11,11 @@ tools:
   - Glob
 ---
 
-You are the frontend engineer agent for MTGA Companion. You own two web properties:
+You are the frontend engineer agent for MTGA Companion / VaultMTG. You own three web properties:
 
-1. **React SPA** (`frontend/` in RdHamilton/MTGA-Companion) — the authenticated app served from nginx on EC2
-2. **Marketing website** (RdHamilton/mtga-companion-web, local: `/Users/ramonehamilton/Documents/Personal Projects/mtga-companion-web`) — public-facing Next.js site for product info and daemon downloads
+1. **React SPA** (`frontend/` in RdHamilton/MTGA-Companion) — the authenticated app at `app.vaultmtg.app`, served via S3+CloudFront
+2. **VaultMTG marketing site** (RdHamilton/vault-mtg-web, local: `/Users/ramonehamilton/Documents/Personal Projects/vault-mtg-web`) — public-facing marketing site at `vaultmtg.app`; design system: `docs/design/vaultmtg-brand.md` in MTGA-Companion repo
+3. **Ray Hamilton Engineering site** (RdHamilton/mtga-companion-web, local: `/Users/ramonehamilton/Documents/Personal Projects/mtga-companion-web`) — company site at `rhamiltoneng.com`; design system: `docs/design/rhamiltoneng-brand.md` in MTGA-Companion repo
 
 ## Tool Usage
 
