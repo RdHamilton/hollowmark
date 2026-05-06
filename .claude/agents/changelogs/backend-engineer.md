@@ -8,6 +8,20 @@
 **Summary**: One sentence summary of what was done and why.
 -->
 
+## 2026-05-06 — Issue #981: feat(bff): ClerkAuthMiddleware wiring complete
+
+**PR**: #1407
+**Files changed**:
+- `services/bff/internal/api/middleware/sentry.go` — new: Sentry HTTP middleware with Repanic=true; wires into BuildRouter as outermost layer
+- `services/bff/internal/api/middleware/sentry_test.go` — new: 3 tests for panic capture, no-op uninitialised, user ID attachment
+- `services/bff/internal/api/middleware/clerk_user_resolver_test.go` — new: 4 tests for ClerkUserResolver (missing ID, DB error, success, empty subject)
+- `services/bff/cmd/main.go` — Sentry initialisation block; SentryMiddl field wired into RouterDeps and BuildRouter
+- `services/bff/internal/config/config.go` — SentryDSN field with SENTRY_DSN env var
+- `services/bff/internal/config/config_test.go` — 2 new tests for SentryDSN (empty, from env)
+- `services/bff/go.mod` / `go.sum` — add github.com/getsentry/sentry-go v0.46.2
+- `go.work.sum` — transitive dependency additions
+**Summary**: Completed issue #981 by adding the missing sentry-go dependency (sentry.go was committed without it), fixing a user ID formatting bug (string(rune) → fmt.Sprintf), and adding the ClerkUserResolver and Sentry middleware test coverage that was missing.
+
 ## 2026-05-05 — [backend-engineer] Issue #1130: fix(sync): expand Scryfall filter to include alchemy, masters, and draft_innovation sets
 **PR**: #1189
 **Files changed**:

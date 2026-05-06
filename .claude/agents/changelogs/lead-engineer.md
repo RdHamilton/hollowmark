@@ -8,6 +8,52 @@
 **Discoveries**: architectural notes, missing test coverage, scope concerns, or context for future reviews (or "None")
 -->
 
+## 2026-05-06 — PR #1407: feat(bff): ClerkAuthMiddleware — Sentry wiring, resolver tests, sentry user ID fix
+**Ticket(s)**: #981
+**Verdict**: APPROVED ✓
+**Checks**: go vet: pass | go test: pass | gofumpt: skip | CLAUDE.md: no violations
+**Discoveries**: Comprehensive auth middleware integration — JWT validation, user provisioning, panic capture, and error logging properly wired. All 7 new tests pass. No scope creep, no over-engineering.
+
+## 2026-05-06 — PR #1406: chore(dba): migration 000067 — daemon_events projection columns (#1401)
+**Ticket(s)**: #1401
+**Verdict**: APPROVED ✓
+**Checks**: gofumpt ✓ (skipped—migration-only) · go vet ✓ (skipped—migration-only) · go test ✓ (skipped—migration-only) · CLAUDE.md ✓
+**Discoveries**: Pure SQL migration, fully compliant. Adds event_id and projected_at columns with partial indexes for idempotency and projection cursor tracking. Down migration correct. Already merged.
+
+## 2026-05-06 — PR #1406: chore(dba): migration 000067 — daemon_events projection columns (#1401)
+**Ticket(s)**: #1401
+**Verdict**: APPROVED ✓
+**Checks**: CLAUDE.md ✓ (Go/TypeScript skipped — database migration only)
+**Discoveries**: Database-only migration with no code violations. Idempotent SQL, proper index strategy, clean backfill logic. Merged without issues.
+
+## 2026-05-06 — PR #1406: chore(dba): migration 000067 — daemon_events projection columns (#1401)
+
+**Ticket(s)**: #1401
+
+**Verdict**: APPROVED ✓
+
+**Checks**: CLAUDE.md ✓ | Go checks skipped (pure SQL migration)
+
+**Discoveries**: 
+- Clean, idempotent SQL migration adding `event_id` and `projected_at` columns to `daemon_events` 
+- Two well-designed partial indexes for projection worker cursor scan and per-daemon deduplication
+- Down migration correctly reverses in proper dependency order (indexes before columns)
+- All DDL guarded with IF [NOT] EXISTS for safety
+- No concurrency violations or transaction issues
+- Merged and deployed to main
+
+## 2026-05-06 — PR #1406: chore(dba): migration 000067 — daemon_events projection columns (#1401)
+**Ticket(s)**: #1401 (mismatch)
+**Verdict**: BLOCKED ✗
+**Checks**: CLAUDE.md violation — scope creep/ticket mismatch
+**Discoveries**: PR claims to close #1401, but #1401's AC describe creating `matches` and `draft_sessions` tables. This PR adds columns to `daemon_events` instead. Ticket linkage mismatch flagged; SQL itself is sound.
+
+## 2026-05-06 — PR #1379: docs(adr): ADR-010 draft overlay architecture
+**Ticket(s)**: None (ADR document)
+**Verdict**: APPROVED ✓
+**Checks**: CLAUDE.md ✓ (Go/frontend checks skipped — docs-only)
+**Discoveries**: High-quality architectural decision document. Correctly defers implementation details to spike tickets. Zero scope creep, well-scoped deferred considerations.
+
 ## 2026-05-06 — PR #1378: docs(prd): resolve all 5 open questions in beta roadmap
 **Ticket(s)**: #980, #983
 **Verdict**: APPROVED ✓
