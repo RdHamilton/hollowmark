@@ -21,6 +21,7 @@ import (
 	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
 	"github.com/ramonehamilton/mtga-bff/internal/api/sse"
 	"github.com/ramonehamilton/mtga-bff/internal/config"
+	"github.com/ramonehamilton/mtga-bff/internal/projection"
 	"github.com/ramonehamilton/mtga-bff/internal/storage"
 	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
 
@@ -111,7 +112,11 @@ func main() {
 		apiKeyAuthMiddl     func(http.Handler) http.Handler
 		clerkUserResolver   func(http.Handler) http.Handler
 		draftRatingsHandler *handlers.DraftRatingsHandler
+		historyHandler      *handlers.HistoryHandler
 	)
+
+	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
+	projCtx, projCancel := context.WithCancel(context.Background())
 
 	if cfg.DatabaseURL != "" {
 		sqlDB, err := sql.Open("pgx", cfg.DatabaseURL)
@@ -129,9 +134,23 @@ func main() {
 		daemonEventsRepo := repository.NewDaemonEventsRepository(sqlDB)
 		ingestHandler = ingestHandler.WithRepository(daemonEventsRepo)
 
+		accountRepo := repository.NewAccountRepository(sqlDB)
+		matchesRepo := repository.NewMatchesRepository(sqlDB)
+		draftSessionsRepo := repository.NewDraftSessionsRepository(sqlDB)
+
+		historyHandler = handlers.NewHistoryHandler(accountRepo, matchesRepo, draftSessionsRepo)
+
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
 		userRepo := repository.NewUserRepository(sqlDB)
 		clerkUserResolver = bffmiddleware.ClerkUserResolver(userRepo)
+
+		// Start projection worker unless disabled by env var.
+		if os.Getenv("BFF_PROJECTION_DISABLED") != "true" {
+			worker := projection.NewWorker(daemonEventsRepo, accountRepo, matchesRepo, draftSessionsRepo)
+			go worker.Run(projCtx)
+		} else {
+			log.Println("BFF_PROJECTION_DISABLED=true — projection worker not started.")
+		}
 	} else {
 		log.Printf("WARN: no DATABASE_URL — API key auth unavailable (env=%s); guarded endpoints return 503", cfg.Env)
 	}
@@ -141,6 +160,7 @@ func main() {
 		IngestHandler:       ingestHandler,
 		APIKeysHandler:      apiKeysHandler,
 		DraftRatingsHandler: draftRatingsHandler,
+		HistoryHandler:      historyHandler,
 		ClerkAuthMiddl:      clerkAuthMiddl,
 		ClerkUserResolver:   clerkUserResolver,
 		APIKeyAuthMiddl:     apiKeyAuthMiddl,
@@ -166,6 +186,8 @@ func main() {
 
 	fmt.Println("\nShutting down...")
 
+	projCancel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -184,6 +206,7 @@ type RouterDeps struct {
 	IngestHandler       *handlers.IngestHandler
 	APIKeysHandler      *handlers.APIKeysHandler
 	DraftRatingsHandler *handlers.DraftRatingsHandler
+	HistoryHandler      *handlers.HistoryHandler
 	ClerkAuthMiddl      func(http.Handler) http.Handler
 	ClerkUserResolver   func(http.Handler) http.Handler
 	APIKeyAuthMiddl     func(http.Handler) http.Handler
@@ -289,6 +312,15 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 			if deps.DraftRatingsHandler != nil {
 				r.Get("/api/v1/draft-ratings/{setCode}/{format}", deps.DraftRatingsHandler.GetDraftRatings)
 			}
+
+			// ── Cloud history endpoints (Clerk-protected, Postgres-backed) ──────
+			// These are NOT the desktop /api/v1/matches and /api/v1/drafts routes
+			// (those are SQLite-backed in the desktop BFF and must not be touched).
+			// Cloud history lives under /api/v1/history/ to make the split clear.
+			if deps.HistoryHandler != nil {
+				r.Get("/api/v1/history/matches", deps.HistoryHandler.GetMatches)
+				r.Get("/api/v1/history/drafts", deps.HistoryHandler.GetDrafts)
+			}
 		})
 
 	case deps.APIKeyAuthMiddl != nil:
@@ -297,6 +329,11 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 
 		if deps.DraftRatingsHandler != nil {
 			r.With(deps.APIKeyAuthMiddl).Get("/api/v1/draft-ratings/{setCode}/{format}", deps.DraftRatingsHandler.GetDraftRatings)
+		}
+
+		if deps.HistoryHandler != nil {
+			r.With(deps.APIKeyAuthMiddl).Get("/api/v1/history/matches", deps.HistoryHandler.GetMatches)
+			r.With(deps.APIKeyAuthMiddl).Get("/api/v1/history/drafts", deps.HistoryHandler.GetDrafts)
 		}
 
 	default:
