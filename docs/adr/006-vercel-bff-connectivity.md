@@ -101,6 +101,15 @@ production database for the duration of Phase 2. This is an accepted risk:
 A follow-on ticket must be created to provision a staging BFF + RDS and to configure
 Vercel preview environments to point at it.
 
+> **[Resolved — 2026-05-07 — see [Staging Environment ADR](./staging-environment-design.md))]**
+> Phase 3.5 introduced a dedicated staging environment (`staging-api.vaultmtg.app` +
+> staging RDS + staging Clerk instance). Vercel Preview builds now resolve
+> `VITE_BFF_URL` to the staging BFF via the Preview-scoped environment variable,
+> so PR review traffic no longer reads from or writes to production data.
+> Resolution work shipped in Wave 3: CloudWatch alarms (#1433), staging env vars
+> wired into the Vercel project (#1442), and the E2E CI fix that exercises the
+> staging surface (#1458).
+
 ### 5. HTTPS / TLS termination
 
 nginx on EC2 terminates TLS at port 443 and reverse-proxies to the BFF on port 8080.
