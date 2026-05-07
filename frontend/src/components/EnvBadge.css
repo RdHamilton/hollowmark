@@ -1,0 +1,29 @@
+.env-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background-color: #4a4a1a;
+  color: #d4c24a;
+  border: 1px solid #6a6a2a;
+  margin-left: auto;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+/* Specific colour overrides per environment */
+.env-badge--preview,
+.env-badge--staging {
+  background-color: #1a3a4a;
+  color: #4ab8d4;
+  border-color: #2a5a6a;
+}
+
+.env-badge--development {
+  background-color: #2a1a4a;
+  color: #9b7fd4;
+  border-color: #4a2a6a;
+}
