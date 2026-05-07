@@ -114,9 +114,11 @@ The $1,000 AWS Activate credit approved 2026-05-05 provides runway. At pre-beta 
 
 **Duration**: 3–4 weeks
 
-**What it accomplishes**: The growth and monetization infrastructure is live. Email waitlist is replaced with real sign-up. Free/paid tiers are enforced. Shareable stats pages enable organic viral loops. The launch sequence runs.
+**What it accomplishes**: The growth infrastructure is live. Email waitlist is replaced with real sign-up. Shareable stats pages enable organic viral loops. The launch sequence runs.
 
-**What it does not accomplish**: AI draft picks, collection vs. meta gap analysis, deck export (these are Pro features that can ship post-beta as they become feasible for a solo dev), or any AI agents/RAG work.
+**What it does not accomplish**: AI draft picks, collection vs. meta gap analysis, deck export (these are Pro features that can ship post-beta as they become feasible for a solo dev), any AI agents/RAG work, or Stripe billing (deferred to GA — beta is free/invite-only).
+
+> **Decision 2026-05-06**: Beta will be free and invite-only. Stripe integration, Stripe Tax, and PostHog revenue events are deferred to post-beta GA. Revisit when preparing for paid launch. Ticket #982 moved to Post-Beta board.
 
 #### Key Deliverables
 
@@ -126,23 +128,28 @@ The $1,000 AWS Activate credit approved 2026-05-05 provides runway. At pre-beta 
 | 2 | PostHog in SPA — funnels, retention, activation tracking wired | Growth P0 (new ticket) |
 | 3 | GA4 verified tracking on vaultmtg.app | Growth P0 (new ticket) |
 | 4 | OpenGraph meta tags on vaultmtg.app | Growth P0 (new ticket) |
-| 5 | Free vs. paid tier definition enforced in BFF feature gating | #985, #980 |
-| 6 | Stripe billing integration for VaultMTG Pro ($6.99/mo) | #982 |
-| 7 | Shareable stats pages (vaultmtg.app/stats/[username]) with OG image preview | Growth P1 (new ticket) |
-| 8 | Discord server live with #support and #bugs channels | Growth P0 (no-code) |
-| 9 | VaultMTG X account created | Growth P0 (no-code) |
-| 10 | In-app bug report link including app version + OS | CS gate 5 |
-| 11 | EOE draft tier list article on vaultmtg.app | Growth P1 (new ticket) |
-| 12 | sitemap.xml submitted to Google Search Console | Growth P1 |
+| 5 | Shareable stats pages (vaultmtg.app/stats/[username]) with OG image preview | Growth P1 (new ticket) |
+| 6 | Discord server live with #support and #bugs channels | Growth P0 (no-code) |
+| 7 | VaultMTG X account created | Growth P0 (no-code) |
+| 8 | In-app bug report link including app version + OS | CS gate 5 |
+| 9 | EOE draft tier list article on vaultmtg.app | Growth P1 (new ticket) |
+| 10 | sitemap.xml submitted to Google Search Console | Growth P1 |
+
+**Removed from v0.4.0 scope (2026-05-06):**
+- Stripe billing integration (#982) — deferred to post-beta GA; beta is free/invite-only
+- Stripe Tax — deferred to post-beta GA
+- PostHog revenue events — deferred to post-beta GA
+- Free vs. paid tier enforcement (#980, #985 billing component) — deferred to post-beta GA
 
 #### Exit Gate (all must be true)
 
 - [ ] 50+ beta testers have connected daemon and tracked at least one match
 - [ ] Activation rate (first match tracked within 7 days) ≥ 40% across testers
 - [ ] PostHog funnel instrumented and showing data
-- [ ] Stripe subscription flow tested end-to-end (subscribe → feature unlocked → cancel → feature locked)
 - [ ] Discord server has at least 1 moderator and a pinned known issues post
 - [ ] Shareable stats URL works and renders OG preview on Discord/Reddit
+
+> **Stripe exit gate removed 2026-05-06**: Beta is free/invite-only. Stripe flow will be an exit gate for the GA launch milestone, not v0.4.0 beta.
 
 ---
 
@@ -175,14 +182,18 @@ Additional technical gates:
 
 ### Financially Ready (v0.4.0 exit)
 
+> **Updated 2026-05-06**: Beta is free/invite-only. Stripe integration deferred to post-beta GA. The financially ready gate for v0.4.0 is simplified to AWS runway only.
+
 | Requirement | Target |
 |---|---|
 | AWS runway | Credits cover ≥ 6 months at projected load |
-| Stripe integration | Pro tier ($6.99/mo) purchasable and enforceable |
-| Free tier limits | Enforced in BFF — not just UI |
-| Break-even visibility | MRR tracking in place; break-even plan documented |
 
-Do NOT introduce paid features before 1,000 MAU. Launch Stripe at beta but do not push upsell hard until the habit loop is confirmed at that threshold.
+**Deferred to GA launch milestone:**
+- Stripe integration (Pro tier $6.99/mo) — ticket #982 on Post-Beta board
+- Free tier limits enforcement (#980) — depends on Stripe
+- Break-even / MRR tracking — revisit when preparing paid launch
+
+Do NOT introduce paid features before 1,000 MAU. Launch Stripe at GA, not beta.
 
 ### Growth Ready (v0.4.0 exit)
 
@@ -245,8 +256,8 @@ These must ship in v0.2.0 or early v0.3.0 or the product does not meet CS beta g
 | P2 | OpenGraph meta tags | NEW | Growth P0 — move to v0.4.0 |
 | P2 | Shareable stats pages with OG preview | NEW | Growth P1 — move to v0.4.0 |
 | P2 | In-app bug report link | NEW | CS gate 5 complement |
-| P2 | Stripe billing ($6.99/mo Pro) | #982 | v0.4.0 |
-| P2 | Free vs. paid tier enforcement | #980 | v0.4.0 |
+| DEFERRED | Stripe billing ($6.99/mo Pro) | #982 | Post-beta GA — beta is free/invite-only |
+| DEFERRED | Free vs. paid tier enforcement | #980 | Post-beta GA — depends on Stripe |
 | P2 | EOE draft tier list article | NEW | v0.4.0 |
 
 ### Post-Beta (explicitly deferred — do not schedule before 1K MAU confirmed)
