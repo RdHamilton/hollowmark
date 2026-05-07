@@ -98,7 +98,7 @@ echo "[create-staging-db] SSM parameters written."
 EC2_INSTANCE_ID=$(aws ec2 describe-instances \
     --profile "$PROFILE" \
     --region  "$REGION" \
-    --filters "Name=tag:Name,Values=mtga-companion" "Name=instance-state-name,Values=running" \
+    --filters "Name=tag:Name,Values=mtga-companion-bff-production" "Name=instance-state-name,Values=running" \
     --query   "Reservations[0].Instances[0].InstanceId" \
     --output  text)
 
