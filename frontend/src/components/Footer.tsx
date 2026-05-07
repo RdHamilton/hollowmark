@@ -3,6 +3,7 @@ import { EventsOn } from '@/services/websocketClient';
 import { matches, system } from '@/services/api';
 import { models } from '@/types/models';
 import DownloadProgressBar from './DownloadProgressBar';
+import EnvBadge from './EnvBadge';
 import './Footer.css';
 
 const Footer = () => {
@@ -90,6 +91,7 @@ const Footer = () => {
       <footer className="app-footer">
         <div className="footer-content">
           <span className="footer-loading">Loading stats...</span>
+          <EnvBadge />
         </div>
       </footer>
     );
@@ -100,6 +102,7 @@ const Footer = () => {
       <footer className="app-footer">
         <div className="footer-content">
           <span className="footer-empty">No matches yet - play some games to see your stats!</span>
+          <EnvBadge />
         </div>
       </footer>
     );
@@ -142,6 +145,7 @@ const Footer = () => {
           </>
         )}
         <DownloadProgressBar />
+        <EnvBadge />
       </div>
     </footer>
   );
