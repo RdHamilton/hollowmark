@@ -122,7 +122,7 @@ v0.3.0 telemetry parity.**
 
 ## Implementation Tickets
 
-These tickets land in milestone v0.3.0 on project board #27. Project
+These tickets land in milestone v0.3.0 on project board #29. Project
 Manager owns final ticket creation, milestone assignment, and
 sequencing; this ADR is the source of truth.
 
