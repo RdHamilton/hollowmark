@@ -9,7 +9,7 @@ To keep the main conversation focused and avoid context bloat:
 
 - **Investigation/Exploration**: Use the `Explore` subagent to find code, trace implementations, or answer "where is X?" questions. Return only the summary to main context.
 - **Planning**: Use the `Plan` subagent for designing implementations before writing code. Get user approval on the plan before implementing.
-- **Parallel research**: When multiple things need investigation, spawn parallel agents to research simultaneously.
+- **Parallel research**: When multiple things need investigation, spawn parallel agents to research simultaneously. Cap at 2 concurrent agents.
 - **Self-contained tasks**: Use `general-purpose` subagent for tasks like "run tests and summarize failures" or "check all files importing X".
 
 The main conversation should focus on:
@@ -21,6 +21,16 @@ Avoid in main context:
 - Reading many files directly (use Explore agent)
 - Long investigation chains
 - Raw test output dumps
+
+## Memory Management
+
+To prevent laptop memory spikes when running agents:
+
+- **Max 3 concurrent agents, maximize utilization** — never spawn more than 3 agents in a single message. If only one agent type has queued work, all 3 slots can go to that type. Across multiple types, fill up to 3 total. Serialize anything beyond 3.
+- **Use `haiku` model for simple agents** — pass `model: "haiku"` to the Agent tool for any task that is: moving a ticket, writing a changelog entry, reading files, or short research queries. Reserve default (sonnet) for implementation tasks.
+- **One instance per type by default** — prefer running one instance of a given agent type at a time. Run multiple only when the work is fully independent (e.g., 3 separate tickets with no shared files).
+- **Foreground over background for long tasks** — `run_in_background: true` keeps a full process alive until it completes. Only use background when you have genuinely independent parallel work to do immediately.
+- **Context compaction is automatic** — Claude Code compacts context automatically when the window fills. The `/compact` command triggers it early if needed.
 
 ## Authentication (Clerk)
 
