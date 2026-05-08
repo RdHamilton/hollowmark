@@ -267,6 +267,17 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 		} else {
 			payload = p
 		}
+	case "match.completed":
+		// Pass empty playerUserID — the daemon config does not store the MTGA
+		// userId, so opponent identification falls back to the first non-empty
+		// playerName in reservedPlayers.
+		p, err := logreader.ParseMatchCompletedEntry(entry, "")
+		if err != nil {
+			log.Printf("[daemon] warn: parse match completed: %v", err)
+			payload = entry.JSON
+		} else {
+			payload = p
+		}
 	default:
 		payload = entry.JSON
 	}
@@ -303,7 +314,11 @@ func classifyEntry(entry *logreader.LogEntry) string {
 		}
 	}
 
-	// Match events
+	// Match events — prefer the matchGameRoomStateChangedEvent path (single
+	// log line with full result data) over the legacy CurrentEventState path.
+	if logreader.IsMatchCompletedEntry(entry) {
+		return "match.completed"
+	}
 	if state, ok := entry.JSON["CurrentEventState"].(string); ok {
 		switch state {
 		case "MatchCompleted":
