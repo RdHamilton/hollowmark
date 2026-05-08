@@ -623,6 +623,107 @@ func TestHandleEntry_DeckUpdatedDispatchesTypedPayload(t *testing.T) {
 	assert.Equal(t, 2, payload.Cards[1].Quantity)
 }
 
+// matchCompletedEntry builds a LogEntry that mirrors the real
+// matchGameRoomStateChangedEvent structure observed in Player.log.
+func matchCompletedEntry() *logreader.LogEntry {
+	return &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"matchGameRoomStateChangedEvent": map[string]interface{}{
+				"gameRoomInfo": map[string]interface{}{
+					"stateType": "MatchGameRoomStateType_MatchCompleted",
+					"gameRoomConfig": map[string]interface{}{
+						"eventId": "Ladder",
+						"reservedPlayers": []interface{}{
+							map[string]interface{}{
+								"userId":     "USER_A",
+								"playerName": "OpponentPlayer",
+								"teamId":     float64(1),
+							},
+							map[string]interface{}{
+								"userId":     "USER_B",
+								"playerName": "LocalPlayer",
+								"teamId":     float64(2),
+							},
+						},
+					},
+					"finalMatchResult": map[string]interface{}{
+						"matchId":              "test-match-uuid",
+						"matchCompletedReason": "MatchCompletedReasonType_Success",
+						"resultList": []interface{}{
+							map[string]interface{}{
+								"scope":         "MatchScope_Game",
+								"result":        "ResultType_WinLoss",
+								"winningTeamId": float64(2),
+								"reason":        "ResultReason_Game",
+							},
+							map[string]interface{}{
+								"scope":         "MatchScope_Match",
+								"result":        "ResultType_WinLoss",
+								"winningTeamId": float64(2),
+								"reason":        "ResultReason_Game",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestClassifyEntry_MatchCompleted_GREEvent verifies that an entry containing
+// matchGameRoomStateChangedEvent with MatchCompleted state type is classified
+// as "match.completed".
+func TestClassifyEntry_MatchCompleted_GREEvent(t *testing.T) {
+	assert.Equal(t, "match.completed", classifyEntry(matchCompletedEntry()))
+}
+
+// TestClassifyEntry_MatchCompletedLegacy verifies the legacy CurrentEventState
+// path still classifies as "match.completed".
+func TestClassifyEntry_MatchCompletedLegacy(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON:   map[string]interface{}{"CurrentEventState": "MatchCompleted"},
+	}
+	assert.Equal(t, "match.completed", classifyEntry(entry))
+}
+
+// TestHandleEntry_MatchCompletedDispatchesTypedPayload verifies that
+// handleEntry parses a match.completed entry into a
+// contract.MatchCompletedPayload and sends it to the BFF with the correct
+// event type and JSON field names.
+func TestHandleEntry_MatchCompletedDispatchesTypedPayload(t *testing.T) {
+	var received contract.DaemonEvent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &received))
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		CloudAPIURL: srv.URL,
+		IngestPath:  "/v1/ingest/events",
+		APIKey:      "test-key",
+		AccountID:   "acc-match",
+	}
+	svc := New(cfg)
+
+	require.NoError(t, svc.handleEntry(context.Background(), matchCompletedEntry()))
+	assert.Equal(t, "match.completed", received.Type)
+	assert.Equal(t, "acc-match", received.AccountID)
+
+	var payload contract.MatchCompletedPayload
+	require.NoError(t, json.Unmarshal(received.Payload, &payload))
+	assert.Equal(t, "test-match-uuid", payload.MatchID)
+	assert.Equal(t, "Ladder", payload.Format)
+	assert.Equal(t, 2, payload.WinningTeamID)
+	require.Len(t, payload.ResultList, 2)
+	assert.Equal(t, "MatchScope_Match", payload.ResultList[1].Scope)
+	assert.Equal(t, 2, payload.ResultList[1].WinningTeamID)
+}
+
 // TestWithVersion sets version and verifies it is stored correctly.
 func TestWithVersion(t *testing.T) {
 	cfg := &config.Config{
