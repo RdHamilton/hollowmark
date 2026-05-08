@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS life_change_tracking (
     life_total  INT          NOT NULL,
     delta       INT          NOT NULL,
     turn_number INT          NOT NULL DEFAULT 0,
-    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_life_change_tracking_game_play_team_turn
+        UNIQUE (game_play_id, team_id, turn_number)
 );
 
 CREATE INDEX IF NOT EXISTS idx_life_change_tracking_game_play
