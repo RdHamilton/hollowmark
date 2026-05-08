@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/RdHamilton/MTGA-Companion/services/contract"
@@ -25,12 +26,19 @@ type Refresher interface {
 }
 
 // Dispatcher POSTs DaemonEvents to the BFF ingest endpoint.
+// It maintains a per-session monotonic sequence counter that is assigned to
+// each event before dispatch (ADR-013).  The counter starts at 1 and resets
+// to 0 when the Dispatcher is created (i.e. on daemon restart).
 type Dispatcher struct {
 	cloudAPIURL string
 	ingestPath  string
 	apiKey      string
 	client      *http.Client
 	refresher   Refresher
+	// seq is the per-session sequence counter.  Incremented atomically so
+	// Send is safe for concurrent callers.  Reset to 0 on daemon restart
+	// because the Dispatcher itself is recreated on restart.
+	seq atomic.Uint64
 }
 
 // New creates a Dispatcher.
@@ -62,11 +70,16 @@ func (d *Dispatcher) SetToken(token string) {
 	d.apiKey = token
 }
 
-// Send encodes event as JSON and POSTs it to the BFF with up to 3 attempts.
+// Send assigns the next per-session sequence number to the event, encodes it
+// as JSON, and POSTs it to the BFF with up to 3 attempts.
 // Retries on transport errors or non-2xx responses with 500ms * attempt backoff.
 // On a 401 response, calls the Refresher (if set) to obtain a new token before
 // the next retry.
 func (d *Dispatcher) Send(ctx context.Context, event contract.DaemonEvent) error {
+	// Assign per-session sequence (ADR-013).  Add(1) returns the new value, so
+	// the first call yields 1 — matching the "starts at 1" requirement.
+	event.Sequence = d.seq.Add(1)
+
 	body, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)

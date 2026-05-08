@@ -11,6 +11,7 @@ type DaemonEvent struct {
 	AccountID  string          `json:"account_id"`
 	EventID    string          `json:"event_id"`
 	SessionID  string          `json:"session_id"`
+	Sequence   uint64          `json:"sequence"`
 	OccurredAt time.Time       `json:"occurred_at"`
 	Payload    json.RawMessage `json:"payload"`
 }
