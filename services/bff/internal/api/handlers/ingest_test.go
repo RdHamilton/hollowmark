@@ -415,6 +415,46 @@ func TestIngestEvent_NilRepo_BroadcastOnly(t *testing.T) {
 	}
 }
 
+// TestIngestEvent_SequenceFieldAccepted verifies that the ingest handler accepts
+// a DaemonEvent carrying a non-zero Sequence value (ADR-013) and that the
+// sequence is preserved on the broadcasted event.
+func TestIngestEvent_SequenceFieldAccepted(t *testing.T) {
+	const token = "seq-token"
+	const wantSequence uint64 = 42
+
+	keyRepo := &mockKeyLister{keys: []repository.APIKey{
+		{ID: 13, KeyHash: mustHash(t, token), UserID: 50},
+	}}
+
+	broadcaster := &mockBroadcaster{}
+	ih := handlers.NewIngestHandler(broadcaster)
+	handler := middleware.APIKeyAuth(keyRepo)(http.HandlerFunc(ih.IngestEvent))
+
+	payload, _ := json.Marshal(map[string]string{"k": "v"})
+	event := contract.DaemonEvent{
+		Type:       "match.completed",
+		AccountID:  "acct_seq",
+		SessionID:  "sess_seq",
+		Sequence:   wantSequence,
+		OccurredAt: time.Now().UTC(),
+		Payload:    payload,
+	}
+	req, rr := ingestRequest(t, token, event)
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rr.Code)
+	}
+
+	if len(broadcaster.calls) != 1 {
+		t.Fatalf("expected 1 broadcast call, got %d", len(broadcaster.calls))
+	}
+
+	if got := broadcaster.calls[0].event.Sequence; got != wantSequence {
+		t.Errorf("broadcast event Sequence=%d, want %d", got, wantSequence)
+	}
+}
+
 // TestIngestEvent_EventIDPropagatedToRepo verifies that the event_id from the
 // contract is forwarded to the repository Insert call so it can be persisted in
 // the daemon_events.event_id column for idempotency (ticket #1405).

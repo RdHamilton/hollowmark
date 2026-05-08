@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,6 +55,43 @@ func TestDispatcherSendsValidDaemonEvent(t *testing.T) {
 	assert.Equal(t, "session-abc", received.SessionID)
 	assert.False(t, received.OccurredAt.IsZero())
 	assert.NotEmpty(t, received.Payload)
+	// First Send from a new Dispatcher must assign sequence=1 (ADR-013).
+	assert.Equal(t, uint64(1), received.Sequence, "first event must have sequence=1")
+}
+
+// TestDispatcherSequenceMonotonicallyIncreases verifies that consecutive Send
+// calls on the same Dispatcher assign strictly increasing sequence numbers
+// starting at 1 (ADR-013).
+func TestDispatcherSequenceMonotonicallyIncreases(t *testing.T) {
+	var mu sync.Mutex
+	var sequences []uint64
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var evt contract.DaemonEvent
+		require.NoError(t, json.Unmarshal(body, &evt))
+		mu.Lock()
+		sequences = append(sequences, evt.Sequence)
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	d := dispatch.New(srv.URL, "/v1/ingest/events", "tok")
+
+	const n = 5
+	for i := range n {
+		evt, err := dispatch.BuildEvent("test.event", "acc", "sess", map[string]int{"i": i})
+		require.NoError(t, err)
+		require.NoError(t, d.Send(context.Background(), evt))
+	}
+
+	require.Len(t, sequences, n)
+	for i, seq := range sequences {
+		want := uint64(i + 1)
+		assert.Equal(t, want, seq, "event %d: sequence mismatch", i)
+	}
 }
 
 // TestDispatcherHandlesBFFError verifies that non-2xx responses are returned as errors.
