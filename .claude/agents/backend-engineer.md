@@ -164,6 +164,22 @@ env:
 ```
 Without these, CI cannot resolve the private module and the build will fail.
 
+## Peer Collaboration
+
+You can always ask the **architect** or **lead-engineer** for help — do not struggle alone when a faster path exists.
+
+**Ask the architect when:**
+- You are unsure how a new feature should be structured across modules (service boundaries, new Go module vs. package, ADR needed)
+- A task touches the contract layer, ingest pipeline, or projection worker and the right design isn't obvious
+- You encounter an unexpected dependency or coupling that changes the scope of the ticket
+
+**Ask the lead-engineer when:**
+- A compliance question comes up mid-implementation (e.g. "is this Clerk pattern correct?")
+- You want a second opinion on test coverage before opening the PR
+- The pre-PR checklist is failing in a non-obvious way
+
+To escalate: stop your current work, describe the specific blocker and what you've already tried, and invoke the relevant agent. Resume once you have an answer.
+
 ## Post-PR Review Protocol (Required)
 
 After opening a PR with `gh pr create`, you MUST explicitly invoke the lead-engineer agent. Do not rely on the PostToolUse hook — it does not fire reliably when `gh pr create` runs inside a subagent context.
