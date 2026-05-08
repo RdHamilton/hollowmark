@@ -22,7 +22,7 @@ Ray cannot travel to conventions before September 2026. The following previously
 | Date | Milestone |
 |---|---|
 | June 2, 2026 | Waitlist opens |
-| July 7, 2026 | Closed beta launch |
+| August 18, 2026 | Closed beta launch |
 | September 4–6, 2026 | SCG CON Dallas (first in-person opportunity) |
 | September 11–13, 2026 | SCG CON Baltimore |
 | September 25, 2026 | Reality Fracture prerelease |
@@ -142,12 +142,12 @@ Print source: Vistaprint or local FedEx Office 48 hours before the event.
 1. QR code on all print materials links to: `https://vaultmtg.app/?utm_source=event&utm_medium=print&utm_campaign=<event-slug>`
    - Use UTM slugs defined in `docs/marketing/utm-naming-convention.md`
    - Event slugs: `scgcon-dallas-2026`, `scgcon-baltimore-2026`, `scgcon-la-2026`, `scgcon-hartford-2026`, `magiccon-atl-2026`, `fnm-fracture-2026`
-2. By September the beta is live — QR code links directly to the app download page, not a waitlist
+2. By September the beta is live (launched August 18) — QR code links directly to the app download page, not a waitlist
 3. Landing page conversion goal shifts from "join waitlist" to "install now"
 
 ### On-the-Spot Signup Incentive
 
-If app is live at time of event (expected from July 7 beta onward):
+If app is live at time of event (expected from August 18 beta onward):
 > "It's free — you can install it right now from your phone if you want. Takes about two minutes."
 
 If someone seems especially engaged:
@@ -200,7 +200,7 @@ Streamer partnerships are not gated on in-person events. This work should start 
 
 **Target profile**: MTG Arena draft streamers with 1,000–10,000 concurrent viewers on Twitch or YouTube Live. This tier is large enough to matter but small enough that an individual outreach message gets read.
 
-**Outreach offer**: Early access to VaultMTG (available from July 7 beta onward), plus direct line to the dev for feedback. Do not offer money — the app value proposition should be sufficient at this stage.
+**Outreach offer**: Early access to VaultMTG (available from August 18 beta onward), plus direct line to the dev for feedback. Do not offer money — the app value proposition should be sufficient at this stage.
 
 **Pitch angle**:
 > "Your viewers watch you draft and want to learn. VaultMTG shows pick grades and deck-building stats in real time. We think it makes for better stream content and helps your viewers follow along. We'd like to give you early access — no strings attached."
@@ -225,20 +225,20 @@ Since no in-person events are viable before September, all pre-September promoti
 |---|---|---|
 | June 2 | Announcement | Waitlist is open — non-promotional framing |
 | June 23 | Content | "Marvel Super Heroes draft picks — what VaultMTG recommends for the top archetypes" |
-| July 7 | Launch | "We launched VaultMTG beta — free companion app for MTG Arena" |
+| August 18 | Launch | "We launched VaultMTG beta — free companion app for MTG Arena" |
 | July 17–19 | Pro Tour weekend | "Watching Pro Tour this weekend? Here's how VaultMTG would break down the featured draft picks" |
 | August | Ongoing | Respond to any "MTG Arena tracker" or "draft helper" threads with a genuine, non-spammy mention |
 
 ### Discord
 
-- Post in #announcements for waitlist open (June 2) and beta launch (July 7)
+- Post in #announcements for waitlist open (June 2) and beta launch (August 18)
 - Engage in r/MagicArena and MTG-adjacent Discord servers as a community member, not a promoter
 - Share the Reality Fracture tier list article in relevant servers once published in late September
 
 ### X (Twitter)
 
 - Schedule posts around each major date above via Buffer
-- During Pro Tour Amsterdam (July 17–19), post commentary and engage with #MagicArena and #ProTour hashtags
+- During Pro Tour Amsterdam (July 17–19), post commentary and engage with #MagicArena and #ProTour hashtags (pre-beta awareness)
 - Use #MTGArena and #MagicTheGathering on all app-related posts
 
 ### Content Marketing
@@ -322,6 +322,6 @@ Guerrilla approach (no vendor table, floor demos only): total hard cost under $2
 
 1. **Exhibitor vs. attendee at SCG CON Dallas**: Decide by August 1 — space at smaller SCG CONs sells out 4–6 weeks out.
 2. **MagicCon Atlanta exhibitor space**: Early registration typically opens 3–4 months before the event (August). Set a calendar reminder to check availability and pricing then.
-3. **Streamer outreach list**: Build the target list of 5–10 draft streamers by June 15 so outreach begins before beta launches on July 7.
+3. **Streamer outreach list**: Build the target list of 5–10 draft streamers by June 15 so outreach begins well before beta launches on August 18.
 4. **Reality Fracture tier list**: Must be published on or before October 2 (Arena drop) to capture search traffic ahead of SCG CON LA on October 9.
 5. **LGS Ambassador kit**: Create printable PDF flyer for Reality Fracture prerelease (September 25 week). Asset due by September 18.
