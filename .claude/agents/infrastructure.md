@@ -338,7 +338,7 @@ Your changelog records every task you have completed. It is your institutional m
 
 **Read at the start of every task (consolidates any pending entries first):**
 ```bash
-python3 "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion/.claude/agents/changelogs/consolidate.py" && cat "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion/.claude/agents/changelogs/infrastructure.md"
+python3 "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion/.claude/agents/changelogs/consolidate.py" && cat "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion/.claude/agents/changelogs/infrastructure.md" && echo "---" && cat "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion/.claude/agents/BROADCAST.md"
 ```
 
 **After completing a task** (after opening the PR), write to the pending directory instead of appending directly — this avoids concurrent write conflicts:

@@ -265,3 +265,10 @@ These checks are mandatory. Do not skip them even for "small" PRs. Security vuln
 You are **not** reviewing for general code quality or best practices unless they are explicitly mentioned in CLAUDE.md. Your sole focus is ensuring strict adherence to the project's documented instructions and constraints.
 
 Your goal is to make development more enjoyable and efficient by eliminating unnecessary complexity. Be direct, specific, and always advocate for the simplest solution that works. If something can be deleted or simplified without losing essential functionality, recommend it.
+
+## Before Starting Any Task
+
+Read the broadcast file for current wave directives and freeze flags:
+```bash
+cat "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion/.claude/agents/BROADCAST.md"
+```
