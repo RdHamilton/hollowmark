@@ -8,6 +8,8 @@ vi.mock('posthog-js', () => ({
     identify: vi.fn(),
     reset: vi.fn(),
     register: vi.fn(),
+    startSessionRecording: vi.fn(),
+    stopSessionRecording: vi.fn(),
   },
 }));
 
@@ -245,6 +247,75 @@ describe('analytics', () => {
     trackEvent({ name: 'app_user_signed_out' });
 
     expect(posthog.capture).toHaveBeenCalledWith('app_user_signed_out', undefined);
+    vi.unstubAllEnvs();
+  });
+
+  // ── Session Replay ────────────────────────────────────────────────────────
+
+  it('initAnalytics passes session_recording config with maskAllInputs and disable_session_recording', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics } = await import('../analytics');
+
+    initAnalytics();
+
+    expect(posthog.init).toHaveBeenCalledWith(
+      'phc_testkey',
+      expect.objectContaining({
+        disable_session_recording: true,
+        session_recording: expect.objectContaining({
+          maskAllInputs: true,
+        }),
+      }),
+    );
+    vi.unstubAllEnvs();
+  });
+
+  it('startSessionReplay calls posthog.startSessionRecording after init', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, startSessionReplay } = await import('../analytics');
+
+    initAnalytics();
+    startSessionReplay();
+
+    expect(posthog.startSessionRecording).toHaveBeenCalledOnce();
+    vi.unstubAllEnvs();
+  });
+
+  it('startSessionReplay is a no-op when PostHog was not initialized', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', '');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, startSessionReplay } = await import('../analytics');
+
+    initAnalytics();
+    startSessionReplay();
+
+    expect(posthog.startSessionRecording).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  it('stopSessionReplay calls posthog.stopSessionRecording after init', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, stopSessionReplay } = await import('../analytics');
+
+    initAnalytics();
+    stopSessionReplay();
+
+    expect(posthog.stopSessionRecording).toHaveBeenCalledOnce();
+    vi.unstubAllEnvs();
+  });
+
+  it('stopSessionReplay is a no-op when PostHog was not initialized', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', '');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, stopSessionReplay } = await import('../analytics');
+
+    initAnalytics();
+    stopSessionReplay();
+
+    expect(posthog.stopSessionRecording).not.toHaveBeenCalled();
     vi.unstubAllEnvs();
   });
 });
