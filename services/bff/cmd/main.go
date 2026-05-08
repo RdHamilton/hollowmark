@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	posthoglib "github.com/posthog/posthog-go"
 	"github.com/ramonehamilton/mtga-bff/internal/api/handlers"
 	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
 	"github.com/ramonehamilton/mtga-bff/internal/api/sse"
@@ -89,10 +90,32 @@ func main() {
 	fmt.Println("==================")
 	fmt.Printf("port: %d\n\n", *port)
 
+	// Initialise PostHog server-side analytics.  The API key is read from
+	// POSTHOG_API_KEY (sourced from SSM /vaultmtg/prod/posthog-api-key at
+	// deploy time).  When empty, PostHog is disabled — a no-op client is used
+	// so all handler code paths are always exercised.  The key is never logged.
+	var postHogClient handlers.PostHogClient
+	if cfg.PostHogAPIKey != "" {
+		phClient, err := posthoglib.NewWithConfig(cfg.PostHogAPIKey, posthoglib.Config{
+			Endpoint: "https://app.posthog.com",
+		})
+		if err != nil {
+			log.Fatalf("posthog.NewWithConfig: %v", err)
+		}
+		defer phClient.Close()
+		postHogClient = phClient
+		log.Println("PostHog initialised.")
+	} else {
+		log.Println("POSTHOG_API_KEY not set — PostHog disabled (development mode only).")
+	}
+
 	broker := sse.New()
 
 	sseBroadcaster := &sseBroadcast{broker: broker}
 	ingestHandler := handlers.NewIngestHandler(sseBroadcaster)
+	if postHogClient != nil {
+		ingestHandler = ingestHandler.WithPostHogClient(postHogClient)
+	}
 
 	// Wire Clerk auth middleware when CLERK_SECRET_KEY is configured.
 	// This middleware protects browser-facing routes by verifying Clerk session
