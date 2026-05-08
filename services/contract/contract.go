@@ -126,3 +126,34 @@ type CollectionUpdatedPayload struct {
 	Cards   []CollectionCard `json:"cards"`
 	IsDelta bool             `json:"is_delta"`
 }
+
+// MatchResult represents a single result entry from the MTGA resultList.
+// Scope distinguishes whether the result applies to a single game or the
+// overall match ("MatchScope_Game" / "MatchScope_Match").
+type MatchResult struct {
+	Scope         string `json:"scope"`
+	Result        string `json:"result"`
+	WinningTeamID int    `json:"winning_team_id"`
+	Reason        string `json:"reason"`
+}
+
+// MatchCompletedPayload is embedded in a DaemonEvent with Type
+// "match.completed". It is derived from the matchGameRoomStateChangedEvent
+// with stateType "MatchGameRoomStateType_MatchCompleted" that Arena emits
+// at the end of every match.
+//
+// WinningTeamID is the teamId of the winning side as reported in the
+// MatchScope_Match result entry (0 if indeterminate).
+// ResultList carries every result entry from finalMatchResult.resultList.
+// OpponentName is the playerName of the opponent as listed in reservedPlayers;
+// it is empty when the daemon cannot determine which seat belongs to the local
+// player.
+// Format is sourced from the eventId field in gameRoomConfig (e.g. "Ladder",
+// "QuickDraft_SOS_20260430"); it is empty when absent.
+type MatchCompletedPayload struct {
+	MatchID       string        `json:"match_id"`
+	WinningTeamID int           `json:"winning_team_id"`
+	ResultList    []MatchResult `json:"result_list"`
+	Format        string        `json:"format"`
+	OpponentName  string        `json:"opponent_name"`
+}
