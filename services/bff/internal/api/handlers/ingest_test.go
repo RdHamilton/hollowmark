@@ -13,10 +13,21 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	contract "github.com/RdHamilton/MTGA-Companion/services/contract"
+	"github.com/posthog/posthog-go"
 	"github.com/ramonehamilton/mtga-bff/internal/api/handlers"
 	"github.com/ramonehamilton/mtga-bff/internal/api/middleware"
 	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
 )
+
+// mockPostHogClient records Enqueue calls for test assertions.
+type mockPostHogClient struct {
+	calls []posthog.Message
+}
+
+func (m *mockPostHogClient) Enqueue(msg posthog.Message) error {
+	m.calls = append(m.calls, msg)
+	return nil
+}
 
 // broadcastedCall records a single BroadcastDaemonEvent invocation.
 type broadcastedCall struct {
@@ -534,5 +545,186 @@ func TestIngestEvent_EventIDPropagatedToRepo(t *testing.T) {
 
 	if got := eventsRepo.calls[0].eventID; got != wantEventID {
 		t.Errorf("Insert eventID=%q, want %q", got, wantEventID)
+	}
+}
+
+// buildHandlerWithPostHog constructs an IngestHandler with the given PostHog
+// client and APIKey middleware wired — helper shared across gap detection tests.
+func buildHandlerWithPostHog(broadcaster handlers.EventBroadcaster, keyRepo *mockKeyLister, phClient handlers.PostHogClient) http.Handler {
+	ih := handlers.NewIngestHandler(broadcaster).WithPostHogClient(phClient)
+	return middleware.APIKeyAuth(keyRepo)(http.HandlerFunc(ih.IngestEvent))
+}
+
+// TestIngestHandler_GapDetected_LogsAndCaptures verifies that when two
+// consecutive events arrive with a sequence gap, the PostHog client receives a
+// daemon_event_gap_detected capture call with the correct properties.
+func TestIngestHandler_GapDetected_LogsAndCaptures(t *testing.T) {
+	const token = "gap-token"
+
+	keyRepo := &mockKeyLister{keys: []repository.APIKey{
+		{ID: 20, KeyHash: mustHash(t, token), UserID: 100},
+	}}
+
+	phClient := &mockPostHogClient{}
+	broadcaster := &mockBroadcaster{}
+	handler := buildHandlerWithPostHog(broadcaster, keyRepo, phClient)
+
+	// First event — establishes baseline at seq=1.
+	firstEvent := contract.DaemonEvent{
+		Type:       "match.completed",
+		AccountID:  "acct_gap_test",
+		SessionID:  "sess_gap_test",
+		Sequence:   1,
+		OccurredAt: time.Now().UTC(),
+		Payload:    json.RawMessage(`{}`),
+	}
+
+	req, rr := ingestRequest(t, token, firstEvent)
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("first event: expected 202, got %d", rr.Code)
+	}
+
+	if len(phClient.calls) != 0 {
+		t.Fatalf("first event should not trigger PostHog capture, got %d calls", len(phClient.calls))
+	}
+
+	// Second event — jumps to seq=5, skipping 2, 3, 4.
+	gapEvent := contract.DaemonEvent{
+		Type:       "match.completed",
+		AccountID:  "acct_gap_test",
+		SessionID:  "sess_gap_test",
+		Sequence:   5,
+		OccurredAt: time.Now().UTC(),
+		Payload:    json.RawMessage(`{}`),
+	}
+
+	req2, rr2 := ingestRequest(t, token, gapEvent)
+	handler.ServeHTTP(rr2, req2)
+
+	if rr2.Code != http.StatusAccepted {
+		t.Fatalf("gap event: expected 202 (gap detection must not block), got %d", rr2.Code)
+	}
+
+	if len(phClient.calls) != 1 {
+		t.Fatalf("expected 1 PostHog capture call after gap, got %d", len(phClient.calls))
+	}
+
+	capture, ok := phClient.calls[0].(posthog.Capture)
+	if !ok {
+		t.Fatal("PostHog message is not a posthog.Capture")
+	}
+
+	if capture.Event != "daemon_event_gap_detected" {
+		t.Errorf("expected event=%q, got %q", "daemon_event_gap_detected", capture.Event)
+	}
+
+	// account_id must be hashed — verify it is not the raw value.
+	if capture.DistinctId == "acct_gap_test" {
+		t.Error("DistinctId must be hashed, got raw account_id")
+	}
+
+	if len(capture.DistinctId) != 16 {
+		t.Errorf("DistinctId hash should be 16 chars, got %d: %q", len(capture.DistinctId), capture.DistinctId)
+	}
+
+	// Verify expected_sequence property.
+	if v, ok := capture.Properties["expected_sequence"]; !ok {
+		t.Error("expected_sequence property missing from PostHog capture")
+	} else if v != uint64(2) {
+		t.Errorf("expected_sequence=%v, want 2", v)
+	}
+
+	if v, ok := capture.Properties["received_sequence"]; !ok {
+		t.Error("received_sequence property missing from PostHog capture")
+	} else if v != uint64(5) {
+		t.Errorf("received_sequence=%v, want 5", v)
+	}
+}
+
+// TestIngestHandler_NoGap_NoCapture verifies that sequential events do not
+// trigger a PostHog capture.
+func TestIngestHandler_NoGap_NoCapture(t *testing.T) {
+	const token = "nogap-token"
+
+	keyRepo := &mockKeyLister{keys: []repository.APIKey{
+		{ID: 21, KeyHash: mustHash(t, token), UserID: 101},
+	}}
+
+	phClient := &mockPostHogClient{}
+	broadcaster := &mockBroadcaster{}
+	handler := buildHandlerWithPostHog(broadcaster, keyRepo, phClient)
+
+	for seq := uint64(1); seq <= 5; seq++ {
+		evt := contract.DaemonEvent{
+			Type:       "draft.pick",
+			AccountID:  "acct_nogap",
+			SessionID:  "sess_nogap",
+			Sequence:   seq,
+			OccurredAt: time.Now().UTC(),
+			Payload:    json.RawMessage(`{}`),
+		}
+
+		req, rr := ingestRequest(t, token, evt)
+		handler.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusAccepted {
+			t.Fatalf("seq=%d: expected 202, got %d", seq, rr.Code)
+		}
+	}
+
+	if len(phClient.calls) != 0 {
+		t.Errorf("sequential events must not trigger PostHog captures, got %d", len(phClient.calls))
+	}
+}
+
+// TestIngestHandler_SequenceReset_NotAGap_NoCapture verifies that a sequence
+// reset (daemon restart) is not emitted as a gap to PostHog.
+func TestIngestHandler_SequenceReset_NotAGap_NoCapture(t *testing.T) {
+	const token = "reset-token"
+
+	keyRepo := &mockKeyLister{keys: []repository.APIKey{
+		{ID: 22, KeyHash: mustHash(t, token), UserID: 102},
+	}}
+
+	phClient := &mockPostHogClient{}
+	broadcaster := &mockBroadcaster{}
+	handler := buildHandlerWithPostHog(broadcaster, keyRepo, phClient)
+
+	// Build up to seq=50.
+	for seq := uint64(1); seq <= 50; seq++ {
+		evt := contract.DaemonEvent{
+			Type:       "match.completed",
+			AccountID:  "acct_reset",
+			SessionID:  "sess_reset",
+			Sequence:   seq,
+			OccurredAt: time.Now().UTC(),
+			Payload:    json.RawMessage(`{}`),
+		}
+
+		req, rr := ingestRequest(t, token, evt)
+		handler.ServeHTTP(rr, req)
+	}
+
+	// Reset: daemon restarts, seq goes back to 1.
+	resetEvt := contract.DaemonEvent{
+		Type:       "match.completed",
+		AccountID:  "acct_reset",
+		SessionID:  "sess_reset",
+		Sequence:   1,
+		OccurredAt: time.Now().UTC(),
+		Payload:    json.RawMessage(`{}`),
+	}
+
+	req, rr := ingestRequest(t, token, resetEvt)
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("reset event: expected 202, got %d", rr.Code)
+	}
+
+	if len(phClient.calls) != 0 {
+		t.Errorf("sequence reset must not trigger PostHog gap capture, got %d calls", len(phClient.calls))
 	}
 }

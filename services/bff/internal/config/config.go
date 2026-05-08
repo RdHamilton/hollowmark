@@ -86,6 +86,18 @@ type Config struct {
 	// initialisation is skipped and a warning is logged.  This value must
 	// NEVER be logged or included in any error response body.
 	SentryDSN string
+
+	// PostHogAPIKey is the PostHog server-side API key used to emit
+	// server-side analytics events from the BFF.
+	//
+	// Sourced from POSTHOG_API_KEY.  The actual value is stored in AWS SSM
+	// Parameter Store at /vaultmtg/prod/posthog-api-key and injected as an
+	// environment variable at deploy time.
+	//
+	// When empty (e.g. local development), PostHog is disabled and a no-op
+	// client is used.  This value must NEVER be logged or included in any
+	// error response body.
+	PostHogAPIKey string
 }
 
 // Load reads configuration from environment variables, applies defaults, and
@@ -143,6 +155,7 @@ func Load() (*Config, error) {
 		DaemonReleasedAt:                    os.Getenv("BFF_DAEMON_RELEASED_AT"),
 		ClerkSecretKey:                      clerkSecretKey,
 		SentryDSN:                           strings.TrimSpace(os.Getenv("SENTRY_DSN")),
+		PostHogAPIKey:                       strings.TrimSpace(os.Getenv("POSTHOG_API_KEY")),
 	}
 
 	if raw := os.Getenv("DRAFT_RATINGS_STALENESS_THRESHOLD_HOURS"); raw != "" {

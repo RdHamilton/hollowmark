@@ -3,12 +3,15 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
-	"log"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	contract "github.com/RdHamilton/MTGA-Companion/services/contract"
+	"github.com/posthog/posthog-go"
 	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
 )
 
@@ -25,27 +28,71 @@ type DaemonEventInserter interface {
 	Insert(ctx context.Context, userID int64, accountID string, eventType string, payload json.RawMessage, occurredAt time.Time, eventID string, sequence uint64) error
 }
 
+// PostHogClient is a mockable interface for server-side PostHog event capture.
+// It is satisfied by the real posthog.Client and by test doubles.
+type PostHogClient interface {
+	Enqueue(msg posthog.Message) error
+}
+
+// noopPostHogClient is a no-op PostHogClient used when POSTHOG_API_KEY is empty.
+type noopPostHogClient struct{}
+
+func (noopPostHogClient) Enqueue(posthog.Message) error { return nil }
+
 // IngestHandler accepts daemon events posted by the daemon service and
 // broadcasts them to connected frontend clients via the broadcaster.
 // When a DaemonEventInserter is wired, each event is also persisted to the
 // database before broadcasting.
 type IngestHandler struct {
-	broadcaster EventBroadcaster
-	repo        DaemonEventInserter
+	broadcaster   EventBroadcaster
+	repo          DaemonEventInserter
+	gapDetector   *GapDetector
+	postHogClient PostHogClient
 }
 
 // NewIngestHandler creates an IngestHandler that broadcasts received events
 // through the provided broadcaster.  Pass nil for repo to run in
 // broadcast-only mode (no persistence).
+//
+// A GapDetector is always initialised.  PostHog defaults to the no-op client
+// until WithPostHogClient is called.
 func NewIngestHandler(broadcaster EventBroadcaster) *IngestHandler {
-	return &IngestHandler{broadcaster: broadcaster}
+	return &IngestHandler{
+		broadcaster:   broadcaster,
+		gapDetector:   &GapDetector{},
+		postHogClient: noopPostHogClient{},
+	}
 }
 
 // WithRepository returns a copy of h with repo wired for persistence.
 // This enables optional dependency injection without changing the existing
 // NewIngestHandler call-sites.
 func (h *IngestHandler) WithRepository(repo DaemonEventInserter) *IngestHandler {
-	return &IngestHandler{broadcaster: h.broadcaster, repo: repo}
+	return &IngestHandler{
+		broadcaster:   h.broadcaster,
+		repo:          repo,
+		gapDetector:   h.gapDetector,
+		postHogClient: h.postHogClient,
+	}
+}
+
+// WithPostHogClient returns a copy of h with the given PostHog client wired.
+// When not called, the handler uses a no-op client so the code path is always
+// exercised without network calls.
+func (h *IngestHandler) WithPostHogClient(client PostHogClient) *IngestHandler {
+	return &IngestHandler{
+		broadcaster:   h.broadcaster,
+		repo:          h.repo,
+		gapDetector:   h.gapDetector,
+		postHogClient: client,
+	}
+}
+
+// hashAccountID returns a privacy-safe representation of accountID for
+// PostHog: SHA-256 hex, first 16 characters.  No raw PII is sent.
+func hashAccountID(accountID string) string {
+	sum := sha256.Sum256([]byte(accountID))
+	return fmt.Sprintf("%x", sum)[:16]
 }
 
 // IngestEvent handles POST /v1/ingest/events.
@@ -74,7 +121,38 @@ func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	// frontend receives the event even when the database is degraded.
 	if h.repo != nil {
 		if err := h.repo.Insert(r.Context(), userID, event.AccountID, event.Type, event.Payload, event.OccurredAt, event.EventID, event.Sequence); err != nil {
-			log.Printf("[IngestHandler] ERROR persisting event %q for userID=%d account=%q: %v", event.Type, userID, event.AccountID, err)
+			slog.Error(
+				"[IngestHandler] ERROR persisting event",
+				"type", event.Type,
+				"userID", userID,
+				"account", event.AccountID,
+				"err", err,
+			)
+		}
+	}
+
+	// Gap detection: check for sequence discontinuities.
+	// This never blocks or discards events — it is observability only.
+	if event.Sequence > 0 {
+		if isGap, expected := h.gapDetector.Check(event.AccountID, event.SessionID, event.Sequence); isGap {
+			slog.Warn(
+				"[IngestHandler] sequence gap detected",
+				"account_id", event.AccountID,
+				"session_id", event.SessionID,
+				"expected_sequence", expected,
+				"received_sequence", event.Sequence,
+			)
+
+			hashedAccountID := hashAccountID(event.AccountID)
+			_ = h.postHogClient.Enqueue(posthog.Capture{
+				DistinctId: hashedAccountID,
+				Event:      "daemon_event_gap_detected",
+				Properties: posthog.NewProperties().
+					Set("account_id_hash", hashedAccountID).
+					Set("session_id", event.SessionID).
+					Set("expected_sequence", expected).
+					Set("received_sequence", event.Sequence),
+			})
 		}
 	}
 
@@ -82,7 +160,13 @@ func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 		h.broadcaster.BroadcastDaemonEvent(userID, event)
 	}
 
-	log.Printf("[IngestHandler] Received event %q seq=%d from account %q (userID=%d)", event.Type, event.Sequence, event.AccountID, userID)
+	slog.Info(
+		"[IngestHandler] Received event",
+		"type", event.Type,
+		"seq", event.Sequence,
+		"account", event.AccountID,
+		"userID", userID,
+	)
 
 	w.WriteHeader(http.StatusAccepted)
 }
