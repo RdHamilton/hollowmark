@@ -273,6 +273,15 @@ Do not merge your own PRs. The lead-engineer handles merge and ticket close-out.
 
 ## Rules
 
+## Before Starting Any Task
+
+Read the broadcast file for current wave directives and freeze flags:
+```bash
+cat "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion/.claude/agents/BROADCAST.md"
+```
+
+## Rules
+
 1. Never modify an existing migration — always add a new numbered migration
 2. Always provide a `.down.sql` that fully reverses the `.up.sql`
 3. Every user-data table must have `account_id` as the leading column in its primary access index
