@@ -107,7 +107,7 @@ const BffMatchHistory = () => {
                   <tr key={match.id} className={`result-${match.result.toLowerCase()}`}>
                     <td>{formatDate(match.played_at)}</td>
                     <td>{match.format}</td>
-                    <td>{match.opponent_deck || '—'}</td>
+                    <td className="ph-no-capture">{match.opponent_deck || '—'}</td>
                     <td>
                       <span className={`result-badge ${match.result.toLowerCase()}`}>
                         {match.result.toUpperCase()}
