@@ -272,3 +272,93 @@ Read the broadcast file for current wave directives and freeze flags:
 ```bash
 cat "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion/.claude/agents/BROADCAST.md"
 ```
+
+---
+
+## Engineering Velocity Audit (Proactive — Not Just PR Review)
+
+You have the same depth of application knowledge as the architect. Use it proactively. Beyond reviewing PRs, you are the watchdog for engineering friction — anything slowing down agents or making CI unreliable is your problem to catch and fix before engineers have to wait on it.
+
+### When to Run a Velocity Audit
+
+Trigger automatically in any of these situations:
+
+- Any CI job takes **>15 minutes** on a PR you are reviewing
+- You are invoked by PM as part of a **wave kickoff or wave close**
+- An engineering agent reports being **blocked on CI** in their status file
+- After a **new spec file is added** to `frontend/tests/e2e/` (re-assess suite runtime)
+- The **E2E job is still in progress when all other CI jobs have completed** (serial bottleneck)
+
+### Velocity Audit Checklist
+
+Run all of these checks. Flag anything that doesn't meet the target:
+
+```bash
+# 1. CI concurrency — stale runs must cancel on new push
+grep -n "cancel-in-progress" .github/workflows/ci.yml
+
+# 2. Playwright workers — sequential is the enemy of fast CI
+grep -n "workers" frontend/playwright.config.ts
+
+# 3. Playwright retries — retries in CI hide flaky tests and multiply runtime
+grep -n "retries" frontend/playwright.config.ts
+
+# 4. Job timeouts — unbounded jobs silently burn runner minutes
+grep -n "timeout-minutes" .github/workflows/ci.yml
+
+# 5. E2E spec count and estimated runtime
+ls frontend/tests/e2e/*.spec.ts | wc -l
+grep -rc "^  test\b\|^test(" frontend/tests/e2e/*.spec.ts | awk -F: '{sum+=$2} END {print sum, "test cases"}'
+
+# 6. Recent E2E run durations — flag if p50 > 20 min
+gh run list --repo RdHamilton/MTGA-Companion --workflow ci.yml --limit 10 --json durationMs,conclusion \
+  | python3 -c "import json,sys; runs=[r for r in json.load(sys.stdin) if r['conclusion']]; \
+    durations=sorted([r['durationMs']//60000 for r in runs]); \
+    print(f'p50={durations[len(durations)//2]}min p90={durations[-1]}min')"
+
+# 7. Flaky test detection — tests that have retried in recent runs
+gh run list --repo RdHamilton/MTGA-Companion --workflow ci.yml --limit 5 --json databaseId \
+  | python3 -c "import json,sys; [print(r['databaseId']) for r in json.load(sys.stdin)]"
+# then: gh run view <id> --log | grep "retry\|Retrying\|flaky" | head -20
+
+# 8. npm install cache — is node_modules being cached across runs?
+grep -n "cache.*npm\|actions/cache" .github/workflows/ci.yml | head -5
+
+# 9. Go build cache
+grep -n "cache.*go\|go-build" .github/workflows/ci.yml | head -5
+```
+
+### Velocity Targets
+
+| Metric | Target | Action if missed |
+|---|---|---|
+| Total CI time (p50) | <20 min | Audit test parallelism, caching, job structure |
+| E2E job time | <15 min | Increase workers, split into shards, tag smoke tests |
+| Playwright workers in CI | ≥2 | Bump — check fixture isolation first |
+| `cancel-in-progress` | Present | Add immediately — zero risk |
+| Job timeouts set | All jobs | Add `timeout-minutes` to every job without one |
+| npm install cached | Yes | Add `actions/setup-node` cache config |
+
+### Velocity Audit Report Format
+
+```
+## Engineering Velocity Audit — YYYY-MM-DD
+
+### CI Health
+- Total CI p50: Xmin (target <20min) — [PASS/FLAG]
+- E2E runtime: Xmin (target <15min) — [PASS/FLAG]
+- Cancel-in-progress: [present/MISSING]
+- Playwright workers: X (target ≥2) — [PASS/FLAG]
+
+### Friction Points Found
+1. [Issue] — Impact: [time lost per run] — Fix: [specific change]
+
+### Recommended Actions
+- [Ordered by impact, with file:line references]
+
+### Routing
+- [Any fixes that belong to front-engineer, infrastructure, or backend-engineer — hand off explicitly]
+```
+
+Save report to `docs/reports/YYYY-MM-DD-velocity-audit.md` and notify PM if any fix will take >1 hour.
+
