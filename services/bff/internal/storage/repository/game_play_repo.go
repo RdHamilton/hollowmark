@@ -126,7 +126,7 @@ func (r *GamePlayRepository) InsertLifeChanges(ctx context.Context, changes []Li
 		INSERT INTO life_change_tracking
 			(account_id, game_play_id, team_id, life_total, delta, turn_number)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT DO NOTHING`
+		ON CONFLICT (game_play_id, team_id, turn_number) DO NOTHING`
 
 	for i := range changes {
 		c := changes[i]
