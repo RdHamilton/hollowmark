@@ -500,3 +500,37 @@ func TestLoad_Env_Staging_NoClerkSecretKey_Error(t *testing.T) {
 		t.Fatal("expected error when MTGA_ENV=staging and CLERK_SECRET_KEY is unset")
 	}
 }
+
+// TestLoad_PostHogAPIKey_EmptyWhenUnset verifies that when POSTHOG_API_KEY is
+// not set Config.PostHogAPIKey is an empty string (PostHog disabled).
+func TestLoad_PostHogAPIKey_EmptyWhenUnset(t *testing.T) {
+	t.Setenv("MTGA_ENV", "development")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("POSTHOG_API_KEY", "")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.PostHogAPIKey != "" {
+		t.Errorf("expected empty PostHogAPIKey when POSTHOG_API_KEY unset, got %q", cfg.PostHogAPIKey)
+	}
+}
+
+// TestLoad_PostHogAPIKey_FromEnv verifies that POSTHOG_API_KEY is surfaced as
+// Config.PostHogAPIKey with leading/trailing whitespace trimmed.
+func TestLoad_PostHogAPIKey_FromEnv(t *testing.T) {
+	t.Setenv("MTGA_ENV", "development")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("POSTHOG_API_KEY", "  phc_testkey123  ")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.PostHogAPIKey != "phc_testkey123" {
+		t.Errorf("expected trimmed PostHogAPIKey 'phc_testkey123', got %q", cfg.PostHogAPIKey)
+	}
+}
