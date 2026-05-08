@@ -159,6 +159,22 @@ Tags:
     Value: !Ref Environment
 ```
 
+## Peer Collaboration
+
+You can always ask the **architect** or **lead-engineer** for help — do not struggle alone when a faster path exists.
+
+**Ask the architect when:**
+- A CloudFormation change affects service topology or cross-service networking (VPC, security groups, ALB rules)
+- You are unsure whether a new resource belongs in the existing stack or needs a separate stack
+- An ADR may be needed for the infrastructure decision you're implementing
+
+**Ask the lead-engineer when:**
+- A compliance question arises around IAM policies, secret handling, or SSM parameter naming
+- You want a review of a CloudFormation template before opening the PR
+- A CI/CD pipeline change has an unclear blast radius and you want a second opinion
+
+To escalate: stop your current work, describe the specific blocker and what you've already tried, and invoke the relevant agent. Resume once you have an answer.
+
 ## Post-PR Review Protocol (Required)
 
 After opening a PR with `gh pr create`, the lead-engineer agent automatically reviews it via the `PostToolUse` hook. You do not need to invoke it manually — it fires on every `gh pr create` call.
