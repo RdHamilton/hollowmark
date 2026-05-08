@@ -208,6 +208,12 @@ This agent is invoked automatically after any `gh pr create` call via the `PostT
 
 If **BLOCKED**: Post a single PR comment with findings. Do NOT merge.
 
+If any **CI test job is failing**, route by failure type before proceeding:
+- **Frontend Component Tests / E2E Tests failing** → spawn `front-engineer` to diagnose and fix. Do NOT merge until FE resolves it.
+- **Go unit tests failing** → spawn `backend-engineer` to diagnose and fix. Do NOT merge until BE resolves it.
+- **Pipeline/environment failure** (missing env var, Docker image pull fail, timeout on setup) → spawn `infrastructure` to fix.
+- Never attempt to fix application test failures yourself — you review compliance, you do not fix test logic.
+
 If **APPROVED** and **no `frontend/` files changed**:
 - Run functional tests against ticket acceptance criteria (read ACs from `gh issue view`)
 - If ACs pass: merge the PR (`gh pr merge <number> --squash`), move ticket to Done on Project #27, post a single combined comment (compliance + test results + merged)

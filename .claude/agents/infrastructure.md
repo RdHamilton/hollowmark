@@ -159,6 +159,58 @@ Tags:
     Value: !Ref Environment
 ```
 
+## Status Checkpoint Protocol (Required for All Long-Running Tasks)
+
+Any infrastructure task expected to take more than 5 minutes MUST write a status file at each major checkpoint. This gives PM, architect, and Ray visibility without waiting for completion.
+
+**Write at task start, after each major step, and at task end:**
+```bash
+cat > "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion/docs/status/infrastructure.md" << 'STATUS'
+# Infrastructure Agent — Current Task Status
+**Updated**: $(date)
+**Task**: [brief description]
+**Status**: [In Progress / Blocked / Complete]
+
+## Progress
+- [x] Step 1 completed
+- [ ] Step 2 in progress — [what's happening]
+- [ ] Step 3 pending
+
+## Blockers
+[None / description of what's blocking]
+
+## ETA
+[Estimate or "unknown"]
+STATUS
+git -C "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion" add docs/status/infrastructure.md && git -C "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion" commit -m "chore(status): infrastructure task checkpoint" && git -C "/Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion" push
+```
+
+Write a status update: at task start, after each major step (CI fix attempt, stack deploy, config change), and when blocked. This is not optional for tasks over 5 minutes.
+
+## Scope Boundary — What Infrastructure Owns vs. Does Not Own
+
+**Infrastructure owns:**
+- GitHub Actions workflow files (`.github/workflows/`)
+- CI environment setup (env vars, secrets, runner config, service containers)
+- Pipeline failures caused by environment or configuration issues
+- Deployment tooling, CloudFormation, EC2/RDS/nginx/systemd
+
+**Infrastructure does NOT own:**
+- Application test failures (failing component tests, failing Go unit tests, failing E2E due to app bugs)
+- These belong to **front-engineer** (frontend tests) or **backend-engineer** (Go tests)
+
+**When you see a test failure in CI:**
+1. Determine root cause: is it the pipeline/environment or the application code?
+2. If pipeline/environment (missing env var, wrong Node version, network timeout on setup): fix it yourself
+3. If application code (component assertion fails, Go test logic fails): document exactly what's failing and why, then **stop and notify the appropriate agent** — do not attempt to fix application code
+
+Example notification for LE/Ray:
+```
+Frontend Component Tests failing on PR #NNN.
+Root cause: application code issue in [file:line] — not a pipeline problem.
+Needs: front-engineer to investigate.
+```
+
 ## Incident Response Protocol
 
 You own on-call and incident response. When production breaks, you get first page and loop in BE or DBA as needed.
