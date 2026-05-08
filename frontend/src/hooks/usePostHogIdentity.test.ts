@@ -9,6 +9,8 @@ vi.mock('posthog-js', () => ({
     identify: vi.fn(),
     reset: vi.fn(),
     register: vi.fn(),
+    startSessionRecording: vi.fn(),
+    stopSessionRecording: vi.fn(),
   },
 }));
 
@@ -16,11 +18,15 @@ vi.mock('posthog-js', () => ({
 const mockIdentifyUser = vi.fn();
 const mockTrackEvent = vi.fn();
 const mockResetIdentity = vi.fn();
+const mockStartSessionReplay = vi.fn();
+const mockStopSessionReplay = vi.fn();
 
 vi.mock('@/services/analytics', () => ({
   identifyUser: (...args: unknown[]) => mockIdentifyUser(...args),
   trackEvent: (...args: unknown[]) => mockTrackEvent(...args),
   resetIdentity: () => mockResetIdentity(),
+  startSessionReplay: () => mockStartSessionReplay(),
+  stopSessionReplay: () => mockStopSessionReplay(),
 }));
 
 // Clerk mock — controlled per test.
@@ -44,6 +50,7 @@ describe('usePostHogIdentity', () => {
 
     expect(mockIdentifyUser).not.toHaveBeenCalled();
     expect(mockTrackEvent).not.toHaveBeenCalled();
+    expect(mockStartSessionReplay).not.toHaveBeenCalled();
   });
 
   it('calls identifyUser with clerk user id when signed in', async () => {
@@ -56,6 +63,26 @@ describe('usePostHogIdentity', () => {
     renderHook(() => usePostHogIdentity());
 
     expect(mockIdentifyUser).toHaveBeenCalledWith('user_abc');
+  });
+
+  it('starts session replay when user is signed in', async () => {
+    mockUseUser.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      user: { id: 'user_abc' },
+    });
+    const { usePostHogIdentity } = await import('./usePostHogIdentity');
+    renderHook(() => usePostHogIdentity());
+
+    expect(mockStartSessionReplay).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT start session replay when user is not signed in', async () => {
+    mockUseUser.mockReturnValue({ isLoaded: true, isSignedIn: false, user: null });
+    const { usePostHogIdentity } = await import('./usePostHogIdentity');
+    renderHook(() => usePostHogIdentity());
+
+    expect(mockStartSessionReplay).not.toHaveBeenCalled();
   });
 
   it('fires funnel_sign_up_completed once per session when signed in', async () => {
@@ -105,5 +132,22 @@ describe('usePostHogIdentity', () => {
     rerender();
 
     expect(mockResetIdentity).toHaveBeenCalledOnce();
+  });
+
+  it('stops session replay when user signs out', async () => {
+    // First render: signed in
+    mockUseUser.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      user: { id: 'user_abc' },
+    });
+    const { usePostHogIdentity } = await import('./usePostHogIdentity');
+    const { rerender } = renderHook(() => usePostHogIdentity());
+
+    // Second render: signed out
+    mockUseUser.mockReturnValue({ isLoaded: true, isSignedIn: false, user: null });
+    rerender();
+
+    expect(mockStopSessionReplay).toHaveBeenCalledOnce();
   });
 });

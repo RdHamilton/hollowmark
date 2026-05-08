@@ -14,6 +14,8 @@ import {
   trackEvent,
   identifyUser,
   resetIdentity,
+  startSessionReplay,
+  stopSessionReplay,
 } from '../services/analytics';
 
 const SESSION_KEY = 'vaultmtg_ph_funnel_sign_up_completed_fired';
@@ -28,6 +30,9 @@ export function usePostHogIdentity(): void {
     if (isSignedIn && user?.id) {
       if (!identifiedRef.current) {
         identifyUser(user.id);
+        // Enable session replay now that we have a confirmed signed-in user.
+        // Recording is disabled at init time and only starts here.
+        startSessionReplay();
         identifiedRef.current = true;
 
         // Fire funnel_sign_up_completed once per session.
@@ -43,8 +48,9 @@ export function usePostHogIdentity(): void {
         }
       }
     } else if (isLoaded && !isSignedIn) {
-      // User signed out — reset PostHog identity.
+      // User signed out — reset PostHog identity and stop recording.
       if (identifiedRef.current) {
+        stopSessionReplay();
         resetIdentity();
         identifiedRef.current = false;
       }
