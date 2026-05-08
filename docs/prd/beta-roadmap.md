@@ -12,9 +12,9 @@
 |---|---|---|
 | Waitlist opens | **2026-06-02** | Aligned with Marvel Super Heroes Arena set release |
 | Internal stretch target | **2026-06-26** | Full v0.4.0 exit gates green; first batch invited if on track |
-| **Public closed beta launch** | **2026-07-07** | Official public commitment — all six CS gates + growth infrastructure required |
+| **Public closed beta launch** | **2026-08-18** | Official public commitment — all six CS gates + growth infrastructure required |
 
-These dates were decided 2026-05-08 after consulting BA, CS, Finance, and Growth Marketing. June 2 is a hard external anchor (set release). June 26 is an internal stretch goal that does not shift the July 7 commitment. July 7 is the public commitment and must not move without a full business review.
+These dates were decided 2026-05-08 after consulting BA, CS, Finance, and Growth Marketing. June 2 is a hard external anchor (set release). June 26 is an internal stretch goal that does not shift the August 18 commitment. August 18 is the public commitment and must not move without a full business review.
 
 ---
 
@@ -146,7 +146,7 @@ v0.3.0-lite still satisfies the alpha invite gate — testers can validate match
 
 **Theme**: Acquire, convert, and retain the first 500 real users.
 
-**Target launch date**: **2026-07-07** (public closed beta — official commitment)
+**Target launch date**: **2026-08-18** (public closed beta — official commitment)
 **Waitlist opens**: 2026-06-02 (aligned with Marvel Super Heroes Arena set release)
 **Internal stretch target**: 2026-06-26 (all v0.4.0 exit gates green; first waitlist batch released if on track)
 
