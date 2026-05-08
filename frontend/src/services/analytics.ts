@@ -25,8 +25,35 @@ export function initAnalytics(): void {
     capture_pageview: false,
     // Disable autocapture to keep event taxonomy clean.
     autocapture: false,
+    // Session replay: disabled by default; enabled per-user after auth.
+    // maskAllInputs prevents any typed text from appearing in replays.
+    // maskAllText: false — we use .ph-no-capture class for selective masking.
+    // disable_session_recording: true until startSessionReplay() is called.
+    session_recording: {
+      maskAllInputs: true,
+      maskTextSelector: '.sensitive, .ph-no-capture',
+    },
+    disable_session_recording: true,
   });
   initialized = true;
+}
+
+/**
+ * Start PostHog session replay for the current user.
+ * Must only be called once Clerk has confirmed isSignedIn — never for
+ * unauthenticated sessions.
+ */
+export function startSessionReplay(): void {
+  if (!initialized) return;
+  posthog.startSessionRecording();
+}
+
+/**
+ * Stop PostHog session replay (e.g. on sign-out).
+ */
+export function stopSessionReplay(): void {
+  if (!initialized) return;
+  posthog.stopSessionRecording();
 }
 
 // ── Event name constants (locked taxonomy) ────────────────────────────────────
