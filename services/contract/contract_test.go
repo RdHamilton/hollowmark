@@ -28,6 +28,7 @@ func TestDaemonEventRoundTrip(t *testing.T) {
 		Type:       "sync:ratings",
 		AccountID:  "acct_abc123",
 		SessionID:  "sess_xyz789",
+		Sequence:   7,
 		OccurredAt: now,
 		Payload:    rawPayload,
 	}
@@ -53,6 +54,9 @@ func TestDaemonEventRoundTrip(t *testing.T) {
 	}
 	if decoded.SessionID != original.SessionID {
 		t.Errorf("SessionID: got %q, want %q", decoded.SessionID, original.SessionID)
+	}
+	if decoded.Sequence != original.Sequence {
+		t.Errorf("Sequence: got %d, want %d", decoded.Sequence, original.Sequence)
 	}
 	if !decoded.OccurredAt.Equal(original.OccurredAt) {
 		t.Errorf("OccurredAt: got %v, want %v", decoded.OccurredAt, original.OccurredAt)

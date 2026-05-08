@@ -82,7 +82,9 @@ func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 		h.broadcaster.BroadcastDaemonEvent(userID, event)
 	}
 
-	log.Printf("[IngestHandler] Received event %q from account %q (userID=%d)", event.Type, event.AccountID, userID)
+	// TODO(#1521): persist event.Sequence to daemon_events.sequence once the
+	// schema migration adding the column lands.
+	log.Printf("[IngestHandler] Received event %q seq=%d from account %q (userID=%d)", event.Type, event.Sequence, event.AccountID, userID)
 
 	w.WriteHeader(http.StatusAccepted)
 }
