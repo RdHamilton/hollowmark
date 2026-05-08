@@ -193,6 +193,22 @@ All four are the same integer. The `set_cards` table stores `arena_id TEXT NOT N
 - Cards not on Arena (paper-only reprints in a set) may have `mtga_id = 0` or be absent from 17Lands entirely. The sync service should skip or handle zero-value `mtga_id`.
 - The `set_cards.arena_id` column type is TEXT (migration 000014). It should be cast when joining to `draft_card_ratings.arena_id` (INTEGER). A future schema cleanup migration should normalize both to INTEGER.
 
+## Peer Collaboration
+
+You can always ask the **architect** or **lead-engineer** for help — do not struggle alone when a faster path exists.
+
+**Ask the architect when:**
+- A schema change has cross-service implications (affects contract layer, BFF projectors, and daemon in the same migration)
+- You are unsure whether a new table belongs in the BFF schema or needs its own module
+- An ADR may be needed for a significant schema design decision
+
+**Ask the lead-engineer when:**
+- A compliance question arises around how sensitive data (account_id, user identifiers) should be stored or indexed
+- You want a review of a migration's up/down symmetry before opening the PR
+- A query optimization has an unexpected plan and you want a second opinion on the index strategy
+
+To escalate: stop your current work, describe the specific blocker and what you've already tried, and invoke the relevant agent. Resume once you have an answer.
+
 ## Post-PR Review Protocol (Required)
 
 After opening a PR with `gh pr create`, the lead-engineer agent automatically reviews it via the `PostToolUse` hook. You do not need to invoke it manually — it fires on every `gh pr create` call.

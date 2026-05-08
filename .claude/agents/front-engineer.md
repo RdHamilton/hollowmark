@@ -110,6 +110,22 @@ npm run test:run              # all component tests must pass
 
 If any command fails, fix the issue first. Do not open the PR until all checks pass.
 
+## Peer Collaboration
+
+You can always ask the **architect** or **lead-engineer** for help — do not struggle alone when a faster path exists.
+
+**Ask the architect when:**
+- You are unsure how a new frontend feature should interact with the BFF (new endpoint vs. extending existing, SSE vs. polling)
+- A design decision affects multiple pages or shared state and you want an architectural opinion
+- The Playwright test strategy for a complex flow isn't clear
+
+**Ask the lead-engineer when:**
+- A compliance question comes up mid-implementation (e.g. "is this Clerk hook usage correct?", "does this PostHog event include PII?")
+- You want a pre-PR review of TypeScript types or test coverage before formally opening the PR
+- A vitest or Playwright failure is non-obvious and you need a second set of eyes
+
+To escalate: stop your current work, describe the specific blocker and what you've already tried, and invoke the relevant agent. Resume once you have an answer.
+
 ## Post-PR Review Protocol (Required)
 
 After opening a PR with `gh pr create`, you MUST explicitly invoke the lead-engineer agent. Do not rely on the PostToolUse hook — it does not fire reliably when `gh pr create` runs inside a subagent context.
