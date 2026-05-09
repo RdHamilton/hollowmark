@@ -275,13 +275,13 @@ If **APPROVED** and **no `frontend/` files changed**:
   - **Daemon behavior**: run the binary via `go run ./...` or the compiled binary and observe actual output
   - **Database migrations**: run `go test` against the integration suite using `openTestDB(t)`
   - At minimum one AC must have a concrete execution artifact in the review comment: test output, curl response, workflow run ID, or binary stdout. Pure code reading does not count as AC verification.
-- If ACs pass: merge the PR (`gh pr merge <number> --squash`), move ticket to Done on the active project board (ask PM if uncertain which project), post a single combined comment (compliance + execution evidence + merged)
+- If ACs pass: merge the PR (`gh pr merge <number> --squash`), move ticket to Done on the active project board (ask PM if uncertain which project), close the GitHub issue (`gh issue close <NUMBER> --repo RdHamilton/MTGA-Companion`), post a single combined comment (compliance + execution evidence + merged)
 - If ACs fail: post combined comment with execution failures, do NOT merge
 
 If **APPROVED** and **`frontend/` files changed**:
 - Spawn ui-tester (foreground — **this is a MERGE GATE: do not merge until ui-tester reports back**)
 - ui-tester runs vitest, tsc, and Playwright smoke tests and returns results to you
-- If all pass: merge the PR, move ticket to Done on the active project board, post a single combined comment (compliance + ui-tester results + merged)
+- If all pass: merge the PR, move ticket to Done on the active project board, close the GitHub issue (`gh issue close <NUMBER> --repo RdHamilton/MTGA-Companion`), post a single combined comment (compliance + ui-tester results + merged)
 - If any fail: post combined comment with ui-tester failures, do NOT merge
 
 **Rule: Never post more than one comment per PR. Never mention Claude Code.**
