@@ -1,5 +1,10 @@
 // Package config loads daemon configuration from a local file and environment variables.
 // The cloud API URL is never hardcoded — it must be supplied via config file or environment.
+//
+// Keychain sentinel: when Keychain is true the daemon API key lives in the OS keychain
+// (go-keyring, service "com.mtga-companion.daemon", account "api-key") rather than in
+// this file.  The APIKey field must be absent/empty when Keychain is true.
+// See ADR-020 §daemon.json Canonical Schema for the full field specification.
 package config
 
 import (
@@ -26,7 +31,14 @@ type Config struct {
 	// APIKey is the user API key used only for daemon registration.
 	// After a successful registration the returned DaemonJWT is used for all ingest calls.
 	// Read from config file or MTGA_DAEMON_API_KEY env var.
-	APIKey string `json:"api_key"`
+	// When Keychain is true this field should be empty — the key lives in the OS keychain.
+	APIKey string `json:"api_key,omitempty"`
+
+	// Keychain indicates that the daemon API key is stored in the OS keychain
+	// (go-keyring service "com.mtga-companion.daemon", account "api-key") rather
+	// than in this config file.  Set to true after a successful PKCE registration.
+	// When true, the APIKey field is not written to disk.
+	Keychain bool `json:"keychain,omitempty"`
 
 	// UserID is the BFF user ID associated with this daemon install.
 	// Required when using JWT registration. Read from config file.
@@ -141,6 +153,30 @@ func (c *Config) SaveTo(path string) error {
 // FilePath returns the path the config was loaded from (empty if env-only).
 func (c *Config) FilePath() string {
 	return c.filePath
+}
+
+// NeedsFirstRunAuth reports whether the daemon must run the PKCE browser-redirect
+// flow to acquire an API key.
+//
+// Returns true when:
+//   - No daemon.json exists (first install), OR
+//   - daemon.json exists but has neither Keychain:true nor a plaintext APIKey
+//     and no DaemonJWT (unconfigured stub).
+//
+// When the MTGA_DAEMON_API_KEY env var is set the caller already has a key —
+// first-run auth is not needed.
+func (c *Config) NeedsFirstRunAuth() bool {
+	// If a key exists in any form, we do not need first-run auth.
+	if c.Keychain {
+		return false
+	}
+	if c.APIKey != "" {
+		return false
+	}
+	if c.DaemonJWT != "" {
+		return false
+	}
+	return true
 }
 
 // JWTNeedsRefresh reports whether the daemon should obtain a fresh JWT.
