@@ -60,4 +60,4 @@ Closed beta is open. VaultMTG follows your MTG Arena drafts pick by pick, live i
 
 **Note**: Links all use base domain `https://app.vaultmtg.app` (no UTM params for X to keep character count down — copy goes out with organic reach, not paid campaign).
 
-**Scheduling note (Post 3)**: Original schedule of 2026-05-16 was rejected — closed beta launches 2026-08-18 per the beta-launch-date decision. Post 3 is rescheduled to launch day. Posts 1 and 2 remain on May to seed awareness ahead of the waitlist opening (June 2).
+**Scheduling note (Post 3)**: Original schedule of 2026-05-16 was rejected — closed beta launches 2026-08-18 per the beta-launch-date decision. Post 3 is rescheduled to launch day. Posts 1 and 2 remain on May to seed awareness ahead of the waitlist opening (August 1, updated from June 2 on 2026-05-09).

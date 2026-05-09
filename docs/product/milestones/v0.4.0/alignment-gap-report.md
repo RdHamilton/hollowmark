@@ -104,14 +104,14 @@ All six Wave 1 business-track tickets exist on Board #30 but have NO STATUS — 
 
 | Ticket | Title | Current status |
 |--------|-------|---------------|
-| #1576 | Waitlist launch coordination — June 2 open date | NO STATUS |
+| #1576 | Waitlist launch coordination — August 1 open date | NO STATUS |
 | #1577 | Beta invite email copy and Clerk invite flow | NO STATUS |
 | #1578 | NPS survey | NO STATUS |
 | #1579 | Beta FAQ / onboarding doc | NO STATUS |
 | #1580 | PostHog activation funnel definition | NO STATUS |
 | #1581 | PostHog feature flag setup for closed-beta cohort | NO STATUS |
 
-**Note**: #1576 (waitlist launch June 2) is **time-critical** — waitlist opens 2026-06-02, 24 days from now. If this is still in NO STATUS it has no owner driving it.
+**Note**: #1576 (waitlist launch August 1) is **time-critical** — waitlist opens 2026-08-01, 84 days from now. If this is still in NO STATUS it has no owner driving it.
 
 **Corrective actions (PROJECT-MANAGER board moves):**
 - [ ] Move #1576–#1581 to Todo on Board #30

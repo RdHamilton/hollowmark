@@ -209,7 +209,7 @@ Beta users will see the UI before any other external audience, so visual regress
 
 | Owner | Ticket | Notes |
 |-------|--------|-------|
-| growth-marketing | #1576: Waitlist launch coordination — June 2 open date | Board #30 |
+| growth-marketing | #1576: Waitlist launch coordination — August 1 open date | Board #30 |
 | growth-marketing | #1577: Beta invite email copy and Clerk invite flow | Board #30 |
 | customer-success | #1578: NPS survey — design, tooling, distribution to internal testers | Board #30 |
 | customer-success | #1579: Beta FAQ / onboarding doc: daemon install, first draft, troubleshooting | Board #30 |
