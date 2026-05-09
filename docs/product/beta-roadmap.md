@@ -1,6 +1,6 @@
 # PRD: VaultMTG Beta Roadmap
 
-**Status**: Active — v0.2.0 closed, v0.3.0 in progress
+**Status**: Active — v0.2.0 closed, v0.3.0 closed, v0.4.0 active
 **Author**: Product Manager
 **Date**: 2026-05-06
 **Last updated**: 2026-05-08
@@ -152,7 +152,7 @@ v0.3.0-lite still satisfies the alpha invite gate — testers can validate match
 
 **Duration**: 3–4 weeks
 
-**What it accomplishes**: The growth infrastructure is live. Email waitlist is replaced with real sign-up. Shareable stats pages enable organic viral loops. The launch sequence runs.
+**What it accomplishes**: The growth infrastructure is live. Email waitlist is replaced with real sign-up. Shareable stats pages (#1542 — Wave 1) enable organic viral loops. The launch sequence runs.
 
 **What it does not accomplish**: AI draft picks, collection vs. meta gap analysis, deck export (these are Pro features that can ship post-beta as they become feasible for a solo dev), any AI agents/RAG work, or Stripe billing (deferred to GA — beta is free/invite-only).
 
