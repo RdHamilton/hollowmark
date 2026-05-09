@@ -154,14 +154,15 @@ func main() {
 
 	// Wire API key handler and auth middleware when a database is available.
 	var (
-		apiKeysHandler      *handlers.APIKeysHandler
-		apiKeyAuthMiddl     func(http.Handler) http.Handler
-		clerkUserResolver   func(http.Handler) http.Handler
-		draftRatingsHandler *handlers.DraftRatingsHandler
-		historyHandler      *handlers.HistoryHandler
-		listV2Handler       *handlers.ListV2Handler
-		statsHandler        *handlers.StatsHandler
-		daemonHealthHandler *handlers.DaemonHealthHandler
+		apiKeysHandler        *handlers.APIKeysHandler
+		apiKeyAuthMiddl       func(http.Handler) http.Handler
+		clerkUserResolver     func(http.Handler) http.Handler
+		draftRatingsHandler   *handlers.DraftRatingsHandler
+		historyHandler        *handlers.HistoryHandler
+		listV2Handler         *handlers.ListV2Handler
+		statsHandler          *handlers.StatsHandler
+		daemonHealthHandler   *handlers.DaemonHealthHandler
+		daemonRegisterHandler *handlers.DaemonRegisterHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -198,6 +199,16 @@ func main() {
 		)
 
 		daemonHealthHandler = handlers.NewDaemonHealthHandler(daemonEventsRepo)
+
+		// DaemonRegisterHandler mints (or retrieves) a per-account API key for the
+		// daemon PKCE registration flow.  Protected by RequireClerkAuth — the daemon
+		// calls this with the Clerk session JWT obtained via the PKCE browser flow.
+		// See ADR-020 §POST /v1/daemon/register Wire Format.
+		daemonAPIKeyRepo := repository.NewDaemonAPIKeyRepository(sqlDB)
+		daemonRegisterHandler = handlers.NewDaemonRegisterHandler(daemonAPIKeyRepo)
+		if postHogClient != nil {
+			daemonRegisterHandler = daemonRegisterHandler.WithPostHogClient(postHogClient)
+		}
 
 		// StatsHandler provides deck performance, win-rate trend, and format
 		// distribution analytics endpoints (issue #1513).
@@ -247,21 +258,22 @@ func main() {
 	}
 
 	r := BuildRouter(cfg, RouterDeps{
-		Broker:              broker,
-		IngestHandler:       ingestHandler,
-		APIKeysHandler:      apiKeysHandler,
-		DraftRatingsHandler: draftRatingsHandler,
-		HistoryHandler:      historyHandler,
-		ListV2Handler:       listV2Handler,
-		StatsHandler:        statsHandler,
-		DaemonHealthHandler: daemonHealthHandler,
-		HealthzHandler:      healthzHandler,
-		ClerkAuthMiddl:      clerkAuthMiddl,
-		ClerkAuthSSEMiddl:   clerkAuthSSEMiddl,
-		ClerkUserResolver:   clerkUserResolver,
-		APIKeyAuthMiddl:     apiKeyAuthMiddl,
-		SentryMiddl:         bffmiddleware.NewSentryMiddleware(),
-		E2EUnguardedSSE:     e2eUnguardedSSE,
+		Broker:                broker,
+		IngestHandler:         ingestHandler,
+		APIKeysHandler:        apiKeysHandler,
+		DraftRatingsHandler:   draftRatingsHandler,
+		HistoryHandler:        historyHandler,
+		ListV2Handler:         listV2Handler,
+		StatsHandler:          statsHandler,
+		DaemonHealthHandler:   daemonHealthHandler,
+		DaemonRegisterHandler: daemonRegisterHandler,
+		HealthzHandler:        healthzHandler,
+		ClerkAuthMiddl:        clerkAuthMiddl,
+		ClerkAuthSSEMiddl:     clerkAuthSSEMiddl,
+		ClerkUserResolver:     clerkUserResolver,
+		APIKeyAuthMiddl:       apiKeyAuthMiddl,
+		SentryMiddl:           bffmiddleware.NewSentryMiddleware(),
+		E2EUnguardedSSE:       e2eUnguardedSSE,
 	})
 
 	srv := &http.Server{
@@ -309,6 +321,10 @@ type RouterDeps struct {
 	// StatsHandler serves the analytics stats endpoints (issue #1513).
 	StatsHandler        *handlers.StatsHandler
 	DaemonHealthHandler *handlers.DaemonHealthHandler
+	// DaemonRegisterHandler serves POST /v1/daemon/register — mints or retrieves
+	// a per-account API key for the daemon PKCE registration flow (ADR-020).
+	// Protected by RequireClerkAuth — the daemon sends its Clerk session JWT.
+	DaemonRegisterHandler *handlers.DaemonRegisterHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -371,6 +387,19 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// GET /api/v1/daemon/version — latest daemon version (no auth required).
 	daemonVersionHandler := handlers.NewDaemonVersionHandler(cfg)
 	r.Get("/api/v1/daemon/version", daemonVersionHandler.GetDaemonVersion)
+
+	// POST /v1/daemon/register — daemon PKCE registration (Clerk JWT required).
+	// The daemon calls this immediately after completing the PKCE browser flow,
+	// sending the Clerk session JWT as the Bearer token.  The handler mints (or
+	// retrieves) a per-account API key and returns it in the response body.
+	// See ADR-020 §POST /v1/daemon/register Wire Format.
+	if deps.DaemonRegisterHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			r.With(deps.ClerkAuthMiddl).Post("/v1/daemon/register", deps.DaemonRegisterHandler.Register)
+		} else {
+			log.Println("WARN: POST /v1/daemon/register disabled — CLERK_SECRET_KEY not configured")
+		}
+	}
 
 	// ── Daemon-facing routes (APIKey auth) ───────────────────────────────────
 	// These routes are called by the local daemon binary, not the browser.

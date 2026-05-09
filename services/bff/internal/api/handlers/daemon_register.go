@@ -1,0 +1,197 @@
+package handlers
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"log"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/posthog/posthog-go"
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/ramonehamilton/mtga-bff/internal/api/middleware"
+	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
+)
+
+const (
+	// daemonAPIKeyPrefix is prepended to every minted daemon API key.
+	daemonAPIKeyPrefix = "sk_live_"
+
+	// daemonRateLimitWindow is the sliding window for per-account rate limiting.
+	daemonRateLimitWindow = time.Minute
+
+	// daemonRateLimitMax is the maximum number of /v1/daemon/register calls
+	// allowed per account per daemonRateLimitWindow.
+	daemonRateLimitMax = 5
+)
+
+// daemonAPIKeyUpsertRepo is the subset of DaemonAPIKeyRepository used by DaemonRegisterHandler.
+type daemonAPIKeyUpsertRepo interface {
+	UpsertKey(ctx context.Context, accountID, keyHash, keyPrefix string) (*repository.DaemonAPIKey, bool, error)
+}
+
+// rateEntry tracks register call timestamps for one account.
+type rateEntry struct {
+	mu        sync.Mutex
+	callTimes []time.Time
+}
+
+// allow returns true if the call is within the rate limit, false otherwise.
+func (e *rateEntry) allow() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-daemonRateLimitWindow)
+
+	// Prune stale timestamps.
+	filtered := e.callTimes[:0]
+	for _, t := range e.callTimes {
+		if t.After(cutoff) {
+			filtered = append(filtered, t)
+		}
+	}
+	e.callTimes = filtered
+
+	if len(e.callTimes) >= daemonRateLimitMax {
+		return false
+	}
+	e.callTimes = append(e.callTimes, now)
+	return true
+}
+
+// DaemonRegisterHandler handles POST /v1/daemon/register.
+//
+// It accepts a Clerk JWT (verified by RequireClerkAuth middleware), mints
+// (or retrieves) a per-account API key scoped to the Clerk user's account_id,
+// and returns it to the daemon.  Rate limited at 5 req/min per account_id
+// using in-memory state (no Redis required for beta volume).
+//
+// Response:
+//   - 201 Created — new key minted; api_key field contains the plaintext key.
+//   - 200 OK — existing key returned; api_key is empty (daemon must use
+//     its locally stored keychain value).
+type DaemonRegisterHandler struct {
+	repo       daemonAPIKeyUpsertRepo
+	postHog    PostHogClient
+	rateMu     sync.Mutex
+	rateByAcct map[string]*rateEntry
+}
+
+// NewDaemonRegisterHandler returns a handler backed by the given repository.
+func NewDaemonRegisterHandler(repo daemonAPIKeyUpsertRepo) *DaemonRegisterHandler {
+	return &DaemonRegisterHandler{
+		repo:       repo,
+		postHog:    noopPostHogClient{},
+		rateByAcct: make(map[string]*rateEntry),
+	}
+}
+
+// WithPostHogClient wires a PostHog client for analytics events.
+func (h *DaemonRegisterHandler) WithPostHogClient(ph PostHogClient) *DaemonRegisterHandler {
+	h.postHog = ph
+	return h
+}
+
+// daemonRegisterResponse is the JSON response body for POST /v1/daemon/register.
+type daemonRegisterResponse struct {
+	// APIKey is the plaintext API key — present only on 201 (new key created).
+	// On 200 (existing key) this field is empty; the daemon uses its keychain copy.
+	APIKey    string `json:"api_key"`
+	AccountID string `json:"account_id"`
+}
+
+// Register handles POST /v1/daemon/register.
+// RequireClerkAuth middleware must run first.
+func (h *DaemonRegisterHandler) Register(w http.ResponseWriter, r *http.Request) {
+	// Clerk user ID is placed on context by RequireClerkAuth.
+	accountID, ok := middleware.ClerkUserIDFromContext(r)
+	if !ok || accountID == "" {
+		log.Printf("[daemon_register] missing Clerk user ID — RequireClerkAuth not applied")
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// In-memory rate limit: 5 req/min per account_id.
+	if !h.rateAllow(accountID) {
+		writeJSONError(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
+	// Generate a new candidate key: "sk_live_" + 32 random bytes hex-encoded.
+	rawBytes := make([]byte, 32)
+	if _, err := rand.Read(rawBytes); err != nil {
+		log.Printf("[daemon_register] rand.Read: %v", err)
+		writeJSONError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	plaintextKey := daemonAPIKeyPrefix + hex.EncodeToString(rawBytes)
+	keyPrefix := plaintextKey[:16]
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(plaintextKey), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("[daemon_register] bcrypt: %v", err)
+		writeJSONError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	rec, created, err := h.repo.UpsertKey(r.Context(), accountID, string(hash), keyPrefix)
+	if err != nil {
+		log.Printf("[daemon_register] UpsertKey account=%s: %v", accountID, err)
+		writeJSONError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// When returning an existing key the plaintext is not available — the daemon
+	// must use its stored keychain value. Return empty api_key with 200.
+	var responseKey string
+	if created {
+		responseKey = plaintextKey
+	}
+
+	statusCode := http.StatusOK
+	if created {
+		statusCode = http.StatusCreated
+	}
+
+	// Emit PostHog daemon_paired event on first pairing.
+	if created {
+		go func(acct, keyID string) {
+			if err := h.postHog.Enqueue(posthog.Capture{
+				DistinctId: acct,
+				Event:      "daemon_paired",
+				Properties: posthog.NewProperties().
+					Set("key_id", keyID).
+					Set("source", "pkce"),
+			}); err != nil {
+				log.Printf("[daemon_register] posthog enqueue: %v", err)
+			}
+		}(accountID, rec.ID)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	if err := json.NewEncoder(w).Encode(daemonRegisterResponse{
+		APIKey:    responseKey,
+		AccountID: accountID,
+	}); err != nil {
+		log.Printf("[daemon_register] encode: %v", err)
+	}
+}
+
+// rateAllow checks and records a rate-limit call for accountID.
+func (h *DaemonRegisterHandler) rateAllow(accountID string) bool {
+	h.rateMu.Lock()
+	entry, ok := h.rateByAcct[accountID]
+	if !ok {
+		entry = &rateEntry{}
+		h.rateByAcct[accountID] = entry
+	}
+	h.rateMu.Unlock()
+	return entry.allow()
+}
