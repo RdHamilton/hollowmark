@@ -163,7 +163,31 @@ The waitlist opens **August 1, 2026**. The public closed beta launches **August 
 
 ---
 
-### Wave 5 — CI Hardening
+### Wave 5 — Component Library Foundation
+
+| | |
+|--|--|
+| **Theme** | Component Library Foundation — Storybook + Chromatic baseline |
+| **Goal** | Storybook 8 installed and deployed to Chromatic; baseline snapshots approved; CI Chromatic check required |
+
+| Ticket | Title | Owner | Effort |
+|--------|-------|-------|--------|
+| #1621 | spike(storybook): Storybook + Chromatic discovery spike — evaluate Vite builder compatibility and Chromatic pricing | front-engineer | M |
+| #1622 | feat(storybook): install and configure Storybook 8 with Vite builder | front-engineer | M |
+| #1625 | feat(chromatic): capture Chromatic baseline snapshots for existing components | front-engineer | M |
+
+**Definition of done:**
+- [ ] Chromatic baseline approved by Ray (no unresolved snapshot diffs)
+- [ ] Storybook deployed to Chromatic; Chromatic project URL documented in repo
+- [ ] CI passes with Chromatic check as a required status
+- [ ] All three tickets in Done state on Project #33
+
+**Assigned agents**: front-engineer
+**Estimated effort**: L (3× M)
+
+---
+
+### Wave 6 — CI Hardening
 
 | | |
 |--|--|
@@ -186,11 +210,11 @@ The waitlist opens **August 1, 2026**. The public closed beta launches **August 
 **Assigned agents**: infrastructure
 **Estimated effort**: M (1× S + 3× XS)
 
-> PM action item: file Wave 5 tickets before Wave 4 closes.
+> PM action item: file Wave 6 tickets before Wave 5 closes.
 
 ---
 
-### Wave 6 — Staging Validation
+### Wave 7 — Staging Validation
 
 | | |
 |--|--|
@@ -211,11 +235,11 @@ The waitlist opens **August 1, 2026**. The public closed beta launches **August 
 **Assigned agents**: infrastructure (primary), backend-engineer, ui-tester
 **Estimated effort**: M (2× S + 1× XS)
 
-> PM action item: file Wave 6 tickets before Wave 5 closes.
+> PM action item: file Wave 7 tickets before Wave 6 closes.
 
 ---
 
-### Wave 7 — Release Gate (Smoke Test + Tag + Changelog)
+### Wave 8 — Release Gate (Smoke Test + Tag + Changelog)
 
 | | |
 |--|--|
@@ -230,7 +254,7 @@ The waitlist opens **August 1, 2026**. The public closed beta launches **August 
 - [ ] Playwright staging smoke suite passes
 - [ ] Manual install smoke test passed on macOS 14+ and Windows 11:
   - Download `.dmg`/`.exe` → install → PKCE login → daemon starts → first event appears in BFF (verified via DB query or PostHog)
-- [ ] All Wave 1–6 tickets are in Done state on Project #33 board
+- [ ] All Wave 1–7 tickets are in Done state on Project #33 board
 - [ ] PostHog `daemon_paired` event confirmed firing from at least one real test session
 - [ ] OQ-4 (Gatekeeper hard-block behavior) confirmed before this wave closes
 - [ ] `CHANGELOG.md` entry written for v0.3.1
@@ -264,7 +288,7 @@ All of the following must be true before the v0.3.1 tag is cut:
 - [ ] Windows installer (.exe) installs and runs without SmartScreen hard-block (tested on Windows 11)
 - [ ] Daemon pairs successfully via PKCE flow on both platforms (at least one successful pair each)
 - [ ] PostHog `daemon_paired` event confirmed firing from a real test session
-- [ ] Chromatic baseline approved *(if Storybook tickets are pulled forward — currently v0.4.0 scope; not required for v0.3.1)*
+- [ ] Chromatic baseline approved (Wave 5 — required for v0.3.1)
 - [ ] Release checklist completed (RELEASE_CHECKLIST.md)
 - [ ] `CHANGELOG.md` updated
 - [ ] GitHub Release created with `.dmg` and `.exe` artifacts attached and checksums verified
@@ -312,7 +336,7 @@ Explicit list of what is NOT in v0.3.1 — save for v0.4.0 or later:
 | Linux packaging | Unsupported platform |
 | Homebrew cask | Post-GA secondary channel |
 | Automatic daemon auto-updater | Post-GA |
-| Storybook + Chromatic component library (#1621, #1622, #1625) | v0.4.0 Wave 1 |
+| Full component story library (beyond Wave 5 baseline) | v0.4.0 follow-on after Chromatic baseline is established |
 | API key issuance/revoke UI (#1314) | Superseded by PKCE; full key management UI post-beta |
 | Full component story library | v0.4.0 Wave 1 follow-on |
 | Stripe integration / paid tiers | Post-beta GA |

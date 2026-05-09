@@ -4,7 +4,7 @@
 **Status**: ACTIVE — started 2026-05-09
 **Board**: #33 (Project ID: `PVT_kwHOABsZ684BXMn-`)
 **Milestone**: v0.3.1 — ships before v0.4.0
-**Last updated**: 2026-05-09 (revised — corrected ticket numbers, removed stale Wave 6 Component Library scope, updated to 7-wave structure)
+**Last updated**: 2026-05-09 (revised — restored Component Library Foundation wave per Ray's direction; Storybook tickets #1621, #1622, #1625 are v0.3.1 scope)
 
 ---
 
@@ -16,7 +16,7 @@ v0.3.1 delivers one thing: a double-clickable, self-configuring daemon installer
 
 Engineering does **not** begin v0.4.0 Wave 0 until v0.3.1 closes and PM issues a GO.
 
-> **Scope clarification (2026-05-09)**: The Component Library Foundation (Storybook + Chromatic) was mistakenly included in the original PRD draft as Wave 6. Tickets #1621, #1622, #1625 are labeled **v0.4.0** on GitHub and are correctly scoped to v0.4.0 Wave 1. They are **not** part of v0.3.1. See Out of Scope section and OQ-3.
+> **Scope note (2026-05-09, updated)**: The Component Library Foundation (Storybook + Chromatic) — tickets #1621, #1622, #1625 — is **v0.3.1 scope** per Ray's direction. Previously removed in error; restored as Wave 5. Waves renumbered accordingly.
 
 ---
 
@@ -136,7 +136,25 @@ No tickets — ceremony only.
 
 ---
 
-### Wave 5 — CI Hardening
+### Wave 5 — Component Library Foundation
+
+**Theme**: Establish Storybook + Chromatic baseline so component visual regression is tracked before beta ships.
+
+| Ticket | Title | Owner | Effort |
+|--------|-------|-------|--------|
+| #1621 | spike(storybook): Storybook + Chromatic discovery spike — evaluate Vite builder compatibility and Chromatic pricing | front-engineer | M |
+| #1622 | feat(storybook): install and configure Storybook 8 with Vite builder | front-engineer | M |
+| #1625 | feat(chromatic): capture Chromatic baseline snapshots for existing components | front-engineer | M |
+
+**Definition of done (Wave 5):**
+- Chromatic baseline approved by Ray (no unresolved snapshot diffs)
+- Storybook deployed to Chromatic; Chromatic project URL documented in repo
+- CI passes with Chromatic check as a required status
+- All three tickets in Done state on Project #33
+
+---
+
+### Wave 6 — CI Hardening
 
 **Theme**: Tighten supply-chain security and vulnerability scanning before shipping installers to beta users.
 
@@ -147,17 +165,17 @@ No tickets — ceremony only.
 | TBD | Add `govulncheck` to Go CI jobs | infrastructure | XS |
 | TBD | Add `npm audit --audit-level=high` to frontend CI | infrastructure | XS |
 
-**Definition of done (Wave 5):**
+**Definition of done (Wave 6):**
 - All CI jobs green on Node.js 22 LTS
 - All GitHub Actions pinned to SHA (not floating tag)
 - `govulncheck` passes with zero high/critical findings
 - `npm audit` passes with zero high-severity findings
 
-> Note: Wave 5 tickets are not yet created on GitHub. PM to file before Wave 4 closes.
+> Note: Wave 6 tickets are not yet created on GitHub. PM to file before Wave 5 closes.
 
 ---
 
-### Wave 6 — Staging Validation
+### Wave 7 — Staging Validation
 
 **Theme**: Prove the staging environment is clean and smoke-tested before the release tag is cut.
 
@@ -167,27 +185,27 @@ No tickets — ceremony only.
 | TBD | BFF `/healthz` verified on staging | backend-engineer | XS |
 | TBD | Playwright staging smoke suite runs clean | ui-tester | S |
 
-**Definition of done (Wave 6):**
+**Definition of done (Wave 7):**
 - Staging deploy completes clean from scratch
 - BFF `/healthz` returns 200 on staging
 - Playwright staging smoke suite passes with zero failures
 
-> Note: Wave 6 tickets are not yet created on GitHub. PM to file before Wave 5 closes.
+> Note: Wave 7 tickets are not yet created on GitHub. PM to file before Wave 6 closes.
 
 ---
 
-### Wave 7 — Release Gate (Smoke Test + Tag + Changelog)
+### Wave 8 — Release Gate (Smoke Test + Tag + Changelog)
 
 **Theme**: Validate the full end-to-end install-to-event flow on both platforms, cut the v0.3.1 tag, and publish the changelog.
 
 **Tickets**: No new code tickets — ceremony wave only.
 
-**Definition of done (Wave 7 — all must be true before tag is cut):**
+**Definition of done (Wave 8 — all must be true before tag is cut):**
 1. CI is green on main (hard gate — no exceptions per BROADCAST Active Directive 2)
 2. Staging deploy pipeline runs from scratch; BFF `/healthz` returns 200
 3. Playwright staging smoke suite passes
 4. Manual install smoke test on macOS 14+ and Windows 11: download `.dmg`/`.exe` → install → PKCE login → daemon starts → first event appears in BFF (checked via DB or PostHog)
-5. All Wave 1–6 tickets are in Done state on Project #33 board
+5. All Wave 1–7 tickets are in Done state on Project #33 board
 6. PostHog `daemon_paired` event confirmed firing from at least one real test session
 7. `CHANGELOG.md` entry written for v0.3.1
 8. v0.3.1 git tag cut; GitHub Release created with `.dmg` and `.exe` artifacts attached
@@ -207,7 +225,7 @@ No tickets — ceremony only.
 | Homebrew cask | Secondary distribution channel, post-GA |
 | Automatic daemon updater | Post-GA |
 | Device authorization flow (headless) | Fallback for CI/server — not a beta user scenario |
-| Storybook + Chromatic component library (#1621, #1622, #1625) | Labeled v0.4.0; execute in v0.4.0 Wave 1 |
+| Full component story library (beyond Wave 5 baseline) | v0.4.0 follow-on after Chromatic baseline is established |
 | API key issuance/revoke UI (#1314) | Superseded by PKCE flow — daemon handles key acquisition automatically; SPA UI for key management deferred post-beta |
 
 ---
@@ -218,7 +236,7 @@ No tickets — ceremony only.
 |---|----------|-------|------|
 | OQ-1 | Apple Developer Program: has Ray confirmed account creation and payment method? Wave 4 (#1648) requires knowing credential storage path. | Ray | Wave 4 |
 | OQ-2 | Azure Trusted Signing budget: approved? Wave 4 (#1649) includes budget approval as an AC — who signs off? | Ray | Wave 4 |
-| OQ-3 | Storybook tickets (#1621, #1622, #1625) are labeled v0.4.0 on GitHub. Confirmed: they stay on v0.4.0 board and are NOT part of v0.3.1 scope. | PM | ✅ Resolved — confirmed v0.4.0 only |
+| OQ-3 | Storybook tickets (#1621, #1622, #1625) scope. | PM | ✅ Resolved — confirmed v0.3.1 per Ray's direction (2026-05-09); tickets relabeled from v0.4.0 to v0.3.1 |
 | OQ-4 | Gatekeeper bypass: on macOS 14+ with no notarization, does right-click → Open produce a one-click bypass, or a hard block? Must be confirmed on a clean macOS 14 VM before Wave 7 closes. | Ray (eng) | Wave 7 |
 | OQ-5 | Ephemeral port range for PKCE callback — fixed port (e.g., 51423) for UX consistency, or fully random? Fixed port simplifies firewall instructions. Decision needed before #1650 starts. | backend-engineer + Ray | Before Wave 2 |
 | OQ-6 | API key scoping — per-machine or per-user-session? Per-machine is simpler but means reinstall requires re-pairing. | backend-engineer | Before Wave 2 |
