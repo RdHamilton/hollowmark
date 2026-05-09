@@ -17,6 +17,9 @@ type DaemonAPIKey struct {
 	AccountID string
 	KeyHash   string
 	KeyPrefix string
+	DeviceID  string
+	Platform  string
+	DaemonVer string
 	CreatedAt time.Time
 	LastUsed  *time.Time
 	RevokedAt *time.Time
@@ -39,9 +42,10 @@ func NewDaemonAPIKeyRepository(db daemonAPIKeyDB) *DaemonAPIKeyRepository {
 }
 
 // UpsertKey inserts a new key for accountID, or returns the existing non-revoked key.
+// deviceID, platform, and daemonVer identify the daemon installation.
 // Returns (record, true, nil) when a new key was created.
 // Returns (record, false, nil) when the existing key was returned.
-func (r *DaemonAPIKeyRepository) UpsertKey(ctx context.Context, accountID, keyHash, keyPrefix string) (*DaemonAPIKey, bool, error) {
+func (r *DaemonAPIKeyRepository) UpsertKey(ctx context.Context, accountID, keyHash, keyPrefix, deviceID, platform, daemonVer string) (*DaemonAPIKey, bool, error) {
 	// Try to fetch existing non-revoked key first.
 	existing, err := r.GetActive(ctx, accountID)
 	if err != nil && err != ErrDaemonAPIKeyNotFound {
@@ -53,12 +57,12 @@ func (r *DaemonAPIKeyRepository) UpsertKey(ctx context.Context, accountID, keyHa
 
 	// No active key — insert a new one.
 	const q = `
-		INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix)
-		VALUES ($1, $2, $3)
+		INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (account_id) DO NOTHING
-		RETURNING id, account_id, key_hash, key_prefix, created_at, last_used, revoked_at`
+		RETURNING id, account_id, key_hash, key_prefix, device_id, platform, daemon_ver, created_at, last_used, revoked_at`
 
-	row := r.db.QueryRowContext(ctx, q, accountID, keyHash, keyPrefix)
+	row := r.db.QueryRowContext(ctx, q, accountID, keyHash, keyPrefix, deviceID, platform, daemonVer)
 	k, err := scanDaemonAPIKey(row)
 	if err != nil {
 		// ON CONFLICT DO NOTHING means no row returned if a concurrent insert won.
@@ -80,7 +84,7 @@ func (r *DaemonAPIKeyRepository) UpsertKey(ctx context.Context, accountID, keyHa
 // Returns ErrDaemonAPIKeyNotFound when no active key exists.
 func (r *DaemonAPIKeyRepository) GetActive(ctx context.Context, accountID string) (*DaemonAPIKey, error) {
 	const q = `
-		SELECT id, account_id, key_hash, key_prefix, created_at, last_used, revoked_at
+		SELECT id, account_id, key_hash, key_prefix, device_id, platform, daemon_ver, created_at, last_used, revoked_at
 		FROM   daemon_api_keys
 		WHERE  account_id = $1 AND revoked_at IS NULL
 		LIMIT  1`
@@ -103,7 +107,7 @@ func (r *DaemonAPIKeyRepository) UpdateLastUsed(ctx context.Context, id string) 
 // scanDaemonAPIKey scans a single row into a DaemonAPIKey.
 func scanDaemonAPIKey(row *sql.Row) (*DaemonAPIKey, error) {
 	var k DaemonAPIKey
-	err := row.Scan(&k.ID, &k.AccountID, &k.KeyHash, &k.KeyPrefix, &k.CreatedAt, &k.LastUsed, &k.RevokedAt)
+	err := row.Scan(&k.ID, &k.AccountID, &k.KeyHash, &k.KeyPrefix, &k.DeviceID, &k.Platform, &k.DaemonVer, &k.CreatedAt, &k.LastUsed, &k.RevokedAt)
 	if err != nil {
 		return nil, err
 	}

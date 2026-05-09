@@ -39,7 +39,7 @@ func (s *stubDaemonDB) QueryRowContext(_ context.Context, _ string, _ ...any) *s
 type stubResult struct{}
 
 func (stubResult) LastInsertId() (int64, error) { return 0, nil }
-func (stubResult) RowsAffected() (int64, error)  { return 1, nil }
+func (stubResult) RowsAffected() (int64, error) { return 1, nil }
 
 // stubRow simulates a *sql.Row.  Unused in unit tests but kept for reference.
 type stubRow struct {
@@ -64,6 +64,9 @@ func TestDaemonAPIKey_Fields(t *testing.T) {
 		AccountID: "user_2abc",
 		KeyHash:   "$2a$10$...",
 		KeyPrefix: "sk_live_ab",
+		DeviceID:  "550e8400-e29b-41d4-a716-446655440000",
+		Platform:  "darwin",
+		DaemonVer: "0.3.1",
 		CreatedAt: now,
 	}
 
@@ -71,6 +74,9 @@ func TestDaemonAPIKey_Fields(t *testing.T) {
 	assert.Equal(t, "user_2abc", k.AccountID)
 	assert.Equal(t, "$2a$10$...", k.KeyHash)
 	assert.Equal(t, "sk_live_ab", k.KeyPrefix)
+	assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", k.DeviceID)
+	assert.Equal(t, "darwin", k.Platform)
+	assert.Equal(t, "0.3.1", k.DaemonVer)
 	assert.Equal(t, now, k.CreatedAt)
 	assert.Nil(t, k.LastUsed)
 	assert.Nil(t, k.RevokedAt)

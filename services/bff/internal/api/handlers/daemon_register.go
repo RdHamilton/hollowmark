@@ -22,7 +22,7 @@ const (
 	daemonAPIKeyPrefix = "sk_live_"
 
 	// daemonRateLimitWindow is the sliding window for per-account rate limiting.
-	daemonRateLimitWindow = time.Minute
+	daemonRateLimitWindow = time.Hour
 
 	// daemonRateLimitMax is the maximum number of /v1/daemon/register calls
 	// allowed per account per daemonRateLimitWindow.
@@ -31,7 +31,7 @@ const (
 
 // daemonAPIKeyUpsertRepo is the subset of DaemonAPIKeyRepository used by DaemonRegisterHandler.
 type daemonAPIKeyUpsertRepo interface {
-	UpsertKey(ctx context.Context, accountID, keyHash, keyPrefix string) (*repository.DaemonAPIKey, bool, error)
+	UpsertKey(ctx context.Context, accountID, keyHash, keyPrefix, deviceID, platform, daemonVer string) (*repository.DaemonAPIKey, bool, error)
 }
 
 // rateEntry tracks register call timestamps for one account.
@@ -68,8 +68,10 @@ func (e *rateEntry) allow() bool {
 //
 // It accepts a Clerk JWT (verified by RequireClerkAuth middleware), mints
 // (or retrieves) a per-account API key scoped to the Clerk user's account_id,
-// and returns it to the daemon.  Rate limited at 5 req/min per account_id
+// and returns it to the daemon.  Rate limited at 5 req/hour per account_id
 // using in-memory state (no Redis required for beta volume).
+//
+// Required request body fields: device_id (UUID), platform (string), daemon_ver (semver string).
 //
 // Response:
 //   - 201 Created — new key minted; api_key field contains the plaintext key.
@@ -97,6 +99,16 @@ func (h *DaemonRegisterHandler) WithPostHogClient(ph PostHogClient) *DaemonRegis
 	return h
 }
 
+// daemonRegisterRequest is the JSON request body for POST /v1/daemon/register.
+type daemonRegisterRequest struct {
+	// DeviceID is a UUID uniquely identifying this daemon installation.
+	DeviceID string `json:"device_id"`
+	// Platform is the OS the daemon is running on (e.g. "darwin", "windows").
+	Platform string `json:"platform"`
+	// DaemonVer is the semantic version string of the daemon binary (e.g. "0.3.1").
+	DaemonVer string `json:"daemon_ver"`
+}
+
 // daemonRegisterResponse is the JSON response body for POST /v1/daemon/register.
 type daemonRegisterResponse struct {
 	// APIKey is the plaintext API key — present only on 201 (new key created).
@@ -116,9 +128,29 @@ func (h *DaemonRegisterHandler) Register(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// In-memory rate limit: 5 req/min per account_id.
+	// In-memory rate limit: 5 req/hour per account_id.
 	if !h.rateAllow(accountID) {
 		writeJSONError(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
+	// Decode request body for device metadata.
+	var reqBody daemonRegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		log.Printf("[daemon_register] decode body: %v", err)
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if reqBody.DeviceID == "" {
+		writeJSONError(w, "device_id is required", http.StatusBadRequest)
+		return
+	}
+	if reqBody.Platform == "" {
+		writeJSONError(w, "platform is required", http.StatusBadRequest)
+		return
+	}
+	if reqBody.DaemonVer == "" {
+		writeJSONError(w, "daemon_ver is required", http.StatusBadRequest)
 		return
 	}
 
@@ -139,7 +171,7 @@ func (h *DaemonRegisterHandler) Register(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	rec, created, err := h.repo.UpsertKey(r.Context(), accountID, string(hash), keyPrefix)
+	rec, created, err := h.repo.UpsertKey(r.Context(), accountID, string(hash), keyPrefix, reqBody.DeviceID, reqBody.Platform, reqBody.DaemonVer)
 	if err != nil {
 		log.Printf("[daemon_register] UpsertKey account=%s: %v", accountID, err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
@@ -160,17 +192,19 @@ func (h *DaemonRegisterHandler) Register(w http.ResponseWriter, r *http.Request)
 
 	// Emit PostHog daemon_paired event on first pairing.
 	if created {
-		go func(acct, keyID string) {
+		go func(acct, keyID, platform, daemonVer string) {
 			if err := h.postHog.Enqueue(posthog.Capture{
 				DistinctId: acct,
 				Event:      "daemon_paired",
 				Properties: posthog.NewProperties().
 					Set("key_id", keyID).
+					Set("platform", platform).
+					Set("daemon_ver", daemonVer).
 					Set("source", "pkce"),
 			}); err != nil {
 				log.Printf("[daemon_register] posthog enqueue: %v", err)
 			}
-		}(accountID, rec.ID)
+		}(accountID, rec.ID, reqBody.Platform, reqBody.DaemonVer)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
