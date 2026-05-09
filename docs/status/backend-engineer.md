@@ -29,3 +29,11 @@
 
 ### Step 4: PR — DONE
 - PR #1603: https://github.com/RdHamilton/MTGA-Companion/pull/1603
+
+### Step 5: LE Review + Fixes — DONE
+Two issues identified and fixed:
+1. **BLOCKER** (`daemon/service.go` `flushGREBuffer`): `entries` param was ignored — emitted payload had empty `MatchID`/`GameNumber=0` which the BFF projector rejects. Fix: bypass `match_id`/`game_number` validation in `projectGamePlayEvent` when `partial=true`; added test `TestRunOnce_GamePlayEvent_PartialTrue_NoMatchIDNoGameNumber_Accepted`
+2. **BUG** (`gre/session_buffer.go` `sweepStale`): log message always printed threshold duration, not actual session idle time. Fix: capture `lastUpdated` alongside `entries` before map deletion, log `time.Since(lastUpdated)`
+- `go test -race ./...` passes in both daemon and bff
+- `gofumpt -l .` clean in both services
+- Pushed as commit `76fd803` on `feat/1519-gre-flush-partial-flag`
