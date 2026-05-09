@@ -178,6 +178,29 @@ Note: The Milestone field is read-only on the board — it derives from the issu
 - Milestones track versions: v0.2.0, v0.3.0, … → v1.0.0.
 - When creating issues, assign milestone `v0.2.0` unless scoped to a later release.
 
+### Project #30: Vault MTG v0.4.0 — Beta Launch (ACTIVE)
+- **Project ID**: `PVT_kwHOABsZ684BW67K`
+- **Status Field ID**: `PVTSSF_lAHOABsZ684BW67KzhSLc30`
+- **Agent Field ID**: `PVTSSF_lAHOABsZ684BW67KzhSbNps`
+- **Milestone**: #68 (v0.4.0)
+- **Status Option IDs**:
+  - Todo: `cf9b61a3`
+  - In Progress: `c7f06869`
+  - PR Review: `a4425acf`
+  - Done: `e4a47050`
+  - Released: `8139d8b9`
+- **Agent Option IDs**:
+  - backend-engineer: `b962ab99`
+  - front-engineer: `3b8975e8`
+  - infrastructure: `3cb99b16`
+  - dba: `a0e2e49d`
+  - architect: `37e0e52c`
+  - growth-marketing: `68f58173`
+  - customer-success: `927d4356`
+  - business-analyst: `3855e2cb`
+  - finance-controller: `940419e2`
+  - product-manager: `648e67ca`
+
 <!-- When creating a new project, add its entry here with the format above -->
 
 ## Issue Templates
