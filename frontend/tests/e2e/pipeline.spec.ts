@@ -48,12 +48,12 @@ test.describe('Data Pipeline - Log to UI', () => {
 
     // Navigate to app and wait for it to load
     await page.goto('/');
-    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
 
     // Wait for the match history page content to be ready (daemon has processed log)
     await expect(
       page.locator('.match-history-table-container table').or(page.locator('.empty-state'))
-    ).toBeVisible({ timeout: 15000 });
+    ).toBeVisible();
   });
 
   test.describe('Match History Pipeline', () => {
@@ -63,7 +63,7 @@ test.describe('Data Pipeline - Log to UI', () => {
       const table = page.locator('.match-history-table-container table');
       const emptyState = page.locator('.empty-state');
 
-      await expect(table.or(emptyState)).toBeVisible({ timeout: 10000 });
+      await expect(table.or(emptyState)).toBeVisible();
 
       const hasMatches = await table.isVisible();
 
@@ -137,13 +137,13 @@ test.describe('Data Pipeline - Log to UI', () => {
     test('should display decks from log file', async ({ page }) => {
       // Wait for the decks page to load - actual class is .decks-page
       const decksPage = page.locator('.decks-page');
-      await expect(decksPage).toBeVisible({ timeout: 10000 });
+      await expect(decksPage).toBeVisible();
 
       // Check for either decks grid or empty state
       const decksGrid = page.locator('.decks-grid');
       const emptyState = page.locator('.empty-state');
 
-      await expect(decksGrid.or(emptyState)).toBeVisible({ timeout: 10000 });
+      await expect(decksGrid.or(emptyState)).toBeVisible();
 
       const hasDecks = await decksGrid.isVisible().catch(() => false);
 
@@ -172,7 +172,7 @@ test.describe('Data Pipeline - Log to UI', () => {
     test('should show decks from multiple formats', async ({ page }) => {
       // Wait for decks page to fully load
       const decksPage = page.locator('.decks-page');
-      await expect(decksPage).toBeVisible({ timeout: 10000 });
+      await expect(decksPage).toBeVisible();
 
       // Check for decks grid with format badges
       const decksGrid = page.locator('.decks-grid');
@@ -199,7 +199,7 @@ test.describe('Data Pipeline - Log to UI', () => {
 
     test('should display draft session from log file', async ({ page }) => {
       const draftContent = page.locator('.draft-container, .draft-empty');
-      await expect(draftContent.first()).toBeVisible({ timeout: 10000 });
+      await expect(draftContent.first()).toBeVisible();
 
       const draftContainer = page.locator('.draft-container');
       const draftEmpty = page.locator('.draft-empty');
@@ -251,7 +251,7 @@ test.describe('Data Pipeline - Log to UI', () => {
       const questsSection = page.locator('.quests-section');
       const emptyState = page.locator('.empty-state');
 
-      await expect(questsSection.first().or(emptyState)).toBeVisible({ timeout: 10000 });
+      await expect(questsSection.first().or(emptyState)).toBeVisible();
 
       const hasQuests = await questsSection.first().isVisible();
 
@@ -303,7 +303,7 @@ test.describe('Data Pipeline - Log to UI', () => {
 
       // After loading, check for wins grid (should be visible when page loads successfully)
       const winsGrid = page.locator('.wins-grid');
-      await expect(winsGrid).toBeVisible({ timeout: 10000 });
+      await expect(winsGrid).toBeVisible();
 
       // Check for daily/weekly wins cards
       const dailyWinsCard = page.locator('.daily-wins-card');
@@ -322,7 +322,7 @@ test.describe('Data Pipeline - Log to UI', () => {
       const collectionContainer = page.locator('.collection-container, .collection-page');
       const emptyState = page.locator('.empty-state');
 
-      await expect(collectionContainer.first().or(emptyState)).toBeVisible({ timeout: 10000 });
+      await expect(collectionContainer.first().or(emptyState)).toBeVisible();
 
       // Collection page should load without errors
       const errorState = page.locator('.error-state');
@@ -331,7 +331,7 @@ test.describe('Data Pipeline - Log to UI', () => {
 
     test('should toggle Set Completion panel when button is clicked (#756)', async ({ page }) => {
       const collectionPage = page.locator('.collection-page');
-      await expect(collectionPage).toBeVisible({ timeout: 10000 });
+      await expect(collectionPage).toBeVisible();
 
       // Button should not be visible initially (no set selected)
       const showButton = page.locator('button.set-completion-button');
@@ -387,7 +387,7 @@ test.describe('Data Pipeline - Log to UI', () => {
     test('should display meta page without errors', async ({ page }) => {
       // Wait for page to load
       const metaPage = page.locator('.meta-page');
-      await expect(metaPage).toBeVisible({ timeout: 10000 });
+      await expect(metaPage).toBeVisible();
 
       // Wait for loading to complete
       const loadingSpinner = page.locator('.meta-loading');
@@ -401,7 +401,7 @@ test.describe('Data Pipeline - Log to UI', () => {
     test('should have format dropdown with friendly names', async ({ page }) => {
       // Wait for page to load
       const metaPage = page.locator('.meta-page');
-      await expect(metaPage).toBeVisible({ timeout: 10000 });
+      await expect(metaPage).toBeVisible();
 
       // Find format dropdown
       const formatSelect = page.locator('.format-select');
@@ -429,7 +429,7 @@ test.describe('Data Pipeline - Log to UI', () => {
     test('should filter archetypes by format', async ({ page }) => {
       // Wait for page to load
       const metaPage = page.locator('.meta-page');
-      await expect(metaPage).toBeVisible({ timeout: 10000 });
+      await expect(metaPage).toBeVisible();
 
       // Wait for loading to complete
       const loadingSpinner = page.locator('.meta-loading');
@@ -455,7 +455,7 @@ test.describe('Data Pipeline - Log to UI', () => {
     test('should display archetype cards when data is available', async ({ page }) => {
       // Wait for page to load
       const metaPage = page.locator('.meta-page');
-      await expect(metaPage).toBeVisible({ timeout: 10000 });
+      await expect(metaPage).toBeVisible();
 
       // Wait for loading to complete
       const loadingSpinner = page.locator('.meta-loading');
@@ -480,7 +480,7 @@ test.describe('Data Pipeline - Log to UI', () => {
 
       // Wait for page to load
       const pageContainer = page.locator('.page-container');
-      await expect(pageContainer).toBeVisible({ timeout: 10000 });
+      await expect(pageContainer).toBeVisible();
 
       // Change date filter to "All Time" since log data has old dates
       const dateRangeSelect = page.locator('.filter-row select').first();
@@ -494,7 +494,7 @@ test.describe('Data Pipeline - Log to UI', () => {
       const chartContainer = page.locator('.chart-container');
       const emptyState = page.locator('.empty-state');
 
-      await expect(chartContainer.or(emptyState)).toBeVisible({ timeout: 10000 });
+      await expect(chartContainer.or(emptyState)).toBeVisible();
 
       // Should not have errors
       const errorState = page.locator('.error-state');
@@ -566,7 +566,7 @@ test.describe('Data Pipeline - Log to UI', () => {
       const chartOrData = page.locator('.recharts-wrapper, svg, .chart-container, .stats-grid');
       const emptyState = page.locator('.empty-state, .no-data');
 
-      await expect(chartOrData.first().or(emptyState)).toBeVisible({ timeout: 10000 });
+      await expect(chartOrData.first().or(emptyState)).toBeVisible();
 
       const errorState = page.locator('.error-state');
       await expect(errorState).not.toBeVisible();
@@ -584,7 +584,7 @@ test.describe('Data Pipeline - Log to UI', () => {
 
       // Wait for page to load
       const pageContainer = page.locator('.page-container');
-      await expect(pageContainer).toBeVisible({ timeout: 10000 });
+      await expect(pageContainer).toBeVisible();
 
       // Change date filter to "All Time" since log data has old dates
       const dateRangeSelect = page.locator('.filter-row select').first();
@@ -594,7 +594,7 @@ test.describe('Data Pipeline - Log to UI', () => {
       const metricsContainer = page.locator('.metrics-container');
       const emptyState = page.locator('.empty-state');
 
-      await expect(metricsContainer.or(emptyState)).toBeVisible({ timeout: 10000 });
+      await expect(metricsContainer.or(emptyState)).toBeVisible();
 
       const errorState = page.locator('.error-state');
       await expect(errorState).not.toBeVisible();
@@ -605,7 +605,7 @@ test.describe('Data Pipeline - Log to UI', () => {
     test('should have filter controls on Match History page', async ({ page }) => {
       // Match History is the default page - check for filter row
       const filterRow = page.locator('.filter-row');
-      await expect(filterRow).toBeVisible({ timeout: 10000 });
+      await expect(filterRow).toBeVisible();
 
       // Should have at least one select element for filtering
       const selects = filterRow.locator('select');
@@ -635,7 +635,7 @@ test.describe('Data Pipeline - Log to UI', () => {
 
       // Quests page should either have filters or show content
       const pageContent = page.locator('.quests-section, .quests-header, .empty-state');
-      await expect(pageContent.first()).toBeVisible({ timeout: 10000 });
+      await expect(pageContent.first()).toBeVisible();
 
       // Should have at least some interactive elements
       expect(selectCount).toBeGreaterThanOrEqual(0);
@@ -664,7 +664,7 @@ test.describe('Data Pipeline - Log to UI', () => {
 
       // Wait for page to load
       const pageContainer = page.locator('.page-container');
-      await expect(pageContainer).toBeVisible({ timeout: 10000 });
+      await expect(pageContainer).toBeVisible();
 
       // Chart pages should have filter controls
       const filterRow = page.locator('.filter-row');
@@ -723,11 +723,11 @@ test.describe('Data Pipeline - Log to UI', () => {
 
       // Wait for decks to load
       const decksPage = page.locator('.decks-page');
-      await expect(decksPage).toBeVisible({ timeout: 10000 });
+      await expect(decksPage).toBeVisible();
 
       const deckCard = page.locator('.deck-card');
       const emptyState = page.locator('.empty-state');
-      await expect(deckCard.first().or(emptyState)).toBeVisible({ timeout: 10000 });
+      await expect(deckCard.first().or(emptyState)).toBeVisible();
 
       const hasDecks = await deckCard.first().isVisible();
 
@@ -746,7 +746,7 @@ test.describe('Data Pipeline - Log to UI', () => {
           // Wait for DeckBuilder to load - could be content or error state
           const deckBuilderContent = page.locator('.deck-builder-content');
           const errorState = page.locator('.deck-builder.error-state');
-          await expect(deckBuilderContent.or(errorState)).toBeVisible({ timeout: 15000 });
+          await expect(deckBuilderContent.or(errorState)).toBeVisible();
 
           // Only check for Build Around button if deck loaded successfully
           const deckLoaded = await deckBuilderContent.isVisible();
@@ -764,7 +764,7 @@ test.describe('Data Pipeline - Log to UI', () => {
       await page.waitForURL('**/decks');
 
       const decksPage = page.locator('.decks-page');
-      await expect(decksPage).toBeVisible({ timeout: 10000 });
+      await expect(decksPage).toBeVisible();
 
       const deckCard = page.locator('.deck-card');
       const hasDecks = await deckCard.first().isVisible().catch(() => false);
@@ -783,7 +783,7 @@ test.describe('Data Pipeline - Log to UI', () => {
           // Wait for DeckBuilder to load - could be content or error state
           const deckBuilderContent = page.locator('.deck-builder-content');
           const errorState = page.locator('.deck-builder.error-state');
-          await expect(deckBuilderContent.or(errorState)).toBeVisible({ timeout: 15000 });
+          await expect(deckBuilderContent.or(errorState)).toBeVisible();
 
           // Only check for buttons if deck loaded successfully
           const deckLoaded = await deckBuilderContent.isVisible();
@@ -846,7 +846,7 @@ test.describe('Data Pipeline - Log to UI', () => {
       const table = page.locator('.match-history-table-container table');
       const emptyState = page.locator('.empty-state');
 
-      await expect(table.or(emptyState)).toBeVisible({ timeout: 10000 });
+      await expect(table.or(emptyState)).toBeVisible();
     });
   });
 });

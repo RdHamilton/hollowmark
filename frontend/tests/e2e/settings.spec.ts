@@ -33,7 +33,7 @@ async function setClerkSignedIn(page: Page, user?: Partial<ClerkTestState>): Pro
 test.describe('Settings', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
 
     await page.click('a[href="/settings"]');
     await page.waitForURL('**/settings');
@@ -195,7 +195,7 @@ test.describe('@smoke Settings — User Profile section', () => {
     await setClerkSignedIn(page, { email: 'smoke@example.com', firstName: 'Smoke', lastName: 'Tester' });
 
     await page.goto('/settings');
-    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
     await page.waitForURL('**/settings');
 
     // Expand the User Profile accordion section
@@ -212,7 +212,7 @@ test.describe('@smoke Settings — User Profile section', () => {
     await setClerkSignedIn(page, { firstName: 'Smoke', lastName: 'Tester', email: 'smoke@example.com' });
 
     await page.goto('/settings');
-    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
 
     const userProfileButton = page.locator('button').filter({ hasText: /user profile/i });
     await expect(userProfileButton).toBeVisible({ timeout: 5000 });

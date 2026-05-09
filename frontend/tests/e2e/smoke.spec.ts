@@ -126,7 +126,7 @@ test.describe('@smoke EnvBadge visibility', () => {
     test.skip(IS_PRODUCTION_URL, 'Skipped: targeting a production URL where EnvBadge is hidden');
 
     await page.goto(BASE_URL);
-    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
 
     await expect(page.locator('[data-testid="env-badge"]')).toBeVisible();
   });
@@ -135,7 +135,7 @@ test.describe('@smoke EnvBadge visibility', () => {
     test.skip(!IS_PRODUCTION_URL, 'Skipped: not targeting a production URL');
 
     await page.goto(BASE_URL);
-    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
 
     await expect(page.locator('[data-testid="env-badge"]')).not.toBeAttached();
   });

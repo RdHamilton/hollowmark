@@ -48,7 +48,7 @@ test.describe('DraftLive', () => {
     // The page must render.
     await expect(
       page.locator('[data-testid="draft-live-container"]')
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeVisible();
 
     // Empty state must be visible — no active draft.
     await expect(page.locator('[data-testid="empty-state"]')).toBeVisible();
