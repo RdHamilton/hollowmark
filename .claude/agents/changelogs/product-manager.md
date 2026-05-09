@@ -8,6 +8,18 @@
 **RICE score**: [if applicable]
 -->
 
+## 2026-05-09 — v0.3.1 docs PR + Project #33 ticket migration
+**Triggered by**: User request — PR docs changes and move Storybook/Playwright tickets
+**Decision**: Opened PR #1660 for docs/product/beta-roadmap.md v0.3.1 sequencing update (docs-only, no LE review). Moved Storybook issues #1621, #1622, #1625 from Project #30 to Project #33 (PVT_kwHOABsZ684BXMn-). No open issues with "playwright" in title found.
+**Output**: PR #1660 opened; issues #1621, #1622, #1625 added to Project #33 and removed from Project #30
+**RICE score**: N/A — operational/housekeeping
+
+## 2026-05-09 — v0.4.0 Alignment Audit (Three-Source Gap Report)
+**Triggered by**: User request — alignment audit across beta-roadmap.md, kickoff.md, Board #30
+**Decision**: 9 gap categories identified. 4 Wave 0 tickets TBD + #1041 not on board; 8 Wave 1 eng items missing from board; all 5 Storybook tickets absent; 6 business-track tickets stranded at NO STATUS; 16 out-of-scope tickets polluting board; roadmap/kickoff contradiction on shareable stats exit gate.
+**Output**: `docs/product/milestones/v0.4.0/alignment-gap-report.md` — prioritized corrective action list, P0–P3
+**RICE score**: N/A — audit task
+
 ## 2026-05-08 — v0.3.0 Post-Mortem
 **Triggered by**: User request — candid retrospective of v0.3.0 release failures
 **Decision**: Wrote comprehensive post-mortem naming every failure honestly: 9/31 tickets open, 2/14 exit gates verified, CI red at release time, staging environment never validated end-to-end, rogue agent incident, wave-close report written prematurely. Identified 4 root cause categories (process, technical, agent, communication) and 18 numbered recommendations. 10 action items tied to specific owners and tickets.
