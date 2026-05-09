@@ -46,8 +46,11 @@ stores the key in the OS keychain.**
    (SHA-256 of verifier, base64url).
 
 3. **Localhost callback server** — daemon binds a one-shot HTTP server on
-   `localhost:PORT` (random ephemeral port). The redirect URI is
-   `http://localhost:PORT/callback`.
+   **fixed port `51423`** (one retry on `51424` if busy). The redirect URI is
+   `http://localhost:51423/oauth/callback` (or `51424` on retry).
+   Clerk OAuth redirect URIs **must be registered for both**:
+   - `http://localhost:51423/oauth/callback`
+   - `http://localhost:51424/oauth/callback`
 
 4. **Browser open** — daemon constructs the Clerk OAuth authorization URL
    with `response_type=code`, `code_challenge`, `code_challenge_method=S256`,
@@ -67,11 +70,16 @@ stores the key in the OS keychain.**
    the BFF with the Clerk JWT in `Authorization: Bearer`. BFF verifies the
    JWT via `clerk-sdk-go v2`, creates (or retrieves) a per-machine API key
    scoped to the authenticated user's `account_id`, and returns the key in
-   the response body.
+   the response body. See § "POST /v1/daemon/register Wire Format" below for
+   the complete request/response contract.
 
 9. **Keychain storage** — daemon stores the API key in the OS keychain
-   using `go-keyring` (service name: `mtga-companion`, key: `api-key`).
+   using `go-keyring` (service name: `com.mtga-companion.daemon`, key: `api-key`).
    The key is NOT written to `daemon.json` in plaintext.
+   `com.mtga-companion.daemon` is the canonical service name — this resolves
+   the conflict between this ADR (which previously said `mtga-companion`) and
+   ticket #1651 (`com.mtga-companion.daemon`). All implementations must use
+   `com.mtga-companion.daemon`.
 
 10. **Config write** — daemon writes `daemon.json` with `cloud_api_url`
     and `keychain: true` (flag indicating the API key lives in the keychain,
@@ -143,6 +151,106 @@ TBD-G is replaced by the three ADR-020 implementation tickets below.
 | **ADR020-1** | `feat(daemon): implement PKCE OAuth browser-redirect login flow` — generate verifier/challenge, bind localhost callback, open system browser, capture auth code, exchange for Clerk session token | backend-engineer |
 | **ADR020-2** | `feat(daemon): store Clerk API key in OS keychain (go-keyring)` — write/read/delete from macOS Keychain and Windows Credential Manager; fallback error handling if keychain unavailable | backend-engineer |
 | **ADR020-3** | `feat(bff): add POST /v1/daemon/register endpoint` — accept Clerk JWT in Authorization header, verify via `clerk-sdk-go v2`, mint per-machine API key scoped to account_id, return key in response body; rate-limit to 5 req/min per user | backend-engineer |
+
+---
+
+## Confirmed Decisions (Wave 0 Review — 2026-05-09)
+
+The following decisions were confirmed by Ray Hamilton during the Wave 0 architecture review
+and are now binding. They resolve open questions and conflicts present in the original draft.
+
+---
+
+### API Key Scoping (Beta)
+
+One API key per user for the beta period. The key is scoped to the authenticated
+`account_id` and stored in the OS keychain under service name `com.mtga-companion.daemon`.
+This resolves the conflict between the original draft of this ADR (which used `mtga-companion`)
+and ticket #1651 — **`com.mtga-companion.daemon` is canonical**.
+
+---
+
+### API Key Revocation and Re-Pair Behavior
+
+**Silent re-use on re-pair.** If a valid API key already exists in the keychain when the
+daemon runs `POST /v1/daemon/register`, the BFF returns the existing key (HTTP 200) without
+creating a new one. A new key is only issued when:
+
+1. No key exists in the keychain for this user/device combination, **or**
+2. The existing key has been revoked server-side (BFF returns 401 on the existing key).
+
+When the daemon receives a 401 using its cached API key, it must re-run the full PKCE flow
+to obtain a new Clerk session token and then call `POST /v1/daemon/register` again.
+
+---
+
+### POST /v1/daemon/register Wire Format
+
+#### Request (daemon → BFF)
+
+```
+POST /v1/daemon/register
+Authorization: Bearer <Clerk session JWT>
+Content-Type: application/json
+```
+
+```json
+{
+  "clerk_user_id": "user_xxxxx",
+  "device_id": "<uuid-v4 generated on first install, stored in keychain>",
+  "platform": "darwin" | "windows",
+  "daemon_version": "0.3.1"
+}
+```
+
+- `device_id`: UUID v4 generated once on first install and persisted in the keychain alongside
+  the API key. Never regenerated unless the keychain entry is deleted.
+- `platform`: `"darwin"` or `"windows"` — verbatim GOOS values.
+- `daemon_version`: the running daemon's semver string (from build-time `ldflags`).
+
+#### Response — 201 Created (new key issued)
+
+```json
+{
+  "api_key": "vlt_live_xxxxx",
+  "account_id": "<uuid>"
+}
+```
+
+#### Response — 200 OK (existing valid key returned; re-use)
+
+```json
+{
+  "api_key": "vlt_live_xxxxx",
+  "account_id": "<uuid>"
+}
+```
+
+#### Rate Limiting
+
+5 requests per minute per Clerk user ID. Excess requests receive:
+
+```
+HTTP 429 Too Many Requests
+Retry-After: <seconds>
+```
+
+---
+
+### macOS Quarantine Clearing
+
+The `.pkg` postinstall script **must** clear the macOS quarantine attribute from the
+daemon binary immediately after installation:
+
+```bash
+xattr -dr com.apple.quarantine /usr/local/bin/vaultmtg-daemon
+```
+
+Failure to clear the quarantine attribute causes macOS Gatekeeper to block the daemon
+on first run with an "unidentified developer" error that requires manual user intervention.
+This step must be included in the postinstall script for every `.pkg` release.
+
+**This is an acceptance criterion for ticket #1640.** See that ticket for full ACs.
 
 ---
 
