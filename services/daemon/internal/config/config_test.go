@@ -531,3 +531,82 @@ func TestGRESessionFlushThresholdBoundaryMax(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2000, cfg.GRESessionFlushThreshold)
 }
+
+// ── NeedsFirstRunAuth ────────────────────────────────────────────────────────
+
+// TestNeedsFirstRunAuth_NoCredentials returns true when no key or JWT is set.
+func TestNeedsFirstRunAuth_NoCredentials(t *testing.T) {
+	t.Setenv("MTGA_DAEMON_CLOUD_API_URL", "http://localhost:9000")
+	cfg, err := config.Load("")
+	require.NoError(t, err)
+	assert.True(t, cfg.NeedsFirstRunAuth())
+}
+
+// TestNeedsFirstRunAuth_PlaintextAPIKey returns false when api_key is present.
+func TestNeedsFirstRunAuth_PlaintextAPIKey(t *testing.T) {
+	t.Setenv("MTGA_DAEMON_CLOUD_API_URL", "http://localhost:9000")
+	t.Setenv("MTGA_DAEMON_API_KEY", "sk_live_somekey")
+	cfg, err := config.Load("")
+	require.NoError(t, err)
+	assert.False(t, cfg.NeedsFirstRunAuth())
+}
+
+// TestNeedsFirstRunAuth_KeychainTrue returns false when keychain sentinel is set.
+func TestNeedsFirstRunAuth_KeychainTrue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.json")
+	content := `{"cloud_api_url":"https://bff.example.com","keychain":true}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.False(t, cfg.NeedsFirstRunAuth())
+}
+
+// TestNeedsFirstRunAuth_DaemonJWT returns false when a daemon JWT is present.
+func TestNeedsFirstRunAuth_DaemonJWT(t *testing.T) {
+	t.Setenv("MTGA_DAEMON_CLOUD_API_URL", "http://localhost:9000")
+	cfg, err := config.Load("")
+	require.NoError(t, err)
+	cfg.DaemonJWT = "some.jwt.token"
+	assert.False(t, cfg.NeedsFirstRunAuth())
+}
+
+// ── Keychain field serialisation ─────────────────────────────────────────────
+
+// TestKeychainFieldRoundTrip verifies that keychain:true is written and read back.
+func TestKeychainFieldRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.json")
+	content := `{"cloud_api_url":"https://bff.example.com"}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+
+	cfg.Keychain = true
+	require.NoError(t, cfg.Save())
+
+	cfg2, err := config.Load(path)
+	require.NoError(t, err)
+	assert.True(t, cfg2.Keychain)
+}
+
+// TestAPIKeyOmittedFromJSONWhenKeychain verifies that api_key is omitted from
+// the JSON output when Keychain is true (omitempty on the field).
+func TestAPIKeyOmittedFromJSONWhenKeychain(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.json")
+	content := `{"cloud_api_url":"https://bff.example.com","keychain":true}`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	cfg.APIKey = "" // ensure empty
+
+	require.NoError(t, cfg.Save())
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), `"api_key"`)
+}
