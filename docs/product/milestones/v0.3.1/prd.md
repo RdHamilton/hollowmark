@@ -4,7 +4,7 @@
 **Status**: ACTIVE — started 2026-05-09
 **Board**: #33 (Project ID: `PVT_kwHOABsZ684BXMn-`)
 **Milestone**: v0.3.1 — ships before v0.4.0
-**Last updated**: 2026-05-09 (revised — restored Component Library Foundation wave per Ray's direction; Storybook tickets #1621, #1622, #1625 are v0.3.1 scope; corrected — Apple signing+notarization is active via daemon-release.yml sign-macos job, not deferred to GA)
+**Last updated**: 2026-05-09 (revised — Wave 3 PKCE Auth closed/LE-verified; added Wave 4 SPA routing fix #1695+#1696; added Wave 5 first-run empty states #1697–#1700; renumbered SPA Setup → Wave 6, GA Readiness → Wave 7, Component Library → Wave 8, Staging Validation → Wave 9, Release Gate → Wave 10)
 
 ---
 
@@ -16,7 +16,7 @@ v0.3.1 delivers one thing: a double-clickable, self-configuring daemon installer
 
 Engineering does **not** begin v0.4.0 Wave 0 until v0.3.1 closes and PM issues a GO.
 
-> **Scope note (2026-05-09, updated)**: The Component Library Foundation (Storybook + Chromatic) — tickets #1621, #1622, #1625 — is **v0.3.1 scope** per Ray's direction. Previously removed in error; restored as Wave 5. Waves renumbered accordingly.
+> **Scope note (2026-05-09, updated)**: The Component Library Foundation (Storybook + Chromatic) — tickets #1621, #1622, #1625 — is **v0.3.1 scope** per Ray's direction. Previously removed in error; restored as Wave 8. Wave 3 (PKCE Auth) is closed/LE-verified. Two new waves added post-Wave 3: Wave 4 (SPA routing fix — #1695, #1696) and Wave 5 (first-run empty states — #1697–#1700). Subsequent waves renumbered 6–10.
 
 ---
 
@@ -101,7 +101,56 @@ No tickets — ceremony only.
 
 ---
 
-### Wave 3 — SPA Setup Page + Download UX
+### Wave 3 — PKCE Auth (CLOSED — LE-verified)
+
+**Status**: CLOSED. All 5 tickets (#1643, #1650, #1651, #1652, #1674) merged and LE-verified. Wave 4 is unblocked.
+
+---
+
+### Wave 4 — SPA Routing Fix + Infrastructure Cleanup
+
+**Theme**: Fix production-blocking routing bugs before any SPA feature work.
+
+> **Rationale**: #1695 is a production blocker — every API call that should route to the local daemon is currently hitting the cloud BFF, causing 404s. #1696 runs in parallel (no shared files). Both must close before Wave 5 (empty states) ships to production.
+
+| Ticket | Title | Owner | Effort |
+|--------|-------|-------|--------|
+| #1695 | feat(frontend): split apiClient.ts into dual base URLs — `VITE_BFF_URL` and `VITE_DAEMON_URL`; update 10 API modules | front-engineer | M |
+| #1696 | fix(infra): nginx/CloudFront returns 503+CORS on unhandled cloud BFF routes — return clean 404 with CORS headers | infrastructure | S |
+
+**Definition of done (Wave 4):**
+- `apiClient.ts` split: cloud-BFF calls use `VITE_BFF_URL`; local daemon calls use `VITE_DAEMON_URL`; no daemon calls route to cloud BFF
+- All 10 affected API modules updated; `npx tsc --noEmit` clean
+- nginx/CloudFront: unhandled routes return 404 (not 503) with correct CORS headers
+- Component tests updated; Playwright E2E smoke passes
+- CI green on main after merge
+
+---
+
+### Wave 5 — First-Run Empty States + Onboarding Analytics
+
+**Theme**: Show empty states when daemon is not connected; instrument the onboarding funnel.
+
+> **Rationale**: Depends on Wave 4 (#1695) — empty state detection requires correct daemon vs BFF routing. Funnel events ship in the same wave so PostHog data is available from day one of beta.
+
+| Ticket | Title | Owner | Effort |
+|--------|-------|-------|--------|
+| #1697 | feat(frontend): implement empty state for Match History page (first-run, no daemon) | front-engineer | S |
+| #1698 | feat(frontend): implement empty state for Collection page (first-run, no daemon) | front-engineer | S |
+| #1699 | feat(frontend): implement empty state for Decks page (first-run, no daemon) | front-engineer | S |
+| #1700 | feat(frontend): implement first-run onboarding funnel analytics events (funnel_daemon_installed, funnel_first_game_played) | front-engineer | S |
+
+**Definition of done (Wave 5):**
+- Match History, Collection, and Decks pages each render a design-spec-compliant empty state when daemon is not connected
+- Empty states include a clear CTA pointing users to `/setup` or daemon download
+- `funnel_daemon_installed` and `funnel_first_game_played` PostHog events fire at the correct points in the first-run flow
+- Component tests added for all three empty state components
+- Playwright E2E test covers the no-daemon empty state flow end-to-end
+- CI green on main after merge
+
+---
+
+### Wave 6 — SPA Setup Page + Download UX
 
 **Theme**: Give first-time users a guided install path from the web app, replacing the broken shell-script-based install flow.
 
@@ -112,7 +161,7 @@ No tickets — ceremony only.
 | #1646 | feat(spa): DaemonDownload.tsx — replace broken install script links with .dmg and .exe download buttons | front-engineer | XS |
 | #1647 | docs(daemon): update install README — describe .pkg/.dmg and NSIS .exe paths, mark shell scripts as power-user fallback | documentation | XS |
 
-**Definition of done (Wave 3):**
+**Definition of done (Wave 6):**
 - `/setup` page renders Gatekeeper (macOS) and SmartScreen (Windows) bypass instructions with screenshots
 - PKCE flow on SPA replaces the old SPA-mint-key flow per ADR-020
 - `DaemonDownload.tsx` shows .dmg and .exe buttons linked to GitHub Releases; no broken shell script links
@@ -120,7 +169,7 @@ No tickets — ceremony only.
 
 ---
 
-### Wave 4 — GA Readiness Documentation
+### Wave 7 — GA Readiness Documentation
 
 **Theme**: Verify the active Apple signing + notarization pipeline end-to-end; document Azure signing workflow for GA activation.
 
@@ -131,15 +180,15 @@ No tickets — ceremony only.
 | #1648 | chore(ga-prep): verify Apple notarization end-to-end on a release tag — confirm `notarytool` credentials in SSM, stapled .dmg passes Gatekeeper on clean macOS VM | infrastructure | S |
 | #1649 | chore(ga-prep): onboard Azure Trusted Signing — document signing workflow in GoReleaser config, budget approval | infrastructure | S |
 
-**Definition of done (Wave 4):**
+**Definition of done (Wave 7):**
 - Apple signing verified end-to-end: a release tag triggers `sign-macos`, `.dmg` is notarized + stapled, confirmed to pass Gatekeeper on a clean macOS 14+ VM
 - `notarytool` credential path in SSM confirmed and documented
 - Azure Trusted Signing workflow documented in GoReleaser config comments; budget approval recorded; identity validation status confirmed with Ray
-- Azure active signing is NOT required to close Wave 4 — documentation is the deliverable for the Azure side only
+- Azure active signing is NOT required to close Wave 7 — documentation is the deliverable for the Azure side only
 
 ---
 
-### Wave 5 — Component Library Foundation
+### Wave 8 — Component Library Foundation
 
 **Theme**: Establish Storybook + Chromatic baseline so component visual regression is tracked before beta ships.
 
@@ -149,7 +198,7 @@ No tickets — ceremony only.
 | #1622 | feat(storybook): install and configure Storybook 8 with Vite builder | front-engineer | M |
 | #1625 | feat(chromatic): capture Chromatic baseline snapshots for existing components | front-engineer | M |
 
-**Definition of done (Wave 5):**
+**Definition of done (Wave 8):**
 - Chromatic baseline approved by Ray (no unresolved snapshot diffs)
 - Storybook deployed to Chromatic; Chromatic project URL documented in repo
 - CI passes with Chromatic check as a required status
@@ -157,58 +206,35 @@ No tickets — ceremony only.
 
 ---
 
-### Wave 6 — CI Hardening
-
-**Theme**: Tighten supply-chain security and vulnerability scanning before shipping installers to beta users.
-
-| Ticket | Title | Owner | Effort |
-|--------|-------|-------|--------|
-| TBD | Upgrade CI to Node.js 22 LTS across all jobs | infrastructure | S |
-| TBD | Pin all GitHub Actions to SHA-pinned versions | infrastructure | XS |
-| TBD | Add `govulncheck` to Go CI jobs | infrastructure | XS |
-| TBD | Add `npm audit --audit-level=high` to frontend CI | infrastructure | XS |
-
-**Definition of done (Wave 6):**
-- All CI jobs green on Node.js 22 LTS
-- All GitHub Actions pinned to SHA (not floating tag)
-- `govulncheck` passes with zero high/critical findings
-- `npm audit` passes with zero high-severity findings
-
-> Note: Wave 6 tickets are not yet created on GitHub. PM to file before Wave 5 closes.
-
----
-
-### Wave 7 — Staging Validation
+### Wave 9 — Staging Validation
 
 **Theme**: Prove the staging environment is clean and smoke-tested before the release tag is cut.
 
 | Ticket | Title | Owner | Effort |
 |--------|-------|-------|--------|
-| TBD | Staging deploy pipeline smoke test | infrastructure | S |
-| TBD | BFF `/healthz` verified on staging | backend-engineer | XS |
-| TBD | Playwright staging smoke suite runs clean | ui-tester | S |
+| #1669 | test(staging): run full daemon install smoke test on macOS 14+ VM | infrastructure | S |
+| #1670 | test(staging): run full daemon install smoke test on Windows with SmartScreen | infrastructure | S |
+| #1671 | test(staging): end-to-end PKCE daemon pairing flow on both platforms | infrastructure | S |
 
-**Definition of done (Wave 7):**
+**Definition of done (Wave 9):**
 - Staging deploy completes clean from scratch
 - BFF `/healthz` returns 200 on staging
 - Playwright staging smoke suite passes with zero failures
 
-> Note: Wave 7 tickets are not yet created on GitHub. PM to file before Wave 6 closes.
-
 ---
 
-### Wave 8 — Release Gate (Smoke Test + Tag + Changelog)
+### Wave 10 — Release Gate (Smoke Test + Tag + Changelog)
 
 **Theme**: Validate the full end-to-end install-to-event flow on both platforms, cut the v0.3.1 tag, and publish the changelog.
 
 **Tickets**: No new code tickets — ceremony wave only.
 
-**Definition of done (Wave 8 — all must be true before tag is cut):**
+**Definition of done (Wave 10 — all must be true before tag is cut):**
 1. CI is green on main (hard gate — no exceptions per BROADCAST Active Directive 2)
 2. Staging deploy pipeline runs from scratch; BFF `/healthz` returns 200
 3. Playwright staging smoke suite passes
 4. Manual install smoke test on macOS 14+ and Windows 11: download `.dmg`/`.exe` → install → PKCE login → daemon starts → first event appears in BFF (checked via DB or PostHog). macOS `.dmg` must be signed + notarized + stapled — Gatekeeper clears automatically with no bypass required.
-5. All Wave 1–7 tickets are in Done state on Project #33 board
+5. All Wave 1–9 tickets are in Done state on Project #33 board
 6. PostHog `daemon_paired` event confirmed firing from at least one real test session
 7. `CHANGELOG.md` entry written for v0.3.1
 8. v0.3.1 git tag cut; GitHub Release created with `.dmg` and `.exe` artifacts attached
@@ -219,7 +245,7 @@ No tickets — ceremony only.
 
 | Item | Reason deferred |
 |------|----------------|
-| Azure Trusted Signing (active) | $9.99/mo — budget approval needed; identity validation pending; GA milestone; Wave 4 documents the workflow only |
+| Azure Trusted Signing (active) | $9.99/mo — budget approval needed; identity validation pending; GA milestone; Wave 7 documents the workflow only |
 | GoReleaser Pro features | Open-source tier sufficient for beta |
 | System tray / menubar icon | Not on critical path for beta |
 | MSI installer (Windows enterprise) | Post-GA only if requested |
@@ -227,7 +253,7 @@ No tickets — ceremony only.
 | Homebrew cask | Secondary distribution channel, post-GA |
 | Automatic daemon updater | Post-GA |
 | Device authorization flow (headless) | Fallback for CI/server — not a beta user scenario |
-| Full component story library (beyond Wave 5 baseline) | v0.4.0 follow-on after Chromatic baseline is established |
+| Full component story library (beyond Wave 8 baseline) | v0.4.0 follow-on after Chromatic baseline is established |
 | API key issuance/revoke UI (#1314) | Superseded by PKCE flow — daemon handles key acquisition automatically; SPA UI for key management deferred post-beta |
 
 ---
@@ -236,13 +262,13 @@ No tickets — ceremony only.
 
 | # | Question | Owner | Gate |
 |---|----------|-------|------|
-| OQ-1 | Apple Developer Program: ✅ Resolved — signing pipeline active via `daemon-release.yml` `sign-macos` job (PR #1655). `notarytool` credential path in SSM to be confirmed in Wave 4 (#1648). | — | Wave 4 |
-| OQ-2 | Azure Trusted Signing budget: approved? Wave 4 (#1649) includes budget approval as an AC — who signs off? | Ray | Wave 4 |
+| OQ-1 | Apple Developer Program: ✅ Resolved — signing pipeline active via `daemon-release.yml` `sign-macos` job (PR #1655). `notarytool` credential path in SSM to be confirmed in Wave 7 (#1648). | — | Wave 7 |
+| OQ-2 | Azure Trusted Signing budget: approved? Wave 7 (#1649) includes budget approval as an AC — who signs off? | Ray | Wave 7 |
 | OQ-3 | Storybook tickets (#1621, #1622, #1625) scope. | PM | ✅ Resolved — confirmed v0.3.1 per Ray's direction (2026-05-09); tickets relabeled from v0.4.0 to v0.3.1 |
-| OQ-4 | Gatekeeper bypass: moot — the `.dmg` is signed + notarized + stapled via the active pipeline. Wave 4 (#1648) verifies it passes Gatekeeper on a clean macOS 14 VM. | Ray (eng) | Wave 4 |
-| OQ-5 | Ephemeral port range for PKCE callback — fixed port (e.g., 51423) for UX consistency, or fully random? Fixed port simplifies firewall instructions. Decision needed before #1650 starts. | backend-engineer + Ray | Before Wave 2 |
-| OQ-6 | API key scoping — per-machine or per-user-session? Per-machine is simpler but means reinstall requires re-pairing. | backend-engineer | Before Wave 2 |
-| OQ-7 | Key revocation on reinstall — should the old key be revoked automatically on reinstall? | backend-engineer + Ray | Before Wave 2 |
+| OQ-4 | Gatekeeper bypass: moot — the `.dmg` is signed + notarized + stapled via the active pipeline. Wave 7 (#1648) verifies it passes Gatekeeper on a clean macOS 14 VM. | Ray (eng) | Wave 7 |
+| OQ-5 | Ephemeral port range for PKCE callback. | backend-engineer + Ray | ✅ Resolved (Wave 3) — fixed port 51423, retry 51424 |
+| OQ-6 | API key scoping — per-machine or per-user-session? | backend-engineer | ✅ Resolved (Wave 3) — per-user, one-key-per-account |
+| OQ-7 | Key revocation on reinstall. | backend-engineer + Ray | ✅ Resolved (Wave 3) — re-use existing key on reinstall; BFF returns 200 |
 
 ---
 
@@ -263,6 +289,7 @@ No tickets — ceremony only.
 - GoReleaser open-source — build orchestrator
 - `pkgbuild` / `productbuild` — macOS system tools (available on macOS GitHub Actions runner)
 - NSIS — Windows installer compiler (via `chocolatey install nsis` on Windows runner)
+- `VITE_BFF_URL` and `VITE_DAEMON_URL` env vars must be defined in SPA build config before Wave 4 ships
 - v0.3.0 tag must be cut before engineering starts
 
 ---
@@ -271,17 +298,18 @@ No tickets — ceremony only.
 
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|------|-----------|--------|------------|
-| R-1 | Notarization credential misconfiguration silently fails the `sign-macos` job — notarized .dmg not produced | Low | High | Wave 4 (#1648) does an end-to-end verification on a real tag; `notarytool` credentials confirmed in SSM before Wave 4 closes |
-| R-2 | SmartScreen hard-blocks unsigned .exe on Windows 11 — no bypass path | Medium | High | Document SmartScreen bypass in Wave 3 SPA; confirm on clean Windows 11 VM; escalate to Ray if block is unbypassable without EV signing |
-| R-3 | PKCE localhost callback port conflict | Low | Medium | Handle gracefully in #1650: retry with ephemeral port, surface error message, never crash |
-| R-4 | `go-keyring` OS keychain integration fails on a specific macOS/Windows version | Low | High | Spike keychain write/read in #1651 before committing to keychain-only storage; keep plaintext fallback path documented |
-| R-5 | Azure identity validation not approved before Wave 4 closes | Medium | Low | Wave 4 documents the workflow only — approval is not required to close the wave; escalate if approval is not received before GA prep begins |
-| R-6 | Wave 5–6 tickets not created before those waves start | High | Medium | PM action item: file Wave 5 tickets before Wave 4 closes, Wave 6 tickets before Wave 5 closes |
+| R-1 | Notarization credential misconfiguration silently fails the `sign-macos` job — notarized .dmg not produced | Low | High | Wave 7 (#1648) does an end-to-end verification on a real tag; `notarytool` credentials confirmed in SSM before Wave 7 closes |
+| R-2 | SmartScreen hard-blocks unsigned .exe on Windows 11 — no bypass path | Medium | High | Document SmartScreen bypass in Wave 6 SPA; confirm on clean Windows 11 VM in Wave 9; escalate to Ray if block is unbypassable without EV signing |
+| R-3 | PKCE localhost callback port conflict | Low | Medium | ✅ Resolved (Wave 3) — handled in #1650; retry 51424, surface error message, never crash |
+| R-4 | `go-keyring` OS keychain integration fails on a specific macOS/Windows version | Low | High | ✅ Resolved (Wave 3) — validated in #1651; CGO-free cross-compile confirmed |
+| R-5 | Azure identity validation not approved before Wave 7 closes | Medium | Low | Wave 7 documents the workflow only — approval is not required to close the wave; escalate if approval is not received before GA prep begins |
+| R-6 | #1695 apiClient split misroutes a call — daemon endpoint hits cloud BFF in production | Medium | High | TypeScript type-check + Playwright E2E required as Wave 4 DoD gates before merge |
+| R-7 | Wave 8 (Storybook) tickets not created before wave starts | Low | Medium | All three tickets (#1621, #1622, #1625) already on Project #33 — no gap |
 
 ---
 
 ## Sequencing Note
 
-v0.3.1 is a blocking prerequisite for v0.4.0. Engineering does not begin v0.4.0 Wave 0 until PM issues a formal GO after all v0.3.1 Wave 7 release gate items are green.
+v0.3.1 is a blocking prerequisite for v0.4.0. Engineering does not begin v0.4.0 Wave 0 until PM issues a formal GO after all v0.3.1 Wave 9 release gate items are green.
 
-Waves 1–4 can partially overlap where tickets have no inter-wave dependencies. Waves 5–6 must run sequentially after Wave 4. Wave 7 cannot start until all prior waves are closed.
+Wave 3 is closed. Waves 4–5 are the immediate priority (production blockers). Waves 6–8 can partially overlap where tickets have no inter-wave dependencies. Wave 9 (Staging Validation) cannot start until all prior waves are closed.
