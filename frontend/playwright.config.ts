@@ -21,9 +21,9 @@ export default defineConfig({
   // Maximum time one test can run for
   timeout: 30 * 1000,
 
-  // Run tests sequentially for consistent state management
-  fullyParallel: false,
-  workers: process.env.CI ? 2 : undefined,
+  // Run tests in parallel for faster CI execution
+  fullyParallel: true,
+  workers: process.env.CI ? 4 : undefined,
 
   // Fail the build on CI if you accidentally left test.only in the source code
   forbidOnly: !!process.env.CI,

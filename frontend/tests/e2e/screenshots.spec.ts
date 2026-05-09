@@ -36,9 +36,8 @@ test.describe('Documentation Screenshots', () => {
     await page.goto('/');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
-    // Wait for data to load
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500); // Allow animations to complete
+    // Wait for primary content to be visible
+    await page.waitForSelector('.match-history-table-container, .empty-state', { timeout: 10000 }).catch(() => {});
 
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, 'match-history.png'),
@@ -50,9 +49,8 @@ test.describe('Documentation Screenshots', () => {
     await page.goto('/draft');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
-    // Wait for draft list to load
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for draft content to be visible
+    await page.waitForSelector('.draft-container, .draft-empty, .empty-state', { timeout: 10000 }).catch(() => {});
 
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, 'draft-history.png'),
@@ -64,9 +62,8 @@ test.describe('Documentation Screenshots', () => {
     await page.goto('/decks');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
-    // Wait for decks to load
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for decks page content to be visible
+    await page.waitForSelector('.decks-page', { timeout: 10000 }).catch(() => {});
 
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, 'decks.png'),
@@ -78,9 +75,8 @@ test.describe('Documentation Screenshots', () => {
     await page.goto('/quests');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
-    // Wait for quest data to load
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for quests content to be visible
+    await page.waitForSelector('.quests-section, .quests-header, .empty-state', { timeout: 10000 }).catch(() => {});
 
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, 'quests.png'),
@@ -92,9 +88,8 @@ test.describe('Documentation Screenshots', () => {
     await page.goto('/collection');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
-    // Wait for collection data to load
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000); // Collection may take longer to load
+    // Wait for collection content to be visible
+    await page.waitForSelector('.collection-container, .collection-page, .empty-state', { timeout: 15000 }).catch(() => {});
 
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, 'collection.png'),
@@ -106,9 +101,8 @@ test.describe('Documentation Screenshots', () => {
     await page.goto('/meta');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
-    // Wait for meta data to load
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000); // Meta data may take longer
+    // Wait for meta page content to be visible
+    await page.waitForSelector('.meta-page', { timeout: 15000 }).catch(() => {});
 
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, 'meta-dashboard.png'),
@@ -120,9 +114,8 @@ test.describe('Documentation Screenshots', () => {
     await page.goto('/charts/deck-performance');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
-    // Wait for chart to render
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chart page container to be visible
+    await page.waitForSelector('.page-container', { timeout: 10000 }).catch(() => {});
 
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, 'charts-deck-performance.png'),
@@ -134,9 +127,8 @@ test.describe('Documentation Screenshots', () => {
     await page.goto('/charts/format-distribution');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
-    // Wait for chart to render
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chart page container to be visible
+    await page.waitForSelector('.page-container', { timeout: 10000 }).catch(() => {});
 
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, 'charts-format-distribution.png'),
@@ -148,9 +140,8 @@ test.describe('Documentation Screenshots', () => {
     await page.goto('/charts/result-breakdown');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
-    // Wait for chart to render
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chart page container to be visible
+    await page.waitForSelector('.page-container', { timeout: 10000 }).catch(() => {});
 
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, 'charts-result-breakdown.png'),
@@ -162,9 +153,8 @@ test.describe('Documentation Screenshots', () => {
     await page.goto('/settings');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
-    // Wait for settings to load
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for settings page content to be visible
+    await page.waitForSelector('.settings-page, .settings-container, [class*="settings"]', { timeout: 10000 }).catch(() => {});
 
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, 'settings.png'),
