@@ -133,16 +133,15 @@ The architect confirmed the following order is correct and internally consistent
 
 ---
 
-### Wave 3 — PKCE Auth (dependency-coupled — all 5 tickets ship together) — UNBLOCKED ✓
+### Wave 3 — PKCE Auth (dependency-coupled — all 5 tickets ship together) — CLOSED ✓
 
 | | |
 |---|---|
 | **Theme** | Zero-terminal daemon authentication |
 | **Goal** | Daemon detects missing config, opens browser, completes PKCE, stores key in OS keychain, registers with BFF — no manual key copy-paste ever |
+| **Status** | CLOSED — all 5 tickets merged; DoD verified by LE. Wave 4 is unblocked. |
 
 > **Coupling note**: These 5 tickets have hard sub-dependencies. #1643 (config detection) and #1651 (keychain storage) must be implemented before #1650 (PKCE flow) can be tested end-to-end. #1652 (BFF endpoint) must exist before #1650 can complete registration. #1674 (migration) must merge before or with #1652. All 5 must ship together — no partial merges. Wave 0 conditions C-1 through C-8 must be satisfied before this wave starts (see Section 4).
->
-> **Status (2026-05-09)**: UNBLOCKED. C-1 through C-5 satisfied; C-3 confirmed done (Clerk Native API enabled, redirect URIs registered). C-6, C-7, C-8 are resolved during Wave 3 itself per the coupling design — they are not pre-blockers. Wave 3 may start.
 
 | Ticket | Title | Owner | Effort |
 |--------|-------|-------|--------|
@@ -153,26 +152,81 @@ The architect confirmed the following order is correct and internally consistent
 | #1650 | feat(daemon): implement PKCE OAuth browser-redirect login flow | backend-engineer | M |
 
 **Definition of done:**
-- [ ] Daemon with no `daemon.json` opens `vaultmtg.app/setup` in system browser (or prints URL if headless)
-- [ ] PKCE flow completes end-to-end: localhost callback on port 51423 (retry 51424) → Clerk login → auth code → `POST /v1/daemon/register`
-- [ ] BFF verifies Clerk JWT, mints API key using `daemon_api_keys` table; rate-limited at 5 req/hour per `account_id` (in-memory, no Redis)
-- [ ] `POST /v1/daemon/register` request body requires three fields: `device_id` (UUID, unique per daemon installation), `platform` (string — e.g. `darwin`, `windows`), `daemon_ver` (semver string — e.g. `0.3.1`); missing any field returns 400
-- [ ] `daemon_api_keys` schema includes `device_id UUID NOT NULL`, `platform TEXT NOT NULL`, `daemon_ver TEXT NOT NULL`, and `UNIQUE(device_id)` in addition to the existing `UNIQUE(account_id)`
-- [ ] BFF returns 200 + existing key if account already has one (not 201)
-- [ ] Daemon writes API key to OS keychain using service `com.mtga-companion.daemon`, account `api-key`
-- [ ] On subsequent starts, daemon reads key from keychain without re-opening browser
-- [ ] Port conflict handled gracefully — retry 51424, surface error message, never crash
-- [ ] `GOOS=windows GOARCH=amd64 go build ./...` passes with zero CGO in dependency graph (per Wave 0 Decision 5)
-- [ ] PostHog `daemon_paired` event fires after successful keychain write
-- [ ] `go-keyring` added to `services/daemon/go.mod`
-- [ ] Integration tests cover BFF `/v1/daemon/register` — JWT verification, key minting, idempotent re-use, rate limit
+- [x] Daemon with no `daemon.json` opens `vaultmtg.app/setup` in system browser (or prints URL if headless)
+- [x] PKCE flow completes end-to-end: localhost callback on port 51423 (retry 51424) → Clerk login → auth code → `POST /v1/daemon/register`
+- [x] BFF verifies Clerk JWT, mints API key using `daemon_api_keys` table; rate-limited at 5 req/hour per `account_id` (in-memory, no Redis)
+- [x] `POST /v1/daemon/register` request body requires three fields: `device_id` (UUID, unique per daemon installation), `platform` (string — e.g. `darwin`, `windows`), `daemon_ver` (semver string — e.g. `0.3.1`); missing any field returns 400
+- [x] `daemon_api_keys` schema includes `device_id UUID NOT NULL`, `platform TEXT NOT NULL`, `daemon_ver TEXT NOT NULL`, and `UNIQUE(device_id)` in addition to the existing `UNIQUE(account_id)`
+- [x] BFF returns 200 + existing key if account already has one (not 201)
+- [x] Daemon writes API key to OS keychain using service `com.mtga-companion.daemon`, account `api-key`
+- [x] On subsequent starts, daemon reads key from keychain without re-opening browser
+- [x] Port conflict handled gracefully — retry 51424, surface error message, never crash
+- [x] `GOOS=windows GOARCH=amd64 go build ./...` passes with zero CGO in dependency graph (per Wave 0 Decision 5)
+- [x] PostHog `daemon_paired` event fires after successful keychain write
+- [x] `go-keyring` added to `services/daemon/go.mod`
+- [x] Integration tests cover BFF `/v1/daemon/register` — JWT verification, key minting, idempotent re-use, rate limit
 
 **Assigned agents**: backend-engineer (primary)
 **Estimated effort**: L (1× M + 4× S)
 
 ---
 
-### Wave 4 — SPA Setup Page + Download UX
+### Wave 4 — SPA Routing Fix + Infrastructure Cleanup
+
+| | |
+|---|---|
+| **Theme** | Fix production-blocking routing bugs before any SPA feature work |
+| **Goal** | SPA routes all API calls to the correct target (cloud BFF vs local daemon); nginx/CloudFront returns clean 404+CORS on unhandled routes |
+
+> **Rationale**: Without #1695, every API call that should hit the local daemon is 404ing against the cloud BFF in production — the SPA is functionally broken for daemon-dependent features. #1696 is an infra fix that can run in parallel (#1695 and #1696 have no shared files). Both must close before any SPA feature wave (#1697–#1700, Wave 5) ships to production.
+
+| Ticket | Title | Owner | Effort |
+|--------|-------|-------|--------|
+| #1695 | feat(frontend): split apiClient.ts into dual base URLs — `VITE_BFF_URL` (cloud) and `VITE_DAEMON_URL` (local daemon); update 10 API modules to route to correct target | front-engineer | M |
+| #1696 | fix(infra): nginx/CloudFront returns 503+CORS on unhandled cloud BFF routes — return clean 404 with CORS headers | infrastructure | S |
+
+**Definition of done:**
+- [ ] `apiClient.ts` split: all cloud-BFF calls use `VITE_BFF_URL`; all local daemon calls use `VITE_DAEMON_URL`; no daemon calls route to cloud BFF
+- [ ] All 10 affected API modules updated and type-checked (`npx tsc --noEmit` clean)
+- [ ] nginx/CloudFront config updated: unhandled routes return 404 (not 503) with correct CORS headers
+- [ ] Component tests updated for API module changes; Playwright E2E smoke passes
+- [ ] CI green on main after merge
+
+**Assigned agents**: front-engineer (#1695), infrastructure (#1696) — parallel
+**Estimated effort**: M (1× M + 1× S, parallel)
+
+---
+
+### Wave 5 — First-Run Empty States + Onboarding Analytics
+
+| | |
+|---|---|
+| **Theme** | First-run user experience — show empty states when daemon is not connected; instrument the onboarding funnel |
+| **Goal** | New users who land on Match History, Collection, or Decks without a connected daemon see a clear, actionable empty state rather than a broken or blank UI; funnel analytics fire so we can measure drop-off |
+
+> **Rationale**: Wave 4 (#1695) must close first — these pages rely on correct daemon vs BFF routing to detect the no-daemon state. Once routing is correct, empty states are the highest-impact UX fix for first-run users before beta launch. Funnel events (#1700) ship in the same wave so PostHog data is available from day one of beta.
+
+| Ticket | Title | Owner | Effort |
+|--------|-------|-------|--------|
+| #1697 | feat(frontend): implement empty state for Match History page (first-run, no daemon) | front-engineer | S |
+| #1698 | feat(frontend): implement empty state for Collection page (first-run, no daemon) | front-engineer | S |
+| #1699 | feat(frontend): implement empty state for Decks page (first-run, no daemon) | front-engineer | S |
+| #1700 | feat(frontend): implement first-run onboarding funnel analytics events (funnel_daemon_installed, funnel_first_game_played) | front-engineer | S |
+
+**Definition of done:**
+- [ ] Match History, Collection, and Decks pages each render a design-spec-compliant empty state when daemon is not connected (not a blank screen or error)
+- [ ] Empty states include a clear CTA pointing users to `/setup` or daemon download
+- [ ] `funnel_daemon_installed` and `funnel_first_game_played` PostHog events fire at the correct points in the first-run flow
+- [ ] Component tests added for all three empty state components
+- [ ] Playwright E2E test covers the no-daemon empty state flow end-to-end
+- [ ] CI green on main after merge
+
+**Assigned agents**: front-engineer
+**Estimated effort**: L (4× S)
+
+---
+
+### Wave 6 — SPA Setup Page + Download UX
 
 | | |
 |---|---|
@@ -199,7 +253,7 @@ The architect confirmed the following order is correct and internally consistent
 
 ---
 
-### Wave 5 — GA Readiness Documentation
+### Wave 7 — GA Readiness Documentation
 
 | | |
 |---|---|
@@ -225,14 +279,14 @@ The architect confirmed the following order is correct and internally consistent
 
 ---
 
-### Wave 6 — Component Library Foundation
+### Wave 8 — Component Library Foundation
 
 | | |
 |---|---|
 | **Theme** | Storybook + Chromatic baseline — pre-beta quality gate |
 | **Goal** | Storybook 8 installed and deployed to Chromatic; baseline snapshots approved; Chromatic check required in CI |
 
-> Wave 6 can partially overlap with Wave 5 — the Storybook spike (#1621) has no dependency on Wave 5 tickets and may start as soon as Wave 3 closes.
+> Wave 8 can partially overlap with Wave 7 — the Storybook spike (#1621) has no dependency on Wave 7 tickets and may start as soon as Wave 3 closes.
 
 | Ticket | Title | Owner | Effort |
 |--------|-------|-------|--------|
@@ -252,7 +306,7 @@ The architect confirmed the following order is correct and internally consistent
 
 ---
 
-### Wave 7 — Staging Validation
+### Wave 9 — Staging Validation
 
 | | |
 |---|---|
@@ -278,17 +332,17 @@ The architect confirmed the following order is correct and internally consistent
 
 ---
 
-### Wave 8 — Release Gate (ceremony)
+### Wave 10 — Release Gate (ceremony)
 
 | | |
 |---|---|
 | **Theme** | Final sign-off, tag, and publish |
 | **Goal** | All exit gates verified; v0.3.1 tag cut; GitHub Release created |
 
-**Tickets**: None — ceremony wave. PM files Wave 8 tracking ticket before Wave 6 closes.
+**Tickets**: None — ceremony wave. PM files Wave 10 tracking ticket before Wave 8 closes.
 
 **Definition of done (all must be true before PM issues GO):**
-- [ ] All Waves 1–7 are closed; all tickets in Done state on Project #33
+- [ ] All Waves 1–9 are closed; all tickets in Done state on Project #33
 - [ ] CI green on main (hard gate — no exceptions)
 - [ ] Staging `/healthz` returns 200 after deploy
 - [ ] macOS DMG is signed + notarized + stapled; installs and clears Gatekeeper automatically on macOS 14+ (no bypass required)
@@ -306,7 +360,7 @@ The architect confirmed the following order is correct and internally consistent
 
 ## 4. Architecture Conditions (Wave 0 → Wave 3+ Gates)
 
-These conditions were identified in the arch review. Engineering **MAY NOT begin Wave 3** until all C-1 through C-8 are satisfied. Wave 4 also has specific conditions.
+These conditions were identified in the arch review. Engineering **MAY NOT begin Wave 3** until all C-1 through C-8 are satisfied. Wave 7 also has a specific condition.
 
 | # | Condition | Owner | Deadline | Status |
 |---|---|---|---|---|
@@ -315,11 +369,11 @@ These conditions were identified in the arch review. Engineering **MAY NOT begin
 | C-3 | Clerk OAuth application configured with `http://localhost:51423/callback` and `http://localhost:51424/callback` | PM action (register URIs) + backend-engineer | Before #1650 In Progress | ✓ DONE 2026-05-09 — Clerk Native API enabled; both redirect URIs registered in Native Applications → Allowlist |
 | C-4 | API key scoping confirmed: per-user, one-key-per-account, `UNIQUE on account_id`. | Resolved (Wave 0) | Before #1652 In Progress | ✓ Resolved (Wave 0) |
 | C-5 | Key revocation behavior confirmed: re-use existing key on reinstall; BFF returns 200 (not 201). | Resolved (Wave 0) | Before #1652 In Progress | ✓ Resolved (Wave 0) |
-| C-6 | `daemon_api_keys` migration ticket #1674 merged to main before or with #1652. | DBA / backend-engineer | Before #1652 In Progress | OPEN — resolved during Wave 3 |
-| C-7 | `POST /v1/daemon/register` request/response JSON contract documented in ADR-020. | Architect + backend-engineer | Before Wave 3 starts | OPEN — resolved during Wave 3 |
-| C-8 | `daemon.json` canonical schema documented in ADR-020 (with migration path from legacy plaintext `api_key`). | Backend-engineer | Before #1643 In Progress | OPEN — resolved during Wave 3 |
+| C-6 | `daemon_api_keys` migration ticket #1674 merged to main before or with #1652. | DBA / backend-engineer | Before #1652 In Progress | ✓ Resolved (Wave 3) |
+| C-7 | `POST /v1/daemon/register` request/response JSON contract documented in ADR-020. | Architect + backend-engineer | Before Wave 3 starts | ✓ Resolved (Wave 3) |
+| C-8 | `daemon.json` canonical schema documented in ADR-020 (with migration path from legacy plaintext `api_key`). | Backend-engineer | Before #1643 In Progress | ✓ Resolved (Wave 3) |
 
-**Wave 5 condition** (non-blocking for Wave 3 start, must resolve before Wave 5 closes):
+**Wave 7 condition** (non-blocking for Wave 3 start, must resolve before Wave 7 closes):
 - Azure identity validation approval confirmed. If not received, escalate to Ray.
 
 ---
@@ -328,7 +382,7 @@ These conditions were identified in the arch review. Engineering **MAY NOT begin
 
 All of the following must be true before the v0.3.1 tag is cut:
 
-- **EG-1** — All Waves 1–7 closed; all tickets in Done state on Project #33
+- **EG-1** — All Waves 1–9 closed; all tickets in Done state on Project #33
 - **EG-2** — CI green on main (hard gate — no exceptions; BROADCAST Active Directive 2 applies)
 - **EG-3** — macOS DMG is signed + notarized + stapled; installs and clears Gatekeeper automatically on macOS 14+ (no bypass required)
 - **EG-4** — Windows installer runs without SmartScreen hard-block on Windows 11
@@ -344,8 +398,8 @@ All of the following must be true before the v0.3.1 tag is cut:
 Open items that must be resolved — updated 2026-05-09:
 
 - [x] **Register Clerk OAuth redirect URIs** — DONE 2026-05-09. `http://localhost:51423/callback` and `http://localhost:51424/callback` registered in Clerk Native Applications → Allowlist. C-3 satisfied.
-- [ ] **Confirm Azure identity validation approved** — Microsoft review in progress. Escalate to Ray if no approval by Wave 5 start.
-- [ ] **File Wave 8 release gate tickets** before Wave 6 closes — Wave 8 is a ceremony wave; PM files a tracking ticket so the release gate has a board artifact.
+- [ ] **Confirm Azure identity validation approved** — Microsoft review in progress. Escalate to Ray if no approval by Wave 7 start.
+- [ ] **File Wave 10 release gate tracking ticket** before Wave 8 closes — Wave 10 is a ceremony wave; PM files a tracking ticket so the release gate has a board artifact.
 
 **Pending cleanup**: PR #1686 (changelogs + gitignore + go.work.sum) — open, pending merge.
 
@@ -355,18 +409,19 @@ Open items that must be resolved — updated 2026-05-09:
 
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|------|-----------|--------|------------|
-| R-1 | Notarization credential misconfiguration silently fails the `sign-macos` job — notarized .dmg not produced | Low | High | Wave 5 (#1648) does an end-to-end verification on a real tag; `notarytool` credentials confirmed in SSM before Wave 5 closes |
-| R-2 | SmartScreen hard-blocks unsigned .exe on Windows 11 — no bypass path | Medium | High | Document SmartScreen bypass in Wave 4 SPA; confirm on clean Windows 11 VM in Wave 7; escalate to Ray if block is unbypassable without EV signing (Azure Trusted Signing deferred to GA) |
+| R-1 | Notarization credential misconfiguration silently fails the `sign-macos` job — notarized .dmg not produced | Low | High | Wave 7 (#1648) does an end-to-end verification on a real tag; `notarytool` credentials confirmed in SSM before Wave 7 closes |
+| R-2 | SmartScreen hard-blocks unsigned .exe on Windows 11 — no bypass path | Medium | High | Document SmartScreen bypass in Wave 6 SPA; confirm on clean Windows 11 VM in Wave 9; escalate to Ray if block is unbypassable without EV signing (Azure Trusted Signing deferred to GA) |
 | R-3 | PKCE localhost callback port conflict (51423 in use) | Low | Medium | #1650 must retry on 51424, then surface a clear error message — never crash; both ports registered in Clerk |
 | R-4 | `go-keyring` OS keychain integration fails on a specific macOS/Windows version | Low | High | Spike keychain write/read in #1651 before committing; CGO-free cross-compile validated in CI (C-5 condition) |
-| R-5 | Azure identity validation not approved before Wave 5 closes | Medium | Low | Wave 5 documents the workflow only — active signing not required to close the wave; escalate if unresolved before GA prep |
+| R-5 | Azure identity validation not approved before Wave 7 closes | Medium | Low | Wave 7 documents the workflow only — active signing not required to close the wave; escalate if unresolved before GA prep |
 | R-6 | Clerk does not permit exact `http://localhost:51423/callback` as redirect URI on current plan tier | Low | High | Fallback: custom URL scheme (`mtgacompanion://callback`) — requires new ticket; scope to separate spike if Clerk rejects exact-match localhost URI |
-| R-7 | `daemon_api_keys` migration (#1674) not merged before #1652 starts — Wave 3 integration failure | Medium | High | C-6 condition blocks #1652 from starting; PM must confirm migration is merged before unblocking backend-engineer on #1652 |
-| R-8 | v0.4.0 engineers start work before v0.3.1 closes | Low | High | BROADCAST Active Directive 1 blocks this; PM must not issue GO until Wave 7 is fully green and all exit gates pass |
+| R-7 | `daemon_api_keys` migration (#1674) not merged before #1652 starts — Wave 3 integration failure | Medium | High | ✓ Resolved — C-6 condition enforced; Wave 3 closed with all migrations merged |
+| R-8 | v0.4.0 engineers start work before v0.3.1 closes | Low | High | BROADCAST Active Directive 1 blocks this; PM must not issue GO until Wave 9 is fully green and all exit gates pass |
+| R-9 | #1695 apiClient split misroutes a call — daemon endpoint hits cloud BFF in production | Medium | High | TypeScript type-check (`npx tsc --noEmit`) + Playwright E2E required as Wave 4 DoD gates before merge |
 | R-A (arch) | Clerk wildcard redirect URI not supported — fixed port is the mitigation | Low | High | Fixed port 51423 chosen; PM must register URIs before Wave 3 starts |
-| R-B (arch) | `go-keyring` requires macOS Keychain entitlement for notarized builds | Medium | Medium | Entitlement must be confirmed in #1648 (Wave 5) — signing is active, so this is a Wave 5 blocker, not GA scope |
+| R-B (arch) | `go-keyring` requires macOS Keychain entitlement for notarized builds | Medium | Medium | Entitlement must be confirmed in #1648 (Wave 7) — signing is active, so this is a Wave 7 blocker, not GA scope |
 | R-C (arch) | `go-keyring` CGO dependency fails on Windows cross-compile | Low | High | CGO-free validation added to #1651 ACs as a CI gate |
-| R-D (arch) | Missing `daemon_api_keys` migration causes Wave 3 integration failure | Medium | High | Tracked as #1674; C-6 condition blocks #1652 until migration is merged |
+| R-D (arch) | Missing `daemon_api_keys` migration causes Wave 3 integration failure | Medium | High | ✓ Resolved — tracked as #1674; closed with Wave 3 |
 | R-E (arch) | Gatekeeper quarantine on binary (not just installer) | Medium | High | `xattr -dr com.apple.quarantine` added to #1640 postinstall ACs (Wave 0 Decision 4) |
 
 ---
@@ -377,8 +432,8 @@ Explicit list of what is NOT in v0.3.1:
 
 | Item | Where it goes |
 |------|--------------|
-| Azure Trusted Signing (active signing) | GA milestone — Wave 5 documents the workflow only; identity validation + budget approval pending |
-| Full Storybook component story library (beyond Wave 6 baseline) | v0.4.0 follow-on after Chromatic baseline is established |
+| Azure Trusted Signing (active signing) | GA milestone — Wave 7 documents the workflow only; identity validation + budget approval pending |
+| Full Storybook component story library (beyond Wave 8 baseline) | v0.4.0 follow-on after Chromatic baseline is established |
 | Security agent / supply-chain scanning beyond npm audit + govulncheck | Post-GA |
 | Windows MSI installer (enterprise) | Post-GA only if requested — beta uses NSIS .exe |
 | System tray / menubar icon | Post-GA |
@@ -388,7 +443,7 @@ Explicit list of what is NOT in v0.3.1:
 | Device authorization flow (headless) | Fallback for CI/server — not a beta user scenario |
 | API key issuance/revoke UI (#1314) | Superseded by PKCE — daemon handles key acquisition automatically; SPA key management UI deferred post-beta |
 | GoReleaser Pro features | Open-source tier sufficient for beta |
-| Any v0.4.0 feature work | Engineering does not start v0.4.0 until PM issues GO after Wave 7 |
+| Any v0.4.0 feature work | Engineering does not start v0.4.0 until PM issues GO after Wave 9 |
 
 ---
 
@@ -397,25 +452,28 @@ Explicit list of what is NOT in v0.3.1:
 ```
 v0.3.0 closed (2026-05-09) ✓
   │
-  └─▶ Wave 1 — CI Hardening (#1658, #1659, #1667, #1668)
+  └─▶ Wave 1 — CI Hardening (#1658, #1659, #1667, #1668) ✓ CLOSED
         │
-        └─▶ Wave 2 — Binary Build + Installer Foundation (#1639, #1642, #1640, #1641)
+        └─▶ Wave 2 — Binary Build + Installer Foundation (#1639, #1642, #1640, #1641) ✓ CLOSED
               │
-              ├─▶ Wave 3 — PKCE Auth [all 5 ship together] (#1643, #1651, #1674, #1652, #1650)
-              │     │  [requires C-1 through C-8 satisfied]
-              │     │
-              │     └─▶ Wave 4 — SPA Setup Page + Download UX (#1644, #1645, #1646, #1647)
-              │           │
-              │           ├─▶ Wave 5 — GA Readiness Docs (#1648, #1649) [partially parallel]
-              │           │
-              │           └─▶ Wave 6 — Component Library (#1621, #1622, #1625)
-              │                 [#1621 spike can start when Wave 3 closes, not Wave 4]
-              │
-              └─▶ Wave 7 — Staging Validation (#1669, #1670, #1671)
+              └─▶ Wave 3 — PKCE Auth [all 5 ship together] (#1643, #1651, #1674, #1652, #1650) ✓ CLOSED
                     │
-                    └─▶ Wave 8 — Release Gate (ceremony)
+                    ├─▶ Wave 4 — SPA Routing Fix + Infra Cleanup (#1695, #1696) [parallel — unblocked by Wave 3]
+                    │     │
+                    │     └─▶ Wave 5 — First-Run Empty States + Onboarding Analytics (#1697, #1698, #1699, #1700)
+                    │           │
+                    │           └─▶ Wave 6 — SPA Setup Page + Download UX (#1644, #1645, #1646, #1647)
+                    │                 │
+                    │                 ├─▶ Wave 7 — GA Readiness Docs (#1648, #1649) [partially parallel with Wave 8]
+                    │                 │
+                    │                 └─▶ Wave 8 — Component Library (#1621, #1622, #1625)
+                    │                       [#1621 spike can start when Wave 3 closes]
+                    │
+                    └─▶ Wave 9 — Staging Validation (#1669, #1670, #1671)
                           │
-                          └─▶ v0.3.1 tag ✓
+                          └─▶ Wave 10 — Release Gate (ceremony)
+                                │
+                                └─▶ v0.3.1 tag ✓
 ```
 
-No v0.4.0 work begins until PM issues GO after Wave 8.
+No v0.4.0 work begins until PM issues GO after Wave 10.
