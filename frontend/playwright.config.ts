@@ -17,6 +17,7 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests/e2e',
+  globalSetup: './playwright.global-setup.ts',
 
   // Maximum time one test can run for
   timeout: 30 * 1000,
@@ -42,6 +43,9 @@ export default defineConfig({
   use: {
     // Base URL for the Vite dev server
     baseURL: 'http://localhost:3000',
+
+    // Timeout for each Playwright action (click, fill, waitForSelector, etc.)
+    actionTimeout: 30_000,
 
     // Collect trace on failure for debugging
     trace: 'on-first-retry',
