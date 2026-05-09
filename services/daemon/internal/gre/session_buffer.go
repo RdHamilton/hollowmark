@@ -131,26 +131,32 @@ func (m *Manager) RunSweep(ctx context.Context) {
 	}
 }
 
+// staleEntry captures the data needed to flush a stale session after the lock
+// is released.
+type staleEntry struct {
+	entries     []json.RawMessage
+	lastUpdated time.Time
+}
+
 // sweepStale evicts and flushes any session buffer whose last-updated time
 // is older than staleMinutes.
 func (m *Manager) sweepStale(ctx context.Context) {
-	threshold := time.Duration(m.staleMinutes) * time.Minute
-	cutoff := time.Now().Add(-threshold)
+	cutoff := time.Now().Add(-time.Duration(m.staleMinutes) * time.Minute)
 
 	m.mu.Lock()
-	stale := make(map[string][]json.RawMessage)
+	stale := make(map[string]staleEntry)
 	for id, buf := range m.sessions {
 		if len(buf.entries) > 0 && buf.lastUpdated.Before(cutoff) {
-			stale[id] = buf.entries
+			stale[id] = staleEntry{entries: buf.entries, lastUpdated: buf.lastUpdated}
 			delete(m.sessions, id)
 		}
 	}
 	m.mu.Unlock()
 
-	for id, entries := range stale {
-		log.Printf("[gre] stale sweep flushing session=%s entries=%d last_updated=%s",
-			id, len(entries), time.Since(time.Now().Add(-threshold)))
-		if err := m.flush(ctx, id, entries, true); err != nil {
+	for id, e := range stale {
+		log.Printf("[gre] stale sweep flushing session=%s entries=%d idle=%s",
+			id, len(e.entries), time.Since(e.lastUpdated).Round(time.Second))
+		if err := m.flush(ctx, id, e.entries, true); err != nil {
 			log.Printf("[gre] warn: stale sweep flush session=%s: %v", id, err)
 		}
 	}

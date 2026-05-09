@@ -927,6 +927,44 @@ func TestRunOnce_GamePlayEvent_PartialOmitted_DefaultsFalse(t *testing.T) {
 	}
 }
 
+func TestRunOnce_GamePlayEvent_PartialTrue_NoMatchIDNoGameNumber_Accepted(t *testing.T) {
+	// Partial events (GRE buffer flushes) may have no match_id / game_number yet.
+	// The projector must accept them without error.
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"partial":      true,
+		"life_changes": []map[string]interface{}{},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 203, UserID: 1, AccountID: "acct-gre-flush", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 4},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 53}
+
+	w := newWorkerWithGamePlay(events, accounts, gp)
+	w.RunOnce(context.Background())
+
+	if len(gp.gamePlayInserts) != 1 {
+		t.Fatalf("expected 1 game_play insert for partial GRE flush, got %d", len(gp.gamePlayInserts))
+	}
+	ins := gp.gamePlayInserts[0]
+	if !ins.Partial {
+		t.Errorf("Partial: want true, got false")
+	}
+	if ins.MatchID != "" {
+		t.Errorf("MatchID: want empty for GRE flush, got %q", ins.MatchID)
+	}
+	if ins.GameNumber != 0 {
+		t.Errorf("GameNumber: want 0 for GRE flush, got %d", ins.GameNumber)
+	}
+	if len(events.projected) != 1 || events.projected[0] != 203 {
+		t.Errorf("expected row 203 marked projected, got %v", events.projected)
+	}
+}
+
 // --- match.game_ended tests ---
 
 // fakeGamePlayStoreCapturing captures calls for assertion.
