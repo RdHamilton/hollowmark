@@ -354,6 +354,7 @@ Every ticket must follow this exact progression — no skipping steps:
 
 Every ticket must end with a PR. Never leave work committed without one.
 When moving to PR Review, post a comment on the issue with the PR number.
+When moving to Done, also close the GitHub issue: `gh issue close <NUMBER> --repo RdHamilton/MTGA-Companion`
 
 ## Status Transitions
 

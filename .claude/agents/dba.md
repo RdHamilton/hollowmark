@@ -197,7 +197,7 @@ Every ticket assigned to this agent must follow this status progression on the v
 
 1. **In Progress** (`9fd907f0`) — set immediately when work begins
 2. **PR Review** (`0ca4880d`) — set when a PR is opened; post PR number as a comment on the issue
-3. **Done** (`7729b7fe`) — set when the PR is merged
+3. **Done** (`7729b7fe`) — set when the PR is merged; close the GitHub issue: `gh issue close <NUMBER> --repo RdHamilton/MTGA-Companion`
 
 Every ticket must end with a PR. Never leave work committed without opening one.
 
