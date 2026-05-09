@@ -38,7 +38,7 @@ The v0.3.0 Architecture Assessment (`docs/product/milestones/v0.4.0/arch-assessm
 | T4 | Projection marks malformed rows as projected (no dead-letter mechanism) | Data loss on any wire format bug |
 | T5 | Partial GRE events written with empty `match_id`/`game_number` | Analytics query correctness — partial rows poison aggregate queries |
 
-**Medium-priority issues (Wave 2 scope):** T6 (daemon local event queue), T7 (NOTIFY/LISTEN projection), T8 (account lookup cache), T9 (request timeout middleware), T10 (SSE slow-client metrics), T11 (typed stats envelope), T12 (SSE cookie name constant).
+**Medium-priority issues:** T8 (account lookup cache) and T9 (request timeout middleware) are **Wave 1** scope (BFF hardening track). T6 (daemon local event queue), T7 (NOTIFY/LISTEN projection), T10 (SSE slow-client metrics), T11 (typed stats envelope), T12 (SSE cookie name constant) are **Wave 2** scope.
 
 **Architectural decisions confirmed correct:** SSE (ADR-001), Clerk auth (ADR-009), cursor pagination (ADR-018), event ordering (ADR-013), game-play correlation (ADR-012). Do not revisit.
 
@@ -141,6 +141,7 @@ v0.4.0 runs in three sequential waves. Wave 1 does not start until Wave 0 is Don
 | TBD | feat: beta invite flow (waitlist → Clerk invite → sign-up) | backend-engineer + front-engineer | Required exit gate; project-manager creates ticket |
 | #1573 | feat(frontend): Crisp chat widget + `setup_idle_90s` event | front-engineer | CS tooling on day 1 |
 | TBD | Medium-priority BFF hardening (T8: account lookup cache, T9: request timeout middleware) | backend-engineer | Two small tickets; project-manager creates |
+| #1542 | feat: shareable player stats profile — public URL + OG preview | front-engineer + backend-engineer | Moved from Wave 2 per Ray decision 2026-05-09; satisfies roadmap Growth Ready exit gate |
 
 **Critical path**: Wave 0 Done → #1517 → #1488 → beta invite flow → exit gate.
 
@@ -226,8 +227,7 @@ Wave 2 starts after the closed beta is open (August 18, 2026). These are medium-
 | TBD | Add daemon local SQLite write-ahead event queue (T6) | architect design + backend-engineer | Crash-safe event delivery; not Sonnet-ready — architect designs first |
 | TBD | NOTIFY/LISTEN projection worker (T7) | architect design + backend-engineer | Reduces projection lag from 30s to <100ms; architect designs first |
 | TBD | ML deck building — degraded mode (no collection data) | backend-engineer + front-engineer | Repositioned ML vision per reprioritization doc |
-| TBD | Collection log parsing spike (#1543, revised scope) | backend-engineer | 3-day spike; go/no-go for full collection-aware ML |
-| #1542 | feat: shareable player stats profile — public URL + season card | front-engineer + backend-engineer | Deferred from v0.4.0 Wave 1; requires Wave 1 data stable |
+| #1543 | Collection log parsing spike (revised scope) | backend-engineer | 3-day spike; go/no-go for full collection-aware ML |
 
 > **Note**: T6 and T7 are architect-designed tickets. The architect must produce a design note before backend-engineer starts implementation. project-manager creates the tickets with placeholder ACs; architect fills in the design ACs before Wave 2 starts.
 
@@ -267,7 +267,7 @@ Wave 2 starts after the closed beta is open (August 18, 2026). These are medium-
 | Overwolf GEP integration | Post-GA, Windows lock-in, architecture cost not justified at beta |
 | Full standalone deck builder | Moxfield dominates; wrong investment at this stage |
 | Alchemy-specific features | ~8–12% format share and declining; divisive |
-| Shareable player stats (#1542) | Wave 2 — depends on Wave 1 data being stable and populated |
+| Shareable player stats season card (extended scope) | Wave 1 ships public URL + OG preview (#1542); full season card deferred to Wave 2 if time allows |
 | ML full mode (collection-aware) | Wave 3 conditional — gated on collection spike GO |
 | ADR-015, ADR-016 tickets (#1589, #1590) | Lambda batch pattern and 17Lands data source — sidelined with ML reprioritization |
 
