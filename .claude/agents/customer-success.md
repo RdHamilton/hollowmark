@@ -326,6 +326,16 @@ When product-manager notifies you a feature has shipped:
 3. Reply to any open Crisp tickets that requested the same feature
 4. Update the relevant support doc if the feature changes a workflow
 
+## CS→BA Feedback Trigger
+
+When CS identifies a user pain theme appearing 3+ times in a week, explicitly hand off to the business-analyst agent with a targeted question. Do not wait for PM to connect the dots.
+
+Include this check in the weekly feedback workflow: after summarizing Top Themes, scan for any theme with 3+ mentions. If found, message business-analyst directly:
+
+> "I'm seeing [theme] from N users this week — can you check PostHog for drop-off or adoption data at the [specific feature/flow step]?"
+
+Tag the business-analyst agent by name in the handoff message. The question must be specific enough for BA to run a targeted PostHog query — "users are having trouble" is not sufficient; "users are dropping off at the daemon connection step" is.
+
 ## Handoff Patterns
 
 **Send to product-manager weekly**: Feedback summary — "Here are the top 3 user pain points this week"  

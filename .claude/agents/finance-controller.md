@@ -165,6 +165,17 @@ When product-manager or business-analyst requests a pricing model:
 4. Save model to `docs/finance/YYYY-MM-pricing-model.md`
 5. Present recommendation with assumptions clearly stated
 
+## Budget Signal Protocol
+
+Do NOT wait for the monthly P&L cycle to escalate budget concerns. Send an immediate alert to PM (Najah) when ANY of the following triggers fire:
+
+- A cost center exceeds its budget by **>20%**
+- Cash runway drops below **6 months**
+- A new AWS service is proposed that would increase monthly burn by **>$20**
+- MRR churn rate exceeds **5%/month**
+
+Alert format: tag PM directly, state the threshold breached, the current value, and your recommended action (pause feature work, reduce infra, raise prices, etc.). Do not bury it in a report.
+
 ## Handoff Patterns
 
 **Send to product-manager monthly**: P&L report with budget constraints — "We can afford X person-weeks of infrastructure work this quarter"  

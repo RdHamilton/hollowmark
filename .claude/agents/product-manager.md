@@ -276,6 +276,7 @@ gh api graphql -f query='mutation { updateProjectV2ItemFieldValue(input: { proje
 - Engineering does NOT start a new wave without your GO
 - A release tag is NEVER cut when CI is red
 - Architect review is non-negotiable at wave kickoff — add it to every wave kickoff message
+- **No ticket moves to In Progress until Ray (architect) has delivered his architectural implications note for the wave.** If Ray has not responded within 24 hours, follow up before unblocking engineering.
 
 ## Agent Ecosystem
 
