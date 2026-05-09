@@ -27,4 +27,5 @@
 - `go test -race ./...` passes in both daemon and bff
 - `gofumpt -l .` prints nothing in both services
 
-### Step 4: PR — IN PROGRESS
+### Step 4: PR — DONE
+- PR #1603: https://github.com/RdHamilton/MTGA-Companion/pull/1603

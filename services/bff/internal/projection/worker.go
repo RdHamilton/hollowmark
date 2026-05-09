@@ -672,12 +672,18 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 		return fmt.Errorf("unmarshal match.game_ended payload: %w", err)
 	}
 
-	if p.MatchID == "" {
-		return fmt.Errorf("match.game_ended payload missing match_id")
-	}
+	// Partial events are GRE buffer flushes emitted before a game completes.
+	// They may not yet carry a final match_id or game_number, so skip those
+	// guards.  A follow-on ticket will add GRE entry parsing to populate these
+	// fields once the GRE log schema is mapped.
+	if !p.Partial {
+		if p.MatchID == "" {
+			return fmt.Errorf("match.game_ended payload missing match_id")
+		}
 
-	if p.GameNumber < 1 {
-		return fmt.Errorf("match.game_ended payload invalid game_number %d", p.GameNumber)
+		if p.GameNumber < 1 {
+			return fmt.Errorf("match.game_ended payload invalid game_number %d", p.GameNumber)
+		}
 	}
 
 	accountID, err := w.accounts.GetOrCreateByClientID(ctx, row.AccountID, row.UserID)
