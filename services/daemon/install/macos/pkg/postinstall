@@ -10,7 +10,7 @@
 #   3. Loads the LaunchAgent with launchctl so the daemon starts immediately
 #      without requiring a logout/login cycle.
 #
-# The binary is installed by pkgbuild into /usr/local/bin/mtga-companion-daemon
+# The binary is installed by pkgbuild into /usr/local/bin/vaultmtg-daemon
 # (the package root maps to / at install time).
 #
 # The config file (daemon.json) is NOT written here — first-run config
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 INSTALL_DIR="/usr/local/bin"
-BINARY_NAME="mtga-companion-daemon"
+BINARY_NAME="vaultmtg-daemon"
 BINARY_PATH="${INSTALL_DIR}/${BINARY_NAME}"
 
 PLIST_LABEL="com.mtga-companion.daemon"
@@ -30,7 +30,7 @@ PLIST_PATH="${PLIST_DIR}/${PLIST_LABEL}.plist"
 CONFIG_DIR="${HOME}/.mtga-companion"
 CONFIG_FILE="${CONFIG_DIR}/daemon.json"
 
-LOG_FILE="${HOME}/Library/Logs/mtga-companion-daemon.log"
+LOG_FILE="${HOME}/Library/Logs/vaultmtg-daemon.log"
 
 # ---------------------------------------------------------------------------
 # 1. Clear quarantine attribute (ADR-020 §macOS Quarantine Clearing).

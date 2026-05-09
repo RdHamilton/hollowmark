@@ -23,14 +23,14 @@
 !endif
 
 !ifndef BINARY_PATH
-  !define BINARY_PATH "bin\mtga-companion-daemon-windows-amd64.exe"
+  !define BINARY_PATH "bin\vaultmtg-daemon-windows-amd64.exe"
 !endif
 
 ;----------------------------------------------------------------------
 ; General attributes
 ;----------------------------------------------------------------------
 Name              "MTGA Companion Daemon ${VERSION}"
-OutFile           "mtga-companion-daemon-setup-${VERSION}.exe"
+OutFile           "vaultmtg-daemon-setup-${VERSION}.exe"
 
 ; Per-user install — no UAC prompt (RequestExecutionLevel user)
 RequestExecutionLevel user
@@ -65,7 +65,7 @@ Section "Install" SecInstall
   SetOutPath "$INSTDIR"
 
   ; Copy the binary.
-  File /oname=mtga-companion-daemon.exe "${BINARY_PATH}"
+  File /oname=vaultmtg-daemon.exe "${BINARY_PATH}"
 
   ; Create config directory.
   CreateDirectory "$APPDATA\mtga-companion"
@@ -86,15 +86,15 @@ Section "Install" SecInstall
 
   ; Register Scheduled Task at logon — no UAC (RunLevel LeastPrivilege).
   ; We use schtasks.exe because it is available on all Windows versions
-  ; without requiring PowerShell or admin rights for /RL HIGHEST on a per-user
-  ; task (the /RL flag on schtasks maps to TaskPrincipalRunLevel — HIGHEST here
-  ; means "highest privilege within the user's own token", not admin elevation).
+  ; without requiring PowerShell or admin rights for per-user tasks.
+  ; /RL LIMITEDACCESS maps to TaskPrincipalRunLevel LeastPrivilege — the task
+  ; runs with the user's standard token, no elevation prompt, no UAC.
   ExecWait 'schtasks /Delete /TN "MTGA-Companion-Daemon" /F'
   ExecWait 'schtasks /Create \
     /TN "MTGA-Companion-Daemon" \
-    /TR "\"$INSTDIR\mtga-companion-daemon.exe\" -config \"$APPDATA\mtga-companion\daemon.json\"" \
+    /TR "\"$INSTDIR\vaultmtg-daemon.exe\" -config \"$APPDATA\mtga-companion\daemon.json\"" \
     /SC ONLOGON \
-    /RL HIGHEST \
+    /RL LIMITED \
     /F'
 
   ; Start the daemon immediately without requiring a logoff/logon.
@@ -112,7 +112,7 @@ Section "Uninstall"
   ExecWait 'schtasks /Delete /TN "MTGA-Companion-Daemon" /F'
 
   ; Remove binary and uninstaller.
-  Delete "$INSTDIR\mtga-companion-daemon.exe"
+  Delete "$INSTDIR\vaultmtg-daemon.exe"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir  "$INSTDIR"
 
