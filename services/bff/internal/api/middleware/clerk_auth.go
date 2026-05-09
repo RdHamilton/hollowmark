@@ -10,7 +10,12 @@ import (
 	clerkhttp "github.com/clerk/clerk-sdk-go/v2/http"
 )
 
-// ctxKeyClerkUserID is the context key used to store the Clerk user ID (sub claim).
+// ctxKeyClerkUserID is reserved for future use if direct context-key storage
+// of the Clerk user ID is needed alongside the Clerk SDK's session claims.
+// Currently the Clerk SDK owns the context key; this constant is kept for
+// documentation purposes.
+//
+//nolint:unused
 const ctxKeyClerkUserID ctxKey = "clerk_user_id"
 
 // clerkSessionCookieName is the name of the session cookie set by the Clerk
@@ -134,6 +139,19 @@ func ClerkUserIDFromContext(r *http.Request) (string, bool) {
 	}
 
 	return claims.Subject, true
+}
+
+// WithClerkUserID returns a copy of r with a synthetic Clerk session context
+// that contains the given userID as the "sub" claim.
+//
+// This helper is intended for use in tests that need to simulate the effect of
+// RequireClerkAuth having verified a JWT — it avoids the need for a real Clerk
+// backend in unit tests.
+func WithClerkUserID(r *http.Request, userID string) *http.Request {
+	claims := &clerk.SessionClaims{}
+	claims.Subject = userID
+	ctx := clerk.ContextWithSessionClaims(r.Context(), claims)
+	return r.WithContext(ctx)
 }
 
 // statusCapture is a minimal ResponseWriter wrapper that records the first
