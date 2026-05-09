@@ -19,9 +19,6 @@ export default defineConfig({
   server: {
     port: 3000,
   },
-  optimizeDeps: {
-    force: true, // Always re-bundle dependencies on startup (avoids stale cache issues)
-  },
   test: {
     globals: true,
     environment: 'jsdom',
