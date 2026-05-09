@@ -144,6 +144,26 @@ v0.4.0 runs in three sequential waves. Wave 1 does not start until Wave 0 is Don
 
 **Critical path**: Wave 0 Done → #1517 → #1488 → beta invite flow → exit gate.
 
+### Visual Testing — Storybook + Chromatic
+
+Beta users will see the UI before any other external audience, so visual regressions caught pre-beta are significantly cheaper to fix than those surfaced during or after the closed beta. Storybook also serves as living component documentation that enables UX reviews without requiring a running environment. Adding this track now — with roughly three months before the August 18 open beta — gives the team enough runway to build a full story library and establish a Chromatic baseline before beta traffic begins.
+
+| Ticket | Title | Owner | Effort | Wave |
+|--------|-------|-------|--------|------|
+| TBD | Discovery spike: Storybook + Chromatic setup on React 19 + Vite | front-engineer | XS (2 days) | Wave 1 |
+| TBD | feat(frontend): install and configure Storybook 8 with Vite builder | front-engineer | S | Wave 1 |
+| TBD | feat(frontend): write stories for all existing UI components | front-engineer | M | Wave 1 |
+| TBD | feat(infra): integrate Chromatic into CI pipeline (PR visual diff gate) | infrastructure | S | Wave 1 |
+| TBD | feat(frontend): capture Chromatic baseline snapshots + approve initial set | front-engineer + ux-designer | XS | Wave 1 |
+
+**ACs for Visual Testing tickets:**
+
+- **Discovery spike**: Spike doc written in `docs/engineering/reference/storybook-spike.md`; confirms Storybook 8 + `@storybook/react-vite` builder works with React 19; documents any known incompatibilities; GO/NO-GO recommendation included.
+- **Install + configure**: `npx storybook dev` runs without errors; `.storybook/` config committed; existing Vitest suite still passes; TypeScript has no new errors.
+- **Write stories**: Every component in `frontend/src/components/` and `frontend/src/pages/` has at least one story covering its default state; components with multiple states (e.g. loading, empty, error) have a story per state; stories use MSW or static fixtures (no live API calls).
+- **Chromatic CI**: Chromatic project linked in repo; `chromatic --exit-zero-on-changes` runs on every PR in CI; Chromatic build URL posted as a PR check; merge is blocked on unreviewed visual changes (Chromatic auto-accept only on main branch builds).
+- **Baseline**: Chromatic baseline captured from main after Storybook install; all stories reviewed and accepted by ux-designer before Wave 1 close.
+
 #### User Stories — Wave 1
 
 1. As a beta tester, I want to see my constructed win rate per deck so that I can track improvement over time.
@@ -298,6 +318,7 @@ Wave 2 starts after the closed beta is open (August 18, 2026). These are medium-
 - [ ] RELEASE_CHECKLIST.md §0 staging gate completed (infrastructure + PM)
 - [ ] RELEASE_CHECKLIST.md §1 all pre-deploy gates green
 - [ ] CI green on main — verified at time of wave-close report (not at PR merge time)
+- [ ] Visual testing gate: Chromatic baseline captured and all stories accepted by ux-designer before Wave 1 closes.
 - [ ] Wave 1 close report written and GO/NO-GO issued by PM + LE co-sign
 
 ---
