@@ -39,6 +39,19 @@ builds:
     ldflags:
       - -s -w -X main.Version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
+    # Windows NSIS installer — compiled after the Windows amd64 binary is built.
+    # makensis is available on ubuntu runners via apt; skipped in snapshot mode.
+    hooks:
+      post:
+        - cmd: >
+            bash -c '[ "${IS_SNAPSHOT}" = "true" ] && exit 0;
+            command -v makensis >/dev/null 2>&1 || exit 0;
+            makensis
+            /DVERSION={{ .Version }}
+            /DBINARY_PATH=dist/vaultmtg-daemon-windows-amd64.exe
+            install/windows/nsis/installer.nsi'
+          env:
+            - IS_SNAPSHOT={{ .IsSnapshot }}
 
 # ---------------------------------------------------------------------------
 # Universal binary (darwin arm64 + amd64 → single universal binary via lipo)
@@ -49,13 +62,28 @@ universal_binaries:
       - daemon
     name_template: vaultmtg-daemon
     replace: true
+    # macOS .pkg/.dmg installer — built after lipo produces the universal binary.
+    # Runs only on darwin and is skipped automatically in snapshot mode because
+    # the script checks for the GORELEASER_CURRENT_TAG / IS_SNAPSHOT env vars
+    # set by the CI workflow. hdiutil and pkgbuild are macOS-only tools.
+    hooks:
+      post:
+        - cmd: >
+            bash -c '[ "${IS_SNAPSHOT}" = "true" ] && exit 0;
+            [ "$(uname)" != "Darwin" ] && exit 0;
+            bash install/macos/pkg/build-pkg.sh'
+          env:
+            - IS_SNAPSHOT={{ .IsSnapshot }}
+            - BINARY_PATH={{ .Path }}
+            - VERSION={{ .Version }}
+            - TEAM_ID={{ if index .Env "APPLE_TEAM_ID" }}{{ .Env.APPLE_TEAM_ID }}{{ end }}
 
 # ---------------------------------------------------------------------------
 # Archives / packaging
 # ---------------------------------------------------------------------------
 archives:
   # macOS: ship the universal binary as a bare binary (no archive).
-  # The .pkg/.dmg are built by the after hook (see below) and attached as
+  # The .pkg/.dmg are built by the universal_binaries post hook and attached as
   # extra_files on the GitHub Release.
   - id: darwin-universal
     ids:
@@ -66,44 +94,15 @@ archives:
     allow_different_binary_count: true
 
   # Windows amd64: ship the bare exe so the release also has a raw binary.
-  # The NSIS .exe installer is also built by the after hook and attached.
+  # The NSIS .exe installer is also built by the build hook and attached.
   - id: windows-amd64
-    builds:
+    ids:
       - daemon
-    format: binary
+    formats:
+      - binary
     name_template: "vaultmtg-daemon-windows-amd64"
     files:
       - none*
-
-# ---------------------------------------------------------------------------
-# Post-build hooks — build macOS .pkg/.dmg and Windows NSIS .exe
-#
-# These run after GoReleaser has compiled and merged the binaries.
-# The CI runner (daemon-release.yml) is responsible for having the required
-# tools installed (hdiutil on macOS runners, makensis on ubuntu runners).
-# ---------------------------------------------------------------------------
-after:
-  hooks:
-    # macOS: build the .pkg postinstall-based installer and wrap in a .dmg.
-    # Runs only on macOS runners (hdiutil and pkgbuild are macOS-only).
-    - cmd: bash install/macos/pkg/build-pkg.sh
-      env:
-        - BINARY_PATH={{ .Artifacts.FindByID "daemon-universal" }}
-        - VERSION={{ .Version }}
-        # TEAM_ID is set in CI via secrets; empty locally = unsigned .pkg.
-        - TEAM_ID={{ if .Env.APPLE_TEAM_ID }}{{ .Env.APPLE_TEAM_ID }}{{ end }}
-      dir: "{{ .Env.GITHUB_WORKSPACE }}/services/daemon"
-      # Skip on non-darwin platforms and in snapshot mode.
-      if: '{{ and (eq .Runtime.Goos "darwin") (not .IsSnapshot) }}'
-    # Windows: compile the NSIS .exe installer.
-    # Runs on ubuntu runners (makensis is cross-platform via apt).
-    - cmd: >
-        makensis
-        /DVERSION={{ .Version }}
-        /DBINARY_PATH=dist/vaultmtg-daemon-windows-amd64.exe
-        install/windows/nsis/installer.nsi
-      dir: "{{ .Env.GITHUB_WORKSPACE }}/services/daemon"
-      if: '{{ not .IsSnapshot }}'
 
 # ---------------------------------------------------------------------------
 # Checksums
@@ -124,10 +123,10 @@ release:
   draft: false
   prerelease: auto
   extra_files:
-    # macOS .pkg/.dmg produced by the after hook.
+    # macOS .pkg/.dmg produced by the universal_binaries post hook.
     - glob: "services/daemon/vaultmtg-daemon-darwin-universal.pkg"
     - glob: "services/daemon/vaultmtg-daemon-darwin-universal.dmg"
-    # Windows NSIS .exe produced by the after hook.
+    # Windows NSIS .exe produced by the builds post hook.
     - glob: "services/daemon/vaultmtg-daemon-setup-*.exe"
 
 # ---------------------------------------------------------------------------
