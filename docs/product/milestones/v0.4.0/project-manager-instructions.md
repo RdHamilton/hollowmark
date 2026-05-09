@@ -103,14 +103,14 @@ Move the following tickets from NO STATUS → **Todo** on Board #30:
 
 | Ticket | Title | Owner |
 |--------|-------|-------|
-| #1576 | Waitlist launch coordination — June 2 open date | growth-marketing |
+| #1576 | Waitlist launch coordination — August 1 open date | growth-marketing |
 | #1577 | Beta invite email copy and Clerk invite flow | growth-marketing |
 | #1578 | NPS survey — design, tooling, distribution to internal testers | customer-success |
 | #1579 | Beta FAQ / onboarding doc: daemon install, first draft, troubleshooting | customer-success |
 | #1580 | PostHog activation funnel definition | business-analyst |
 | #1581 | PostHog feature flag setup for closed-beta cohort | business-analyst |
 
-> **URGENT**: #1576 (waitlist launch) has a hard deadline of June 2, 2026 — 24 days from today. If no owner is actively driving it, escalate to Ray immediately.
+> **URGENT**: #1576 (waitlist launch) has a hard deadline of August 1, 2026. Owner = growth-marketing agent (RdHamilton as proxy on GitHub). If no owner is actively driving it, escalate to Ray immediately.
 
 ---
 

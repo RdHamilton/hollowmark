@@ -21,7 +21,7 @@ Ray cannot travel to conventions before September 2026. The following previously
 
 | Date | Milestone |
 |---|---|
-| June 2, 2026 | Waitlist opens |
+| August 1, 2026 | Waitlist opens |
 | August 18, 2026 | Closed beta launch |
 | September 4–6, 2026 | SCG CON Dallas (first in-person opportunity) |
 | September 11–13, 2026 | SCG CON Baltimore |
@@ -223,7 +223,7 @@ Since no in-person events are viable before September, all pre-September promoti
 
 | Timing | Post type | Topic |
 |---|---|---|
-| June 2 | Announcement | Waitlist is open — non-promotional framing |
+| August 1 | Announcement | Waitlist is open — non-promotional framing |
 | June 23 | Content | "Marvel Super Heroes draft picks — what VaultMTG recommends for the top archetypes" |
 | August 18 | Launch | "We launched VaultMTG beta — free companion app for MTG Arena" |
 | July 17–19 | Pro Tour weekend | "Watching Pro Tour this weekend? Here's how VaultMTG would break down the featured draft picks" |
@@ -231,7 +231,7 @@ Since no in-person events are viable before September, all pre-September promoti
 
 ### Discord
 
-- Post in #announcements for waitlist open (June 2) and beta launch (August 18)
+- Post in #announcements for waitlist open (August 1) and beta launch (August 18)
 - Engage in r/MagicArena and MTG-adjacent Discord servers as a community member, not a promoter
 - Share the Reality Fracture tier list article in relevant servers once published in late September
 
