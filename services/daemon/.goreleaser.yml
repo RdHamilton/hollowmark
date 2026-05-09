@@ -12,7 +12,7 @@
 
 version: 2
 
-project_name: mtga-companion-daemon
+project_name: vaultmtg-daemon
 
 # ---------------------------------------------------------------------------
 # Build
@@ -20,7 +20,7 @@ project_name: mtga-companion-daemon
 builds:
   - id: daemon
     main: ./cmd/daemon
-    binary: mtga-companion-daemon
+    binary: vaultmtg-daemon
     env:
       - CGO_ENABLED=0
       - GONOSUMDB=github.com/RdHamilton/MTGA-Companion
@@ -47,7 +47,7 @@ universal_binaries:
   - id: daemon-universal
     ids:
       - daemon
-    name_template: mtga-companion-daemon
+    name_template: vaultmtg-daemon
     replace: true
 
 # ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ archives:
       - daemon-universal
     formats:
       - binary
-    name_template: "mtga-companion-daemon-darwin-universal"
+    name_template: "vaultmtg-daemon-darwin-universal"
     allow_different_binary_count: true
 
   # Windows amd64: ship the bare exe so the release also has a raw binary.
@@ -71,7 +71,7 @@ archives:
     builds:
       - daemon
     format: binary
-    name_template: "mtga-companion-daemon-windows-amd64"
+    name_template: "vaultmtg-daemon-windows-amd64"
     files:
       - none*
 
@@ -100,7 +100,7 @@ after:
     - cmd: >
         makensis
         /DVERSION={{ .Version }}
-        /DBINARY_PATH=dist/mtga-companion-daemon-windows-amd64.exe
+        /DBINARY_PATH=dist/vaultmtg-daemon-windows-amd64.exe
         install/windows/nsis/installer.nsi
       dir: "{{ .Env.GITHUB_WORKSPACE }}/services/daemon"
       if: '{{ not .IsSnapshot }}'
@@ -125,10 +125,10 @@ release:
   prerelease: auto
   extra_files:
     # macOS .pkg/.dmg produced by the after hook.
-    - glob: "services/daemon/mtga-companion-daemon-darwin-universal.pkg"
-    - glob: "services/daemon/mtga-companion-daemon-darwin-universal.dmg"
+    - glob: "services/daemon/vaultmtg-daemon-darwin-universal.pkg"
+    - glob: "services/daemon/vaultmtg-daemon-darwin-universal.dmg"
     # Windows NSIS .exe produced by the after hook.
-    - glob: "services/daemon/mtga-companion-daemon-setup-*.exe"
+    - glob: "services/daemon/vaultmtg-daemon-setup-*.exe"
 
 # ---------------------------------------------------------------------------
 # Snapshot (local dev / CI dry-run)

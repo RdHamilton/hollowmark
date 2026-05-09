@@ -2,7 +2,7 @@
 # build-pkg.sh — Build the macOS .pkg installer and wrap it in a .dmg.
 #
 # Usage:
-#   BINARY_PATH=bin/mtga-companion-daemon \
+#   BINARY_PATH=bin/vaultmtg-daemon \
 #   VERSION=0.3.1 \
 #   TEAM_ID=<Apple Team ID> \
 #   bash services/daemon/install/macos/pkg/build-pkg.sh
@@ -13,8 +13,8 @@
 #   TEAM_ID       Apple Developer Team ID for signing (omit to skip signing).
 #
 # Outputs (in the current directory):
-#   mtga-companion-daemon-darwin-universal.pkg
-#   mtga-companion-daemon-darwin-universal.dmg
+#   vaultmtg-daemon-darwin-universal.pkg
+#   vaultmtg-daemon-darwin-universal.dmg
 #
 # This script is intended to be called from the GoReleaser hooks or the
 # daemon-release CI workflow after the binary has been built and signed.
@@ -25,10 +25,10 @@ BINARY_PATH="${BINARY_PATH:?BINARY_PATH is required}"
 VERSION="${VERSION:?VERSION is required}"
 TEAM_ID="${TEAM_ID:-}"
 
-BINARY_NAME="mtga-companion-daemon"
+BINARY_NAME="vaultmtg-daemon"
 PKG_ID="com.vaultmtg.daemon"
-PKG_NAME="mtga-companion-daemon-darwin-universal.pkg"
-DMG_NAME="mtga-companion-daemon-darwin-universal.dmg"
+PKG_NAME="vaultmtg-daemon-darwin-universal.pkg"
+DMG_NAME="vaultmtg-daemon-darwin-universal.dmg"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_ROOT="$(mktemp -d)/pkg-root"
