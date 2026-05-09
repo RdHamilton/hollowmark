@@ -50,8 +50,10 @@ test.describe('Data Pipeline - Log to UI', () => {
     await page.goto('/');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 15000 });
 
-    // Give the daemon time to process the log file
-    await page.waitForTimeout(2000);
+    // Wait for the match history page content to be ready (daemon has processed log)
+    await expect(
+      page.locator('.match-history-table-container table').or(page.locator('.empty-state'))
+    ).toBeVisible({ timeout: 15000 });
   });
 
   test.describe('Match History Pipeline', () => {
@@ -345,7 +347,8 @@ test.describe('Data Pipeline - Log to UI', () => {
           const setOption = options.find((opt) => opt !== 'All Sets');
           if (setOption) {
             await setSelect.selectOption({ label: setOption });
-            await page.waitForTimeout(500);
+            // Wait for the set-completion-button to reflect the new selection
+            await page.waitForSelector('button.set-completion-button, .empty-state', { timeout: 5000 }).catch(() => {});
           }
         }
       }
@@ -436,8 +439,8 @@ test.describe('Data Pipeline - Log to UI', () => {
       const formatSelect = page.locator('.format-select');
       await formatSelect.selectOption('historic');
 
-      // Wait for reload
-      await page.waitForTimeout(1000);
+      // Wait for reload — spinner reappears then hides
+      await loadingSpinner.waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
       await loadingSpinner.waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
 
       // Verify the format was changed
@@ -587,9 +590,6 @@ test.describe('Data Pipeline - Log to UI', () => {
       const dateRangeSelect = page.locator('.filter-row select').first();
       await dateRangeSelect.selectOption('all');
 
-      // Wait for data to reload
-      await page.waitForTimeout(1000);
-
       // Log has 7 wins and 5 losses - actual class is .metrics-container
       const metricsContainer = page.locator('.metrics-container');
       const emptyState = page.locator('.empty-state');
@@ -629,9 +629,6 @@ test.describe('Data Pipeline - Log to UI', () => {
       await page.click('a[href="/quests"]');
       await page.waitForURL('**/quests');
 
-      // Wait for page to load
-      await page.waitForTimeout(1000);
-
       // Check for any select element (date filter) or page content
       const selects = page.locator('select');
       const selectCount = await selects.count();
@@ -648,8 +645,8 @@ test.describe('Data Pipeline - Log to UI', () => {
       await page.click('a[href="/collection"]');
       await page.waitForURL('**/collection');
 
-      // Wait for page to load
-      await page.waitForTimeout(1000);
+      // Wait for collection page to be ready
+      await page.waitForSelector('.collection-container, .collection-page, .empty-state', { timeout: 10000 }).catch(() => {});
 
       // Collection page should have some filter controls
       const filterArea = page.locator('.filter-controls, .collection-filters, select, input');
