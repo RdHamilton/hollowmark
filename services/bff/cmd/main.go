@@ -160,7 +160,6 @@ func main() {
 		draftRatingsHandler *handlers.DraftRatingsHandler
 		historyHandler      *handlers.HistoryHandler
 		listV2Handler       *handlers.ListV2Handler
-		statsHandler        *handlers.StatsHandler
 		daemonHealthHandler *handlers.DaemonHealthHandler
 	)
 
@@ -198,11 +197,6 @@ func main() {
 		)
 
 		daemonHealthHandler = handlers.NewDaemonHealthHandler(daemonEventsRepo)
-
-		// StatsHandler provides deck performance, win-rate trend, and format
-		// distribution analytics endpoints (issue #1513).
-		statsRepo := repository.NewStatsRepository(sqlDB)
-		statsHandler = handlers.NewStatsHandler(accountRepo, statsRepo, statsRepo, statsRepo)
 
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
 		userRepo := repository.NewUserRepository(sqlDB)
@@ -250,7 +244,6 @@ func main() {
 		DraftRatingsHandler: draftRatingsHandler,
 		HistoryHandler:      historyHandler,
 		ListV2Handler:       listV2Handler,
-		StatsHandler:        statsHandler,
 		DaemonHealthHandler: daemonHealthHandler,
 		HealthzHandler:      healthzHandler,
 		ClerkAuthMiddl:      clerkAuthMiddl,
@@ -302,9 +295,7 @@ type RouterDeps struct {
 	DraftRatingsHandler *handlers.DraftRatingsHandler
 	HistoryHandler      *handlers.HistoryHandler
 	// ListV2Handler serves the cursor-paginated v2 list endpoints (ADR-018).
-	ListV2Handler *handlers.ListV2Handler
-	// StatsHandler serves the analytics stats endpoints (issue #1513).
-	StatsHandler        *handlers.StatsHandler
+	ListV2Handler       *handlers.ListV2Handler
 	DaemonHealthHandler *handlers.DaemonHealthHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
