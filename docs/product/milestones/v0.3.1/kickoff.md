@@ -155,7 +155,9 @@ The architect confirmed the following order is correct and internally consistent
 **Definition of done:**
 - [ ] Daemon with no `daemon.json` opens `vaultmtg.app/setup` in system browser (or prints URL if headless)
 - [ ] PKCE flow completes end-to-end: localhost callback on port 51423 (retry 51424) → Clerk login → auth code → `POST /v1/daemon/register`
-- [ ] BFF verifies Clerk JWT, mints API key using `daemon_api_keys` table; rate-limited at 5 req/min per `account_id` (in-memory, no Redis)
+- [ ] BFF verifies Clerk JWT, mints API key using `daemon_api_keys` table; rate-limited at 5 req/hour per `account_id` (in-memory, no Redis)
+- [ ] `POST /v1/daemon/register` request body requires three fields: `device_id` (UUID, unique per daemon installation), `platform` (string — e.g. `darwin`, `windows`), `daemon_ver` (semver string — e.g. `0.3.1`); missing any field returns 400
+- [ ] `daemon_api_keys` schema includes `device_id UUID NOT NULL`, `platform TEXT NOT NULL`, `daemon_ver TEXT NOT NULL`, and `UNIQUE(device_id)` in addition to the existing `UNIQUE(account_id)`
 - [ ] BFF returns 200 + existing key if account already has one (not 201)
 - [ ] Daemon writes API key to OS keychain using service `com.mtga-companion.daemon`, account `api-key`
 - [ ] On subsequent starts, daemon reads key from keychain without re-opening browser

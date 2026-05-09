@@ -1,6 +1,7 @@
 package handlers_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -20,7 +21,7 @@ type stubDaemonAPIKeyRepo struct {
 	err      error
 }
 
-func (s *stubDaemonAPIKeyRepo) UpsertKey(_ context.Context, accountID, keyHash, keyPrefix string) (*repository.DaemonAPIKey, bool, error) {
+func (s *stubDaemonAPIKeyRepo) UpsertKey(_ context.Context, accountID, keyHash, keyPrefix, deviceID, platform, daemonVer string) (*repository.DaemonAPIKey, bool, error) {
 	if s.err != nil {
 		return nil, false, s.err
 	}
@@ -33,16 +34,37 @@ func (s *stubDaemonAPIKeyRepo) UpsertKey(_ context.Context, accountID, keyHash, 
 		AccountID: accountID,
 		KeyHash:   keyHash,
 		KeyPrefix: keyPrefix,
+		DeviceID:  deviceID,
+		Platform:  platform,
+		DaemonVer: daemonVer,
 		CreatedAt: now,
 	}, true, nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-// newRegisterRequest builds a POST /v1/daemon/register request.
+// newRegisterRequest builds a POST /v1/daemon/register request with a JSON body.
 // When accountID is non-empty it simulates RequireClerkAuth having verified a JWT.
 func newRegisterRequest(accountID string) *http.Request {
-	req := httptest.NewRequest(http.MethodPost, "/v1/daemon/register", nil)
+	body := map[string]string{
+		"device_id":  "550e8400-e29b-41d4-a716-446655440001",
+		"platform":   "darwin",
+		"daemon_ver": "0.3.1",
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/daemon/register", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	if accountID != "" {
+		req = middleware.WithClerkUserID(req, accountID)
+	}
+	return req
+}
+
+// newRegisterRequestWithBody builds a POST /v1/daemon/register request with a custom JSON body.
+func newRegisterRequestWithBody(accountID string, body map[string]string) *http.Request {
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/daemon/register", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
 	if accountID != "" {
 		req = middleware.WithClerkUserID(req, accountID)
 	}
@@ -88,6 +110,9 @@ func TestDaemonRegister_ExistingKey_Returns200_EmptyAPIKey(t *testing.T) {
 		AccountID: "user_existing",
 		KeyHash:   "hash",
 		KeyPrefix: "sk_live_abc",
+		DeviceID:  "550e8400-e29b-41d4-a716-446655440002",
+		Platform:  "windows",
+		DaemonVer: "0.3.1",
 		CreatedAt: time.Now().UTC(),
 	}
 	repo := &stubDaemonAPIKeyRepo{existing: existing}
@@ -123,7 +148,14 @@ func TestDaemonRegister_MissingClerkAuth_Returns401(t *testing.T) {
 	h := handlers.NewDaemonRegisterHandler(repo)
 
 	// No Clerk user ID set on context.
-	req := httptest.NewRequest(http.MethodPost, "/v1/daemon/register", nil)
+	body := map[string]string{
+		"device_id":  "550e8400-e29b-41d4-a716-446655440003",
+		"platform":   "darwin",
+		"daemon_ver": "0.3.1",
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/daemon/register", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	h.Register(rr, req)
 
@@ -194,5 +226,53 @@ func TestDaemonRegister_APIKeyFormat(t *testing.T) {
 	const expected = 8 + 64
 	if len(apiKey) != expected {
 		t.Errorf("api_key length: want %d, got %d (%q)", expected, len(apiKey), apiKey)
+	}
+}
+
+func TestDaemonRegister_MissingDeviceID_Returns400(t *testing.T) {
+	repo := &stubDaemonAPIKeyRepo{}
+	h := handlers.NewDaemonRegisterHandler(repo)
+
+	req := newRegisterRequestWithBody("user_nodevice", map[string]string{
+		"platform":   "darwin",
+		"daemon_ver": "0.3.1",
+	})
+	rr := httptest.NewRecorder()
+	h.Register(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing device_id, got %d", rr.Code)
+	}
+}
+
+func TestDaemonRegister_MissingPlatform_Returns400(t *testing.T) {
+	repo := &stubDaemonAPIKeyRepo{}
+	h := handlers.NewDaemonRegisterHandler(repo)
+
+	req := newRegisterRequestWithBody("user_noplat", map[string]string{
+		"device_id":  "550e8400-e29b-41d4-a716-446655440004",
+		"daemon_ver": "0.3.1",
+	})
+	rr := httptest.NewRecorder()
+	h.Register(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing platform, got %d", rr.Code)
+	}
+}
+
+func TestDaemonRegister_MissingDaemonVer_Returns400(t *testing.T) {
+	repo := &stubDaemonAPIKeyRepo{}
+	h := handlers.NewDaemonRegisterHandler(repo)
+
+	req := newRegisterRequestWithBody("user_nover", map[string]string{
+		"device_id": "550e8400-e29b-41d4-a716-446655440005",
+		"platform":  "windows",
+	})
+	rr := httptest.NewRecorder()
+	h.Register(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing daemon_ver, got %d", rr.Code)
 	}
 }
