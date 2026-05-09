@@ -133,14 +133,14 @@ The architect confirmed the following order is correct and internally consistent
 
 ---
 
-### Wave 3 — PKCE Auth (dependency-coupled — all 4 tickets ship together) — UNBLOCKED ✓
+### Wave 3 — PKCE Auth (dependency-coupled — all 5 tickets ship together) — UNBLOCKED ✓
 
 | | |
 |---|---|
 | **Theme** | Zero-terminal daemon authentication |
 | **Goal** | Daemon detects missing config, opens browser, completes PKCE, stores key in OS keychain, registers with BFF — no manual key copy-paste ever |
 
-> **Coupling note**: These 4 tickets have hard sub-dependencies. #1643 (config detection) and #1651 (keychain storage) must be implemented before #1650 (PKCE flow) can be tested end-to-end. #1652 (BFF endpoint) must exist before #1650 can complete registration. All 4 must ship together — no partial merges. Wave 0 conditions C-1 through C-8 must be satisfied before this wave starts (see Section 4).
+> **Coupling note**: These 5 tickets have hard sub-dependencies. #1643 (config detection) and #1651 (keychain storage) must be implemented before #1650 (PKCE flow) can be tested end-to-end. #1652 (BFF endpoint) must exist before #1650 can complete registration. #1674 (migration) must merge before or with #1652. All 5 must ship together — no partial merges. Wave 0 conditions C-1 through C-8 must be satisfied before this wave starts (see Section 4).
 >
 > **Status (2026-05-09)**: UNBLOCKED. C-1 through C-5 satisfied; C-3 confirmed done (Clerk Native API enabled, redirect URIs registered). C-6, C-7, C-8 are resolved during Wave 3 itself per the coupling design — they are not pre-blockers. Wave 3 may start.
 
@@ -399,7 +399,7 @@ v0.3.0 closed (2026-05-09) ✓
         │
         └─▶ Wave 2 — Binary Build + Installer Foundation (#1639, #1642, #1640, #1641)
               │
-              ├─▶ Wave 3 — PKCE Auth [all 4 ship together] (#1643, #1651, #1674, #1652, #1650)
+              ├─▶ Wave 3 — PKCE Auth [all 5 ship together] (#1643, #1651, #1674, #1652, #1650)
               │     │  [requires C-1 through C-8 satisfied]
               │     │
               │     └─▶ Wave 4 — SPA Setup Page + Download UX (#1644, #1645, #1646, #1647)
