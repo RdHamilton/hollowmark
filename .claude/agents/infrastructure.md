@@ -392,6 +392,7 @@ ENTRY
 8. Do NOT add Claude Code references to issues, PRs, or comments
 9. Always follow the Ticket Workflow above — move ticket status at each stage
 10. **Before creating any branch or PR, always run `git fetch origin && git checkout main && git pull origin main` first to ensure you branch from an up-to-date main. Never branch from a stale local HEAD.**
+11. **RULE-INFRA-01 — Lint gate rollout**: Before adding any new CI lint job, run it locally or in a `continue-on-error: true` step against all existing workflow files. Fix all violations in the same PR that introduces the job. Never introduce a hard-failure lint gate against files that have not been cleaned first. (Source: v0.3.0 post-mortem)
 
 ---
 
