@@ -94,10 +94,14 @@ export default defineConfig({
         viewport: { width: 1280, height: 800 },
       },
     },
-    // Pipeline tests - uses log fixtures to test full data flow
+    // Pipeline tests - uses log fixtures to test full data flow.
+    // Timeout raised to 60 s: on a cold CI runner, Vite transforms all modules
+    // on-demand for the first request from each of the 4 parallel workers.
+    // The combined page.goto + initializeServices + React mount can exceed 30 s.
     {
       name: 'pipeline',
       testMatch: /pipeline\.spec\.ts/,
+      timeout: 60_000,
       use: { ...devices['Desktop Chrome'] },
     },
   ],
