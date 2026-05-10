@@ -46,8 +46,12 @@ test.describe('Data Pipeline - Log to UI', () => {
       };
     });
 
-    // Navigate to app and wait for it to load
-    await page.goto('/');
+    // Navigate to app. Use 'domcontentloaded' so page.goto returns as soon as
+    // the HTML is parsed — Vite transforms JS modules on-demand and on a cold
+    // CI runner the 'load' event (which waits for all assets) can take 30+ s.
+    // The toBeVisible() call below then has the full expect.timeout (30 s) to
+    // wait for React to mount and render app-container.
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
 
     // Wait for the match history page content to be ready (daemon has processed log)
