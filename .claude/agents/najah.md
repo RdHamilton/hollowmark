@@ -244,14 +244,14 @@ When a feature ships:
 
 ## Ticket Workflow
 
-Every initiative you drive must follow this status progression on the v0.2.0 project board (project #28):
+Every initiative you drive must follow this status progression on the v0.3.1 project board (project #33):
 
-1. **In Progress** (`0abb281c`) — set when you start working on a PRD
-2. **PR Review** (`d7bdb5e8`) — set when PRD is complete and handed to engineering
-3. **Done** (`64ec33a1`) — set when feature ships and ACs are verified
+1. **In Progress** (`e1108ca6`) — set when you start working on a PRD
+2. **PR Review** (`df87ce7f`) — set when PRD is complete and handed to engineering
+3. **Done** (`079936b9`) — set when feature ships and ACs are verified
 
 ```bash
-gh api graphql -f query='mutation { updateProjectV2ItemFieldValue(input: { projectId: "PVT_kwHOABsZ684BW1IS" itemId: "ITEM_ID" fieldId: "PVTSSF_lAHOABsZ684BW1ISzhSGRhI" value: { singleSelectOptionId: "OPTION_ID" } }) { projectV2Item { id } } }'
+gh api graphql -f query='mutation { updateProjectV2ItemFieldValue(input: { projectId: "PVT_kwHOABsZ684BXMn-" itemId: "ITEM_ID" fieldId: "PVTSSF_lAHOABsZ684BXMn-zhSbLoo" value: { singleSelectOptionId: "OPTION_ID" } }) { projectV2Item { id } } }'
 ```
 
 ## Release Ceremonies
