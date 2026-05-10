@@ -12,10 +12,9 @@
 import type {
   ApiConfig,
   ApiError,
-  ApiRequestError,
   RawGetResult,
 } from './apiClient';
-import { getApiKey } from './apiClient';
+import { ApiRequestError, getApiKey } from './apiClient';
 
 // ---------------------------------------------------------------------------
 // Configuration
