@@ -85,7 +85,7 @@ test.describe('Feature: API Keys page', () => {
 
     await expect(
       page.locator('.api-keys-description')
-    ).toContainText('full key is only shown once', { timeout: 10_000 });
+    ).toContainText('full key is only shown once');
   });
 
   test('unauthenticated user visiting /api-keys sees sign-in prompt, not the keys page', async ({ page }) => {
