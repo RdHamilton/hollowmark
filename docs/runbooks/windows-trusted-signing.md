@@ -1,6 +1,6 @@
 # Runbook: Windows Code Signing (Azure Trusted Signing)
 
-**Status**: DOCUMENTED — not yet active. Activates at GA.
+**Status**: ACTIVE -- credentials configured, pipeline live.
 **Ticket**: #1649
 **Budget approved**: 2026-05-10 (Ray Hamilton)
 **Azure identity validation**: approved 2026-05-10
@@ -11,61 +11,49 @@
 ## Overview
 
 This runbook covers the Azure Trusted Signing workflow for the VaultMTG daemon
-Windows installer (`.exe`). When active, the Windows binary and NSIS installer
-are signed before release, eliminating the SmartScreen "Windows protected your
-PC" warning for end users.
+Windows installer (`.exe`). The Windows binary and NSIS installer are signed
+before release, eliminating the SmartScreen "Windows protected your PC" warning
+for end users.
 
 Per ADR-011: EV certificates are explicitly rejected. Azure Trusted Signing
 achieves equivalent SmartScreen reputation at a fraction of the cost ($120/yr
 vs $300-600/yr) after Microsoft removed the SmartScreen EV advantage in 2024.
 
-The GA workflow step is documented in `services/daemon/.goreleaser.yml`
-(header comments) and in this runbook. It is not yet wired into
-`.github/workflows/daemon-release.yml` — that happens at GA.
+The signing step (`microsoft/trusted-signing-action@v0`) is wired into
+`.github/workflows/daemon-release.yml` and is active. The step configuration
+is also documented in `services/daemon/.goreleaser.yml` header comments for
+reference.
 
 ---
 
-## Prerequisites
+## Prerequisites (already satisfied)
 
-- Azure subscription (existing AWS-primary account or a new Azure account)
-- Azure Trusted Signing account ($9.99/mo) created in Azure Portal
-- Service principal (app registration) in Azure AD with signing permissions
-- Identity validation completed (Microsoft reviews the publisher identity)
-
----
-
-## Step 1: Create Azure Trusted Signing Account
-
-1. Sign in at https://portal.azure.com
-2. Search for "Trusted Signing" and select the service
-3. Create a new account:
-   - Subscription: choose the billing subscription
-   - Resource group: `vaultmtg-signing`
-   - Account name: `vaultmtg-signing`
-   - Region: East US (closest to us-east-1 for minimal latency)
-   - SKU: Basic ($9.99/mo)
-4. Create a Certificate Profile:
-   - Profile name: `vaultmtg-daemon`
-   - Profile type: Public Trust
+- Azure subscription -- active
+- Azure Trusted Signing account (`vaultmtg-signing`, Basic SKU) -- active
+- Service principal (`vaultmtg-daemon-signing`) in Azure AD -- active
+- Identity validation -- approved 2026-05-10
 
 ---
 
-## Step 2: Identity Validation
+## Step 1: (Reference) Azure Trusted Signing Account Setup
 
-Microsoft requires identity validation before issuing a Trusted Signing
-certificate. For an individual/small publisher:
-
-1. In the Trusted Signing account, go to Identity Validation
-2. Submit: organization name, address, email, and a government ID scan
-3. Wait for approval (typically 1-3 business days)
-
-**Note**: Identity validation was approved 2026-05-10. When the Azure account
-is created at GA, the validation process starts from scratch for the new
-account. Allow 3-5 business days.
+Account details:
+- Resource group: `vaultmtg-signing`
+- Account name: `vaultmtg-signing`
+- Region: East US
+- SKU: Basic ($9.99/mo)
+- Certificate profile: `vaultmtg-daemon` (Public Trust)
 
 ---
 
-## Step 3: Create Service Principal for CI
+## Step 2: (Reference) Identity Validation
+
+Identity validation was completed and approved by Microsoft on 2026-05-10.
+No action required unless the account is recreated.
+
+---
+
+## Step 3: (Reference) Service Principal for CI
 
 ```bash
 # Login to Azure
@@ -81,7 +69,7 @@ APP_ID=$(az ad app list --display-name "vaultmtg-daemon-signing" \
 # Create service principal
 az ad sp create --id "$APP_ID"
 
-# Create client secret (valid 2 years — set a calendar reminder to rotate)
+# Create client secret (valid 2 years -- set a calendar reminder to rotate)
 az ad app credential reset --id "$APP_ID" \
   --display-name "github-actions-signing" \
   --years 2 \
@@ -94,17 +82,15 @@ az account show --query "tenantId" -o tsv
 
 ---
 
-## Step 4: Grant Service Principal Signing Permissions
+## Step 4: (Reference) Service Principal Signing Permissions
 
-In Azure Portal:
-1. Go to the Trusted Signing account > Access Control (IAM)
-2. Add role assignment:
-   - Role: Trusted Signing Certificate Profile Signer
-   - Assign to: the service principal created above
+The service principal has the `Trusted Signing Certificate Profile Signer`
+role assigned on the `vaultmtg-signing` account. No action required unless
+the service principal is recreated.
 
 ---
 
-## Step 5: Populate SSM Parameters
+## Step 5: Rotate or Re-Populate SSM Parameters
 
 ```bash
 # Tenant ID
@@ -140,7 +126,7 @@ aws ssm put-parameter --profile personal --region us-east-1 \
 
 ---
 
-## Step 6: Populate GitHub Actions Secrets
+## Step 6: Sync GitHub Actions Secrets from SSM
 
 | GitHub Secret | SSM Path |
 |---|---|
@@ -152,13 +138,13 @@ aws ssm put-parameter --profile personal --region us-east-1 \
 
 ---
 
-## Step 7: Add Signing Step to daemon-release.yml
+## Step 7: Active Signing Step in daemon-release.yml
 
-Add the following step to the `goreleaser` job in
-`.github/workflows/daemon-release.yml`, AFTER the `Run GoReleaser` step
-and BEFORE the `Upload darwin universal binary` step.
+The following step is active in the `goreleaser` job in
+`.github/workflows/daemon-release.yml`, positioned AFTER the `Run GoReleaser`
+step and BEFORE the `Upload darwin universal binary` step.
 
-This step is guarded to only run on real tags (not snapshot/dry-run):
+The step is tag-guarded (only runs on real `daemon/v*` tags):
 
 ```yaml
 - name: Sign Windows binary (Azure Trusted Signing)
@@ -179,7 +165,7 @@ This step is guarded to only run on real tags (not snapshot/dry-run):
 ```
 
 Note: The `endpoint` uses `eus` (East US) matching the Trusted Signing
-account region. Update if the account is created in a different region.
+account region.
 
 After signing, GoReleaser's `extra_files` glob picks up the `.exe` installer
 produced by the NSIS hook and uploads it to the GitHub Release. The signing
