@@ -294,13 +294,13 @@ To escalate: stop your current work, describe the specific blocker and what you'
 
 ## Post-PR Review Protocol (Required — PC-10)
 
-After opening a PR with `gh pr create`, you MUST immediately spawn a background general-purpose agent to run the LE review. The PostToolUse hook only fires in the main session — when you run as a subagent it does not fire. Use the Agent tool directly:
+After opening a PR with `gh pr create`, you MUST immediately spawn the lead-engineer agent to run the LE review. The PostToolUse hook only fires in the main session — when you run as a subagent it does not fire. Use the Agent tool directly:
 
 ```
 Agent(
-  subagent_type: "general-purpose",
+  subagent_type: "lead-engineer",
   run_in_background: true,
-  prompt: "You are the lead engineer for MTGA-Companion. Read your full instructions from .claude/agents/lead-engineer.md. Repo: /Users/ramonehamilton/Documents/Personal Projects/MTGA-Companion. Review PR #<NUMBER> and run the full Post-PR Review Protocol."
+  prompt: "Review PR #<NUMBER> on RdHamilton/MTGA-Companion (branch: <BRANCH>, ticket: #<TICKET>). Run the full Post-PR Review Protocol."
 )
 ```
 
@@ -343,17 +343,17 @@ Before opening a PR for any infrastructure change:
 
 ## Ticket Workflow
 
-Every ticket assigned to this agent must follow this status progression on the v0.2.0 project board (project #28, repo RdHamilton/MTGA-Companion):
+Every ticket assigned to this agent must follow this status progression on the v0.3.1 project board (project #33, repo RdHamilton/MTGA-Companion):
 
-1. **In Progress** (`0abb281c`) — set immediately when work begins
-2. **PR Review** (`d7bdb5e8`) — set when a PR is opened; post PR number as a comment on the issue
-3. **Done** (`64ec33a1`) — set when the PR is merged; close the GitHub issue: `gh issue close <NUMBER> --repo RdHamilton/MTGA-Companion`
+1. **In Progress** (`e1108ca6`) — set immediately when work begins
+2. **PR Review** (`df87ce7f`) — set when a PR is opened; post PR number as a comment on the issue
+3. **Done** (`079936b9`) — set when the PR is merged; close the GitHub issue: `gh issue close <NUMBER> --repo RdHamilton/MTGA-Companion`
 
 Every ticket must end with a PR. Never leave work committed without opening one.
 
 Use this GraphQL mutation pattern to update status:
 ```bash
-gh api graphql -f query='mutation { updateProjectV2ItemFieldValue(input: { projectId: "PVT_kwHOABsZ684BW1IS" itemId: "ITEM_ID" fieldId: "PVTSSF_lAHOABsZ684BW1ISzhSGRhI" value: { singleSelectOptionId: "OPTION_ID" } }) { projectV2Item { id } } }'
+gh api graphql -f query='mutation { updateProjectV2ItemFieldValue(input: { projectId: "PVT_kwHOABsZ684BXMn-" itemId: "ITEM_ID" fieldId: "PVTSSF_lAHOABsZ684BXMn-zhSbLoo" value: { singleSelectOptionId: "OPTION_ID" } }) { projectV2Item { id } } }'
 ```
 
 ## Agent Changelog

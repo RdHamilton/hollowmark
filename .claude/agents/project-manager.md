@@ -151,17 +151,18 @@ Cached project metadata for fast status transitions (no need to re-query field I
   - Todo: `6263f412` | In Progress: `9fd907f0` | PR Review: `0ca4880d` | Done: `7729b7fe` | Released: `21c7bb87`
 - This project is closed. Do not add new issues here.
 
-### Project #28: Vault MTG v0.2.0 (ACTIVE)
+### Project #28: Vault MTG v0.2.0 (CLOSED)
 - **Project ID**: `PVT_kwHOABsZ684BW1IS`
 - **Status Field ID**: `PVTSSF_lAHOABsZ684BW1ISzhSGRhI`
-- **Milestone Field ID**: `PVTF_lAHOABsZ684BW1ISzhSGRhU`
 - **Status Option IDs**:
-  - Todo: `73a754e2`
-  - In Progress: `0abb281c`
-  - PR Review: `d7bdb5e8`
-  - Done: `64ec33a1`
-  - Released: `6b52b4aa`
-- **Active milestone**: v0.2.0 (#67)
+  - Todo: `73a754e2` | In Progress: `0abb281c` | PR Review: `d7bdb5e8` | Done: `64ec33a1` | Released: `6b52b4aa`
+- This project is closed. Do not add new issues here.
+
+### Project #33: v0.3.1 — Packaging (ACTIVE)
+- **Project ID**: `PVT_kwHOABsZ684BXMn-`
+- **Status Field ID**: `PVTSSF_lAHOABsZ684BXMn-zhSbLoo`
+- **Status Option IDs**:
+  - Todo: `0b7bc3e1` | In Progress: `e1108ca6` | PR Review: `df87ce7f` | Done: `079936b9` | Released: `ea8e5e46`
 
 **How to set Milestone on a GitHub issue** (the board Milestone column auto-populates from this):
 ```bash
@@ -396,14 +397,14 @@ gh project field-list <NUMBER> --owner RdHamilton --format json
 # Note: gh issue create does NOT support --json; capture URL from stdout directly
 # Use --body-file with a temp file for multi-line bodies; use --label once per label (comma-separated values do NOT work)
 ISSUE_URL=$(gh issue create --title "<title>" --body-file /tmp/body.md --label "<label1>" --label "<label2>" --milestone "<milestone-title>" 2>&1)
-ITEM_ID=$(gh project item-add 28 --owner RdHamilton --url "$ISSUE_URL" --format json -q .id)
+ITEM_ID=$(gh project item-add 33 --owner RdHamilton --url "$ISSUE_URL" --format json -q .id)
 # REQUIRED: Set Status = "Todo" immediately — NEVER skip; blank status breaks board views
-# Project #28: project-id=PVT_kwHOABsZ684BW1IS, status field=PVTSSF_lAHOABsZ684BW1ISzhSGRhI, Todo option=73a754e2
+# Project #33: project-id=PVT_kwHOABsZ684BXMn-, status field=PVTSSF_lAHOABsZ684BXMn-zhSbLoo, Todo option=0b7bc3e1
 gh project item-edit \
-  --project-id PVT_kwHOABsZ684BW1IS \
+  --project-id PVT_kwHOABsZ684BXMn- \
   --id "$ITEM_ID" \
-  --field-id PVTSSF_lAHOABsZ684BW1ISzhSGRhI \
-  --single-select-option-id 73a754e2
+  --field-id PVTSSF_lAHOABsZ684BXMn-zhSbLoo \
+  --single-select-option-id 0b7bc3e1
 
 # Create project
 gh project create --owner RdHamilton --title "<title>"
@@ -487,8 +488,8 @@ This check is what prevents the board from filling with duplicate tickets across
 
 ## Rules
 
-1. NEVER create an issue without: (a) at least one label, (b) an **Agent** line in the body, (c) `--milestone "v0.2.0"` on `gh issue create`, (d) **Status = Todo** set on the board immediately after `item-add`. All four are required. Missing Status breaks board views; missing Milestone breaks release tracking. The board's Milestone column auto-derives from the issue milestone — do not set it separately via GraphQL.
-   - **Every new ticket MUST have Status = Todo set immediately after board add — never leave status blank.** Use `gh project item-edit --project-id PVT_kwHOABsZ684BW1IS --id <item-id> --field-id PVTSSF_lAHOABsZ684BW1ISzhSGRhI --single-select-option-id 73a754e2` (Project #28 Todo option: `73a754e2`).
+1. NEVER create an issue without: (a) at least one label, (b) an **Agent** line in the body, (c) `--milestone "v0.3.1"` on `gh issue create`, (d) **Status = Todo** set on the board immediately after `item-add`. All four are required. Missing Status breaks board views; missing Milestone breaks release tracking. The board's Milestone column auto-derives from the issue milestone — do not set it separately via GraphQL.
+   - **Every new ticket MUST have Status = Todo set immediately after board add — never leave status blank.** Use `gh project item-edit --project-id PVT_kwHOABsZ684BXMn- --id <item-id> --field-id PVTSSF_lAHOABsZ684BXMn-zhSbLoo --single-select-option-id 0b7bc3e1` (Project #33 Todo option: `0b7bc3e1`).
    - **Run the Deduplication Check section above BEFORE calling `gh issue create`. This is a hard gate — no exceptions.**
 2. NEVER create a project without all 5 status columns configured
 3. Always use the existing label if one fits - check the list above first
