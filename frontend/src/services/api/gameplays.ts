@@ -4,7 +4,7 @@
  * attacks, blocks, and turn-by-turn game state snapshots.
  */
 
-import { get } from '../apiClient';
+import { get } from '../daemonClient';
 
 /**
  * Represents a single game play action.
