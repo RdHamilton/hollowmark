@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as gameplays from '../gameplays';
 
-// Mock the apiClient
-vi.mock('../../apiClient', () => ({
+// Mock the daemonClient — gameplays.ts is a daemon route (local match log data)
+vi.mock('../../daemonClient', () => ({
   get: vi.fn(),
   post: vi.fn(),
 }));
 
-import { get } from '../../apiClient';
+import { get } from '../../daemonClient';
 
 describe('gameplays API', () => {
   beforeEach(() => {
