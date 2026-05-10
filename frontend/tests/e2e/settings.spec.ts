@@ -53,17 +53,17 @@ test.describe('Settings', () => {
   test.describe('Settings Sections', () => {
     test('should display settings content', async ({ page }) => {
       const settingsContent = page.locator('.settings-content');
-      await expect(settingsContent).toBeVisible({ timeout: 5000 });
+      await expect(settingsContent).toBeVisible();
     });
 
     test('should have accordion sections', async ({ page }) => {
       // Wait for settings content to load
       const settingsContent = page.locator('.settings-content');
-      await expect(settingsContent).toBeVisible({ timeout: 5000 });
+      await expect(settingsContent).toBeVisible();
 
       // Settings uses accordion sections
       const accordionSections = page.locator('.settings-section, .accordion-item, [class*="accordion"]');
-      await expect(accordionSections.first()).toBeVisible({ timeout: 5000 });
+      await expect(accordionSections.first()).toBeVisible();
     });
   });
 
@@ -71,7 +71,7 @@ test.describe('Settings', () => {
     test('should display daemon connection section', async ({ page }) => {
       // Wait for settings to load
       const settingsContent = page.locator('.settings-content');
-      await expect(settingsContent).toBeVisible({ timeout: 5000 });
+      await expect(settingsContent).toBeVisible();
 
       // Look for daemon/connection section
       const connectionSection = page.locator('text=Daemon').first();
@@ -88,7 +88,7 @@ test.describe('Settings', () => {
     test('should have preference settings available', async ({ page }) => {
       // Wait for settings to load
       const settingsContent = page.locator('.settings-content');
-      await expect(settingsContent).toBeVisible({ timeout: 5000 });
+      await expect(settingsContent).toBeVisible();
 
       // Look for preference-related elements
       const preferencesText = page.locator('text=Preferences').first();
@@ -108,7 +108,7 @@ test.describe('Settings', () => {
     test('@smoke should have save button', async ({ page }) => {
       // Wait for settings to load
       const settingsContent = page.locator('.settings-content');
-      await expect(settingsContent).toBeVisible({ timeout: 5000 });
+      await expect(settingsContent).toBeVisible();
 
       const saveButton = page.locator('button').filter({ hasText: /save/i });
       await expect(saveButton).toBeVisible();
@@ -117,7 +117,7 @@ test.describe('Settings', () => {
     test('should have reset to defaults option', async ({ page }) => {
       // Wait for settings to load
       const settingsContent = page.locator('.settings-content');
-      await expect(settingsContent).toBeVisible({ timeout: 5000 });
+      await expect(settingsContent).toBeVisible();
 
       const resetButton = page.locator('button').filter({ hasText: /reset|defaults/i });
       await expect(resetButton).toBeVisible();
@@ -128,7 +128,7 @@ test.describe('Settings', () => {
     test('should have version info in settings', async ({ page }) => {
       // Wait for settings to load
       const settingsContent = page.locator('.settings-content');
-      await expect(settingsContent).toBeVisible({ timeout: 5000 });
+      await expect(settingsContent).toBeVisible();
 
       // Look for version text or about button
       const versionText = page.locator('text=Version').first();
@@ -147,10 +147,10 @@ test.describe('Settings', () => {
     test('should have 17Lands settings section', async ({ page }) => {
       // Wait for settings to load
       const settingsContent = page.locator('.settings-content');
-      await expect(settingsContent).toBeVisible({ timeout: 5000 });
+      await expect(settingsContent).toBeVisible();
 
       const landsSection = page.locator('text=17Lands').first();
-      await expect(landsSection).toBeVisible({ timeout: 5000 });
+      await expect(landsSection).toBeVisible();
     });
   });
 
@@ -158,7 +158,7 @@ test.describe('Settings', () => {
     test('should have ML/AI settings section', async ({ page }) => {
       // Wait for settings to load
       const settingsContent = page.locator('.settings-content');
-      await expect(settingsContent).toBeVisible({ timeout: 5000 });
+      await expect(settingsContent).toBeVisible();
 
       const mlSection = page.locator('text=ML').first();
       const aiSection = page.locator('text=AI').first();
@@ -177,7 +177,7 @@ test.describe('Settings', () => {
     test('should not show error state on initial load', async ({ page }) => {
       // Wait for settings to load
       const settingsContent = page.locator('.settings-content');
-      await expect(settingsContent).toBeVisible({ timeout: 5000 });
+      await expect(settingsContent).toBeVisible();
 
       const errorState = page.locator('.settings-error, .error-state');
       await expect(errorState).not.toBeVisible();
@@ -200,11 +200,11 @@ test.describe('@smoke Settings — User Profile section', () => {
 
     // Expand the User Profile accordion section
     const userProfileButton = page.locator('button').filter({ hasText: /user profile/i });
-    await expect(userProfileButton).toBeVisible({ timeout: 5000 });
+    await expect(userProfileButton).toBeVisible();
     await userProfileButton.click();
 
     // The email address must be visible in the profile section
-    await expect(page.locator('[data-testid="user-profile-email"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="user-profile-email"]')).toBeVisible();
     await expect(page.locator('[data-testid="user-profile-email"]')).toHaveText('smoke@example.com');
   });
 
@@ -215,7 +215,7 @@ test.describe('@smoke Settings — User Profile section', () => {
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
 
     const userProfileButton = page.locator('button').filter({ hasText: /user profile/i });
-    await expect(userProfileButton).toBeVisible({ timeout: 5000 });
+    await expect(userProfileButton).toBeVisible();
     await userProfileButton.click();
 
     await expect(page.locator('[data-testid="user-profile-name"]')).toHaveText('Smoke Tester');
