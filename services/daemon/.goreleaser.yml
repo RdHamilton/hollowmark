@@ -1,27 +1,26 @@
-# .goreleaser.yml — GoReleaser configuration for the MTGA Companion daemon.
+# .goreleaser.yml -- GoReleaser configuration for the MTGA Companion daemon.
 #
 # Targets:
 #   - darwin/amd64  }
 #   - darwin/arm64  } merged by lipo into a darwin universal binary
-#   - windows/amd64   — single exe, no CGO
+#   - windows/amd64   -- single exe, no CGO
 #
-# GoReleaser open-source (free tier) only — no Pro features used.
+# GoReleaser open-source (free tier) only -- no Pro features used.
 #
 # Run locally (dry-run):
 #   cd services/daemon && goreleaser release --snapshot --clean
 #
 # ---------------------------------------------------------------------------
-# GA CODE SIGNING -- DEFERRED TO GA (not active for beta)
+# CODE SIGNING -- ACTIVE (both Apple and Azure configured as of 2026-05-10)
 # ---------------------------------------------------------------------------
-# ADR-011 Section 5 documents the full GA signing strategy. Summary:
+# ADR-011 Section 5 documents the full signing strategy. Summary:
 #
 # macOS -- Apple Developer ID notarization (ticket #1648)
 # -------------------------------------------------------
-# Status: DOCUMENTED. Credential enrollment pending Apple Developer Program
-#         ($99/yr, budget approved). Active signing activates at GA.
+# Status: ACTIVE. Credentials configured in SSM and GitHub Actions secrets.
 # Identity validation: approved 2026-05-10.
 #
-# How it works (when activated):
+# How it works:
 #   1. build    -- GoReleaser produces universal binary (lipo darwin/amd64 + arm64)
 #   2. sign     -- codesign --options runtime --sign "Developer ID Application: <TEAM_ID>"
 #   3. pkg      -- pkgbuild --sign "Developer ID Installer: <TEAM_ID>"
@@ -41,7 +40,7 @@
 #   APPLE_NOTARIZATION_PASSWORD          -- app-specific password for notarytool
 #                                           (generated at appleid.apple.com)
 #
-# SSM credential path convention (populate before GA activation):
+# SSM credential paths (active):
 #   /vaultmtg/prod/apple-team-id
 #   /vaultmtg/prod/apple-notarization-apple-id
 #   /vaultmtg/prod/apple-notarization-password    (SecureString)
@@ -50,37 +49,37 @@
 #   /vaultmtg/prod/apple-installer-certificate    (SecureString, base64 .p12)
 #   /vaultmtg/prod/apple-installer-certificate-password (SecureString)
 #
-# These SSM params are loaded into GitHub Actions secrets before signing.
-# Full enrollment runbook: docs/runbooks/macos-notarization.md
+# These SSM params are loaded into GitHub Actions secrets.
+# Operational runbook: docs/runbooks/macos-notarization.md
 #
 # Windows -- Azure Trusted Signing (ticket #1649)
 # ------------------------------------------------
-# Status: DOCUMENTED. Azure identity validation approved 2026-05-10.
-#         Account creation pending ($9.99/mo, budget approved -- GA line item).
-#         Active signing activates at GA.
+# Status: ACTIVE. Azure identity validation approved 2026-05-10.
+#         Account active ($9.99/mo). Credentials configured in SSM and
+#         GitHub Actions secrets.
 #
-# How it works (when activated):
+# How it works:
 #   1. build    -- GoReleaser produces vaultmtg-daemon-windows-amd64.exe
 #   2. sign     -- Azure Trusted Signing via microsoft/trusted-signing-action@v0
 #                  Signs the .exe using Azure account credentials
 #   3. installer -- NSIS wraps the signed .exe into a per-user installer
 #   4. publish  -- GitHub Release via goreleaser-action
 #
-# Required GitHub Actions secrets (populate before GA activation):
+# GitHub Actions secrets (active):
 #   AZURE_TENANT_ID               -- Azure AD tenant ID
 #   AZURE_CLIENT_ID               -- Service principal (app registration) client ID
 #   AZURE_CLIENT_SECRET           -- Service principal secret (SecureString in SSM)
 #   AZURE_TRUSTED_SIGNING_ACCOUNT -- Trusted Signing account name
 #   AZURE_CERTIFICATE_PROFILE     -- Certificate profile name
 #
-# SSM credential path convention (populate before GA activation):
+# SSM credential paths (active):
 #   /vaultmtg/prod/azure-tenant-id
 #   /vaultmtg/prod/azure-client-id
 #   /vaultmtg/prod/azure-client-secret            (SecureString)
 #   /vaultmtg/prod/azure-trusted-signing-account
 #   /vaultmtg/prod/azure-certificate-profile
 #
-# GA workflow step to add in daemon-release.yml (goreleaser job, after GoReleaser):
+# Active step in daemon-release.yml (goreleaser job, after GoReleaser):
 #
 #   - name: Sign Windows binary (Azure Trusted Signing)
 #     if: startsWith(github.ref, 'refs/tags/daemon/v')
@@ -127,7 +126,7 @@ builds:
     goarch:
       - amd64
       - arm64
-    # Exclude darwin/arm64 from the individual windows-style naming — arm64
+    # Exclude darwin/arm64 from the individual windows-style naming -- arm64
     # only appears in the darwin pair that lipo merges into a universal binary.
     ignore:
       - goos: windows
@@ -135,7 +134,7 @@ builds:
     ldflags:
       - -s -w -X main.Version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
-    # Windows NSIS installer — compiled after the Windows amd64 binary is built.
+    # Windows NSIS installer -- compiled after the Windows amd64 binary is built.
     # makensis is available on ubuntu runners via apt; skipped in snapshot mode.
     hooks:
       post:
@@ -150,7 +149,7 @@ builds:
             - IS_SNAPSHOT={{ .IsSnapshot }}
 
 # ---------------------------------------------------------------------------
-# Universal binary (darwin arm64 + amd64 → single universal binary via lipo)
+# Universal binary (darwin arm64 + amd64 -> single universal binary via lipo)
 # ---------------------------------------------------------------------------
 universal_binaries:
   - id: daemon-universal
@@ -158,7 +157,7 @@ universal_binaries:
       - daemon
     name_template: vaultmtg-daemon
     replace: true
-    # macOS .pkg/.dmg installer — built after lipo produces the universal binary.
+    # macOS .pkg/.dmg installer -- built after lipo produces the universal binary.
     # Runs only on darwin and is skipped automatically in snapshot mode because
     # the script checks for the GORELEASER_CURRENT_TAG / IS_SNAPSHOT env vars
     # set by the CI workflow. hdiutil and pkgbuild are macOS-only tools.
@@ -214,7 +213,7 @@ release:
   github:
     owner: RdHamilton
     name: MTGA-Companion
-  # Tag format: daemon/v0.3.1 — strip the "daemon/" prefix for the release name.
+  # Tag format: daemon/v0.3.1 -- strip the "daemon/" prefix for the release name.
   name_template: "Daemon {{ .Tag }}"
   draft: false
   prerelease: auto
