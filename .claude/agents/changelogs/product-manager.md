@@ -8,6 +8,12 @@
 **RICE score**: [if applicable]
 -->
 
+## 2026-05-10 — v0.3.2 milestone setup (MTGA-Companion → VaultMTG rename)
+**Triggered by**: User request — orchestrate full v0.3.2 milestone (project, tickets, arch review, PRD) from architect's rename audit + Ray's 4 decisions (VaultMTG casing, repo rename yes, DB rename yes, archive rewrite).
+**Decision**: Created GitHub Project #34 ("v0.3.2 — mtga-companion rename", `PVT_kwHOABsZ684BXSA8`) and milestone #71 (v0.3.2). Synthesized 31 tickets across 6 waves from the 1,134-match audit. ADR-021 gates all work. Wave 1 (8 docs/strings) and Wave 2 (5 code) parallel-safe; Wave 3 (5 SSM/EC2) and Wave 4 (5 daemon — highest user risk) parallel-safe; Wave 5 (3 S3/Vercel) → Wave 6 (4 repo+DB+CI). Wrote arch-review.md flagging 7 risks: highest are (1) two daemons running simultaneously after macOS migration bug, (2) SSM cutover ordering, (3) Go module path mismatch with not-yet-renamed repo (recommended moving repo rename to Wave 0.5). PRD documents 6 user stories, 10 risks/mitigations, 3-week wall-clock estimate fitting before 2026-08-18 closed beta. Did NOT create GitHub issues directly (per rule #13) — handoff to project-manager prepared.
+**Output**: docs/product/milestones/v0.3.2/ticket-list.md, arch-review.md, prd.md, project-manager-instructions.md. Project #34, milestone #71 created on GitHub.
+**RICE score**: N/A — operational rename, not feature work
+
 ## 2026-05-09 — v0.3.1 docs PR + Project #33 ticket migration
 **Triggered by**: User request — PR docs changes and move Storybook/Playwright tickets
 **Decision**: Opened PR #1660 for docs/product/beta-roadmap.md v0.3.1 sequencing update (docs-only, no LE review). Moved Storybook issues #1621, #1622, #1625 from Project #30 to Project #33 (PVT_kwHOABsZ684BXMn-). No open issues with "playwright" in title found.
