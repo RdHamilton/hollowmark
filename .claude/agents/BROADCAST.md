@@ -5,8 +5,8 @@ description: Shared operational directives broadcast to all agents. Read at the 
 
 # Agent Broadcast — VaultMTG
 
-**Last updated**: 2026-05-09
-**Updated by**: PM (v0.4.0 kickoff cleanup)
+**Last updated**: 2026-05-10
+**Updated by**: Ray (add PC-11 pre-review checklist exemptions for fix/infra and fix/staging branches)
 
 ---
 
@@ -60,6 +60,7 @@ These apply to every agent on every task and do not expire:
 - **PC-4 (branch cleanliness)**: Every agent runs `git status && git log --oneline -5` before opening any PR. If the working tree is dirty or contains unexpected commits, STOP and report back — do not open the PR.
 - **PC-9 (agent invocation mode)**: Use synchronous invocation for output-producing tasks (research, status checks, reports). Use `run_in_background: true` only for state-update tasks (ticket moves, board updates, GitHub notifications).
 - **PC-10 (LE review after every PR — agent rule)**: Any engineering agent (backend-engineer, front-engineer, infrastructure, dba, ray) that opens a PR with `gh pr create` MUST immediately spawn the lead-engineer agent to run the LE review — do not stop after the PR is created. Use `subagent_type: "lead-engineer"` and `run_in_background: true`. Pass the PR number, ticket number(s), and branch name. The Agent tool is provisioned in your tools list for exactly this purpose.
+- **PC-11 (Pre-Review Checklist exemptions)**: The Pre-Review Checklist is required in all PR bodies EXCEPT branches prefixed with: `chore/`, `docs/`, `fix/ci`, `fix/infra`, or `fix/staging`. These prefixes are reserved for CI/infra-only changes where all checklist items are N/A. Using these prefixes on PRs that include application code (Go, TypeScript, frontend assets) is a policy violation.
 
 ---
 
