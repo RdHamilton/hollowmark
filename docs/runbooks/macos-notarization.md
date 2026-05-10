@@ -1,6 +1,6 @@
 # Runbook: macOS Notarization (Apple Developer ID)
 
-**Status**: DOCUMENTED — not yet active. Activates at GA.
+**Status**: ACTIVE — credentials configured, pipeline live.
 **Ticket**: #1648
 **Budget approved**: 2026-05-10 (Ray Hamilton)
 **Cost**: $99/yr (Apple Developer Program)
@@ -9,35 +9,32 @@
 
 ## Overview
 
-This runbook covers the end-to-end Apple Developer ID notarization workflow
-for the VaultMTG daemon `.dmg` installer. When active, users install the daemon
-with zero Gatekeeper warnings on macOS 14+.
+This runbook covers the Apple Developer ID notarization workflow for the
+VaultMTG daemon `.dmg` installer. Users install the daemon with zero Gatekeeper
+warnings on macOS 14+.
 
 The CI pipeline (`sign-macos` job in `.github/workflows/daemon-release.yml`)
-is already implemented and tag-guarded. It runs on every `daemon/v*` release
-tag. It is inert until the Apple credentials are populated in GitHub Secrets.
+is live and tag-guarded. It runs on every `daemon/v*` release tag. Credentials
+are populated in SSM and loaded into GitHub Actions secrets.
 
 ---
 
-## Prerequisites
+## Prerequisites (already satisfied)
 
-- Apple Developer Program membership enrolled ($99/yr)
-- Developer ID Application certificate issued by Apple
-- Developer ID Installer certificate issued by Apple
-- App-specific password generated at appleid.apple.com for `notarytool`
-
----
-
-## Step 1: Enroll in Apple Developer Program
-
-1. Go to https://developer.apple.com/programs/enroll/
-2. Sign in with the Apple ID that will own the certificates
-3. Complete enrollment ($99 charge)
-4. Wait for approval (usually same-day for individuals)
+- Apple Developer Program enrolled ($99/yr) — active
+- Developer ID Application certificate issued by Apple — active
+- Developer ID Installer certificate issued by Apple — active
+- App-specific password generated at appleid.apple.com for `notarytool` — active
 
 ---
 
-## Step 2: Create Certificates in Xcode / Keychain
+## Credential Management
+
+Credentials live in SSM under `/vaultmtg/prod/apple-*`. To rotate any
+credential, update the SSM parameter and re-sync the corresponding GitHub
+Actions secret (see Step 3 below).
+
+## Step 1: (Reference) How Certificates Were Created
 
 ```
 Xcode > Settings > Accounts > Manage Certificates
@@ -50,7 +47,7 @@ Store the passphrases in a password manager (1Password, Bitwarden, etc.).
 
 ---
 
-## Step 3: Generate an App-Specific Password for notarytool
+## Step 2: (Reference) How App-Specific Password Was Created
 
 1. Sign in at https://appleid.apple.com
 2. Go to App-Specific Passwords > Generate
@@ -59,7 +56,7 @@ Store the passphrases in a password manager (1Password, Bitwarden, etc.).
 
 ---
 
-## Step 4: Populate SSM Parameters
+## Step 3: Rotate or Re-Populate SSM Parameters
 
 Use the `personal` AWS profile. All secret values use `SecureString` type.
 
@@ -109,10 +106,10 @@ aws ssm put-parameter --profile personal --region us-east-1 \
 
 ---
 
-## Step 5: Populate GitHub Actions Secrets
+## Step 4: Sync GitHub Actions Secrets from SSM
 
-Load the SSM values into GitHub Secrets. These map 1:1 to the env vars
-read by the `sign-macos` job:
+The SSM values map 1:1 to the GitHub Secrets read by the `sign-macos` job.
+Use this procedure to rotate a secret: update SSM first, then re-sync below.
 
 | GitHub Secret | SSM Path |
 |---|---|
@@ -136,7 +133,7 @@ Repeat for each secret listed above.
 
 ---
 
-## Step 6: Verify the sign-macos CI Job End-to-End
+## Step 5: Verify the sign-macos CI Job End-to-End
 
 1. Push a `daemon/v*` tag to trigger the `daemon-release.yml` workflow:
    ```bash
@@ -157,7 +154,7 @@ Repeat for each secret listed above.
    open /Volumes/MTGA\ Companion\ Daemon/vaultmtg-daemon-darwin-universal.pkg
    ```
    Gatekeeper must NOT warn ("Apple cannot verify..."). If the warning appears,
-   notarization or stapling failed — check the `notarytool submit` log output
+   notarization or stapling failed -- check the `notarytool submit` log output
    in the CI run.
 
 5. Verify stapling independently:
