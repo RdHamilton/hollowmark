@@ -8,6 +8,12 @@
 **Summary**: One sentence summary of what was done and why.
 -->
 
+## 2026-05-10 — Operational: Staging deploy triggered and verified (PRs #1732, #1733, #1734)
+**PR**: N/A (operational deploy, no code change)
+**Files changed**:
+- `docs/status/infra.md` — updated task status checkpoint
+**Summary**: Triggered staging-deploy.yml via workflow_dispatch on main (run 25632494956); all 17 steps completed successfully in 1m36s including S3 migration path fix (PR #1734) and SSM errexit fix (PR #1733); verified https://staging-api.vaultmtg.app/healthz returned HTTP 200.
+
 ## 2026-05-10 — Staging deploy fix: migrations require S3 download (no repo on EC2)
 **PR**: #1734 (in RdHamilton/MTGA-Companion)
 **Files changed**:
