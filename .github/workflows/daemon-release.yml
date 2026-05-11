@@ -134,6 +134,9 @@ jobs:
       DMG: vaultmtg-daemon-darwin-universal.dmg
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download darwin universal binary artifact
         uses: actions/download-artifact@v4
         with:
@@ -200,6 +203,7 @@ jobs:
           cp bin/${{ env.BINARY }} pkg-root/usr/local/bin/vaultmtg-daemon
           pkgbuild \
             --root pkg-root \
+            --scripts services/daemon/install/macos/pkg \
             --identifier com.vaultmtg.daemon \
             --version "${GITHUB_REF#refs/tags/daemon/v}" \
             --install-location / \
