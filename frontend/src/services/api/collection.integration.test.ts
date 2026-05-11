@@ -21,10 +21,10 @@ vi.unmock('@/services/api');
 // Import the actual API functions after unmocking
 import { collection } from '@/services/api';
 
-// collection.ts still routes through the local daemonClient (Phase 2 has
-// not migrated /collection yet), so MSW must intercept the daemon URL,
-// not the BFF. See drafts.test.ts for the same pattern.
-const API_BASE = 'http://localhost:9001/api/v1';
+// Phase 2 PR #2 migrated collection.ts to apiClient (BFF, port 8080), so
+// MSW must intercept the BFF URL. Other modules (drafts, cards, etc.) still
+// hit the daemon at port 9001 — see drafts.test.ts for that pattern.
+const API_BASE = 'http://localhost:8080/api/v1';
 
 describe('Collection API Integration Tests', () => {
   // Start MSW server before all tests

@@ -79,8 +79,8 @@ tests + lint/format gates.
 
 | # | PR scope                              | Paths | Status        | Branch / PR |
 |---|---------------------------------------|-------|---------------|-------------|
-| 1 | matches/* — full surface (17 paths)   | 17    | ⏳ **In progress** — expanding open PR | `feat/phase2-pr1-matches` → PR #1872 |
-| 2 | collection/* (8 paths)                | 8     | Pending       | — |
+| 1 | matches/* — full surface (17 paths)   | 17    | ✅ **Merged** 2026-05-11 | PR #1872 |
+| 2 | collection/* (8 paths)                | 8     | ⏳ **In progress** | `feat/phase2-pr2-collection` |
 | 3 | quests/* (4 paths)                    | 4     | Pending       | — |
 | 4 | standard/* (6 paths)                  | 6     | Pending       | — |
 | 5 | gameplays/* + meta/* (2 paths)        | 2     | Pending       | — |
@@ -208,3 +208,17 @@ authenticated user's accounts. camelCase JSON wire format.
   existing `/api/v1/stats/rank-progression`. 12 functions need
   brand-new BFF handlers + repo + tests. Authenticated user picked
   "do it all on PR #1872" (~1500 lines of Go).
+- **2026-05-11** — PR #1872 merged. Full /api/v1/matches/* surface
+  shipped (17 routes), envelope + casing contract bugs fixed.
+  Discovered while building: the original "repoint to /stats/rank-
+  progression" plan was wrong — that endpoint is a timeline, not a
+  current-rank summary. RankProgression became a 13th /matches/*
+  handler. Starting PR #2 (collection/*).
+- **2026-05-11** — PR #2 (collection/*) built. Audited consumers and
+  found 7 of 12 collection.ts wrappers were dead Wails-era code with
+  no real callers (getMissingCardsForSet, getMissingCards,
+  getCollectionBySet, getCollectionByRarity, getRecentChanges,
+  getMissingCardsForDeck, getDeckValue) — deleted them. Real BFF
+  surface: 4 endpoints (POST /collection, GET /collection/stats,
+  /collection/sets, /collection/value). Branch
+  `feat/phase2-pr2-collection` ready to open as PR.
