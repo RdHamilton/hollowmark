@@ -4,11 +4,16 @@
  */
 import { http, HttpResponse } from 'msw';
 
-// All routes here are still served by the daemon localapi (Phase 2 has only
-// migrated /matches to the BFF, and matches integration tests have their own
-// dedicated mocks). Keep this aligned with daemonClient's default base URL
-// so MSW intercepts the requests instead of letting them escape.
-const API_BASE = 'http://localhost:9001/api/v1';
+// Routes still served by the daemon localapi (Phase 2 hasn't migrated them
+// yet) live under DAEMON_BASE; routes that have been migrated to the BFF
+// (matches, collection) live under BFF_BASE. Per-test handler overrides
+// must use the matching base so MSW intercepts correctly.
+const DAEMON_BASE = 'http://localhost:9001/api/v1';
+const BFF_BASE = 'http://localhost:8080/api/v1';
+
+// API_BASE retained as the daemon-side alias so older mocks keep working
+// without touching every route. New BFF mocks should use BFF_BASE explicitly.
+const API_BASE = DAEMON_BASE;
 
 /**
  * Create a standard API success response wrapper.
@@ -112,8 +117,9 @@ export function createMockSetInfo(overrides: Partial<{
  * These return realistic response structures matching the actual backend.
  */
 export const handlers = [
-  // Collection endpoint - returns CollectionResponse with cards array
-  http.post(`${API_BASE}/collection`, () => {
+  // Collection endpoint - returns CollectionResponse with cards array.
+  // BFF-served (Phase 2 PR #2) so the URL prefix is BFF_BASE.
+  http.post(`${BFF_BASE}/collection`, () => {
     return successResponse({
       cards: [
         createMockCollectionCard({ cardId: 1, name: 'Lightning Bolt' }),
@@ -127,8 +133,8 @@ export const handlers = [
     });
   }),
 
-  // Collection stats endpoint
-  http.get(`${API_BASE}/collection/stats`, () => {
+  // Collection stats endpoint (BFF-served).
+  http.get(`${BFF_BASE}/collection/stats`, () => {
     return successResponse({
       totalUniqueCards: 100,
       totalCards: 400,
@@ -147,8 +153,9 @@ export const handlers = [
     ]);
   }),
 
-  // Set completion endpoint - uses PascalCase to match Go struct serialization
-  http.get(`${API_BASE}/collection/sets`, () => {
+  // Set completion endpoint - uses PascalCase to match Go struct serialization.
+  // BFF-served (Phase 2 PR #2).
+  http.get(`${BFF_BASE}/collection/sets`, () => {
     return successResponse([
       { SetCode: 'sta', SetName: 'Strixhaven', TotalCards: 63, OwnedCards: 50, Percentage: 79.4 },
       { SetCode: 'dsk', SetName: 'Duskmourn', TotalCards: 200, OwnedCards: 100, Percentage: 50.0 },
@@ -756,14 +763,14 @@ export const handlers = [
 /**
  * Handler that returns null collection (for testing null handling).
  */
-export const nullCollectionHandler = http.post(`${API_BASE}/collection`, () => {
+export const nullCollectionHandler = http.post(`${BFF_BASE}/collection`, () => {
   return successResponse(null);
 });
 
 /**
  * Handler that returns empty collection response.
  */
-export const emptyCollectionHandler = http.post(`${API_BASE}/collection`, () => {
+export const emptyCollectionHandler = http.post(`${BFF_BASE}/collection`, () => {
   return successResponse({
     cards: [],
     totalCount: 0,
@@ -774,7 +781,7 @@ export const emptyCollectionHandler = http.post(`${API_BASE}/collection`, () => 
 /**
  * Handler that returns collection API error.
  */
-export const errorCollectionHandler = http.post(`${API_BASE}/collection`, () => {
+export const errorCollectionHandler = http.post(`${BFF_BASE}/collection`, () => {
   return HttpResponse.json(
     { error: 'Internal Server Error', message: 'Database error', code: 500 },
     { status: 500 }

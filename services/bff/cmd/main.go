@@ -175,6 +175,7 @@ func main() {
 		daemonHealthHandler   *handlers.DaemonHealthHandler
 		daemonRegisterHandler *handlers.DaemonRegisterHandler
 		matchesHandler        *handlers.MatchesHandler
+		collectionHandler     *handlers.CollectionHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -207,6 +208,12 @@ func main() {
 		// support).  Replaces the SPA's daemonClient /matches calls.  See
 		// docs/product/milestones/v0.3.1/daemon-local-api-phase2-audit.md.
 		matchesHandler = handlers.NewMatchesHandler(matchesRepo, accountRepo)
+
+		// Phase 2 PR #2 — /api/v1/collection surface (cards/stats/sets/value).
+		// Replaces the SPA's daemonClient /collection calls.  See
+		// .claude/plans/spa-route-migration.md.
+		collectionRepo := repository.NewCollectionRepository(sqlDB)
+		collectionHandler = handlers.NewCollectionHandler(collectionRepo, accountRepo)
 
 		// ListV2Handler provides cursor-paginated v2 endpoints for matches,
 		// drafts, decks, and collection (ADR-018).
@@ -293,6 +300,7 @@ func main() {
 		DaemonHealthHandler:   daemonHealthHandler,
 		DaemonRegisterHandler: daemonRegisterHandler,
 		MatchesHandler:        matchesHandler,
+		CollectionHandler:     collectionHandler,
 		HealthzHandler:        healthzHandler,
 		ClerkAuthMiddl:        clerkAuthMiddl,
 		ClerkAuthSSEMiddl:     clerkAuthSSEMiddl,
@@ -356,6 +364,9 @@ type RouterDeps struct {
 	// MatchesHandler serves the Phase 2 /api/v1/matches/* surface that the
 	// SPA's daemonClient previously hit. Protected by DaemonAPIKeyAuth.
 	MatchesHandler *handlers.MatchesHandler
+	// CollectionHandler serves the Phase 2 /api/v1/collection/* surface
+	// (cards/stats/sets/value). Protected by DaemonAPIKeyAuth.
+	CollectionHandler *handlers.CollectionHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -480,6 +491,23 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 			r.With(auth).Post("/api/v1/matches/compare/time-periods", m.CompareTimePeriods)
 		} else {
 			log.Println("WARN: /api/v1/matches/* disabled — DaemonAPIKeyAuth middleware not configured")
+		}
+	}
+
+	// Phase 2 PR #2 — /api/v1/collection surface. Same auth model + envelope
+	// contract as /api/v1/matches/*. Replaces the SPA's daemonClient
+	// /collection calls (only the live wrappers — dead Wails-era functions
+	// were dropped on the SPA side in this PR).
+	if deps.CollectionHandler != nil {
+		if deps.DaemonAPIKeyAuthMiddl != nil {
+			c := deps.CollectionHandler
+			auth := deps.DaemonAPIKeyAuthMiddl
+			r.With(auth).Post("/api/v1/collection", c.List)
+			r.With(auth).Get("/api/v1/collection/stats", c.Stats)
+			r.With(auth).Get("/api/v1/collection/sets", c.Sets)
+			r.With(auth).Get("/api/v1/collection/value", c.Value)
+		} else {
+			log.Println("WARN: /api/v1/collection/* disabled — DaemonAPIKeyAuth middleware not configured")
 		}
 	}
 

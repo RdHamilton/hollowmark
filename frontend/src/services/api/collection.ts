@@ -1,9 +1,16 @@
 /**
  * Collection API service.
- * Replaces Wails collection-related function bindings.
+ *
+ * Phase 2 PR #2: cloud-data collection reads now hit the BFF directly via
+ * apiClient at /api/v1/collection/*. Dead Wails-era wrappers
+ * (getMissingCardsForSet, getMissingCards, getCollectionBySet,
+ * getCollectionByRarity, getRecentChanges, getMissingCardsForDeck,
+ * getDeckValue) were removed in this PR — no component referenced them.
+ *
+ * Plan tracker: .claude/plans/spa-route-migration.md
  */
 
-import { get, post } from '../daemonClient';
+import { get, post } from '../apiClient';
 import { gui, models } from '@/types/models';
 
 // Re-export types for convenience
@@ -39,7 +46,8 @@ export interface CollectionResponse {
  */
 export async function getCollectionWithMetadata(filter: CollectionFilter = {}): Promise<CollectionResponse> {
   const response = await post<CollectionResponse>('/collection', filter);
-  // Handle null/undefined response or missing fields
+  // Defensive: BFF will always return a populated envelope, but the SPA
+  // historically tolerated nulls so keep the fallback.
   return {
     cards: response?.cards ?? [],
     totalCount: response?.totalCount ?? 0,
@@ -74,49 +82,6 @@ export async function getSetCompletion(): Promise<models.SetCompletion[]> {
 }
 
 /**
- * Get recent collection changes.
- */
-export async function getRecentChanges(limit?: number): Promise<CollectionChangeEntry[]> {
-  const params = limit ? `?limit=${limit}` : '';
-  return get<CollectionChangeEntry[]>(`/collection/recent${params}`);
-}
-
-/**
- * Get missing cards for a set.
- */
-export async function getMissingCardsForSet(setCode: string): Promise<CollectionCard[]> {
-  return get<CollectionCard[]>(`/collection/missing/${setCode}`);
-}
-
-/**
- * Get collection for a specific set.
- */
-export async function getCollectionBySet(setCode: string): Promise<CollectionCard[]> {
-  return getCollection({ set_code: setCode });
-}
-
-/**
- * Get collection by rarity.
- */
-export async function getCollectionByRarity(rarity: string): Promise<CollectionCard[]> {
-  return getCollection({ rarity });
-}
-
-/**
- * Get missing cards analysis for a set.
- */
-export async function getMissingCards(setCode: string): Promise<models.MissingCardsAnalysis> {
-  return get<models.MissingCardsAnalysis>(`/collection/missing/${setCode}`);
-}
-
-/**
- * Get missing cards for a deck.
- */
-export async function getMissingCardsForDeck(deckId: string): Promise<gui.MissingCardsForDeckResponse> {
-  return get<gui.MissingCardsForDeckResponse>(`/collection/decks/${deckId}/missing`);
-}
-
-/**
  * Card value information.
  */
 export interface CardValue {
@@ -143,28 +108,8 @@ export interface CollectionValue {
 }
 
 /**
- * Deck value response.
- */
-export interface DeckValue {
-  deckId: string;
-  deckName: string;
-  totalValueUsd: number;
-  totalValueEur: number;
-  cardCount: number;
-  cardsWithPrice: number;
-  topCards: CardValue[];
-}
-
-/**
  * Get the estimated value of the collection.
  */
 export async function getCollectionValue(): Promise<CollectionValue> {
   return get<CollectionValue>('/collection/value');
-}
-
-/**
- * Get the estimated value of a specific deck.
- */
-export async function getDeckValue(deckId: string): Promise<DeckValue> {
-  return get<DeckValue>(`/collection/decks/${deckId}/value`);
 }
