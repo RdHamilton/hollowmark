@@ -16,6 +16,7 @@ import (
 	"github.com/ramonehamilton/mtga-daemon/internal/dispatch"
 	"github.com/ramonehamilton/mtga-daemon/internal/gre"
 	"github.com/ramonehamilton/mtga-daemon/internal/keychain"
+	"github.com/ramonehamilton/mtga-daemon/internal/localapi"
 	"github.com/ramonehamilton/mtga-daemon/internal/logreader"
 	"github.com/ramonehamilton/mtga-daemon/internal/registrar"
 	"github.com/ramonehamilton/mtga-daemon/internal/updatecheck"
@@ -211,6 +212,21 @@ func (s *Service) Run(ctx context.Context) error {
 
 	updates := poller.Start()
 	errs := poller.Errors()
+
+	// Phase 0 of the daemon-local-API plan: serve a /health endpoint on
+	// 127.0.0.1:9001 so the SPA's "daemon connected" indicator can detect
+	// this process. Non-fatal — if the port is busy (e.g. a previous daemon
+	// instance is still draining), the daemon continues with dispatch only.
+	localAPI := localapi.New(localapi.DefaultPort, localapi.State{
+		Version:   s.version,
+		SessionID: s.sessionID,
+		StartedAt: time.Now().UTC(),
+		AccountID: s.cfg.AccountID,
+	})
+	if err := localAPI.Start(); err != nil {
+		log.Printf("[daemon] warn: local API server did not start: %v", err)
+	}
+	defer func() { _ = localAPI.Stop() }()
 
 	log.Printf("[daemon] started (session=%s cloud_api=%s)", s.sessionID, s.cfg.CloudAPIURL)
 
