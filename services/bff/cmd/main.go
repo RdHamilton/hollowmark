@@ -453,9 +453,31 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// docs/product/milestones/v0.3.1/daemon-local-api-phase2-audit.md.
 	if deps.MatchesHandler != nil {
 		if deps.DaemonAPIKeyAuthMiddl != nil {
-			r.With(deps.DaemonAPIKeyAuthMiddl).Post("/api/v1/matches", deps.MatchesHandler.List)
-			r.With(deps.DaemonAPIKeyAuthMiddl).Get("/api/v1/matches/formats", deps.MatchesHandler.Formats)
-			r.With(deps.DaemonAPIKeyAuthMiddl).Get("/api/v1/matches/{matchId}", deps.MatchesHandler.Get)
+			m := deps.MatchesHandler
+			auth := deps.DaemonAPIKeyAuthMiddl
+			// List + lookup
+			r.With(auth).Post("/api/v1/matches", m.List)
+			r.With(auth).Get("/api/v1/matches/{matchId}", m.Get)
+			r.With(auth).Get("/api/v1/matches/{matchId}/games", m.Games)
+			// Filter dropdowns
+			r.With(auth).Get("/api/v1/matches/formats", m.Formats)
+			r.With(auth).Get("/api/v1/matches/archetypes", m.Archetypes)
+			// Aggregations
+			r.With(auth).Post("/api/v1/matches/stats", m.Stats)
+			r.With(auth).Post("/api/v1/matches/trends", m.Trends)
+			r.With(auth).Post("/api/v1/matches/format-distribution", m.FormatDistribution)
+			r.With(auth).Post("/api/v1/matches/performance-by-hour", m.PerformanceByHour)
+			r.With(auth).Post("/api/v1/matches/matchup-matrix", m.MatchupMatrix)
+			// Rank views
+			r.With(auth).Get("/api/v1/matches/rank-progression/{format}", m.RankProgression)
+			r.With(auth).Get("/api/v1/matches/rank-progression-timeline", m.RankProgressionTimeline)
+			// Export
+			r.With(auth).Get("/api/v1/matches/export", m.Export)
+			// Compare
+			r.With(auth).Post("/api/v1/matches/compare", m.Compare)
+			r.With(auth).Post("/api/v1/matches/compare/formats", m.CompareFormats)
+			r.With(auth).Post("/api/v1/matches/compare/decks", m.CompareDecks)
+			r.With(auth).Post("/api/v1/matches/compare/time-periods", m.CompareTimePeriods)
 		} else {
 			log.Println("WARN: /api/v1/matches/* disabled — DaemonAPIKeyAuth middleware not configured")
 		}

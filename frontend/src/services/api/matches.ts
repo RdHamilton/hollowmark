@@ -1,15 +1,14 @@
 /**
  * Matches API service.
  *
- * Phase 2 (see docs/product/milestones/v0.3.1/daemon-local-api-phase2-audit.md):
- * cloud-data reads now hit the BFF directly via apiClient. The BFF emits the
- * camelCase wire format defined under /api/v1/matches/*; the
- * adaptMatchListItem helper below maps that back to the SPA's existing
- * models.Match shape so consuming components do not need PascalCase renames
- * in this PR.
+ * Phase 2 PR #1: every cloud-data matches.* call hits the BFF at
+ * /api/v1/matches/*. The BFF emits PascalCase JSON keys to match the existing
+ * Wails-era models.Match / Statistics / PerformanceMetrics TS classes the SPA
+ * already deserialises into; that lets us migrate routing without a
+ * companion type regen / component refactor in this PR.
  *
  * Live-state paths (draft pick grading, in-progress match win probability)
- * remain on daemonClient and are added back as Phase 2 Bucket C lands.
+ * remain on daemonClient and come back as Phase 2 Bucket C lands.
  */
 
 import { get as bffGet, post as bffPost } from '../apiClient';
@@ -20,6 +19,17 @@ export type Match = models.Match;
 export type StatsFilter = models.StatsFilter;
 export type Statistics = models.Statistics;
 export type PerformanceMetrics = models.PerformanceMetrics;
+
+// matchListEnvelope is the BFF's POST /matches response shape: matches plus
+// pagination metadata. The SPA's getMatches caller wants a Match[] so we
+// unwrap below; the metadata is preserved on the wire for a future paginated
+// match-history view.
+interface MatchListEnvelope {
+  Matches: Match[];
+  Total: number;
+  Page: number;
+  Limit: number;
+}
 
 /**
  * Filter request for API calls.
@@ -57,7 +67,8 @@ export interface TrendAnalysisRequest {
  * Get matches with optional filters.
  */
 export async function getMatches(filter: StatsFilterRequest = {}): Promise<Match[]> {
-  return bffPost<Match[]>('/matches', filter);
+  const env = await bffPost<MatchListEnvelope>('/matches', filter);
+  return env?.Matches ?? [];
 }
 
 /**
@@ -112,13 +123,6 @@ export async function getFormatDistribution(
 }
 
 /**
- * Get win rate trends over time.
- */
-export async function getWinRateOverTime(request: TrendAnalysisRequest): Promise<unknown> {
-  return bffPost('/matches/win-rate-over-time', request);
-}
-
-/**
  * Get performance metrics by hour.
  */
 export async function getPerformanceByHour(
@@ -134,15 +138,6 @@ export async function getMatchupMatrix(
   filter: StatsFilterRequest = {}
 ): Promise<Record<string, Statistics>> {
   return bffPost<Record<string, Statistics>>('/matches/matchup-matrix', filter);
-}
-
-/**
- * Get performance metrics with optional filters.
- */
-export async function getPerformanceMetrics(
-  filter: StatsFilterRequest = {}
-): Promise<PerformanceMetrics> {
-  return bffPost<PerformanceMetrics>('/matches/performance', filter);
 }
 
 /**

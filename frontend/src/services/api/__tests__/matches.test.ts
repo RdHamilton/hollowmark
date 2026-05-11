@@ -95,14 +95,20 @@ describe('matches API', () => {
   });
 
   describe('getMatches', () => {
-    it('should call post with correct path and filter', async () => {
-      const mockMatches = [{ id: '1', result: 'win' }];
-      vi.mocked(post).mockResolvedValue(mockMatches);
+    it('should call post with correct path and unwrap MatchListEnvelope.Matches', async () => {
+      const mockMatches = [{ ID: '1', Result: 'win' }];
+      vi.mocked(post).mockResolvedValue({ Matches: mockMatches, Total: 1, Page: 1, Limit: 50 });
 
       const result = await matches.getMatches({ format: 'standard' });
 
       expect(post).toHaveBeenCalledWith('/matches', { format: 'standard' });
       expect(result).toEqual(mockMatches);
+    });
+
+    it('should return [] when the envelope has no Matches field', async () => {
+      vi.mocked(post).mockResolvedValue(undefined as unknown as { Matches: unknown[] });
+      const result = await matches.getMatches();
+      expect(result).toEqual([]);
     });
   });
 
@@ -154,18 +160,6 @@ describe('matches API', () => {
     });
   });
 
-  describe('getPerformanceMetrics', () => {
-    it('should call post with correct path and filter', async () => {
-      const mockMetrics = { winRate: 0.6 };
-      vi.mocked(post).mockResolvedValue(mockMetrics);
-
-      const result = await matches.getPerformanceMetrics({ format: 'standard' });
-
-      expect(post).toHaveBeenCalledWith('/matches/performance', { format: 'standard' });
-      expect(result).toEqual(mockMetrics);
-    });
-  });
-
   describe('getRankProgression', () => {
     it('should call get with correct path', async () => {
       const mockProgression = { currentRank: 'Gold' };
@@ -201,6 +195,116 @@ describe('matches API', () => {
       await matches.exportMatches('csv');
 
       expect(get).toHaveBeenCalledWith('/matches/export?format=csv');
+    });
+  });
+
+  // ── Phase 2 PR #1 expansion: 12 new endpoints ─────────────────────────────
+  // One assertion per function: that it forwards to the documented URL with
+  // the expected body (POST) or query (GET). Response-shape concerns live in
+  // the BFF handler tests; here we lock the wire contract from the SPA side.
+
+  describe('getStats', () => {
+    it('forwards filter to POST /matches/stats', async () => {
+      vi.mocked(post).mockResolvedValue({ TotalMatches: 1 });
+      await matches.getStats({ format: 'standard' });
+      expect(post).toHaveBeenCalledWith('/matches/stats', { format: 'standard' });
+    });
+  });
+
+  describe('getTrendAnalysis', () => {
+    it('forwards request to POST /matches/trends', async () => {
+      vi.mocked(post).mockResolvedValue({});
+      const req = { startDate: '2026-01-01', endDate: '2026-01-31', periodType: 'week' };
+      await matches.getTrendAnalysis(req);
+      expect(post).toHaveBeenCalledWith('/matches/trends', req);
+    });
+  });
+
+  describe('getArchetypes', () => {
+    it('calls GET /matches/archetypes', async () => {
+      vi.mocked(get).mockResolvedValue(['Mono Red']);
+      await matches.getArchetypes();
+      expect(get).toHaveBeenCalledWith('/matches/archetypes');
+    });
+  });
+
+  describe('getFormatDistribution', () => {
+    it('forwards filter to POST /matches/format-distribution', async () => {
+      vi.mocked(post).mockResolvedValue({});
+      await matches.getFormatDistribution({ format: 'standard' });
+      expect(post).toHaveBeenCalledWith('/matches/format-distribution', { format: 'standard' });
+    });
+  });
+
+  describe('getPerformanceByHour', () => {
+    it('forwards filter to POST /matches/performance-by-hour', async () => {
+      vi.mocked(post).mockResolvedValue({});
+      await matches.getPerformanceByHour({ format: 'standard' });
+      expect(post).toHaveBeenCalledWith('/matches/performance-by-hour', { format: 'standard' });
+    });
+  });
+
+  describe('getMatchupMatrix', () => {
+    it('forwards filter to POST /matches/matchup-matrix', async () => {
+      vi.mocked(post).mockResolvedValue({});
+      await matches.getMatchupMatrix({ format: 'standard' });
+      expect(post).toHaveBeenCalledWith('/matches/matchup-matrix', { format: 'standard' });
+    });
+  });
+
+  describe('getRankProgressionTimeline', () => {
+    it('forwards GET /matches/rank-progression-timeline with query string', async () => {
+      vi.mocked(get).mockResolvedValue({ entries: [] });
+      const start = new Date('2026-01-01T00:00:00Z');
+      const end = new Date('2026-02-01T00:00:00Z');
+      await matches.getRankProgressionTimeline('standard', start, end, 'week');
+      expect(get).toHaveBeenCalledWith(expect.stringMatching(
+        /^\/matches\/rank-progression-timeline\?format=standard&start_date=.+&end_date=.+&period=week$/,
+      ));
+    });
+  });
+
+  describe('compareMatches', () => {
+    it('forwards request to POST /matches/compare', async () => {
+      vi.mocked(post).mockResolvedValue({});
+      const req = { groups: [{ label: 'Last week', filter: {} }] };
+      await matches.compareMatches(req);
+      expect(post).toHaveBeenCalledWith('/matches/compare', req);
+    });
+  });
+
+  describe('compareFormats', () => {
+    it('forwards request to POST /matches/compare/formats', async () => {
+      vi.mocked(post).mockResolvedValue({});
+      const req = { formats: ['standard', 'historic'] };
+      await matches.compareFormats(req);
+      expect(post).toHaveBeenCalledWith('/matches/compare/formats', req);
+    });
+  });
+
+  describe('compareDecks', () => {
+    it('forwards request to POST /matches/compare/decks', async () => {
+      vi.mocked(post).mockResolvedValue({});
+      const req = { deckIDs: ['d1', 'd2'] };
+      await matches.compareDecks(req);
+      expect(post).toHaveBeenCalledWith('/matches/compare/decks', req);
+    });
+  });
+
+  describe('compareTimePeriods', () => {
+    it('forwards request to POST /matches/compare/time-periods', async () => {
+      vi.mocked(post).mockResolvedValue({});
+      const req = { periods: [{ label: 'Jan', startDate: '2026-01-01', endDate: '2026-01-31' }] };
+      await matches.compareTimePeriods(req);
+      expect(post).toHaveBeenCalledWith('/matches/compare/time-periods', req);
+    });
+  });
+
+  describe('getMatchGames (covered above)', () => {
+    it('still calls GET /matches/{id}/games', async () => {
+      vi.mocked(get).mockResolvedValue([]);
+      await matches.getMatchGames('m1');
+      expect(get).toHaveBeenCalledWith('/matches/m1/games');
     });
   });
 });
