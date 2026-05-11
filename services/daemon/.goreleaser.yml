@@ -145,13 +145,15 @@ builds:
       post:
         - cmd: >
             bash -c '[ "${IS_SNAPSHOT}" = "true" ] && exit 0;
+            [ "${TARGET_GOOS}" != "windows" ] && exit 0;
             command -v makensis >/dev/null 2>&1 || exit 0;
             makensis
             -DVERSION={{ .Version }}
-            -DBINARY_PATH=dist/vaultmtg-daemon-windows-amd64.exe
+            "-DBINARY_PATH={{ .Path }}"
             services/daemon/install/windows/nsis/installer.nsi'
           env:
             - IS_SNAPSHOT={{ .IsSnapshot }}
+            - TARGET_GOOS={{ .Os }}
 
 # ---------------------------------------------------------------------------
 # Universal binary (darwin arm64 + amd64 -> single universal binary via lipo)
