@@ -168,9 +168,9 @@ func migrateLegacyAPIKey(cfg *config.Config) error {
 //  4. Writes daemon.json with keychain:true.
 func runPKCEAuth(cfg *config.Config, cfgPath string) error {
 	clerkFrontendAPI := os.Getenv("CLERK_FRONTEND_API")
-	clientID := os.Getenv("CLERK_PUBLISHABLE_KEY")
+	clientID := os.Getenv("CLERK_OAUTH_CLIENT_ID")
 	if clerkFrontendAPI == "" || clientID == "" {
-		return fmt.Errorf("CLERK_FRONTEND_API and CLERK_PUBLISHABLE_KEY must be set for PKCE auth")
+		return fmt.Errorf("CLERK_FRONTEND_API and CLERK_OAUTH_CLIENT_ID must be set for PKCE auth")
 	}
 
 	headless := os.Getenv("MTGA_DAEMON_HEADLESS") == "1"
