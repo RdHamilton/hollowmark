@@ -164,16 +164,17 @@ func main() {
 
 	// Wire API key handler and auth middleware when a database is available.
 	var (
-		apiKeysHandler         *handlers.APIKeysHandler
-		apiKeyAuthMiddl        func(http.Handler) http.Handler
-		daemonAPIKeyAuthMiddl  func(http.Handler) http.Handler
-		clerkUserResolver      func(http.Handler) http.Handler
-		draftRatingsHandler    *handlers.DraftRatingsHandler
-		historyHandler         *handlers.HistoryHandler
-		listV2Handler          *handlers.ListV2Handler
-		statsHandler           *handlers.StatsHandler
-		daemonHealthHandler    *handlers.DaemonHealthHandler
+		apiKeysHandler        *handlers.APIKeysHandler
+		apiKeyAuthMiddl       func(http.Handler) http.Handler
+		daemonAPIKeyAuthMiddl func(http.Handler) http.Handler
+		clerkUserResolver     func(http.Handler) http.Handler
+		draftRatingsHandler   *handlers.DraftRatingsHandler
+		historyHandler        *handlers.HistoryHandler
+		listV2Handler         *handlers.ListV2Handler
+		statsHandler          *handlers.StatsHandler
+		daemonHealthHandler   *handlers.DaemonHealthHandler
 		daemonRegisterHandler *handlers.DaemonRegisterHandler
+		matchesHandler        *handlers.MatchesHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -201,6 +202,11 @@ func main() {
 		deckListRepo := repository.NewDeckListRepository(sqlDB)
 
 		historyHandler = handlers.NewHistoryHandler(accountRepo, matchesRepo, draftSessionsRepo)
+
+		// Phase 2 PR #1 — new /api/v1/matches surface (camelCase, full filter
+		// support).  Replaces the SPA's daemonClient /matches calls.  See
+		// docs/product/milestones/v0.3.1/daemon-local-api-phase2-audit.md.
+		matchesHandler = handlers.NewMatchesHandler(matchesRepo, accountRepo)
 
 		// ListV2Handler provides cursor-paginated v2 endpoints for matches,
 		// drafts, decks, and collection (ADR-018).
@@ -286,6 +292,7 @@ func main() {
 		StatsHandler:          statsHandler,
 		DaemonHealthHandler:   daemonHealthHandler,
 		DaemonRegisterHandler: daemonRegisterHandler,
+		MatchesHandler:        matchesHandler,
 		HealthzHandler:        healthzHandler,
 		ClerkAuthMiddl:        clerkAuthMiddl,
 		ClerkAuthSSEMiddl:     clerkAuthSSEMiddl,
@@ -346,6 +353,9 @@ type RouterDeps struct {
 	// a per-account API key for the daemon PKCE registration flow (ADR-020).
 	// Protected by RequireClerkAuth — the daemon sends its Clerk session JWT.
 	DaemonRegisterHandler *handlers.DaemonRegisterHandler
+	// MatchesHandler serves the Phase 2 /api/v1/matches/* surface that the
+	// SPA's daemonClient previously hit. Protected by DaemonAPIKeyAuth.
+	MatchesHandler *handlers.MatchesHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -433,6 +443,21 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 			r.With(deps.ClerkOAuthMiddl).Post("/api/v1/daemon/register", deps.DaemonRegisterHandler.Register)
 		} else {
 			log.Println("WARN: POST /api/v1/daemon/register disabled — CLERK_FRONTEND_API not configured")
+		}
+	}
+
+	// ── Phase 2 — /api/v1/matches/* (camelCase API, full filter support) ─────
+	// Replaces the SPA's daemonClient /matches calls. Protected by
+	// DaemonAPIKeyAuth so the daemon's keychain-stored api_key authenticates;
+	// the same scheme used by /api/v1/ingest/events.  See
+	// docs/product/milestones/v0.3.1/daemon-local-api-phase2-audit.md.
+	if deps.MatchesHandler != nil {
+		if deps.DaemonAPIKeyAuthMiddl != nil {
+			r.With(deps.DaemonAPIKeyAuthMiddl).Post("/api/v1/matches", deps.MatchesHandler.List)
+			r.With(deps.DaemonAPIKeyAuthMiddl).Get("/api/v1/matches/formats", deps.MatchesHandler.Formats)
+			r.With(deps.DaemonAPIKeyAuthMiddl).Get("/api/v1/matches/{matchId}", deps.MatchesHandler.Get)
+		} else {
+			log.Println("WARN: /api/v1/matches/* disabled — DaemonAPIKeyAuth middleware not configured")
 		}
 	}
 
