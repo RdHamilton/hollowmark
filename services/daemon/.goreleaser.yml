@@ -149,7 +149,7 @@ builds:
             makensis
             -DVERSION={{ .Version }}
             -DBINARY_PATH=dist/vaultmtg-daemon-windows-amd64.exe
-            install/windows/nsis/installer.nsi'
+            services/daemon/install/windows/nsis/installer.nsi'
           env:
             - IS_SNAPSHOT={{ .IsSnapshot }}
 
