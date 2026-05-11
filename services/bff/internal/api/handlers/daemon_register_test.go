@@ -75,7 +75,7 @@ func newRegisterRequestWithBody(accountID string, body map[string]string) *http.
 
 func TestDaemonRegister_NewKey_Returns201(t *testing.T) {
 	repo := &stubDaemonAPIKeyRepo{}
-	h := handlers.NewDaemonRegisterHandler(repo)
+	h := handlers.NewDaemonRegisterHandler(repo, nil)
 
 	req := newRegisterRequest("user_test_123")
 	rr := httptest.NewRecorder()
@@ -116,7 +116,7 @@ func TestDaemonRegister_ExistingKey_Returns200_EmptyAPIKey(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	}
 	repo := &stubDaemonAPIKeyRepo{existing: existing}
-	h := handlers.NewDaemonRegisterHandler(repo)
+	h := handlers.NewDaemonRegisterHandler(repo, nil)
 
 	req := newRegisterRequest("user_existing")
 	rr := httptest.NewRecorder()
@@ -145,7 +145,7 @@ func TestDaemonRegister_ExistingKey_Returns200_EmptyAPIKey(t *testing.T) {
 
 func TestDaemonRegister_MissingClerkAuth_Returns401(t *testing.T) {
 	repo := &stubDaemonAPIKeyRepo{}
-	h := handlers.NewDaemonRegisterHandler(repo)
+	h := handlers.NewDaemonRegisterHandler(repo, nil)
 
 	// No Clerk user ID set on context.
 	body := map[string]string{
@@ -166,7 +166,7 @@ func TestDaemonRegister_MissingClerkAuth_Returns401(t *testing.T) {
 
 func TestDaemonRegister_RepoError_Returns500(t *testing.T) {
 	repo := &stubDaemonAPIKeyRepo{err: context.DeadlineExceeded}
-	h := handlers.NewDaemonRegisterHandler(repo)
+	h := handlers.NewDaemonRegisterHandler(repo, nil)
 
 	req := newRegisterRequest("user_err")
 	rr := httptest.NewRecorder()
@@ -179,7 +179,7 @@ func TestDaemonRegister_RepoError_Returns500(t *testing.T) {
 
 func TestDaemonRegister_RateLimit_Returns429(t *testing.T) {
 	repo := &stubDaemonAPIKeyRepo{}
-	h := handlers.NewDaemonRegisterHandler(repo)
+	h := handlers.NewDaemonRegisterHandler(repo, nil)
 
 	// Send 5 requests (should succeed).
 	for i := 0; i < 5; i++ {
@@ -203,7 +203,7 @@ func TestDaemonRegister_RateLimit_Returns429(t *testing.T) {
 
 func TestDaemonRegister_APIKeyFormat(t *testing.T) {
 	repo := &stubDaemonAPIKeyRepo{}
-	h := handlers.NewDaemonRegisterHandler(repo)
+	h := handlers.NewDaemonRegisterHandler(repo, nil)
 
 	req := newRegisterRequest("user_format")
 	rr := httptest.NewRecorder()
@@ -231,7 +231,7 @@ func TestDaemonRegister_APIKeyFormat(t *testing.T) {
 
 func TestDaemonRegister_MissingDeviceID_Returns400(t *testing.T) {
 	repo := &stubDaemonAPIKeyRepo{}
-	h := handlers.NewDaemonRegisterHandler(repo)
+	h := handlers.NewDaemonRegisterHandler(repo, nil)
 
 	req := newRegisterRequestWithBody("user_nodevice", map[string]string{
 		"platform":   "darwin",
@@ -247,7 +247,7 @@ func TestDaemonRegister_MissingDeviceID_Returns400(t *testing.T) {
 
 func TestDaemonRegister_MissingPlatform_Returns400(t *testing.T) {
 	repo := &stubDaemonAPIKeyRepo{}
-	h := handlers.NewDaemonRegisterHandler(repo)
+	h := handlers.NewDaemonRegisterHandler(repo, nil)
 
 	req := newRegisterRequestWithBody("user_noplat", map[string]string{
 		"device_id":  "550e8400-e29b-41d4-a716-446655440004",
@@ -263,7 +263,7 @@ func TestDaemonRegister_MissingPlatform_Returns400(t *testing.T) {
 
 func TestDaemonRegister_MissingDaemonVer_Returns400(t *testing.T) {
 	repo := &stubDaemonAPIKeyRepo{}
-	h := handlers.NewDaemonRegisterHandler(repo)
+	h := handlers.NewDaemonRegisterHandler(repo, nil)
 
 	req := newRegisterRequestWithBody("user_nover", map[string]string{
 		"device_id": "550e8400-e29b-41d4-a716-446655440005",

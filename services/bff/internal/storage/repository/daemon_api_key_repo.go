@@ -28,6 +28,7 @@ type DaemonAPIKey struct {
 // daemonAPIKeyDB is the minimal interface required by DaemonAPIKeyRepository.
 type daemonAPIKeyDB interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
@@ -102,6 +103,35 @@ func (r *DaemonAPIKeyRepository) UpdateLastUsed(ctx context.Context, id string) 
 	const q = `UPDATE daemon_api_keys SET last_used = now() WHERE id = $1`
 	_, err := r.db.ExecContext(ctx, q, id)
 	return err
+}
+
+// ListAllActive returns all non-revoked daemon_api_keys rows. Used by the
+// daemon API key auth middleware to bcrypt-compare an incoming Bearer token
+// against every known hash.
+//
+// NOTE: full-table scan + bcrypt per request. Acceptable for v0.3.1 beta
+// scale; revisit with a prefix-index lookup if the key count grows large.
+func (r *DaemonAPIKeyRepository) ListAllActive(ctx context.Context) ([]DaemonAPIKey, error) {
+	const q = `
+		SELECT id, account_id, key_hash, key_prefix, device_id, platform, daemon_ver, created_at, last_used, revoked_at
+		FROM   daemon_api_keys
+		WHERE  revoked_at IS NULL`
+
+	rows, err := r.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var keys []DaemonAPIKey
+	for rows.Next() {
+		var k DaemonAPIKey
+		if err := rows.Scan(&k.ID, &k.AccountID, &k.KeyHash, &k.KeyPrefix, &k.DeviceID, &k.Platform, &k.DaemonVer, &k.CreatedAt, &k.LastUsed, &k.RevokedAt); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
 }
 
 // scanDaemonAPIKey scans a single row into a DaemonAPIKey.
