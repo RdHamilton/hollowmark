@@ -271,11 +271,11 @@ The architect confirmed the following order is correct and internally consistent
 | #1649 | chore(ga-prep): onboard Azure Trusted Signing — document signing workflow in GoReleaser config, budget approval | infrastructure | S |
 
 **Definition of done:**
-- [ ] Apple signing verified end-to-end: release tag triggers `sign-macos`; `.dmg` is notarized + stapled; Gatekeeper clears automatically on a clean macOS 14+ VM
-- [ ] `notarytool` credential path in SSM confirmed and documented
-- [ ] Azure Trusted Signing workflow documented in GoReleaser config comments; budget approval recorded
-- [ ] Azure identity validation status confirmed with Ray before this wave closes
-- [ ] Azure active signing is NOT required to close this wave — documentation is the Azure deliverable
+- [x] Apple signing verified end-to-end: release tag triggers `sign-macos`; `.dmg` is notarized + stapled; Gatekeeper clears automatically on a clean macOS 14+ VM
+- [x] `notarytool` credential path in SSM confirmed and documented
+- [x] Azure Trusted Signing workflow documented in GoReleaser config comments; budget approval recorded
+- [x] Azure identity validation status confirmed with Ray before this wave closes
+- [x] Azure active signing is NOT required to close this wave — documentation is the Azure deliverable
 
 **Assigned agents**: infrastructure
 **Estimated effort**: M (2× S)
@@ -298,11 +298,11 @@ The architect confirmed the following order is correct and internally consistent
 | #1625 | feat(frontend): capture Chromatic baseline snapshots and approve initial set | front-engineer | M |
 
 **Definition of done:**
-- [ ] Storybook 8 running locally with Vite builder against the existing component library
-- [ ] Storybook deployed to Chromatic; Chromatic project URL documented in repo
-- [ ] Chromatic baseline snapshots captured and approved by Ray (zero unresolved diffs)
-- [ ] Chromatic check added as a required CI status; CI green on main
-- [ ] All three tickets in Done state on Project #33
+- [x] Storybook 8 running locally with Vite builder against the existing component library
+- [x] Storybook deployed to Chromatic; Chromatic project URL documented in repo
+- [x] Chromatic baseline snapshots captured and approved by Ray (zero unresolved diffs)
+- [x] Chromatic check added as a required CI status; CI green on main
+- [x] All three tickets in Done state on Project #33
 
 **Assigned agents**: front-engineer
 **Estimated effort**: L (3× M)
