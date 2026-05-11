@@ -123,7 +123,11 @@ jobs:
 
     env:
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      BINARY: vaultmtg-daemon-darwin-universal
+      # The artifact uploaded by goreleaser contains the file 'vaultmtg-daemon'
+      # (the binary name set in .goreleaser.yml builds[].binary). The artifact
+      # container is named 'vaultmtg-daemon-darwin-universal' but the file inside
+      # is 'vaultmtg-daemon'. BINARY must match the file name, not the artifact name.
+      BINARY: vaultmtg-daemon
       PKG: vaultmtg-daemon-darwin-universal.pkg
       DMG: vaultmtg-daemon-darwin-universal.dmg
 
