@@ -3,8 +3,12 @@ import { trackEvent } from '@/services/analytics';
 import { useFeatureFlag } from '@/hooks/useFeatureFlag';
 import './DaemonDownload.css';
 
-const RELEASES_BASE =
-  'https://github.com/RdHamilton/MTGA-Companion/releases/latest/download';
+// Staging injects VITE_DAEMON_VERSION to pin downloads to a specific pre-release
+// build (e.g. v0.3.1-rc11). Production leaves this unset so the URL always
+// resolves to the latest stable release via GitHub's /releases/latest/download/.
+const RELEASES_BASE = import.meta.env.VITE_DAEMON_VERSION
+  ? `https://github.com/RdHamilton/MTGA-Companion/releases/download/${import.meta.env.VITE_DAEMON_VERSION}`
+  : 'https://github.com/RdHamilton/MTGA-Companion/releases/latest/download';
 
 const WAITLIST_URL = 'https://vaultmtg.app/#waitlist';
 
