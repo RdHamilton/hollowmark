@@ -28,6 +28,12 @@ func (s *stubDaemonDB) ExecContext(_ context.Context, _ string, _ ...any) (sql.R
 	return stubResult{}, nil
 }
 
+func (s *stubDaemonDB) QueryContext(_ context.Context, _ string, _ ...any) (*sql.Rows, error) {
+	// *sql.Rows cannot be constructed without a real driver; integration tests
+	// in *_pg_test.go exercise ListAllActive against real Postgres.
+	return nil, nil //nolint:nilnil
+}
+
 func (s *stubDaemonDB) QueryRowContext(_ context.Context, _ string, _ ...any) *sql.Row {
 	// *sql.Row cannot be constructed directly in tests — use a real DB round trip.
 	// Instead we rely on the real Postgres for integration tests; here we only

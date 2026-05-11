@@ -164,14 +164,15 @@ func main() {
 
 	// Wire API key handler and auth middleware when a database is available.
 	var (
-		apiKeysHandler        *handlers.APIKeysHandler
-		apiKeyAuthMiddl       func(http.Handler) http.Handler
-		clerkUserResolver     func(http.Handler) http.Handler
-		draftRatingsHandler   *handlers.DraftRatingsHandler
-		historyHandler        *handlers.HistoryHandler
-		listV2Handler         *handlers.ListV2Handler
-		statsHandler          *handlers.StatsHandler
-		daemonHealthHandler   *handlers.DaemonHealthHandler
+		apiKeysHandler         *handlers.APIKeysHandler
+		apiKeyAuthMiddl        func(http.Handler) http.Handler
+		daemonAPIKeyAuthMiddl  func(http.Handler) http.Handler
+		clerkUserResolver      func(http.Handler) http.Handler
+		draftRatingsHandler    *handlers.DraftRatingsHandler
+		historyHandler         *handlers.HistoryHandler
+		listV2Handler          *handlers.ListV2Handler
+		statsHandler           *handlers.StatsHandler
+		daemonHealthHandler    *handlers.DaemonHealthHandler
 		daemonRegisterHandler *handlers.DaemonRegisterHandler
 	)
 
@@ -211,14 +212,22 @@ func main() {
 		daemonHealthHandler = handlers.NewDaemonHealthHandler(daemonEventsRepo)
 
 		// DaemonRegisterHandler mints (or retrieves) a per-account API key for the
-		// daemon PKCE registration flow.  Protected by RequireClerkAuth — the daemon
-		// calls this with the Clerk session JWT obtained via the PKCE browser flow.
-		// See ADR-020 §POST /v1/daemon/register Wire Format.
+		// daemon PKCE registration flow.  Protected by RequireClerkOAuthToken — the
+		// daemon calls this with the Clerk OAuth access token obtained via the PKCE
+		// browser flow.  See ADR-020 §POST /api/v1/daemon/register Wire Format.
 		daemonAPIKeyRepo := repository.NewDaemonAPIKeyRepository(sqlDB)
-		daemonRegisterHandler = handlers.NewDaemonRegisterHandler(daemonAPIKeyRepo)
+		userRepo := repository.NewUserRepository(sqlDB)
+		daemonRegisterHandler = handlers.NewDaemonRegisterHandler(daemonAPIKeyRepo, userRepo)
 		if postHogClient != nil {
 			daemonRegisterHandler = daemonRegisterHandler.WithPostHogClient(postHogClient)
 		}
+
+		// daemonAPIKeyAuthMiddl protects daemon-facing routes (currently only
+		// POST /api/v1/ingest/events).  It validates the api_key minted by
+		// daemon_register against daemon_api_keys, resolves account_id (Clerk
+		// user_id) → users.id (int64), and sets user_id on the request context
+		// so the standard UserIDFromContext continues to work.
+		daemonAPIKeyAuthMiddl = bffmiddleware.DaemonAPIKeyAuth(daemonAPIKeyRepo, userRepo)
 
 		// StatsHandler provides deck performance, win-rate trend, and format
 		// distribution analytics endpoints (issue #1513).
@@ -229,7 +238,7 @@ func main() {
 			WithResultBreakdown(statsRepo)
 
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
-		userRepo := repository.NewUserRepository(sqlDB)
+		// userRepo was created above for daemonRegisterHandler/daemonAPIKeyAuthMiddl.
 		clerkUserResolver = bffmiddleware.ClerkUserResolver(userRepo)
 
 		// Start projection worker unless disabled by env var.
@@ -283,6 +292,7 @@ func main() {
 		ClerkOAuthMiddl:       clerkOAuthMiddl,
 		ClerkUserResolver:     clerkUserResolver,
 		APIKeyAuthMiddl:       apiKeyAuthMiddl,
+		DaemonAPIKeyAuthMiddl: daemonAPIKeyAuthMiddl,
 		SentryMiddl:           bffmiddleware.NewSentryMiddleware(),
 		E2EUnguardedSSE:       e2eUnguardedSSE,
 	})
@@ -351,6 +361,11 @@ type RouterDeps struct {
 	ClerkOAuthMiddl   func(http.Handler) http.Handler
 	ClerkUserResolver func(http.Handler) http.Handler
 	APIKeyAuthMiddl   func(http.Handler) http.Handler
+	// DaemonAPIKeyAuthMiddl validates a daemon api_key against daemon_api_keys
+	// and resolves the matching Clerk account_id → users.id (int64). Used on
+	// POST /api/v1/ingest/events. The legacy APIKeyAuth path checks the
+	// api_keys table which is not where daemon_register stores its keys.
+	DaemonAPIKeyAuthMiddl func(http.Handler) http.Handler
 	// SentryMiddl is the Sentry panic/error capture middleware.  When non-nil
 	// it is installed as the outermost middleware so it captures panics from
 	// all downstream handlers.  Safe to omit in tests and development.
@@ -438,11 +453,13 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 		}
 	}
 
-	// POST /api/v1/ingest/events — API-key auth; falls back to unguarded in dev mode.
+	// POST /api/v1/ingest/events — daemon api_key auth; falls back to unguarded
+	// in dev mode. Uses DaemonAPIKeyAuth (not the legacy APIKeyAuth) because the
+	// PKCE-minted daemon api_key lives in daemon_api_keys, not api_keys.
 	// Mounted under /api/v1/ so nginx (which only forwards /api/v1/*) can reach it.
 	if deps.IngestHandler != nil {
-		if deps.APIKeyAuthMiddl != nil {
-			r.With(deps.APIKeyAuthMiddl).Post("/api/v1/ingest/events", deps.IngestHandler.IngestEvent)
+		if deps.DaemonAPIKeyAuthMiddl != nil {
+			r.With(deps.DaemonAPIKeyAuthMiddl).Post("/api/v1/ingest/events", deps.IngestHandler.IngestEvent)
 		} else {
 			r.Post("/api/v1/ingest/events", deps.IngestHandler.IngestEvent)
 		}
