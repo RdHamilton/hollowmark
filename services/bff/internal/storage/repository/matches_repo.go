@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -272,3 +274,170 @@ type MatchUpsert struct {
 	OpponentName    *string
 	OpponentID      *string
 }
+
+// MatchFilter captures every filterable dimension the Phase 2 /api/v1/matches
+// endpoint supports. Zero-valued fields are treated as "no filter on this
+// dimension" so callers can pass a partially-populated struct.
+type MatchFilter struct {
+	StartDate *time.Time
+	EndDate   *time.Time
+	Format    string
+	Formats   []string
+	DeckID    string
+	Result    string // "win" | "loss" | "draw"
+	Page      int
+	Limit     int
+}
+
+// ListByAccountIDFiltered returns a page of matches scoped to accountID,
+// filtered by the non-zero fields of f, ordered by timestamp DESC.  Returns
+// the page rows and a total count for pagination.
+func (r *MatchesRepository) ListByAccountIDFiltered(ctx context.Context, accountID int64, f MatchFilter) ([]MatchRow, int, error) {
+	where, args := buildMatchWhere(accountID, f)
+	offset := (f.Page - 1) * f.Limit
+	args = append(args, f.Limit, offset)
+
+	q := `SELECT id, format, result, timestamp, duration_seconds, deck_id,
+	             rank_before, rank_after, player_wins, opponent_wins
+	      FROM matches ` + where + `
+	      ORDER BY timestamp DESC
+	      LIMIT $` + itoa(len(args)-1) + ` OFFSET $` + itoa(len(args))
+
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var matches []MatchRow
+	for rows.Next() {
+		var m MatchRow
+		if err := rows.Scan(
+			&m.ID, &m.Format, &m.Result, &m.Timestamp,
+			&m.DurationSeconds, &m.DeckID, &m.RankBefore, &m.RankAfter,
+			&m.PlayerWins, &m.OpponentWins,
+		); err != nil {
+			return nil, 0, err
+		}
+		matches = append(matches, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	// Drop pagination args for the count query.
+	countWhere, countArgs := buildMatchWhere(accountID, f)
+	countQ := "SELECT COUNT(*) FROM matches " + countWhere
+	var total int
+	if err := r.db.QueryRowContext(ctx, countQ, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	return matches, total, nil
+}
+
+// GetByID returns a single match row scoped to accountID, or nil when the
+// row does not exist or belongs to a different account. The "scoped to
+// accountID" check is the security boundary — never trust matchID alone.
+func (r *MatchesRepository) GetByID(ctx context.Context, accountID int64, matchID string) (*MatchRow, error) {
+	const q = `SELECT id, format, result, timestamp, duration_seconds, deck_id,
+	                  rank_before, rank_after, player_wins, opponent_wins
+	           FROM matches
+	           WHERE account_id = $1 AND id = $2`
+	row := r.db.QueryRowContext(ctx, q, accountID, matchID)
+	var m MatchRow
+	err := row.Scan(
+		&m.ID, &m.Format, &m.Result, &m.Timestamp,
+		&m.DurationSeconds, &m.DeckID, &m.RankBefore, &m.RankAfter,
+		&m.PlayerWins, &m.OpponentWins,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// DistinctFormats returns every distinct format the account has matches in,
+// sorted alphabetically. Used by the SPA's format-filter dropdown.
+func (r *MatchesRepository) DistinctFormats(ctx context.Context, accountID int64) ([]string, error) {
+	const q = `SELECT DISTINCT format
+	           FROM matches
+	           WHERE account_id = $1 AND format <> ''
+	           ORDER BY format`
+	rows, err := r.db.QueryContext(ctx, q, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var f string
+		if err := rows.Scan(&f); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// buildMatchWhere assembles the WHERE clause + args for ListByAccountIDFiltered
+// and the matching count query.  Returns "WHERE ..." with $1..$N placeholders
+// in the same order as the args slice.
+func buildMatchWhere(accountID int64, f MatchFilter) (string, []any) {
+	clauses := []string{"account_id = $1"}
+	args := []any{accountID}
+	next := 2
+
+	if f.StartDate != nil {
+		clauses = append(clauses, "timestamp >= $"+itoa(next))
+		args = append(args, *f.StartDate)
+		next++
+	}
+	if f.EndDate != nil {
+		clauses = append(clauses, "timestamp <= $"+itoa(next))
+		args = append(args, *f.EndDate)
+		next++
+	}
+	switch {
+	case f.Format != "" && len(f.Formats) > 0:
+		clauses = append(clauses, "(lower(format) = lower($"+itoa(next)+") OR lower(format) = ANY($"+itoa(next+1)+"))")
+		args = append(args, f.Format, lowerSlice(f.Formats))
+		next += 2
+	case f.Format != "":
+		clauses = append(clauses, "lower(format) = lower($"+itoa(next)+")")
+		args = append(args, f.Format)
+		next++
+	case len(f.Formats) > 0:
+		clauses = append(clauses, "lower(format) = ANY($"+itoa(next)+")")
+		args = append(args, lowerSlice(f.Formats))
+		next++
+	}
+	if f.DeckID != "" {
+		clauses = append(clauses, "deck_id = $"+itoa(next))
+		args = append(args, f.DeckID)
+		next++
+	}
+	if f.Result != "" {
+		clauses = append(clauses, "lower(result) = lower($"+itoa(next)+")")
+		args = append(args, f.Result)
+		next++
+	}
+
+	return "WHERE " + strings.Join(clauses, " AND "), args
+}
+
+func lowerSlice(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		out = append(out, strings.ToLower(s))
+	}
+	return out
+}
+
+// itoa is a small int-to-string helper used inside SQL builders; preferred
+// over strconv.Itoa here to avoid an extra import and to keep the SQL
+// concatenation readable.
+func itoa(i int) string { return strconv.Itoa(i) }
