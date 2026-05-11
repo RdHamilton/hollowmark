@@ -195,9 +195,22 @@ jobs:
             bin/${{ env.BINARY }}
           codesign --verify --verbose bin/${{ env.BINARY }}
 
+      - name: Resolve cloud API URL for this build
+        id: cloud_url
+        run: |
+          REF="${{ github.ref_name }}"
+          if [[ "$REF" == *"-rc"* || "$REF" == *"-alpha"* || "$REF" == *"-beta"* || "$REF" == *"-pre"* ]]; then
+            echo "url=https://staging-api.vaultmtg.app/api/v1" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=https://api.vaultmtg.app/api/v1" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create .pkg installer
         env:
           INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+          CLERK_FRONTEND_API: https://clerk.vaultmtg.app
+          CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+          VAULTMTG_CLOUD_API_URL: ${{ steps.cloud_url.outputs.url }}
         run: |
           mkdir -p pkg-root/usr/local/bin
           cp bin/${{ env.BINARY }} pkg-root/usr/local/bin/vaultmtg-daemon

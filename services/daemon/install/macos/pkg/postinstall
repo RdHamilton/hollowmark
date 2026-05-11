@@ -13,9 +13,9 @@
 # The binary is installed by pkgbuild into /usr/local/bin/vaultmtg-daemon
 # (the package root maps to / at install time).
 #
-# The config file (daemon.json) is NOT written here — first-run config
-# acquisition is handled by the daemon binary itself on first launch
-# (see feat/first-run-config detection, issue #1643).
+# The Clerk env vars (CLERK_FRONTEND_API, CLERK_PUBLISHABLE_KEY) and
+# cloud_api_url are baked in at build time via the CI workflow's env block
+# and embedded into the plist EnvironmentVariables and daemon.json respectively.
 
 set -euo pipefail
 
@@ -32,6 +32,11 @@ CONFIG_FILE="${CONFIG_DIR}/daemon.json"
 
 LOG_FILE="${HOME}/Library/Logs/vaultmtg-daemon.log"
 
+# Baked in at build time by the CI workflow. Defaults are production values.
+CLOUD_API_URL="${VAULTMTG_CLOUD_API_URL:-https://api.vaultmtg.app/api/v1}"
+CLERK_FRONTEND_API="${CLERK_FRONTEND_API:-https://clerk.vaultmtg.app}"
+CLERK_PUBLISHABLE_KEY="${CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsudmF1bHRtdGcuYXBwJA}"
+
 # ---------------------------------------------------------------------------
 # 1. Clear quarantine attribute (ADR-020 §macOS Quarantine Clearing).
 #
@@ -44,16 +49,31 @@ echo "[postinstall] clearing quarantine attribute on ${BINARY_PATH}"
 xattr -dr com.apple.quarantine "${BINARY_PATH}" || true
 
 # ---------------------------------------------------------------------------
-# 2. Ensure LaunchAgents directory exists.
+# 2. Write daemon.json with cloud_api_url (required field).
+#    Only written on a fresh install — skip if the file already exists so
+#    re-installs do not clobber the user's existing api_key / daemon_jwt.
+# ---------------------------------------------------------------------------
+mkdir -p "${CONFIG_DIR}"
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+  echo "[postinstall] writing ${CONFIG_FILE}"
+  cat > "${CONFIG_FILE}" <<JSON
+{
+  "cloud_api_url": "${CLOUD_API_URL}",
+  "sync_enabled": true
+}
+JSON
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Ensure LaunchAgents directory exists.
 # ---------------------------------------------------------------------------
 mkdir -p "${PLIST_DIR}"
 
 # ---------------------------------------------------------------------------
-# 3. Write the LaunchAgent plist.
+# 4. Write the LaunchAgent plist.
 #    - RunAtLoad=true   start at login.
 #    - KeepAlive=true   restart if the daemon exits unexpectedly.
-#    - The -config flag is passed explicitly so the daemon always reads from
-#      the expected location, regardless of how the binary is invoked.
+#    - EnvironmentVariables injects the Clerk values the PKCE flow requires.
 # ---------------------------------------------------------------------------
 echo "[postinstall] writing LaunchAgent plist to ${PLIST_PATH}"
 cat > "${PLIST_PATH}" <<PLIST
@@ -71,6 +91,14 @@ cat > "${PLIST_PATH}" <<PLIST
         <string>-config</string>
         <string>${CONFIG_FILE}</string>
     </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CLERK_FRONTEND_API</key>
+        <string>${CLERK_FRONTEND_API}</string>
+        <key>CLERK_PUBLISHABLE_KEY</key>
+        <string>${CLERK_PUBLISHABLE_KEY}</string>
+    </dict>
 
     <!-- Start automatically when the user logs in. -->
     <key>RunAtLoad</key>
