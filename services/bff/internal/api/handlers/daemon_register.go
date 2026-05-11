@@ -34,6 +34,14 @@ type daemonAPIKeyUpsertRepo interface {
 	UpsertKey(ctx context.Context, accountID, keyHash, keyPrefix, deviceID, platform, daemonVer string) (*repository.DaemonAPIKey, bool, error)
 }
 
+// userUpserter is the subset of UserRepository used to ensure a users row
+// exists for the Clerk user_id before issuing a daemon api_key. Without this
+// the subsequent ingest auth path (DaemonAPIKeyAuth) cannot resolve the key
+// back to an int64 users.id.
+type userUpserter interface {
+	UpsertByClerkUserID(ctx context.Context, clerkUserID string) (*repository.User, error)
+}
+
 // rateEntry tracks register call timestamps for one account.
 type rateEntry struct {
 	mu        sync.Mutex
@@ -79,15 +87,19 @@ func (e *rateEntry) allow() bool {
 //     its locally stored keychain value).
 type DaemonRegisterHandler struct {
 	repo       daemonAPIKeyUpsertRepo
+	userRepo   userUpserter
 	postHog    PostHogClient
 	rateMu     sync.Mutex
 	rateByAcct map[string]*rateEntry
 }
 
-// NewDaemonRegisterHandler returns a handler backed by the given repository.
-func NewDaemonRegisterHandler(repo daemonAPIKeyUpsertRepo) *DaemonRegisterHandler {
+// NewDaemonRegisterHandler returns a handler backed by the given repositories.
+// userRepo may be nil in tests; in production it must be wired so the user row
+// is JIT-provisioned for the Clerk identity before the api_key is issued.
+func NewDaemonRegisterHandler(repo daemonAPIKeyUpsertRepo, userRepo userUpserter) *DaemonRegisterHandler {
 	return &DaemonRegisterHandler{
 		repo:       repo,
+		userRepo:   userRepo,
 		postHog:    noopPostHogClient{},
 		rateByAcct: make(map[string]*rateEntry),
 	}
@@ -169,6 +181,18 @@ func (h *DaemonRegisterHandler) Register(w http.ResponseWriter, r *http.Request)
 		log.Printf("[daemon_register] bcrypt: %v", err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
+	}
+
+	// JIT-provision the users row for this Clerk identity so DaemonAPIKeyAuth
+	// can resolve the key's account_id (Clerk user_id) back to users.id
+	// (int64) on subsequent ingest calls. Skipped when userRepo is nil
+	// (test-only path).
+	if h.userRepo != nil {
+		if _, err := h.userRepo.UpsertByClerkUserID(r.Context(), accountID); err != nil {
+			log.Printf("[daemon_register] UpsertByClerkUserID account=%s: %v", accountID, err)
+			writeJSONError(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	rec, created, err := h.repo.UpsertKey(r.Context(), accountID, string(hash), keyPrefix, reqBody.DeviceID, reqBody.Platform, reqBody.DaemonVer)
