@@ -133,18 +133,26 @@ func (s *Service) installCollectionHelper() {
 		return
 	}
 
-	// Give launchd a moment to start the daemon.
-	time.Sleep(2 * time.Second)
-
+	// Poll until the helper socket is accepting connections (launchd startup
+	// can take several seconds). Give up after 15s and let the next periodic
+	// check update the tray when the socket eventually comes up.
 	c := collectionclient.New()
-	installed := c.IsHelperRunning()
+	installed := false
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.IsHelperRunning() {
+			installed = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 	if s.trayHooks.SetHelperInstalled != nil {
 		s.trayHooks.SetHelperInstalled(installed)
 	}
 	if installed {
 		log.Printf("[daemon] collection helper installed and running")
 	} else {
-		log.Printf("[daemon] collection helper installed but not yet reachable")
+		log.Printf("[daemon] collection helper installed but socket not yet up — will retry")
 	}
 }
 
