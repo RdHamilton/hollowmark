@@ -183,21 +183,28 @@ func (h *DraftsHandler) List(w http.ResponseWriter, r *http.Request) {
 		EndDate   string `json:"end_date"`
 		Status    string `json:"status"`
 	}
-	_ = decodeJSONBody(r, &body)
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	filter := repository.DraftFilter{
 		Format: body.Format, SetCode: body.SetCode, Status: body.Status,
 	}
 	if body.StartDate != "" {
 		t, err := parseFilterDate(body.StartDate)
-		if err == nil {
-			filter.StartDate = &t
+		if err != nil {
+			writeJSONError(w, "start_date: "+err.Error(), http.StatusBadRequest)
+			return
 		}
+		filter.StartDate = &t
 	}
 	if body.EndDate != "" {
 		t, err := parseFilterDate(body.EndDate)
-		if err == nil {
-			filter.EndDate = &t
+		if err != nil {
+			writeJSONError(w, "end_date: "+err.Error(), http.StatusBadRequest)
+			return
 		}
+		filter.EndDate = &t
 	}
 	rows, err := h.drafts.ListSessions(r.Context(), accountID, filter)
 	if err != nil {
@@ -304,20 +311,32 @@ func (h *DraftsHandler) Stats(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Format    string `json:"format"`
 		SetCode   string `json:"set_code"`
+		Status    string `json:"status"`
 		StartDate string `json:"start_date"`
 		EndDate   string `json:"end_date"`
 	}
-	_ = decodeJSONBody(r, &body)
-	filter := repository.DraftFilter{Format: body.Format, SetCode: body.SetCode}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	filter := repository.DraftFilter{
+		Format: body.Format, SetCode: body.SetCode, Status: body.Status,
+	}
 	if body.StartDate != "" {
-		if t, err := parseFilterDate(body.StartDate); err == nil {
-			filter.StartDate = &t
+		t, err := parseFilterDate(body.StartDate)
+		if err != nil {
+			writeJSONError(w, "start_date: "+err.Error(), http.StatusBadRequest)
+			return
 		}
+		filter.StartDate = &t
 	}
 	if body.EndDate != "" {
-		if t, err := parseFilterDate(body.EndDate); err == nil {
-			filter.EndDate = &t
+		t, err := parseFilterDate(body.EndDate)
+		if err != nil {
+			writeJSONError(w, "end_date: "+err.Error(), http.StatusBadRequest)
+			return
 		}
+		filter.EndDate = &t
 	}
 	agg, err := h.drafts.AggregateStats(r.Context(), accountID, filter)
 	if err != nil {
