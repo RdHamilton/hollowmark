@@ -1,16 +1,25 @@
 /**
  * useDraftEventStream — SSE consumer hook for live draft events.
  *
- * Opens an EventSource connection to the BFF `/api/v1/events` endpoint
- * (secured via Clerk `__session` cookie, set automatically by the Clerk JS
- * SDK) and filters for events whose `type` field starts with `draft.`.
+ * Opens an EventSource connection to the BFF `/api/v1/events` endpoint and
+ * filters for events whose `type` field starts with `draft.`.
+ *
+ * Auth: appends a fresh Clerk session JWT as `?token=<jwt>` on every
+ * (re)connect.  The Clerk `__session` cookie still works on production (same
+ * parent domain), and the BFF's SSE middleware prefers it over the query
+ * parameter — but on staging the SPA + Clerk Dev instance live on different
+ * parent domains, so the cookie never reaches the BFF and we fall back to
+ * the query param.  See issue #1904.  Nginx is configured with `access_log
+ * off` on `/api/v1/events` so JWTs do not land in long-lived proxy logs.
  *
  * Features:
  * - Reconnects with exponential backoff (100ms base, 30s cap) on error.
+ *   Each reconnect re-fetches `getToken()` so rotated JWTs are picked up.
  * - Exposes `latestEvent` (last parsed draft event or null) and `status`.
  * - Cleans up the EventSource on unmount — no memory leaks.
  */
 
+import { useAuth } from '@clerk/react';
 import { useEffect, useRef, useState } from 'react';
 
 /** Status of the underlying SSE connection. */
@@ -54,6 +63,8 @@ function computeBackoff(attempt: number): number {
 }
 
 export function useDraftEventStream(): UseDraftEventStreamReturn {
+  const { getToken } = useAuth();
+
   const [latestEvent, setLatestEvent] = useState<DaemonEvent | null>(null);
   const [status, setStatus] = useState<DraftEventStreamStatus>('connecting');
 
@@ -69,6 +80,15 @@ export function useDraftEventStream(): UseDraftEventStreamReturn {
   const setLatestEventRef = useRef(setLatestEvent);
   const setStatusRef = useRef(setStatus);
 
+  // getToken changes identity on every Clerk session rotation; keep the latest
+  // reference in a ref so the EventSource effect doesn't tear down + recreate
+  // the SSE connection just because Clerk minted a new JWT.  Update the ref in
+  // a separate effect, not during render, per react-hooks/refs.
+  const getTokenRef = useRef(getToken);
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
+
   useEffect(() => {
     unmountedRef.current = false;
 
@@ -77,12 +97,30 @@ export function useDraftEventStream(): UseDraftEventStreamReturn {
     const setLatestEventLocal = setLatestEventRef.current;
     const setStatusLocal = setStatusRef.current;
 
-    function connect() {
+    async function connect() {
       if (unmountedRef.current) return;
 
       setStatusLocal('connecting');
 
-      const source = new EventSource(SSE_URL, { withCredentials: true });
+      // Fresh JWT every (re)connect so a rotated Clerk session picks up on
+      // the next backoff cycle.  If getToken returns null (not signed in /
+      // Clerk still hydrating), open the URL without ?token= and let the
+      // server's 401 trigger the existing reconnect path.
+      let url = SSE_URL;
+      try {
+        const token = await getTokenRef.current();
+        if (token) {
+          const u = new URL(SSE_URL);
+          u.searchParams.set('token', token);
+          url = u.toString();
+        }
+      } catch {
+        // Token fetch failure — fall through and let SSE 401 + backoff retry.
+      }
+
+      if (unmountedRef.current) return;
+
+      const source = new EventSource(url, { withCredentials: true });
       sourceRef.current = source;
 
       source.onopen = () => {
