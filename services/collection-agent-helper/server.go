@@ -60,7 +60,7 @@ func runServer() error {
 func handleConn(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 
 	var req ScanRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
