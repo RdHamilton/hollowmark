@@ -260,7 +260,7 @@ export const handlers = [
   }),
 
   // Build around seed endpoint
-  http.post(`${API_BASE}/decks/build-around`, () => {
+  http.post(`${BFF_BASE}/decks/build-around`, () => {
     return successResponse({
       seedCard: {
         cardID: 12345,
@@ -325,7 +325,7 @@ export const handlers = [
   }),
 
   // Generate complete deck endpoint (Issue #774)
-  http.post(`${API_BASE}/decks/generate`, () => {
+  http.post(`${BFF_BASE}/decks/generate`, () => {
     return successResponse({
       seedCard: {
         cardID: 12345,
@@ -409,7 +409,7 @@ export const handlers = [
   }),
 
   // Get archetype profiles endpoint (Issue #774)
-  http.get(`${API_BASE}/decks/archetypes`, () => {
+  http.get(`${BFF_BASE}/decks/archetypes`, () => {
     return successResponse({
       aggro: {
         name: 'Aggro',
@@ -515,7 +515,7 @@ export const handlers = [
   }),
 
   // Deck export endpoint
-  http.post(`${API_BASE}/decks/:deckId/export`, async ({ request }) => {
+  http.post(`${BFF_BASE}/decks/:deckId/export`, async ({ request }) => {
     // Read format from request body (the API sends { format: 'arena' })
     let format = 'arena';
     try {
