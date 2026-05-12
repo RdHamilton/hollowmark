@@ -63,49 +63,67 @@ type stubDraftsReader struct {
 	feedback    repository.RecommendationFeedbackStatsRow
 	feedbackErr error
 
-	// captured args
+	// captured args + per-method invocation flags. *Called booleans are
+	// the source of truth for "did the handler actually reach the repo?"
+	// — the captured-ID fields are only meaningful when the corresponding
+	// flag is true (zero is a valid accountID/userID and can't double as
+	// a sentinel).
+	listCalled        bool
 	listAccountID     int64
 	listFilter        repository.DraftFilter
+	sessionCalled     bool
 	sessionAccountID  int64
 	sessionLookupID   string
+	setsCalled        bool
 	setsAccountID     int64
+	picksCalled       bool
 	picksAccountID    int64
 	picksSessionID    string
+	statsCalled       bool
 	statsAccountID    int64
 	statsFilter       repository.DraftFilter
+	comparisonCalled  bool
 	comparisonSetCode string
 	comparisonFormat  string
+	trendsCalled      bool
 	trendsPeriod      string
 	trendsSetCode     string
 	trendsNumPeriods  int
+	learningCalled    bool
 	learningSetCode   string
+	feedbackCalled    bool
 	feedbackAccountID int64
 }
 
 func (s *stubDraftsReader) ListSessions(_ context.Context, accountID int64, f repository.DraftFilter) ([]repository.DraftSessionDetailRow, error) {
+	s.listCalled = true
 	s.listAccountID = accountID
 	s.listFilter = f
 	return s.sessions, s.sessionsErr
 }
 
 func (s *stubDraftsReader) GetSession(_ context.Context, accountID int64, sessionID string) (*repository.DraftSessionDetailRow, error) {
+	s.sessionCalled = true
 	s.sessionAccountID = accountID
 	s.sessionLookupID = sessionID
 	return s.session, s.sessionErr
 }
 
 func (s *stubDraftsReader) DistinctSets(_ context.Context, accountID int64) ([]string, error) {
+	s.setsCalled = true
 	s.setsAccountID = accountID
 	return s.sets, s.setsErr
 }
 
 func (s *stubDraftsReader) PicksForSession(_ context.Context, accountID int64, sessionID string) ([]repository.DraftPickRow, error) {
+	s.picksCalled = true
 	s.picksAccountID = accountID
 	s.picksSessionID = sessionID
 	return s.picks, s.picksErr
 }
 
 func (s *stubDraftsReader) AggregateStats(_ context.Context, accountID int64, f repository.DraftFilter) (repository.DraftStatsAggregate, error) {
+	s.statsCalled = true
 	s.statsAccountID = accountID
 	s.statsFilter = f
 	return s.stats, s.statsErr
@@ -116,12 +134,14 @@ func (s *stubDraftsReader) CommunityComparisons(_ context.Context) ([]repository
 }
 
 func (s *stubDraftsReader) CommunityComparisonForSet(_ context.Context, setCode, format string) (*repository.CommunityComparisonRow, error) {
+	s.comparisonCalled = true
 	s.comparisonSetCode = setCode
 	s.comparisonFormat = format
 	return s.comparison, s.comparisonErr
 }
 
 func (s *stubDraftsReader) TemporalTrends(_ context.Context, periodType, setCode string, numPeriods int) ([]repository.TemporalTrendRow, error) {
+	s.trendsCalled = true
 	s.trendsPeriod = periodType
 	s.trendsSetCode = setCode
 	s.trendsNumPeriods = numPeriods
@@ -129,11 +149,13 @@ func (s *stubDraftsReader) TemporalTrends(_ context.Context, periodType, setCode
 }
 
 func (s *stubDraftsReader) LearningCurve(_ context.Context, setCode string) ([]repository.TemporalTrendRow, error) {
+	s.learningCalled = true
 	s.learningSetCode = setCode
 	return s.learning, s.learningErr
 }
 
 func (s *stubDraftsReader) RecommendationFeedbackStats(_ context.Context, accountID int64) (repository.RecommendationFeedbackStatsRow, error) {
+	s.feedbackCalled = true
 	s.feedbackAccountID = accountID
 	return s.feedback, s.feedbackErr
 }
@@ -461,8 +483,62 @@ func TestDraftsList_AccountNotFoundReturnsEmpty(t *testing.T) {
 		t.Errorf("expected empty list, got %v", arr)
 	}
 	// Repo should NOT be called when the account is missing.
-	if reader.listAccountID != 0 {
-		t.Errorf("ListSessions called with accountID %d when account missing", reader.listAccountID)
+	if reader.listCalled {
+		t.Errorf("ListSessions invoked despite missing account (accountID=%d)", reader.listAccountID)
+	}
+}
+
+func TestDraftsList_BadJSONReturns400(t *testing.T) {
+	reader := &stubDraftsReader{}
+	h := handlers.NewDraftsHandler(reader, &draftsAccountLookup{accountID: 7, found: true})
+	req := authedDraftsRequest(t, http.MethodPost, "/api/v1/drafts", []byte(`{"format":}`), 168)
+	rr := httptest.NewRecorder()
+	h.List(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status: %d, want 400", rr.Code)
+	}
+	if reader.listCalled {
+		t.Errorf("ListSessions invoked despite bad JSON body")
+	}
+}
+
+func TestDraftsList_BadStartDateReturns400(t *testing.T) {
+	reader := &stubDraftsReader{}
+	h := handlers.NewDraftsHandler(reader, &draftsAccountLookup{accountID: 7, found: true})
+	body, _ := json.Marshal(map[string]any{"start_date": "not-a-date"})
+	req := authedDraftsRequest(t, http.MethodPost, "/api/v1/drafts", body, 168)
+	rr := httptest.NewRecorder()
+	h.List(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status: %d, want 400", rr.Code)
+	}
+	if reader.listCalled {
+		t.Errorf("ListSessions invoked despite bad start_date")
+	}
+}
+
+func TestDraftsStats_PassesStatusFilter(t *testing.T) {
+	// Regression: Stats handler used to omit Status from the request body
+	// even though AggregateStats now respects it.
+	reader := &stubDraftsReader{stats: repository.DraftStatsAggregate{}}
+	h := handlers.NewDraftsHandler(reader, &draftsAccountLookup{accountID: 7, found: true})
+	body, _ := json.Marshal(map[string]any{
+		"format": "PremierDraft", "set_code": "DSK", "status": "completed",
+	})
+	req := authedDraftsRequest(t, http.MethodPost, "/api/v1/drafts/stats", body, 168)
+	rr := httptest.NewRecorder()
+	h.Stats(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !reader.statsCalled {
+		t.Fatalf("AggregateStats not called")
+	}
+	if reader.statsFilter.Status != "completed" {
+		t.Errorf("Status filter not forwarded: got %q", reader.statsFilter.Status)
+	}
+	if reader.statsFilter.Format != "PremierDraft" || reader.statsFilter.SetCode != "DSK" {
+		t.Errorf("filter shape: %+v", reader.statsFilter)
 	}
 }
 
