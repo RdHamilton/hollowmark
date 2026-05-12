@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,15 +19,19 @@ import (
 // ─── stubs ──────────────────────────────────────────────────────────────────
 
 type draftsAccountLookup struct {
-	accountID int64
-	found     bool
-	err       error
+	accountID        int64
+	found            bool
+	err              error
+	calledWithUserID int64 // captured for assertion
 }
 
-func (d *draftsAccountLookup) GetAccountIDByUserID(_ context.Context, _ int64) (int64, bool, error) {
+func (d *draftsAccountLookup) GetAccountIDByUserID(_ context.Context, userID int64) (int64, bool, error) {
+	d.calledWithUserID = userID
 	return d.accountID, d.found, d.err
 }
 
+// stubDraftsReader records every accountID + key positional argument the
+// handler forwards so tests can assert account scoping was preserved.
 type stubDraftsReader struct {
 	sessions    []repository.DraftSessionDetailRow
 	sessionsErr error
@@ -57,25 +62,52 @@ type stubDraftsReader struct {
 
 	feedback    repository.RecommendationFeedbackStatsRow
 	feedbackErr error
+
+	// captured args
+	listAccountID     int64
+	listFilter        repository.DraftFilter
+	sessionAccountID  int64
+	sessionLookupID   string
+	setsAccountID     int64
+	picksAccountID    int64
+	picksSessionID    string
+	statsAccountID    int64
+	statsFilter       repository.DraftFilter
+	comparisonSetCode string
+	comparisonFormat  string
+	trendsPeriod      string
+	trendsSetCode     string
+	trendsNumPeriods  int
+	learningSetCode   string
+	feedbackAccountID int64
 }
 
-func (s *stubDraftsReader) ListSessions(_ context.Context, _ int64, _ repository.DraftFilter) ([]repository.DraftSessionDetailRow, error) {
+func (s *stubDraftsReader) ListSessions(_ context.Context, accountID int64, f repository.DraftFilter) ([]repository.DraftSessionDetailRow, error) {
+	s.listAccountID = accountID
+	s.listFilter = f
 	return s.sessions, s.sessionsErr
 }
 
-func (s *stubDraftsReader) GetSession(_ context.Context, _ int64, _ string) (*repository.DraftSessionDetailRow, error) {
+func (s *stubDraftsReader) GetSession(_ context.Context, accountID int64, sessionID string) (*repository.DraftSessionDetailRow, error) {
+	s.sessionAccountID = accountID
+	s.sessionLookupID = sessionID
 	return s.session, s.sessionErr
 }
 
-func (s *stubDraftsReader) DistinctSets(_ context.Context, _ int64) ([]string, error) {
+func (s *stubDraftsReader) DistinctSets(_ context.Context, accountID int64) ([]string, error) {
+	s.setsAccountID = accountID
 	return s.sets, s.setsErr
 }
 
-func (s *stubDraftsReader) PicksForSession(_ context.Context, _ int64, _ string) ([]repository.DraftPickRow, error) {
+func (s *stubDraftsReader) PicksForSession(_ context.Context, accountID int64, sessionID string) ([]repository.DraftPickRow, error) {
+	s.picksAccountID = accountID
+	s.picksSessionID = sessionID
 	return s.picks, s.picksErr
 }
 
-func (s *stubDraftsReader) AggregateStats(_ context.Context, _ int64, _ repository.DraftFilter) (repository.DraftStatsAggregate, error) {
+func (s *stubDraftsReader) AggregateStats(_ context.Context, accountID int64, f repository.DraftFilter) (repository.DraftStatsAggregate, error) {
+	s.statsAccountID = accountID
+	s.statsFilter = f
 	return s.stats, s.statsErr
 }
 
@@ -83,19 +115,26 @@ func (s *stubDraftsReader) CommunityComparisons(_ context.Context) ([]repository
 	return s.comparisons, s.comparisonsErr
 }
 
-func (s *stubDraftsReader) CommunityComparisonForSet(_ context.Context, _, _ string) (*repository.CommunityComparisonRow, error) {
+func (s *stubDraftsReader) CommunityComparisonForSet(_ context.Context, setCode, format string) (*repository.CommunityComparisonRow, error) {
+	s.comparisonSetCode = setCode
+	s.comparisonFormat = format
 	return s.comparison, s.comparisonErr
 }
 
-func (s *stubDraftsReader) TemporalTrends(_ context.Context, _, _ string, _ int) ([]repository.TemporalTrendRow, error) {
+func (s *stubDraftsReader) TemporalTrends(_ context.Context, periodType, setCode string, numPeriods int) ([]repository.TemporalTrendRow, error) {
+	s.trendsPeriod = periodType
+	s.trendsSetCode = setCode
+	s.trendsNumPeriods = numPeriods
 	return s.trends, s.trendsErr
 }
 
-func (s *stubDraftsReader) LearningCurve(_ context.Context, _ string) ([]repository.TemporalTrendRow, error) {
+func (s *stubDraftsReader) LearningCurve(_ context.Context, setCode string) ([]repository.TemporalTrendRow, error) {
+	s.learningSetCode = setCode
 	return s.learning, s.learningErr
 }
 
-func (s *stubDraftsReader) RecommendationFeedbackStats(_ context.Context, _ int64) (repository.RecommendationFeedbackStatsRow, error) {
+func (s *stubDraftsReader) RecommendationFeedbackStats(_ context.Context, accountID int64) (repository.RecommendationFeedbackStatsRow, error) {
+	s.feedbackAccountID = accountID
 	return s.feedback, s.feedbackErr
 }
 
@@ -144,7 +183,8 @@ func TestDraftsList_HappyPath(t *testing.T) {
 			StartTime: now, Status: "completed", TotalPicks: 45, CreatedAt: now, UpdatedAt: now,
 		},
 	}}
-	h := handlers.NewDraftsHandler(reader, &draftsAccountLookup{accountID: 7, found: true})
+	accts := &draftsAccountLookup{accountID: 7, found: true}
+	h := handlers.NewDraftsHandler(reader, accts)
 	req := authedDraftsRequest(t, http.MethodPost, "/api/v1/drafts", []byte(`{}`), 168)
 	rr := httptest.NewRecorder()
 	h.List(rr, req)
@@ -155,6 +195,14 @@ func TestDraftsList_HappyPath(t *testing.T) {
 	decodeDraftsEnvelope(t, rr.Body.Bytes(), &arr)
 	if len(arr) != 1 || arr[0]["ID"] != "s1" {
 		t.Errorf("list: %v", arr)
+	}
+	// Account scoping: handler should resolve userID 168 via the lookup
+	// then pass the resolved accountID 7 to the repo.
+	if accts.calledWithUserID != 168 {
+		t.Errorf("GetAccountIDByUserID called with %d, want 168", accts.calledWithUserID)
+	}
+	if reader.listAccountID != 7 {
+		t.Errorf("ListSessions accountID = %d, want 7", reader.listAccountID)
 	}
 }
 
@@ -382,3 +430,123 @@ func TestDraftsAuth_Unauthorized(t *testing.T) {
 		t.Errorf("status: %d", rr.Code)
 	}
 }
+
+// ─── Negative cases ────────────────────────────────────────────────────────
+
+func TestDraftsList_DatabaseError(t *testing.T) {
+	reader := &stubDraftsReader{sessionsErr: errStubDB}
+	h := handlers.NewDraftsHandler(reader, &draftsAccountLookup{accountID: 7, found: true})
+	req := authedDraftsRequest(t, http.MethodPost, "/api/v1/drafts", []byte(`{}`), 168)
+	rr := httptest.NewRecorder()
+	h.List(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("status: %d, want 500", rr.Code)
+	}
+}
+
+func TestDraftsList_AccountNotFoundReturnsEmpty(t *testing.T) {
+	// found=false short-circuits with a 200 + empty list (consistent with
+	// every other Phase 2 handler — see matches/collection/quests).
+	reader := &stubDraftsReader{}
+	h := handlers.NewDraftsHandler(reader, &draftsAccountLookup{found: false})
+	req := authedDraftsRequest(t, http.MethodPost, "/api/v1/drafts", []byte(`{}`), 168)
+	rr := httptest.NewRecorder()
+	h.List(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d", rr.Code)
+	}
+	var arr []map[string]any
+	decodeDraftsEnvelope(t, rr.Body.Bytes(), &arr)
+	if len(arr) != 0 {
+		t.Errorf("expected empty list, got %v", arr)
+	}
+	// Repo should NOT be called when the account is missing.
+	if reader.listAccountID != 0 {
+		t.Errorf("ListSessions called with accountID %d when account missing", reader.listAccountID)
+	}
+}
+
+// ─── Trends period normalization (regression) ──────────────────────────────
+
+func TestDraftsTrends_NormalizesWeeklyToWeek(t *testing.T) {
+	// SPA's TemporalTrendsRequest defines period_type as "weekly"|"monthly";
+	// the repo's TemporalTrends accepts "week"|"month". Verify the handler
+	// folds the SPA payload down to the SQL value.
+	reader := &stubDraftsReader{trends: []repository.TemporalTrendRow{}}
+	h := handlers.NewDraftsHandler(reader, &draftsAccountLookup{accountID: 7, found: true})
+	body, _ := json.Marshal(map[string]any{"period_type": "WEEKLY", "num_periods": 4, "set_code": "DSK"})
+	req := authedDraftsRequest(t, http.MethodPost, "/api/v1/drafts/trends", body, 168)
+	rr := httptest.NewRecorder()
+	h.Trends(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	if reader.trendsPeriod != "week" {
+		t.Errorf("repo received period=%q, want %q", reader.trendsPeriod, "week")
+	}
+}
+
+func TestDraftsTrends_NormalizesMonthlyToMonth(t *testing.T) {
+	reader := &stubDraftsReader{trends: []repository.TemporalTrendRow{}}
+	h := handlers.NewDraftsHandler(reader, &draftsAccountLookup{accountID: 7, found: true})
+	body, _ := json.Marshal(map[string]any{"period_type": "monthly", "num_periods": 12})
+	req := authedDraftsRequest(t, http.MethodPost, "/api/v1/drafts/trends", body, 168)
+	rr := httptest.NewRecorder()
+	h.Trends(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d", rr.Code)
+	}
+	if reader.trendsPeriod != "month" {
+		t.Errorf("repo received period=%q, want %q", reader.trendsPeriod, "month")
+	}
+}
+
+// ─── 17Lands export numeric IDs (regression) ───────────────────────────────
+
+func TestDraftsExport17Lands_NumericPickAndPack(t *testing.T) {
+	// SeventeenLandsPickData on the SPA types pick:number and pack:number[].
+	// The schema stores card_id + alternatives_json as TEXT — make sure the
+	// handler converts.
+	now := time.Now().UTC()
+	alt := `["12345","12346","12347"]`
+	reader := &stubDraftsReader{
+		session: &repository.DraftSessionDetailRow{
+			ID: "s1", EventName: "PremierDraft", SetCode: "DSK",
+			DraftType: "PremierDraft", StartTime: now, Status: "completed",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		picks: []repository.DraftPickRow{
+			{
+				ID: 1, SessionID: "s1", PackNumber: 1, PickNumber: 1,
+				CardID: "12345", Timestamp: now, AlternativesJSON: &alt,
+			},
+		},
+	}
+	h := handlers.NewDraftsHandler(reader, &draftsAccountLookup{accountID: 7, found: true})
+	req := authedDraftsRequest(t, http.MethodGet, "/api/v1/drafts/s1/export/17lands", nil, 168)
+	req = chiDraftsContext(req, "sessionId", "s1")
+	rr := httptest.NewRecorder()
+	h.Export17Lands(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	decodeDraftsEnvelope(t, rr.Body.Bytes(), &resp)
+	export, _ := resp["export"].(map[string]any)
+	picks, _ := export["picks"].([]any)
+	if len(picks) != 1 {
+		t.Fatalf("expected 1 pick, got %v", picks)
+	}
+	first := picks[0].(map[string]any)
+	if first["pick"].(float64) != 12345 {
+		t.Errorf("pick = %v, want numeric 12345", first["pick"])
+	}
+	pack, _ := first["pack"].([]any)
+	if len(pack) != 3 || pack[0].(float64) != 12345 || pack[1].(float64) != 12346 {
+		t.Errorf("pack = %v, want [12345,12346,12347] as numbers", pack)
+	}
+}
+
+// errStubDB is a sentinel error used by negative-case tests to drive the
+// repo stubs into their failure paths.
+var errStubDB = errors.New("stub: database unavailable")

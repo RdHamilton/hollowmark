@@ -216,6 +216,16 @@ func (r *DraftsRepository) AggregateStats(ctx context.Context, accountID int64, 
 		args = append(args, f.SetCode)
 		next++
 	}
+	if f.Format != "" {
+		clauses = append(clauses, "lower(draft_type) = lower($"+strconv.Itoa(next)+")")
+		args = append(args, f.Format)
+		next++
+	}
+	if f.Status != "" {
+		clauses = append(clauses, "lower(status) = lower($"+strconv.Itoa(next)+")")
+		args = append(args, f.Status)
+		next++
+	}
 	if f.StartDate != nil {
 		clauses = append(clauses, "start_time >= $"+strconv.Itoa(next))
 		args = append(args, *f.StartDate)

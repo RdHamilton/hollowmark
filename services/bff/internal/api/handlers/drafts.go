@@ -15,8 +15,10 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -549,10 +551,7 @@ func (h *DraftsHandler) Trends(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	period := strings.ToLower(strings.TrimSpace(body.PeriodType))
-	if period != "week" && period != "month" {
-		period = "week"
-	}
+	period := normalizePeriodType(body.PeriodType)
 	rows, err := h.drafts.TemporalTrends(r.Context(), period, body.SetCode, body.NumPeriods)
 	if err != nil {
 		log.Printf("[DraftsHandler.Trends] period=%s set=%s: %v", period, body.SetCode, err)
@@ -900,26 +899,77 @@ func trendRowsToResponse(rows []repository.TemporalTrendRow) []trendEntryRespons
 }
 
 // buildSeventeenLandsPicks shapes draft_picks rows into the 17lands
-// pick array. Each pick carries pack_number, pick_number, the pack
-// candidates (from alternatives_json when available), and the picked
-// card id.
+// pick array. The SPA's SeventeenLandsPickData contract requires `pick`
+// and `pack[]` as numbers (arena card ids), so we parse the schema's
+// TEXT-typed card_id + alternatives_json into ints. Bad rows fall back
+// to a single-element pack containing the picked id (or empty when
+// even the picked id won't parse).
 func buildSeventeenLandsPicks(picks []repository.DraftPickRow) []map[string]any {
 	out := make([]map[string]any, 0, len(picks))
 	for _, p := range picks {
+		pick, _ := strconv.Atoi(strings.TrimSpace(p.CardID))
 		entry := map[string]any{
 			"pack_number": p.PackNumber,
 			"pick_number": p.PickNumber,
-			"pick":        p.CardID,
+			"pick":        pick,
 			"pick_time":   p.Timestamp.UTC().Format(time.RFC3339),
 		}
-		if p.AlternativesJSON != nil && *p.AlternativesJSON != "" {
-			entry["pack"] = parseStringArray(*p.AlternativesJSON)
-		} else {
-			entry["pack"] = []string{p.CardID}
+		var pack []int
+		if p.AlternativesJSON != nil && strings.TrimSpace(*p.AlternativesJSON) != "" {
+			pack = parseIntArray(*p.AlternativesJSON)
 		}
+		if len(pack) == 0 {
+			if pick > 0 {
+				pack = []int{pick}
+			} else {
+				pack = []int{}
+			}
+		}
+		entry["pack"] = pack
 		out = append(out, entry)
 	}
 	return out
+}
+
+// parseIntArray decodes a JSON array stored as TEXT into a slice of ints.
+// Accepts both ["123","456"] (the daemon's existing alternatives_json
+// format) and [123,456] for forward compatibility. Returns nil on parse
+// failure so the caller can fall back to the picked card id.
+func parseIntArray(raw string) []int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" {
+		return nil
+	}
+	// Try numeric array first.
+	var nums []int
+	if err := json.Unmarshal([]byte(raw), &nums); err == nil {
+		return nums
+	}
+	// Fall back to string array, parsing each element.
+	var strs []string
+	if err := json.Unmarshal([]byte(raw), &strs); err != nil {
+		return nil
+	}
+	out := make([]int, 0, len(strs))
+	for _, s := range strs {
+		if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// normalizePeriodType folds the SPA's "weekly"/"monthly" payload (and
+// other common variants like "week"/"month"/"WEEKLY") down to the SQL
+// names accepted by repository.TemporalTrends. Unknown values fall back
+// to "week" so the SPA never sees a 400 from a typo.
+func normalizePeriodType(raw string) string {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	v = strings.TrimSuffix(v, "ly") // "weekly" → "week", "monthly" → "month"
+	if v != "week" && v != "month" {
+		return "week"
+	}
+	return v
 }
 
 // draftGradeStub returns a zero-confidence DraftGrade placeholder.
