@@ -87,8 +87,8 @@ tests + lint/format gates.
 | 5b | meta/* (7 endpoints; 3 real reads from mtgzone_* + 4 shape-stubs pending ML/scrape infra) | 7 | ✅ **Merged** 2026-05-11 | PR #1877 |
 | 6 | opponents/* + analytics + archetypes-expected (5 endpoints across 4 URL prefixes) | 5 | ✅ **Merged** 2026-05-11 | PR #1878 |
 | 7 | notes/* + suggestions (10 endpoints across 3 URL prefixes; generate stubbed) | 10 | ✅ **Merged** 2026-05-11 | PR #1879 |
-| 8 | cards/* (16 endpoints; refresh-ratings stubbed pending scrape pipeline) | 16 | ⏳ **In progress** | `feat/phase2-pr8-cards` |
-| 9 | decks/* cloud paths (33 paths)        | 33    | Pending       | — |
+| 8 | cards/* (16 endpoints; refresh-ratings stubbed pending scrape pipeline) | 16 | ✅ **Merged** 2026-05-11 | PR #1880 |
+| 9 | decks/* (~50 endpoints; CRUD + cards + tags + permutations + import/export real, deck-builder + recommendation stubs) | 50 | ⏳ **In progress** | `feat/phase2-pr9-decks` |
 |10 | drafts/* — full module incl. `/decks/*` and `/feedback/*` strays (31 paths, minus Bucket C) | 28 | Pending | — |
 |11 | mlSuggestions/* (8 paths)             | 8     | Pending       | — |
 |12 | settings/* — implement cloud-backed settings on BFF | 1+ | Pending | — |
@@ -292,3 +292,19 @@ authenticated user's accounts. camelCase JSON wire format.
   Tier letter derived from gihwr (S/A/B/C/D/F bucketing). cards.ts
   + cards.test.ts + msw cards/sets handler: import-only swap to
   apiClient / BFF_BASE.
+- **2026-05-11** — PR #8 merged. User pushed back on default-splitting
+  for PR #9 (decks/*); confirmed one-shot is fine since decks.ts is
+  one module (PR #5 was split because gameplays.ts/meta.ts were two
+  files with unrelated concerns).
+- **2026-05-11** — PR #9 (decks/*) built one-shot. ~50 endpoints
+  across CRUD + per-deck stats/performance/validate/classify, deck
+  cards add/remove, deck tags add/remove, library/by-tags/by-draft,
+  permutations (list/get/current/diff/name/restore), import/parse/
+  export, and the deck-builder + recommendations STUBs (build-around,
+  generate, suggest, analyze, archetypes, card-performance, four
+  recommendations endpoints). All real impls go through new
+  DecksRepository (decks + deck_cards + deck_tags + deck_permutations
+  + matches join for performance). Import accepts Arena-format text;
+  export renders back to Arena format. STUBs documented inline pending
+  the ML / archetype-matching pipeline. decks.ts + decks.test.ts +
+  4 msw deck handlers: import-only swap to apiClient / BFF_BASE.

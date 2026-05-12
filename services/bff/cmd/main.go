@@ -183,6 +183,7 @@ func main() {
 		opponentsHandler      *handlers.OpponentsHandler
 		notesHandler          *handlers.NotesHandler
 		cardsHandler          *handlers.CardsHandler
+		decksHandler          *handlers.DecksHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -258,6 +259,11 @@ func main() {
 		// /collection-quantities + /search-with-collection are the two
 		// account-scoped endpoints.
 		cardsHandler = handlers.NewCardsHandler(repository.NewCardsRepository(sqlDB), accountRepo)
+
+		// Phase 2 PR #9 — /api/v1/decks/* surface (CRUD, cards, tags,
+		// permutations, import/export, library + STUBs for the deck-builder
+		// + recommendation pipeline).
+		decksHandler = handlers.NewDecksHandler(repository.NewDecksRepository(sqlDB), accountRepo)
 
 		// ListV2Handler provides cursor-paginated v2 endpoints for matches,
 		// drafts, decks, and collection (ADR-018).
@@ -352,6 +358,7 @@ func main() {
 		OpponentsHandler:      opponentsHandler,
 		NotesHandler:          notesHandler,
 		CardsHandler:          cardsHandler,
+		DecksHandler:          decksHandler,
 		HealthzHandler:        healthzHandler,
 		ClerkAuthMiddl:        clerkAuthMiddl,
 		ClerkAuthSSEMiddl:     clerkAuthSSEMiddl,
@@ -447,6 +454,11 @@ type RouterDeps struct {
 	// CFB ratings (CRUD + arena-id linking), and the two account-scoped
 	// collection-aware endpoints. Protected by DaemonAPIKeyAuth.
 	CardsHandler *handlers.CardsHandler
+	// DecksHandler serves the Phase 2 /api/v1/decks/* surface (CRUD,
+	// cards, tags, permutations, import/export, plus STUBs for the
+	// deck-builder + recommendation pipeline). Protected by
+	// DaemonAPIKeyAuth.
+	DecksHandler *handlers.DecksHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -622,6 +634,72 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 			r.With(auth).Get("/api/v1/gameplays/game/{gameId}", gp.PlaysByGame)
 		} else {
 			log.Println("WARN: gameplays routes disabled — DaemonAPIKeyAuth middleware not configured")
+		}
+	}
+
+	// Phase 2 PR #9 — /api/v1/decks/* surface. CRUD + cards + tags +
+	// permutations + import/export are real; deck-builder + recommendation
+	// endpoints are documented STUBs pending the ML pipeline.
+	if deps.DecksHandler != nil {
+		if deps.DaemonAPIKeyAuthMiddl != nil {
+			d := deps.DecksHandler
+			auth := deps.DaemonAPIKeyAuthMiddl
+			// List + CRUD
+			r.With(auth).Get("/api/v1/decks", d.List)
+			r.With(auth).Post("/api/v1/decks", d.Create)
+			// Library / by-tags / by-draft / archetypes (literal paths
+			// before the {deckId} wildcard so chi prefers the static).
+			r.With(auth).Post("/api/v1/decks/by-tags", d.ByTags)
+			r.With(auth).Post("/api/v1/decks/library", d.Library)
+			r.With(auth).Get("/api/v1/decks/by-draft/{draftEventId}", d.GetByDraftEvent)
+			r.With(auth).Get("/api/v1/decks/archetypes", d.Archetypes)
+			// Import / parse / suggest / analyze / generate / build-around
+			r.With(auth).Post("/api/v1/decks/import", d.Import)
+			r.With(auth).Post("/api/v1/decks/parse", d.Parse)
+			r.With(auth).Post("/api/v1/decks/suggest", d.SuggestDecks)
+			r.With(auth).Post("/api/v1/decks/analyze", d.AnalyzeDeck)
+			r.With(auth).Post("/api/v1/decks/apply-suggestion", d.ApplySuggestion)
+			r.With(auth).Post("/api/v1/decks/build-around", d.BuildAround)
+			r.With(auth).Post("/api/v1/decks/build-around/suggest-next", d.BuildAroundSuggestNext)
+			r.With(auth).Post("/api/v1/decks/generate", d.Generate)
+			r.With(auth).Post("/api/v1/decks/suggested/export-content", d.SuggestedExportContent)
+			// Permutations
+			r.With(auth).Get("/api/v1/decks/{deckId}/permutations", d.ListPermutations)
+			r.With(auth).Get("/api/v1/decks/{deckId}/permutations/current", d.CurrentPermutation)
+			r.With(auth).Get("/api/v1/decks/{deckId}/permutations/{permutationId}", d.GetPermutation)
+			r.With(auth).Get("/api/v1/decks/{deckId}/permutations/{fromPermutationId}/diff/{toPermutationId}", d.PermutationDiff)
+			r.With(auth).Put("/api/v1/decks/{deckId}/permutations/{permutationId}/name", d.UpdatePermutationName)
+			r.With(auth).Post("/api/v1/decks/{deckId}/permutations/{permutationId}/restore", d.RestorePermutation)
+			// Cards
+			r.With(auth).Post("/api/v1/decks/{deckId}/cards", d.AddCard)
+			r.With(auth).Delete("/api/v1/decks/{deckId}/cards/{cardId}/all", d.RemoveAllCopies)
+			r.With(auth).Delete("/api/v1/decks/{deckId}/cards/{cardId}", d.RemoveCard)
+			// Tags
+			r.With(auth).Post("/api/v1/decks/{deckId}/tags", d.AddTag)
+			r.With(auth).Delete("/api/v1/decks/{deckId}/tags/{tag}", d.RemoveTag)
+			// Per-deck stats / performance / classify / validate / clone /
+			// recommendations / card-performance
+			r.With(auth).Get("/api/v1/decks/{deckId}/stats", d.Stats)
+			r.With(auth).Get("/api/v1/decks/{deckId}/curve", d.Stats)
+			r.With(auth).Get("/api/v1/decks/{deckId}/colors", d.Stats)
+			r.With(auth).Get("/api/v1/decks/{deckId}/statistics", d.Stats)
+			r.With(auth).Get("/api/v1/decks/{deckId}/matches", d.Performance)
+			r.With(auth).Get("/api/v1/decks/{deckId}/performance", d.Performance)
+			r.With(auth).Get("/api/v1/decks/{deckId}/validate-draft", d.ValidateDraft)
+			r.With(auth).Get("/api/v1/decks/{deckId}/classify", d.Classify)
+			r.With(auth).Get("/api/v1/decks/{deckId}/card-performance", d.CardPerformance)
+			r.With(auth).Get("/api/v1/decks/{deckId}/recommendations/add", d.AddRecommendations)
+			r.With(auth).Get("/api/v1/decks/{deckId}/recommendations/remove", d.RemoveRecommendations)
+			r.With(auth).Get("/api/v1/decks/{deckId}/recommendations/swap", d.SwapRecommendations)
+			r.With(auth).Get("/api/v1/decks/{deckId}/recommendations/all", d.AllRecommendations)
+			r.With(auth).Post("/api/v1/decks/{deckId}/clone", d.Clone)
+			// Generic by-id GET/PUT/DELETE — mounted last so the literal
+			// paths above win.
+			r.With(auth).Get("/api/v1/decks/{deckId}", d.Get)
+			r.With(auth).Put("/api/v1/decks/{deckId}", d.Update)
+			r.With(auth).Delete("/api/v1/decks/{deckId}", d.Delete)
+		} else {
+			log.Println("WARN: /api/v1/decks/* disabled — DaemonAPIKeyAuth middleware not configured")
 		}
 	}
 

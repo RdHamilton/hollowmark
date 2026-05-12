@@ -1,9 +1,16 @@
 /**
  * Decks API service.
- * Replaces Wails deck-related function bindings.
+ *
+ * Phase 2 PR #9: cloud-data deck CRUD, cards, tags, permutations,
+ * import/export, and library reads now hit the BFF directly via
+ * apiClient. Deck-builder + recommendation endpoints (build-around,
+ * generate, suggest, recommendations/*) are documented BFF stubs
+ * pending the ML pipeline.
+ *
+ * Plan tracker: .claude/plans/spa-route-migration.md
  */
 
-import { get, post, put, del } from '../daemonClient';
+import { get, post, put, del } from '../apiClient';
 import { models, gui } from '@/types/models';
 
 // Re-export types for convenience
