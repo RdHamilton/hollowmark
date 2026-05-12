@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.vaultmtg.collection-helper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Application Support/VaultMTG/collection-helper</string>
+    </array>
+
+    <!-- Run as root so task_for_pid succeeds -->
+    <key>UserName</key>
+    <string>root</string>
+
+    <!-- Start on load; launchd will relaunch if it exits -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Library/Logs/VaultMTG/collection-helper.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Library/Logs/VaultMTG/collection-helper.log</string>
+</dict>
+</plist>
