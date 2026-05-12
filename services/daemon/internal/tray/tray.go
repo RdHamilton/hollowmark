@@ -46,17 +46,21 @@ type App struct {
 	onQuit  func()
 
 	// protected by single-goroutine access after setup()
-	status   Status
-	lastSync time.Time
+	status          Status
+	lastSync        time.Time
+	helperInstalled bool
 
-	miStatus   *systray.MenuItem
-	miLastSync *systray.MenuItem
-	miSyncNow  *systray.MenuItem
-	miOpenApp  *systray.MenuItem
-	miQuit     *systray.MenuItem
+	miStatus      *systray.MenuItem
+	miLastSync    *systray.MenuItem
+	miSyncNow     *systray.MenuItem
+	miGrantAccess *systray.MenuItem
+	miOpenApp     *systray.MenuItem
+	miQuit        *systray.MenuItem
 
 	// SyncNow is signalled when the user clicks "Sync Now".
 	SyncNow chan struct{}
+	// GrantAccess is signalled when the user clicks "Grant Access".
+	GrantAccess chan struct{}
 }
 
 // New creates an App. appURL is opened when "Open VaultMTG" is clicked.
@@ -64,11 +68,12 @@ type App struct {
 // tray exits (Quit clicked or process terminated).
 func New(appURL string, openURL func(string) error, onQuit func()) *App {
 	return &App{
-		appURL:  appURL,
-		openURL: openURL,
-		onQuit:  onQuit,
-		status:  StatusStarting,
-		SyncNow: make(chan struct{}, 1),
+		appURL:      appURL,
+		openURL:     openURL,
+		onQuit:      onQuit,
+		status:      StatusStarting,
+		SyncNow:     make(chan struct{}, 1),
+		GrantAccess: make(chan struct{}, 1),
 	}
 }
 
@@ -102,6 +107,22 @@ func (a *App) SetStatus(s Status) {
 	}
 }
 
+// SetHelperInstalled shows or hides the "Grant Access" menu item.
+// Call with true once the helper is confirmed running; false shows the install prompt.
+func (a *App) SetHelperInstalled(installed bool) {
+	a.helperInstalled = installed
+	if a.miGrantAccess == nil || a.miSyncNow == nil {
+		return
+	}
+	if installed {
+		a.miGrantAccess.Hide()
+		a.miSyncNow.Show()
+	} else {
+		a.miGrantAccess.Show()
+		a.miSyncNow.Hide()
+	}
+}
+
 // SetLastSync updates the "last synced" timestamp label. Safe to call from any goroutine.
 func (a *App) SetLastSync(t time.Time) {
 	a.lastSync = t
@@ -131,6 +152,10 @@ func (a *App) setup() {
 	a.miLastSync = systray.AddMenuItem("Collection: never synced", "")
 	a.miLastSync.Disable()
 	a.miSyncNow = systray.AddMenuItem("Sync Now", "Read collection from MTGA")
+	a.miGrantAccess = systray.AddMenuItem("Grant Access…", "Install the collection helper (requires admin password)")
+	// Show whichever is appropriate; default to showing Grant Access until the
+	// daemon confirms the helper is running.
+	a.miSyncNow.Hide()
 
 	systray.AddSeparator()
 
@@ -148,6 +173,11 @@ func (a *App) loop() {
 			select {
 			case a.SyncNow <- struct{}{}:
 			default: // already queued
+			}
+		case <-a.miGrantAccess.ClickedCh:
+			select {
+			case a.GrantAccess <- struct{}{}:
+			default:
 			}
 		case <-a.miOpenApp.ClickedCh:
 			if a.openURL != nil {
