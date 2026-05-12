@@ -64,6 +64,9 @@ type Service struct {
 	// win/loss can be derived.  Empty until a player.authenticated event
 	// has been processed in this daemon session.
 	mtgaUserID string
+	// trayHooks connects the tray icon to the daemon event loop.
+	// All fields are optional — nil channels block forever in select (safe no-op).
+	trayHooks TrayHooks
 }
 
 // New creates a Service from cfg.
@@ -277,6 +280,9 @@ func (s *Service) Run(ctx context.Context) error {
 
 	log.Printf("[daemon] started (session=%s cloud_api=%s)", s.sessionID, s.cfg.CloudAPIURL)
 
+	// Check if the privileged collection helper is already installed.
+	go s.checkHelperOnStartup(ctx)
+
 	// Start the GRE stale-buffer sweep goroutine.
 	go s.greManager.RunSweep(ctx)
 
@@ -334,6 +340,26 @@ func (s *Service) Run(ctx context.Context) error {
 				log.Printf("[daemon] warn: heartbeat dispatch: %v", sendErr)
 			}
 			cancel()
+
+		case <-s.trayHooks.SyncNow:
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[daemon] panic in performCollectionSync: %v", r)
+					}
+				}()
+				s.performCollectionSync(ctx)
+			}()
+
+		case <-s.trayHooks.GrantAccess:
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[daemon] panic in installCollectionHelper: %v", r)
+					}
+				}()
+				s.installCollectionHelper()
+			}()
 
 		case err, ok := <-errs:
 			if !ok {
