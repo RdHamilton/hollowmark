@@ -25,10 +25,18 @@
 package localapi
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"time"
 )
+
+// ErrUnsupportedPlatform is returned by runPlatformUninstall on platforms
+// that don't have an in-process uninstall path today (currently anything
+// other than darwin / windows — no Linux installer ships). Handlers map
+// this to 400 Bad Request so the SPA can render the manual-removal docs
+// rather than treating it as a server failure.
+var ErrUnsupportedPlatform = errors.New("automatic uninstall not supported on this platform")
 
 // Uninstaller is the minimal surface handleSystemUninstall depends on.
 // Tests inject a stub; production wires defaultUninstaller, which
@@ -84,7 +92,14 @@ func (s *Server) handleSystemUninstall(w http.ResponseWriter, r *http.Request) {
 	}
 	msg, err := u.Run(purge)
 	if err != nil {
-		writeJSON(w, r, http.StatusInternalServerError, uninstallResponse{
+		status := http.StatusInternalServerError
+		if errors.Is(err, ErrUnsupportedPlatform) {
+			// Not a server failure — this platform just doesn't have an
+			// in-process uninstall path. SPA should surface the manual
+			// removal docs instead of a generic error.
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, r, status, uninstallResponse{
 			Status:  "error",
 			Message: err.Error(),
 		})

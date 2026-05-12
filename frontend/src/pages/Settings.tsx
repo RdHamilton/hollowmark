@@ -238,7 +238,11 @@ const Settings = () => {
             replayProgress={replayProgress}
             onReplayLogs={() => handleReplayLogs(isConnected)}
             onUninstallDaemon={async (purge) => {
-              await uninstallDaemon({ purge });
+              const response = await uninstallDaemon({ purge });
+              // Forward the backend's user-facing message (residual
+              // platform-specific cleanup steps) to the section so it
+              // can render it verbatim in the success panel.
+              return response.message;
             }}
           />
         ),

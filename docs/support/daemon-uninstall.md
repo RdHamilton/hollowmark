@@ -7,6 +7,8 @@ To fully remove the VaultMTG daemon, you need to stop it, remove the app, delete
 
 ## Quick uninstall from the app
 
+> **Supported platforms:** macOS and Windows only. On Linux the **Danger Zone — Uninstall Daemon** action returns *"automatic uninstall not supported on this platform"* (HTTP 400) because there is no Linux installer to undo today — Linux users should remove the daemon manually using the steps later in this document.
+
 If the daemon is running and you have the VaultMTG web app open:
 
 1. Sign in to [app.vaultmtg.app](https://app.vaultmtg.app) and open **Settings → Data Recovery**.
