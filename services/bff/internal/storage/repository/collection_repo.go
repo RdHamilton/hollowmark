@@ -9,10 +9,9 @@ import (
 
 // CollectionRepository serves the Phase 2 /api/v1/collection/* read paths.
 // All queries are scoped by account_id and join card_inventory (the active
-// inventory table) against cards (Scryfall metadata) and set_cards (per-set
-// cache that carries prices). The legacy `collection` table is intentionally
-// not touched — it has been read-only since the projection worker switched
-// to card_inventory.
+// inventory table) against set_cards (per-set cache that carries metadata and
+// prices). The legacy `cards` table was dropped in migration 25 and replaced
+// by set_cards; the legacy `collection` table is intentionally not touched.
 type CollectionRepository struct {
 	db DB
 }
@@ -27,13 +26,13 @@ func NewCollectionRepository(db DB) *CollectionRepository {
 type CollectionFilter struct {
 	SetCode     string
 	Rarity      string
-	Colors      []string // any-of match against the cards.colors JSON array
+	Colors      []string // any-of match against the set_cards.colors JSON array
 	OwnedOnly   bool     // require count > 0 (always true today; kept for API symmetry)
 	MissingOnly bool     // require count = 0 (rare — an account row only exists for owned cards, so this returns nothing today)
 }
 
 // CollectionItem is a single card in the collection-list response — joined
-// metadata from cards + sets + set_cards.
+// metadata from set_cards + sets.
 type CollectionItem struct {
 	CardID        int
 	ArenaID       int
@@ -46,7 +45,7 @@ type CollectionItem struct {
 	CMC           float64
 	TypeLine      string
 	Colors        string // JSON array stored as TEXT
-	ColorIdentity string // JSON array stored as TEXT
+	ColorIdentity string // JSON array stored as TEXT (empty: not available in set_cards)
 	ImageURIs     string // JSON object stored as TEXT
 	Power         *string
 	Toughness     *string
@@ -74,21 +73,21 @@ func (r *CollectionRepository) ListCollection(ctx context.Context, accountID int
 		clauses = append(clauses, "ci.count = 0")
 	}
 	if f.SetCode != "" {
-		clauses = append(clauses, "lower(c.set_code) = lower($"+strconv.Itoa(next)+")")
+		clauses = append(clauses, "lower(sc.set_code) = lower($"+strconv.Itoa(next)+")")
 		args = append(args, f.SetCode)
 		next++
 	}
 	if f.Rarity != "" {
-		clauses = append(clauses, "lower(c.rarity) = lower($"+strconv.Itoa(next)+")")
+		clauses = append(clauses, "lower(sc.rarity) = lower($"+strconv.Itoa(next)+")")
 		args = append(args, f.Rarity)
 		next++
 	}
 	if len(f.Colors) > 0 {
-		// cards.colors is stored as a JSON array of color letters ('W','U','B','R','G').
+		// set_cards.colors is stored as a JSON array of color letters ('W','U','B','R','G').
 		// Use ILIKE on the raw JSON text so we don't have to depend on a JSONB cast.
 		ors := make([]string, 0, len(f.Colors))
 		for _, color := range f.Colors {
-			ors = append(ors, "c.colors ILIKE $"+strconv.Itoa(next))
+			ors = append(ors, "sc.colors ILIKE $"+strconv.Itoa(next))
 			args = append(args, "%\""+strings.ToUpper(strings.TrimSpace(color))+"\"%")
 			next++
 		}
@@ -98,30 +97,29 @@ func (r *CollectionRepository) ListCollection(ctx context.Context, accountID int
 	q := `
 		SELECT
 			ci.card_id,
-			COALESCE(c.arena_id, ci.card_id),
+			COALESCE(sc.arena_id::INT, ci.card_id),
 			ci.count,
-			COALESCE(c.name, ''),
-			COALESCE(c.set_code, ''),
+			COALESCE(sc.name, ''),
+			COALESCE(sc.set_code, ''),
 			COALESCE(s.name, ''),
-			COALESCE(c.rarity, ''),
-			COALESCE(c.mana_cost, ''),
-			COALESCE(c.cmc, 0),
-			COALESCE(c.type_line, ''),
-			COALESCE(c.colors, '[]'),
-			COALESCE(c.color_identity, '[]'),
-			COALESCE(c.image_uris, '{}'),
-			c.power,
-			c.toughness,
+			COALESCE(sc.rarity, ''),
+			COALESCE(sc.mana_cost, ''),
+			COALESCE(sc.cmc, 0),
+			COALESCE(sc.types, ''),
+			COALESCE(sc.colors, '[]'),
+			'[]',
+			json_build_object('normal', sc.image_url)::TEXT,
+			sc.power,
+			sc.toughness,
 			sc.price_usd,
 			sc.price_usd_foil,
 			sc.price_eur,
 			EXTRACT(EPOCH FROM sc.prices_updated_at)::BIGINT
 		FROM card_inventory ci
-		LEFT JOIN cards c       ON c.arena_id = ci.card_id
-		LEFT JOIN sets  s       ON s.code = c.set_code
-		LEFT JOIN set_cards sc  ON sc.set_code = c.set_code AND sc.arena_id = c.arena_id::TEXT
+		LEFT JOIN set_cards sc ON sc.arena_id = ci.card_id::TEXT
+		LEFT JOIN sets s       ON s.code = sc.set_code
 		WHERE ` + strings.Join(clauses, " AND ") + `
-		ORDER BY c.name NULLS LAST, ci.card_id
+		ORDER BY sc.name NULLS LAST, ci.card_id
 		LIMIT 5000`
 
 	rows, err := r.db.QueryContext(ctx, q, args...)
@@ -175,15 +173,15 @@ type RarityCount struct {
 }
 
 // CountByRarity returns per-rarity copy counts for the account, joining
-// card_inventory → cards to pull rarity. Cards with no metadata are bucketed
-// under empty-string rarity which the handler can fold into "unknown".
+// card_inventory → set_cards to pull rarity. Cards with no metadata are
+// bucketed under empty-string rarity which the handler can fold into "unknown".
 func (r *CollectionRepository) CountByRarity(ctx context.Context, accountID int64) ([]RarityCount, error) {
-	const q = `SELECT COALESCE(c.rarity, '') AS rarity,
+	const q = `SELECT COALESCE(sc.rarity, '') AS rarity,
 	                  COALESCE(SUM(ci.count), 0) AS total_cards
 	           FROM card_inventory ci
-	           LEFT JOIN cards c ON c.arena_id = ci.card_id
+	           LEFT JOIN set_cards sc ON sc.arena_id = ci.card_id::TEXT
 	           WHERE ci.account_id = $1 AND ci.count > 0
-	           GROUP BY rarity
+	           GROUP BY sc.rarity
 	           ORDER BY rarity`
 	rows, err := r.db.QueryContext(ctx, q, accountID)
 	if err != nil {
@@ -224,11 +222,11 @@ func (r *CollectionRepository) SetCompletion(ctx context.Context, accountID int6
 			GROUP BY set_code
 		),
 		per_set_owned AS (
-			SELECT c.set_code, COUNT(DISTINCT ci.card_id) AS owned_cards
+			SELECT sc.set_code, COUNT(DISTINCT ci.card_id) AS owned_cards
 			FROM card_inventory ci
-			JOIN cards c ON c.arena_id = ci.card_id
+			JOIN set_cards sc ON sc.arena_id = ci.card_id::TEXT
 			WHERE ci.account_id = $1 AND ci.count > 0
-			GROUP BY c.set_code
+			GROUP BY sc.set_code
 		)
 		SELECT
 			t.set_code,
@@ -275,11 +273,11 @@ func (r *CollectionRepository) SetRarityBreakdown(ctx context.Context, accountID
 			GROUP BY set_code, rarity
 		),
 		set_rarity_owned AS (
-			SELECT c.set_code, COALESCE(c.rarity, '') AS rarity, COUNT(DISTINCT ci.card_id) AS owned
+			SELECT sc.set_code, COALESCE(sc.rarity, '') AS rarity, COUNT(DISTINCT ci.card_id) AS owned
 			FROM card_inventory ci
-			JOIN cards c ON c.arena_id = ci.card_id
+			JOIN set_cards sc ON sc.arena_id = ci.card_id::TEXT
 			WHERE ci.account_id = $1 AND ci.count > 0
-			GROUP BY c.set_code, c.rarity
+			GROUP BY sc.set_code, sc.rarity
 		)
 		SELECT
 			t.set_code, t.rarity, t.total, COALESCE(o.owned, 0)
@@ -324,15 +322,14 @@ func (r *CollectionRepository) ValueRows(ctx context.Context, accountID int64) (
 	const priced = `
 		SELECT
 			ci.card_id,
-			COALESCE(c.name, ''),
-			COALESCE(c.set_code, ''),
-			COALESCE(c.rarity, ''),
+			COALESCE(sc.name, ''),
+			COALESCE(sc.set_code, ''),
+			COALESCE(sc.rarity, ''),
 			ci.count,
 			COALESCE(sc.price_usd, 0),
 			COALESCE(sc.price_eur, 0)
 		FROM card_inventory ci
-		JOIN cards c       ON c.arena_id = ci.card_id
-		JOIN set_cards sc  ON sc.set_code = c.set_code AND sc.arena_id = c.arena_id::TEXT
+		JOIN set_cards sc ON sc.arena_id = ci.card_id::TEXT
 		WHERE ci.account_id = $1 AND ci.count > 0 AND sc.price_usd IS NOT NULL AND sc.price_usd > 0`
 
 	rows, err := r.db.QueryContext(ctx, priced, accountID)
@@ -359,8 +356,7 @@ func (r *CollectionRepository) ValueRows(ctx context.Context, accountID int64) (
 	const unpriced = `
 		SELECT COUNT(*)
 		FROM card_inventory ci
-		LEFT JOIN cards c       ON c.arena_id = ci.card_id
-		LEFT JOIN set_cards sc  ON sc.set_code = c.set_code AND sc.arena_id = c.arena_id::TEXT
+		LEFT JOIN set_cards sc ON sc.arena_id = ci.card_id::TEXT
 		WHERE ci.account_id = $1 AND ci.count > 0
 		  AND (sc.price_usd IS NULL OR sc.price_usd = 0)`
 	var unpricedCount int
@@ -370,14 +366,12 @@ func (r *CollectionRepository) ValueRows(ctx context.Context, accountID int64) (
 	return out, unpricedCount, nil
 }
 
-// LastPriceUpdate returns the most recent set_cards.last_updated for the
+// LastPriceUpdate returns the most recent set_cards.prices_updated_at for the
 // account's owned cards (so the SPA can show a "prices last refreshed" hint).
-// Returns sql.ErrNoRows when the account has no priced cards.
 func (r *CollectionRepository) LastPriceUpdate(ctx context.Context, accountID int64) (int64, error) {
 	const q = `SELECT EXTRACT(EPOCH FROM MAX(sc.prices_updated_at))::BIGINT
 	           FROM card_inventory ci
-	           JOIN cards c       ON c.arena_id = ci.card_id
-	           JOIN set_cards sc  ON sc.set_code = c.set_code AND sc.arena_id = c.arena_id::TEXT
+	           JOIN set_cards sc ON sc.arena_id = ci.card_id::TEXT
 	           WHERE ci.account_id = $1 AND ci.count > 0`
 	var ts sql.NullInt64
 	if err := r.db.QueryRowContext(ctx, q, accountID).Scan(&ts); err != nil {
