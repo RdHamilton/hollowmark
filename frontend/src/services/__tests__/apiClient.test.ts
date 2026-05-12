@@ -12,7 +12,6 @@ import {
   getApiKey,
   setApiKey,
   setClerkTokenProvider,
-  createSSEConnection,
 } from '../apiClient';
 
 // Mock fetch globally
@@ -234,33 +233,6 @@ describe('apiClient', () => {
       const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
       const headers = init.headers as Record<string, string>;
       expect(headers['Authorization']).toBe('Bearer legacy-key');
-    });
-  });
-
-  describe('createSSEConnection', () => {
-    it('returns null when no API key is stored', () => {
-      const result = createSSEConnection('/events');
-      expect(result).toBeNull();
-    });
-
-    it('returns an EventSource when an API key is stored', () => {
-      setApiKey('sse-key-123');
-
-      // EventSource is not available in jsdom — mock it
-      const MockEventSource = vi.fn().mockImplementation((url: string) => ({ url }));
-      vi.stubGlobal('EventSource', MockEventSource);
-
-      const result = createSSEConnection('/events');
-
-      expect(result).not.toBeNull();
-      expect(MockEventSource).toHaveBeenCalledWith(
-        expect.stringContaining('token=sse-key-123')
-      );
-      expect(MockEventSource).toHaveBeenCalledWith(
-        expect.stringContaining('/events')
-      );
-
-      vi.unstubAllGlobals();
     });
   });
 
@@ -508,9 +480,8 @@ describe('cloudClient alias', () => {
     expect(typeof cloudClient.getApiConfig).toBe('function');
   });
 
-  it('exposes healthCheck and createSSEConnection', () => {
+  it('exposes healthCheck', () => {
     expect(typeof cloudClient.healthCheck).toBe('function');
-    expect(typeof cloudClient.createSSEConnection).toBe('function');
   });
 
   it('get is the same reference as the named export', () => {

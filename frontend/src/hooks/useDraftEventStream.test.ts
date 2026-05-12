@@ -1,5 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
+
+// ---------------------------------------------------------------------------
+// Clerk useAuth mock — the hook calls getToken() on every (re)connect to
+// append a fresh JWT as ?token=.  We control what it returns per test.
+// ---------------------------------------------------------------------------
+
+const mockGetToken = vi.fn<[], Promise<string | null>>();
+
+vi.mock('@clerk/react', () => ({
+  useAuth: () => ({
+    getToken: mockGetToken,
+    isSignedIn: true,
+    isLoaded: true,
+  }),
+}));
 
 // ---------------------------------------------------------------------------
 // Minimal EventSource mock
@@ -93,6 +108,9 @@ describe('useDraftEventStream', () => {
   beforeEach(() => {
     instances = [];
     MockEventSource.mockClear();
+    mockGetToken.mockReset();
+    // Default: return a stable test JWT so tests don't have to set it.
+    mockGetToken.mockResolvedValue('clerk-test-jwt');
     vi.useFakeTimers();
   });
 
@@ -100,6 +118,15 @@ describe('useDraftEventStream', () => {
     vi.useRealTimers();
     vi.resetModules();
   });
+
+  // Drains the microtask queue so the hook's async connect() finishes (it
+  // awaits getToken() before opening the EventSource).  All assertions that
+  // touch `instances[N]` after a render/reconnect must call this first.
+  async function flushConnect() {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
 
   it('starts with status "connecting"', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
@@ -112,6 +139,7 @@ describe('useDraftEventStream', () => {
   it('transitions to "open" on EventSource open', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { result } = renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     expect(instances).toHaveLength(1);
 
@@ -125,14 +153,78 @@ describe('useDraftEventStream', () => {
   it('opens EventSource with withCredentials: true', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     expect(instances).toHaveLength(1);
     expect(instances[0].withCredentials).toBe(true);
   });
 
+  it('appends the Clerk JWT as ?token= on connect', async () => {
+    mockGetToken.mockResolvedValue('jwt-abc-123');
+
+    const { useDraftEventStream } = await import('./useDraftEventStream');
+    renderHook(() => useDraftEventStream());
+    await flushConnect();
+
+    expect(instances).toHaveLength(1);
+    const url = new URL(instances[0].url);
+    expect(url.searchParams.get('token')).toBe('jwt-abc-123');
+  });
+
+  it('omits ?token= when getToken returns null (signed-out / Clerk still hydrating)', async () => {
+    mockGetToken.mockResolvedValue(null);
+
+    const { useDraftEventStream } = await import('./useDraftEventStream');
+    renderHook(() => useDraftEventStream());
+    await flushConnect();
+
+    expect(instances).toHaveLength(1);
+    const url = new URL(instances[0].url);
+    expect(url.searchParams.get('token')).toBeNull();
+  });
+
+  it('re-fetches getToken on every reconnect (picks up rotated Clerk JWTs)', async () => {
+    mockGetToken
+      .mockResolvedValueOnce('jwt-first')
+      .mockResolvedValueOnce('jwt-second');
+
+    const { useDraftEventStream } = await import('./useDraftEventStream');
+    renderHook(() => useDraftEventStream());
+    await flushConnect();
+
+    expect(instances).toHaveLength(1);
+    expect(new URL(instances[0].url).searchParams.get('token')).toBe('jwt-first');
+
+    // Force a reconnect by triggering an error + advancing past backoff.
+    act(() => {
+      instances[0]._triggerError();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    await flushConnect();
+
+    expect(instances).toHaveLength(2);
+    expect(new URL(instances[1].url).searchParams.get('token')).toBe('jwt-second');
+    expect(mockGetToken).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens EventSource without ?token= when getToken throws', async () => {
+    mockGetToken.mockRejectedValue(new Error('clerk error'));
+
+    const { useDraftEventStream } = await import('./useDraftEventStream');
+    renderHook(() => useDraftEventStream());
+    await flushConnect();
+
+    expect(instances).toHaveLength(1);
+    const url = new URL(instances[0].url);
+    expect(url.searchParams.get('token')).toBeNull();
+  });
+
   it('updates latestEvent when a draft.started message arrives', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { result } = renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     act(() => {
       instances[0]._triggerOpen();
@@ -145,6 +237,7 @@ describe('useDraftEventStream', () => {
   it('updates latestEvent when a draft.pack message arrives', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { result } = renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     act(() => {
       instances[0]._triggerOpen();
@@ -157,6 +250,7 @@ describe('useDraftEventStream', () => {
   it('updates latestEvent when a draft.ended message arrives', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { result } = renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     act(() => {
       instances[0]._triggerOpen();
@@ -169,6 +263,7 @@ describe('useDraftEventStream', () => {
   it('ignores non-draft events', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { result } = renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     act(() => {
       instances[0]._triggerOpen();
@@ -181,6 +276,7 @@ describe('useDraftEventStream', () => {
   it('handles named event frames (draft.pack as addEventListener)', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { result } = renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     act(() => {
       instances[0]._triggerOpen();
@@ -193,6 +289,7 @@ describe('useDraftEventStream', () => {
   it('ignores malformed JSON without throwing', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { result } = renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     expect(() => {
       act(() => {
@@ -207,6 +304,7 @@ describe('useDraftEventStream', () => {
   it('sets status to "error" on EventSource error', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { result } = renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     act(() => {
       instances[0]._triggerOpen();
@@ -222,6 +320,7 @@ describe('useDraftEventStream', () => {
   it('closes the first EventSource on error', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     act(() => {
       instances[0]._triggerOpen();
@@ -234,6 +333,7 @@ describe('useDraftEventStream', () => {
   it('reconnects after exponential backoff on error', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     // Trigger an error — should schedule a reconnect
     act(() => {
@@ -243,9 +343,10 @@ describe('useDraftEventStream', () => {
     expect(instances).toHaveLength(1); // not reconnected yet
 
     // Advance past the first backoff (100ms base)
-    act(() => {
-      vi.advanceTimersByTime(150);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
     });
+    await flushConnect();
 
     expect(instances).toHaveLength(2); // new EventSource created
   });
@@ -253,43 +354,49 @@ describe('useDraftEventStream', () => {
   it('increases backoff delay on successive errors', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     // First error — 100ms backoff
     act(() => {
       instances[0]._triggerError();
     });
-    act(() => {
-      vi.advanceTimersByTime(150);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
     });
+    await flushConnect();
     expect(instances).toHaveLength(2);
 
     // Second error — 200ms backoff
     act(() => {
       instances[1]._triggerError();
     });
-    act(() => {
-      vi.advanceTimersByTime(150);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
     });
+    await flushConnect();
     // 150ms < 200ms — not reconnected yet
     expect(instances).toHaveLength(2);
 
-    act(() => {
-      vi.advanceTimersByTime(100);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
     });
+    await flushConnect();
     expect(instances).toHaveLength(3);
   });
 
   it('resets backoff attempt counter on successful open', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     // Fail once and reconnect
     act(() => {
       instances[0]._triggerError();
     });
-    act(() => {
-      vi.advanceTimersByTime(150);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
     });
+    await flushConnect();
     expect(instances).toHaveLength(2);
 
     // Succeed on second connection
@@ -301,15 +408,17 @@ describe('useDraftEventStream', () => {
     act(() => {
       instances[1]._triggerError();
     });
-    act(() => {
-      vi.advanceTimersByTime(150);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
     });
+    await flushConnect();
     expect(instances).toHaveLength(3); // reconnected at 100ms
   });
 
   it('cleans up EventSource on unmount', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { unmount } = renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     act(() => {
       instances[0]._triggerOpen();
@@ -323,6 +432,7 @@ describe('useDraftEventStream', () => {
   it('cancels pending reconnect timer on unmount', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { unmount } = renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     // Trigger error to schedule reconnect
     act(() => {
@@ -333,9 +443,10 @@ describe('useDraftEventStream', () => {
     unmount();
 
     // Advance time — no new EventSource should be created
-    act(() => {
-      vi.advanceTimersByTime(5000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
     });
+    await flushConnect();
 
     expect(instances).toHaveLength(1);
   });
@@ -346,6 +457,7 @@ describe('useDraftEventStream', () => {
     // leak-free behaviour we care about.
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { unmount } = renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     act(() => {
       instances[0]._triggerOpen();
@@ -363,6 +475,7 @@ describe('useDraftEventStream', () => {
   it('caps backoff at 30 seconds', async () => {
     const { useDraftEventStream } = await import('./useDraftEventStream');
     renderHook(() => useDraftEventStream());
+    await flushConnect();
 
     // Trigger many errors to push past the cap (2^n * 100ms > 30000ms at n=9)
     for (let i = 0; i < 10; i++) {
@@ -371,9 +484,10 @@ describe('useDraftEventStream', () => {
         instances[idx]._triggerError();
       });
       // Advance max delay to ensure reconnect always happens
-      act(() => {
-        vi.advanceTimersByTime(35_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(35_000);
       });
+      await flushConnect();
     }
 
     // After 10 cycles we should have 11 EventSource instances (1 original + 10 reconnects)
