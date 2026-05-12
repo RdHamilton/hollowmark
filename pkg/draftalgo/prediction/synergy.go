@@ -209,6 +209,13 @@ func checkTribalSynergy(a, b CardData) *SynergyScore {
 func checkMechanicalSynergies(a, b CardData) []SynergyScore {
 	var out []SynergyScore
 	for mechanic, keywords := range mechanicalSynergies {
+		// addedThisMechanic prevents double-counting forward + reverse
+		// for the SAME mechanic on a given pair. Scoped to this loop
+		// iteration so different mechanics can still both produce
+		// distinct SynergyScore entries — the previous implementation
+		// scanned `out` for any (CardA, CardB) match, which silently
+		// dropped reverse-direction matches across mechanics.
+		addedThisMechanic := false
 		if hasMechanic(a, mechanic) {
 			for _, kw := range keywords {
 				if hasKeyword(b, kw) {
@@ -218,28 +225,20 @@ func checkMechanicalSynergies(a, b CardData) []SynergyScore {
 						Reason: a.Name + " (" + mechanic + ") synergizes with " + b.Name,
 						Weight: 0.12,
 					})
+					addedThisMechanic = true
 					break
 				}
 			}
 		}
-		if hasMechanic(b, mechanic) {
+		if !addedThisMechanic && hasMechanic(b, mechanic) {
 			for _, kw := range keywords {
 				if hasKeyword(a, kw) {
-					duplicate := false
-					for _, existing := range out {
-						if existing.CardA == a.Name && existing.CardB == b.Name {
-							duplicate = true
-							break
-						}
-					}
-					if !duplicate {
-						out = append(out, SynergyScore{
-							CardA: a.Name, CardB: b.Name,
-							SynergyType: SynergyMechanical, Score: 0.7,
-							Reason: b.Name + " (" + mechanic + ") synergizes with " + a.Name,
-							Weight: 0.12,
-						})
-					}
+					out = append(out, SynergyScore{
+						CardA: a.Name, CardB: b.Name,
+						SynergyType: SynergyMechanical, Score: 0.7,
+						Reason: b.Name + " (" + mechanic + ") synergizes with " + a.Name,
+						Weight: 0.12,
+					})
 					break
 				}
 			}

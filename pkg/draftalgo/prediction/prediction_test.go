@@ -91,6 +91,41 @@ func TestPredictWinRate_ClampsToBoundaries(t *testing.T) {
 	}
 }
 
+func TestPredictWinRate_ColorlessCardsDontInflateColorCount(t *testing.T) {
+	// Regression test for #1892 review finding #1: artifacts and
+	// colorless cards (Color "" or "C") were inflating the color
+	// count and triggering the 3+ color penalty on a real 2-color
+	// deck.
+	deck := make([]prediction.Card, 40)
+	for i := range deck {
+		switch {
+		case i < 18:
+			deck[i] = prediction.Card{Name: "W", CMC: 2 + i%3, Color: "W", GIHWR: 0.5}
+		case i < 36:
+			deck[i] = prediction.Card{Name: "U", CMC: 2 + i%3, Color: "U", GIHWR: 0.5}
+		default:
+			// 4 colorless artifacts — must NOT push this into 3-color penalty land.
+			deck[i] = prediction.Card{Name: "Artifact", CMC: 2, Color: "C", GIHWR: 0.5}
+		}
+	}
+	p, err := prediction.PredictWinRate(deck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Factors.ColorAdjustment <= 0 {
+		t.Errorf("ColorAdjustment = %v, want >0 (2-color deck with colorless filler)", p.Factors.ColorAdjustment)
+	}
+	// Also try empty-string color (some MTGA logs emit that for
+	// colorless cards instead of "C").
+	for i := 36; i < 40; i++ {
+		deck[i].Color = ""
+	}
+	p2, _ := prediction.PredictWinRate(deck)
+	if p2.Factors.ColorAdjustment <= 0 {
+		t.Errorf(`ColorAdjustment = %v, want >0 (2-color deck with "" colorless filler)`, p2.Factors.ColorAdjustment)
+	}
+}
+
 func TestPredictWinRate_ColorAdjustmentApplied(t *testing.T) {
 	mk := func(colors []string) []prediction.Card {
 		deck := make([]prediction.Card, 40)
@@ -206,6 +241,50 @@ func TestCalculateSynergy_MechanicalSacrificePairing(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected at least one synergy reason in TopSynergies, got %v", r.TopSynergies)
+	}
+}
+
+func TestCalculateSynergy_ReverseMechanicAcrossDifferentMechanicsBothFire(t *testing.T) {
+	// Regression test for #1892 review finding #3: the original
+	// duplicate check matched on (CardA, CardB) alone, so once any
+	// mechanic added an entry for a pair, every subsequent reverse-
+	// direction mechanic check was silently dropped.
+	//
+	// Set up a pair where:
+	//   - card A has mechanic "sacrifice" and B has the matching kw "dies"  → forward fires
+	//   - card B has mechanic "graveyard" and A has the matching kw "flashback" → reverse must ALSO fire on a different mechanic
+	a := prediction.CardData{
+		Name:       "Sac Outlet",
+		Color:      "B",
+		Keywords:   []string{"sacrifice", "flashback"},
+		OracleText: "Sacrifice a creature. Flashback {3}{B}.",
+	}
+	b := prediction.CardData{
+		Name:       "Reanimator",
+		Color:      "B",
+		Keywords:   []string{"graveyard", "dies"},
+		OracleText: "Whenever a creature dies, return target creature card from your graveyard.",
+	}
+	r := prediction.CalculateSynergy([]prediction.CardData{a, b})
+	if r.MechSynergies < 2 {
+		t.Errorf("MechSynergies = %d, want ≥2 (forward sacrifice + reverse graveyard) — pairs: %+v",
+			r.MechSynergies, r.SynergyPairs)
+	}
+	// Sanity: both reasons appear.
+	sawForward, sawReverse := false, false
+	for _, p := range r.SynergyPairs {
+		switch {
+		case p.Reason == "Sac Outlet (sacrifice) synergizes with Reanimator":
+			sawForward = true
+		case p.Reason == "Reanimator (graveyard) synergizes with Sac Outlet":
+			sawReverse = true
+		}
+	}
+	if !sawForward {
+		t.Errorf("missing forward sacrifice → dies synergy in %+v", r.SynergyPairs)
+	}
+	if !sawReverse {
+		t.Errorf("missing reverse graveyard → flashback synergy in %+v", r.SynergyPairs)
 	}
 }
 

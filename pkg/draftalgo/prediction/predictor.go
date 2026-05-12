@@ -113,8 +113,17 @@ func PredictWinRate(cards []Card) (*DeckPrediction, error) {
 		}
 	}
 
-	// 2. Color adjustment.
-	colorCount := len(factors.ColorDistribution)
+	// 2. Color adjustment. Count only "real" colors — colorless cards
+	// (Color == "" or "C") sit alongside any number of colored cards
+	// without affecting the deck's mana-base complexity, so they don't
+	// count toward the colorCount switch below.
+	colorCount := 0
+	for c := range factors.ColorDistribution {
+		if c == "" || c == "C" {
+			continue
+		}
+		colorCount++
+	}
 	switch {
 	case colorCount == 2:
 		factors.ColorAdjustment = twoColorBonus
@@ -200,7 +209,14 @@ func generateExplanation(f PredictionFactors, winRate float64) string {
 		s += "average card quality, "
 	}
 
-	colorCount := len(f.ColorDistribution)
+	// Same colorless filter as the adjustment pass above.
+	colorCount := 0
+	for c := range f.ColorDistribution {
+		if c == "" || c == "C" {
+			continue
+		}
+		colorCount++
+	}
 	switch {
 	case colorCount == 2:
 		s += "focused 2-color deck, "
