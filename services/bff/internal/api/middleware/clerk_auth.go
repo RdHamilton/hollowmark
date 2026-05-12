@@ -61,25 +61,24 @@ func RequireClerkAuth(secretKey string) func(http.Handler) http.Handler {
 }
 
 // RequireClerkAuthForSSE returns middleware that verifies a Clerk session JWT
-// using a token extractor that accepts EITHER:
+// using a token extractor that accepts ANY of:
 //
 //  1. "Authorization: Bearer <token>" header — the standard path used by all
 //     non-SSE browser requests and the existing test suite.
-//  2. "__session" cookie — the session cookie written by the Clerk frontend SDK.
-//     The browser EventSource API cannot set custom request headers, so it sends
-//     the Clerk session cookie automatically on same-origin connections instead.
+//  2. "__session" cookie — the session cookie written by the Clerk frontend SDK
+//     when the SPA + BFF share a parent domain (e.g. production:
+//     stg-app.vaultmtg.app + staging-api.vaultmtg.app under .vaultmtg.app).
+//  3. "?token=<jwt>" query parameter — fallback for cross-domain SSE when the
+//     Clerk Frontend API is on a different parent domain (e.g. the Clerk Dev
+//     instance at *.clerk.accounts.dev).  The browser EventSource API has no
+//     header support, so the SPA appends a fresh Clerk JWT to the SSE URL on
+//     every (re)connect.  Clerk JWTs are short-lived (60s default) so the
+//     exposure window is bounded; nginx is configured to log_access off on the
+//     /api/v1/events path to keep tokens out of proxy logs.
 //
-// Auth approach: Clerk session cookie passthrough.
-//
-//   - The Clerk JS SDK stores the active session token in a cookie named
-//     "__session" (httpOnly, Secure in production).
-//   - On SSE connections the extractor reads the cookie value and treats it as
-//     the Bearer token for Clerk JWT verification.  No custom signing or secret
-//     sharing is required — it is the same Clerk-issued JWT, delivered via a
-//     different transport.
-//   - The Bearer header path is checked first; the cookie is only used when no
-//     header is present.  This means non-SSE routes behind this middleware
-//     continue to work identically to RequireClerkAuth.
+// Auth approach: Clerk JWT passthrough — never custom signing or secret
+// sharing.  All three sources carry the same Clerk-issued JWT; only the
+// transport differs.
 //
 // Security considerations:
 //   - The cookie must be same-site (Strict or Lax) and httpOnly to resist CSRF
@@ -87,23 +86,33 @@ func RequireClerkAuth(secretKey string) func(http.Handler) http.Handler {
 //   - Use this middleware ONLY on GET endpoints that establish long-lived
 //     read-only streams.  Mutation endpoints must continue to use the Bearer
 //     header path (RequireClerkAuth) to avoid CSRF risk.
+//   - Disable nginx access_log on routes mounted under this middleware to
+//     avoid leaking ?token= JWTs into long-lived log files.
 //
 // The secretKey must be the Clerk backend API secret (CLERK_SECRET_KEY).
 func RequireClerkAuthForSSE(secretKey string) func(http.Handler) http.Handler {
 	clerk.SetKey(secretKey)
 
-	// jwtExtractor checks the Authorization header first, then falls back to
-	// the Clerk session cookie.  The Clerk SDK calls this function to obtain the
-	// raw JWT string before signature verification.
+	// jwtExtractor returns the first non-empty token found in:
+	// header → cookie → query.  The Clerk SDK calls this function to obtain
+	// the raw JWT string before signature verification.
 	jwtExtractor := func(r *http.Request) string {
 		// 1. Bearer header (existing path — non-SSE callers and tests).
 		if authHeader := strings.TrimSpace(r.Header.Get("Authorization")); authHeader != "" {
 			return strings.TrimPrefix(authHeader, "Bearer ")
 		}
 
-		// 2. Clerk session cookie (EventSource / browser SSE path).
+		// 2. Clerk session cookie (EventSource / browser SSE path on
+		// same-parent-domain deployments — e.g. prod).
 		if cookie, err := r.Cookie(clerkSessionCookieName); err == nil {
 			return cookie.Value
+		}
+
+		// 3. ?token= query parameter (EventSource cross-domain fallback —
+		// e.g. staging-api.vaultmtg.app talking to a SPA whose Clerk session
+		// cookie lives on *.clerk.accounts.dev).  Issue #1904.
+		if token := r.URL.Query().Get("token"); token != "" {
+			return token
 		}
 
 		return ""

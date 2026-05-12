@@ -195,6 +195,23 @@ else
   fail "$ERR_COUNT 'ERROR persisting event' lines in last 5 min — schema drift or DB error"
 fi
 
+# ── 11. SSE /api/v1/events rejects unauthenticated connection ────────────────
+# Regression check: no auth + no cookie + no ?token= must always 401.  Catches
+# any future middleware misconfiguration that would let the SSE stream open
+# without verifying the Clerk JWT.
+info "Test 11 — GET /api/v1/events with no auth returns 401"
+expect_status "GET /api/v1/events no-auth" "$BFF_HOST/api/v1/events" "401"
+
+# ── 12. SSE /api/v1/events accepts ?token= extractor (Issue #1904 wiring) ─────
+# Sends a deliberately invalid JWT in ?token=.  The BFF middleware should
+# parse the query parameter, attempt verification, and return 401 — proving
+# that (a) the ?token= extractor is wired into RequireClerkAuthForSSE and
+# (b) failures still return 401, never 5xx.  A 200 here would be a serious
+# regression (auth bypass), and a 5xx would indicate the extractor crashes
+# on bad input.  See services/bff/internal/api/middleware/clerk_auth.go.
+info "Test 12 — GET /api/v1/events?token=<garbage> returns 401 (not 5xx)"
+expect_status "GET /api/v1/events ?token=garbage" "$BFF_HOST/api/v1/events?token=not.a.real.jwt" "401"
+
 # ── summary ───────────────────────────────────────────────────────────────────
 echo
 echo "──────────────────────────────────────────────"

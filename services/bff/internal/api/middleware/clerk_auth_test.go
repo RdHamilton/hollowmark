@@ -350,6 +350,134 @@ func TestRequireClerkAuthForSSE_InvalidCookieReturns401(t *testing.T) {
 	}
 }
 
+// TestRequireClerkAuthForSSE_ValidQueryToken verifies that an EventSource
+// connection authenticated via the ?token=<jwt> query parameter is accepted.
+// This is the cross-domain fallback used when the Clerk Frontend API is on a
+// different parent domain than the BFF — e.g. staging's Dev Clerk instance at
+// *.clerk.accounts.dev talking to staging-api.vaultmtg.app.  Issue #1904.
+func TestRequireClerkAuthForSSE_ValidQueryToken(t *testing.T) {
+	kid := "kid-sse-query"
+
+	now := time.Now()
+	claims := map[string]any{
+		"sub": "user_query",
+		"sid": "sess_query",
+		"iss": "https://clerk.test",
+		"iat": now.Add(-1 * time.Minute).Unix(),
+		"nbf": now.Add(-1 * time.Minute).Unix(),
+		"exp": now.Add(1 * time.Hour).Unix(),
+	}
+
+	token, pubKey := clerktest.GenerateJWT(t, claims, kid)
+	withClerkBackend(t, kid, pubKey)
+
+	handler := middleware.RequireClerkAuthForSSE("sk_test_dummy")(clerkOKHandler)
+
+	// No Authorization header, no __session cookie — only ?token=.
+	// This mirrors the staging SPA's cross-domain SSE connection where the
+	// Clerk session cookie lives on *.clerk.accounts.dev and never reaches
+	// staging-api.vaultmtg.app.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?token="+token, nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("SSE query token: want 200, got %d — body: %s", rr.Code, rr.Body.String())
+	}
+
+	if rr.Body.String() != "user_query" {
+		t.Errorf("subject: want \"user_query\", got %q", rr.Body.String())
+	}
+}
+
+// TestRequireClerkAuthForSSE_InvalidQueryToken verifies that a request carrying
+// a malformed or expired ?token= value is rejected with 401.
+func TestRequireClerkAuthForSSE_InvalidQueryToken(t *testing.T) {
+	withClerkBackend(t, "kid-sse-bad-query", nil) // no valid key in JWKS
+
+	handler := middleware.RequireClerkAuthForSSE("sk_test_dummy")(clerkOKHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?token=not.a.valid.jwt", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid query token: want 401, got %d", rr.Code)
+	}
+}
+
+// TestRequireClerkAuthForSSE_HeaderPreferredOverQuery verifies the source
+// precedence: when a Bearer header AND a ?token= are both present, the header
+// wins.  The query-string fallback is intentionally last in the chain so a
+// stale token cached in a URL bar can never override a fresh Bearer header.
+func TestRequireClerkAuthForSSE_HeaderPreferredOverQuery(t *testing.T) {
+	kid := "kid-sse-prefer-header-over-query"
+
+	now := time.Now()
+	claims := map[string]any{
+		"sub": "user_prefer_header",
+		"sid": "sess_prefer_header",
+		"iss": "https://clerk.test",
+		"iat": now.Add(-1 * time.Minute).Unix(),
+		"nbf": now.Add(-1 * time.Minute).Unix(),
+		"exp": now.Add(1 * time.Hour).Unix(),
+	}
+
+	token, pubKey := clerktest.GenerateJWT(t, claims, kid)
+	withClerkBackend(t, kid, pubKey)
+
+	handler := middleware.RequireClerkAuthForSSE("sk_test_dummy")(clerkOKHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?token=stale.query.token", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("prefer header: want 200, got %d — body: %s", rr.Code, rr.Body.String())
+	}
+
+	if rr.Body.String() != "user_prefer_header" {
+		t.Errorf("subject: want \"user_prefer_header\", got %q", rr.Body.String())
+	}
+}
+
+// TestRequireClerkAuthForSSE_CookiePreferredOverQuery verifies the source
+// precedence: when an __session cookie AND a ?token= are both present, the
+// cookie wins.  Same reasoning as the header path — the query-string is the
+// last resort.
+func TestRequireClerkAuthForSSE_CookiePreferredOverQuery(t *testing.T) {
+	kid := "kid-sse-prefer-cookie-over-query"
+
+	now := time.Now()
+	claims := map[string]any{
+		"sub": "user_prefer_cookie",
+		"sid": "sess_prefer_cookie",
+		"iss": "https://clerk.test",
+		"iat": now.Add(-1 * time.Minute).Unix(),
+		"nbf": now.Add(-1 * time.Minute).Unix(),
+		"exp": now.Add(1 * time.Hour).Unix(),
+	}
+
+	token, pubKey := clerktest.GenerateJWT(t, claims, kid)
+	withClerkBackend(t, kid, pubKey)
+
+	handler := middleware.RequireClerkAuthForSSE("sk_test_dummy")(clerkOKHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?token=stale.query.token", nil)
+	req.AddCookie(&http.Cookie{Name: "__session", Value: token})
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("prefer cookie: want 200, got %d — body: %s", rr.Code, rr.Body.String())
+	}
+
+	if rr.Body.String() != "user_prefer_cookie" {
+		t.Errorf("subject: want \"user_prefer_cookie\", got %q", rr.Body.String())
+	}
+}
+
 // TestRequireClerkAuthForSSE_CookieIgnoredWhenBearerPresent verifies that when
 // both an Authorization header and an __session cookie are present, the Bearer
 // header takes precedence (header is checked first in the extractor).

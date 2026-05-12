@@ -343,35 +343,6 @@ export async function healthCheck(): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// SSE helper
-// ---------------------------------------------------------------------------
-
-/**
- * Open a Server-Sent Events connection to the given path.
- *
- * The connection is gated on an API key being present in storage — if no key
- * is stored the function returns null and the caller decides how to handle the
- * unauthenticated state.
- *
- * EventSource does not support custom request headers natively, so the API key
- * is appended as a `token` query-parameter which the BFF SSE handler reads and
- * maps to a Bearer credential.  This is the standard workaround for SSE auth.
- *
- * @param path  API path relative to baseUrl (e.g. "/events")
- * @returns     A connected EventSource, or null when no API key is stored.
- */
-export function createSSEConnection(path: string): EventSource | null {
-  const key = getApiKey();
-  if (!key) {
-    return null;
-  }
-
-  const url = new URL(`${config.baseUrl}${path}`);
-  url.searchParams.set('token', key);
-  return new EventSource(url.toString());
-}
-
-// ---------------------------------------------------------------------------
 // cloudClient alias
 // ---------------------------------------------------------------------------
 
@@ -381,6 +352,11 @@ export function createSSEConnection(path: string): EventSource | null {
  * Bundles the core HTTP helpers under a single namespace so callers that
  * need to explicitly distinguish cloud vs daemon routes can do so without
  * ambiguity.
+ *
+ * SSE connections are owned by the hook that needs them (e.g.
+ * useDraftEventStream) so the EventSource construction and Clerk token
+ * sourcing live next to the consumer; there is intentionally no SSE helper
+ * on the cloudClient surface.
  */
 export const cloudClient = {
   get,
@@ -394,5 +370,4 @@ export const cloudClient = {
   configureApi,
   getApiConfig,
   healthCheck,
-  createSSEConnection,
 } as const;
