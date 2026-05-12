@@ -11,10 +11,21 @@ import (
 )
 
 const (
-	minRegionSize = 4 * 1024 * 1024 // 4MB — skip tiny regions
+	minRegionSize = 4 * 1024 * 1024 // skip regions smaller than 4MB
 	chunkSize     = 4 * 1024 * 1024 // read in 4MB chunks to bound per-call memory
-	minDensity    = 100             // a region with fewer entries than this isn't the collection
+	minEntries    = 500             // minimum entries to treat a region as a candidate
+	// maxFillPct caps fill rate at 3%. The C# collection Dictionary is sparsely filled
+	// (~1%) because .NET over-allocates buckets. Dense dictionaries (card pool DB, etc.)
+	// exceed this and must be excluded.
+	maxFillPct = 3.0
 )
+
+type candidate struct {
+	addr    uint64
+	size    uint64
+	entries map[int]int
+	fillPct float64
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -37,54 +48,73 @@ func main() {
 	regions := listReadableRegions(task, minRegionSize)
 	fmt.Printf("Scanning %d readable regions >= 4MB...\n", len(regions))
 
-	// Merge results across all regions; take max quantity when an ID appears in multiple.
-	collection := make(map[int]int)
+	var candidates []candidate
 
 	for _, r := range regions {
-		regionEntries := make(map[int]int)
+		entries := make(map[int]int)
 		var scanned uint64
 		for scanned < r.size {
 			chunk := uint64(chunkSize)
-			if remaining := r.size - scanned; chunk > remaining {
-				chunk = remaining
+			if rem := r.size - scanned; chunk > rem {
+				chunk = rem
 			}
-			data, err := readMemory(task, r.addr+scanned, chunk)
-			if err != nil {
+			data, readErr := readMemory(task, r.addr+scanned, chunk)
+			if readErr != nil {
 				scanned += chunk
 				continue
 			}
 			for id, qty := range ScanDictEntries(data) {
-				if existing, ok := regionEntries[id]; !ok || qty > existing {
-					regionEntries[id] = qty
+				if existing, ok := entries[id]; !ok || qty > existing {
+					entries[id] = qty
 				}
 			}
 			scanned += chunk
 		}
 
-		if len(regionEntries) >= minDensity {
-			fmt.Printf("  0x%010x  size=%-6dMB  entries=%d\n",
-				r.addr, r.size/1024/1024, len(regionEntries))
-			for id, qty := range regionEntries {
-				if existing, ok := collection[id]; !ok || qty > existing {
-					collection[id] = qty
-				}
-			}
+		fillPct := 100 * float64(len(entries)) / float64(r.size/16)
+
+		switch {
+		case len(entries) < minEntries:
+			// too sparse to be the collection
+		case fillPct > maxFillPct:
+			fmt.Printf("  0x%010x  size=%-6dMB  entries=%-6d  fill=%.2f%%  SKIP (card pool DB?)\n",
+				r.addr, r.size/1024/1024, len(entries), fillPct)
+		default:
+			fmt.Printf("  0x%010x  size=%-6dMB  entries=%-6d  fill=%.2f%%  candidate\n",
+				r.addr, r.size/1024/1024, len(entries), fillPct)
+			candidates = append(candidates, candidate{r.addr, r.size, entries, fillPct})
 		}
 	}
 
-	ids := make([]int, 0, len(collection))
-	for id := range collection {
+	if len(candidates) == 0 {
+		fmt.Fprintln(os.Stderr, "no collection region found")
+		os.Exit(1)
+	}
+
+	// The live Dictionary always has more entries than any stale resize-copy.
+	// Pick the candidate with the highest entry count.
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if len(c.entries) > len(best.entries) {
+			best = c
+		}
+	}
+	fmt.Printf("\nSelected 0x%010x  (%d entries, %.2f%% fill)\n",
+		best.addr, len(best.entries), best.fillPct)
+
+	ids := make([]int, 0, len(best.entries))
+	for id := range best.entries {
 		ids = append(ids, id)
 	}
 	sort.Ints(ids)
 
 	total := 0
-	for _, qty := range collection {
+	for _, qty := range best.entries {
 		total += qty
 	}
 
 	fmt.Printf("\n=== COLLECTION ===\n")
-	fmt.Printf("Unique GRP IDs : %d\n", len(collection))
+	fmt.Printf("Unique GRP IDs : %d\n", len(best.entries))
 	fmt.Printf("Total copies   : %d\n", total)
 	fmt.Printf("\nFirst 50 entries:\n")
 	lim := 50
@@ -92,7 +122,7 @@ func main() {
 		lim = len(ids)
 	}
 	for _, id := range ids[:lim] {
-		fmt.Printf("  %d -> %d\n", id, collection[id])
+		fmt.Printf("  %d -> %d\n", id, best.entries[id])
 	}
 
 	outPath := "/tmp/collection_go.json"
@@ -100,7 +130,7 @@ func main() {
 	if err == nil {
 		enc := json.NewEncoder(f)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(collection)
+		_ = enc.Encode(best.entries)
 		f.Close()
 		fmt.Printf("\nSaved to %s\n", outPath)
 	}
