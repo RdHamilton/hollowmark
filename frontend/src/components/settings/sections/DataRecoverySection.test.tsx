@@ -170,8 +170,12 @@ describe('DataRecoverySection', () => {
       expect(screen.queryByRole('button', { name: /Confirm Uninstall/i })).not.toBeInTheDocument();
     });
 
-    it('confirm fires onUninstallDaemon with purge=false by default', async () => {
-      const onUninstallDaemon = vi.fn().mockResolvedValue(undefined);
+    it('confirm fires onUninstallDaemon with purge=false and renders the backend message', async () => {
+      const onUninstallDaemon = vi
+        .fn()
+        .mockResolvedValue(
+          'Daemon stopped and removed from launchd. Drag VaultMTG to the Trash to remove the app bundle.',
+        );
       render(
         <DataRecoverySection
           {...defaultProps}
@@ -185,13 +189,20 @@ describe('DataRecoverySection', () => {
       await waitFor(() => {
         expect(onUninstallDaemon).toHaveBeenCalledWith(false);
       });
+      // Backend-provided residual-action message renders verbatim.
       await waitFor(() => {
-        expect(screen.getByText(/Daemon uninstall scheduled/i)).toBeInTheDocument();
+        expect(
+          screen.getByText(/Drag VaultMTG to the Trash to remove the app bundle/i),
+        ).toBeInTheDocument();
       });
     });
 
-    it('confirm passes purge=true when the checkbox is ticked', async () => {
-      const onUninstallDaemon = vi.fn().mockResolvedValue(undefined);
+    it('confirm passes purge=true when the checkbox is ticked and renders the purge variant', async () => {
+      const onUninstallDaemon = vi
+        .fn()
+        .mockResolvedValue(
+          'Daemon stopped, removed from launchd, and config wiped. Drag VaultMTG to the Trash to remove the app bundle.',
+        );
       render(
         <DataRecoverySection
           {...defaultProps}
@@ -206,6 +217,26 @@ describe('DataRecoverySection', () => {
 
       await waitFor(() => {
         expect(onUninstallDaemon).toHaveBeenCalledWith(true);
+      });
+      await waitFor(() => {
+        expect(screen.getByText(/config wiped/i)).toBeInTheDocument();
+      });
+    });
+
+    it('falls back to a neutral message when the backend returns an empty string', async () => {
+      const onUninstallDaemon = vi.fn().mockResolvedValue('');
+      render(
+        <DataRecoverySection
+          {...defaultProps}
+          isConnected={true}
+          onUninstallDaemon={onUninstallDaemon}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: /Uninstall VaultMTG Daemon/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Confirm Uninstall/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Daemon uninstall scheduled/i)).toBeInTheDocument();
       });
     });
 

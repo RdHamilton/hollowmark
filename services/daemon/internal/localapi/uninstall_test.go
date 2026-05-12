@@ -136,6 +136,50 @@ func TestSystemUninstall_PropagatesError(t *testing.T) {
 	}
 }
 
+func TestSystemUninstall_UnsupportedPlatformMapsTo400(t *testing.T) {
+	stub := &stubUninstaller{err: localapi.ErrUnsupportedPlatform}
+	restore := localapi.SetShutdownExitForTest(func(_ int) {})
+	t.Cleanup(restore)
+
+	srv := newTestServer(t, stub)
+
+	resp, err := http.Post("http://"+srv.Addr()+"/api/v1/system/uninstall", "application/json", nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status: %d, want 400 for unsupported platform", resp.StatusCode)
+	}
+	var body struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body.Status != "error" {
+		t.Errorf("status = %q, want error", body.Status)
+	}
+}
+
+func TestSystemUninstall_OtherErrorsStay500(t *testing.T) {
+	stub := &stubUninstaller{err: errors.New("something deeper")}
+	restore := localapi.SetShutdownExitForTest(func(_ int) {})
+	t.Cleanup(restore)
+
+	srv := newTestServer(t, stub)
+
+	resp, err := http.Post("http://"+srv.Addr()+"/api/v1/system/uninstall", "application/json", nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status: %d, want 500 for non-platform errors", resp.StatusCode)
+	}
+}
+
 func TestSystemUninstall_RejectsNonPOST(t *testing.T) {
 	stub := &stubUninstaller{msg: "ok"}
 	restore := localapi.SetShutdownExitForTest(func(_ int) {})

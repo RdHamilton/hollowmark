@@ -13,8 +13,14 @@ export interface DataRecoverySectionProps {
    * Phase 2 PR #18 — daemon uninstall hook. When omitted, the Danger
    * Zone subsection is hidden entirely so legacy callers / tests keep
    * working without the danger UI rendering.
+   *
+   * The returned string is the user-facing residual-action message the
+   * backend produced (e.g. "drag VaultMTG to the Trash to remove the
+   * app bundle"). It surfaces verbatim in the success panel — the
+   * component does not fabricate its own copy, because the residual
+   * steps differ by platform and by whether `purge` was set.
    */
-  onUninstallDaemon?: (purge: boolean) => Promise<void>;
+  onUninstallDaemon?: (purge: boolean) => Promise<string>;
 }
 
 export function DataRecoverySection({
@@ -37,12 +43,17 @@ export function DataRecoverySection({
     if (!onUninstallDaemon) return;
     setUninstalling(true);
     try {
-      await onUninstallDaemon(purgeConfig);
-      setUninstallResult({
-        kind: 'success',
-        message:
-          'Daemon uninstall scheduled. The daemon will shut down momentarily — you can close this tab.',
-      });
+      const backendMessage = await onUninstallDaemon(purgeConfig);
+      // Render the backend message verbatim — it carries the platform-
+      // specific residual steps (e.g. "Drag VaultMTG to the Trash"
+      // vs. "Use Add/Remove Programs") and reflects whether purge ran.
+      // Fall back to a neutral message only if the backend returned an
+      // empty string, which shouldn't happen in practice.
+      const message =
+        backendMessage && backendMessage.trim().length > 0
+          ? backendMessage
+          : 'Daemon uninstall scheduled. The daemon will shut down momentarily — you can close this tab.';
+      setUninstallResult({ kind: 'success', message });
     } catch (err) {
       setUninstallResult({
         kind: 'error',
