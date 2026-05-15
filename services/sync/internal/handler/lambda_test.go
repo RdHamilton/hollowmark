@@ -597,6 +597,128 @@ func TestHandle_SetHashError_NonFatal(t *testing.T) {
 	require.Len(t, store.upserted, 1, "UpsertRatings must succeed even if SetHash fails")
 }
 
+// --- retry tests (SYNC_MAX_RETRIES / NewWithOptions) ---
+
+// TestHandle_RetrySucceedsAfterTransientError verifies that a transient fetch
+// failure on the first attempt is retried and the second attempt succeeds.
+func TestHandle_RetrySucceedsAfterTransientError(t *testing.T) {
+	cards := []seventeenlands.CardRating{{MtgaID: 1, Name: "Lightning Bolt", ALSA: 1.5}}
+	f := &retryFetcher{
+		failFirstN: 1,
+		cards:      cards,
+	}
+	store := &stubStore{}
+
+	// 1 retry allowed, instant backoff.
+	h := handler.NewWithOptions(f, store, []string{"FDN"}, []string{"PremierDraft"}, 1, 0, noBackoff)
+	err := h.Handle(context.Background(), nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, f.called, "expected 2 attempts: 1 failure + 1 success")
+	require.Len(t, store.upserted, 1)
+	assert.Equal(t, "FDN", store.upserted[0].SetCode)
+}
+
+// TestHandle_RetryExhausted verifies that when all fetch attempts fail, the error
+// is swallowed (non-fatal) and Handle returns nil.
+func TestHandle_RetryExhausted(t *testing.T) {
+	f := &retryFetcher{
+		failFirstN: 99, // always fail
+		cards:      nil,
+	}
+	store := &stubStore{}
+
+	// 2 retries = 3 total attempts, all will fail.
+	h := handler.NewWithOptions(f, store, []string{"FDN"}, []string{"PremierDraft"}, 2, 0, noBackoff)
+	err := h.Handle(context.Background(), nil)
+
+	require.NoError(t, err, "exhausted fetch retries must be non-fatal")
+	assert.Equal(t, 3, f.called, "expected 3 total attempts")
+	assert.Empty(t, store.upserted)
+}
+
+// --- skip-guard tests (maxConsecutiveSkips / NewWithOptions) ---
+
+// persistentHashStore wraps stubStore and makes SetHash actually update storedHashes
+// so consecutive Handle calls see incrementing skip counters.
+type persistentHashStore struct {
+	stubStore
+}
+
+func newPersistentHashStore() *persistentHashStore {
+	return &persistentHashStore{
+		stubStore: stubStore{
+			storedHashes: make(map[string]string),
+		},
+	}
+}
+
+func (s *persistentHashStore) SetHash(_ context.Context, key, hash string) error {
+	s.setHashCalls = append(s.setHashCalls, stubSetHashCall{key, hash})
+	if s.setHashErr != nil {
+		return s.setHashErr
+	}
+	if s.storedHashes == nil {
+		s.storedHashes = make(map[string]string)
+	}
+	s.storedHashes[key] = hash
+	return nil
+}
+
+// TestHandle_ConsecutiveSkipGuard_UnderThreshold verifies that the guard does not
+// return an error when the zero-card count is below the threshold.
+func TestHandle_ConsecutiveSkipGuard_UnderThreshold(t *testing.T) {
+	// Fetcher always returns 0 cards.
+	f := &stubFetcher{cards: []seventeenlands.CardRating{}}
+	store := newPersistentHashStore()
+
+	// Threshold = 3. Call Handle twice — under threshold, no error.
+	h := handler.NewWithOptions(f, store, []string{"FDN"}, []string{"PremierDraft"}, 0, 3, noBackoff)
+
+	require.NoError(t, h.Handle(context.Background(), nil), "first miss — no error")
+	require.NoError(t, h.Handle(context.Background(), nil), "second miss — still under threshold")
+}
+
+// TestHandle_ConsecutiveSkipGuard_AtThreshold verifies that the guard returns an
+// error on the invocation that hits the threshold.
+func TestHandle_ConsecutiveSkipGuard_AtThreshold(t *testing.T) {
+	f := &stubFetcher{cards: []seventeenlands.CardRating{}}
+	store := newPersistentHashStore()
+
+	h := handler.NewWithOptions(f, store, []string{"FDN"}, []string{"PremierDraft"}, 0, 3, noBackoff)
+
+	require.NoError(t, h.Handle(context.Background(), nil), "1st miss")
+	require.NoError(t, h.Handle(context.Background(), nil), "2nd miss")
+	err := h.Handle(context.Background(), nil)
+	require.Error(t, err, "3rd miss must return error (threshold reached)")
+	assert.Contains(t, err.Error(), "consecutive")
+}
+
+// TestHandle_ConsecutiveSkipGuard_ResetOnSuccess verifies that a successful
+// card response resets the skip counter so the next run starts fresh.
+func TestHandle_ConsecutiveSkipGuard_ResetOnSuccess(t *testing.T) {
+	cards := []seventeenlands.CardRating{{MtgaID: 1, Name: "Forest", ALSA: 9.0}}
+	f := &toggleFetcher{
+		// Invocation sequence: miss, miss, hit, miss, miss — should never trip.
+		sequence: [][]seventeenlands.CardRating{
+			{},    // miss
+			{},    // miss
+			cards, // hit (resets counter)
+			{},    // miss (counter back to 1)
+			{},    // miss (counter 2, still under threshold=3)
+		},
+	}
+	store := newPersistentHashStore()
+
+	// Threshold = 3. The hit on invocation 3 resets the counter.
+	h := handler.NewWithOptions(f, store, []string{"FDN"}, []string{"PremierDraft"}, 0, 3, noBackoff)
+
+	for i := 0; i < 5; i++ {
+		err := h.Handle(context.Background(), nil)
+		require.NoError(t, err, "invocation %d should not error", i+1)
+	}
+}
+
 // --- helpers ---
 
 // formatTrackingFetcher records the (setCode, format) pairs it was called with.
@@ -637,3 +759,45 @@ func (c *countingFetcher) FetchCardRatings(_ context.Context, setCode, _ string)
 func (c *countingFetcher) FetchColorRatings(_ context.Context, _, _ string) ([]seventeenlands.ColorRating, error) {
 	return nil, nil
 }
+
+// retryFetcher fails the first failFirstN calls then returns cards.
+type retryFetcher struct {
+	called     int
+	failFirstN int
+	cards      []seventeenlands.CardRating
+}
+
+func (f *retryFetcher) FetchCardRatings(_ context.Context, _, _ string) ([]seventeenlands.CardRating, error) {
+	f.called++
+	if f.called <= f.failFirstN {
+		return nil, errors.New("transient upstream error")
+	}
+	return f.cards, nil
+}
+
+func (f *retryFetcher) FetchColorRatings(_ context.Context, _, _ string) ([]seventeenlands.ColorRating, error) {
+	return nil, nil
+}
+
+// toggleFetcher returns a pre-defined sequence of responses, one per call.
+// After the sequence is exhausted, it returns empty cards.
+type toggleFetcher struct {
+	callIdx  int
+	sequence [][]seventeenlands.CardRating
+}
+
+func (f *toggleFetcher) FetchCardRatings(_ context.Context, _, _ string) ([]seventeenlands.CardRating, error) {
+	if f.callIdx < len(f.sequence) {
+		cards := f.sequence[f.callIdx]
+		f.callIdx++
+		return cards, nil
+	}
+	return nil, nil
+}
+
+func (f *toggleFetcher) FetchColorRatings(_ context.Context, _, _ string) ([]seventeenlands.ColorRating, error) {
+	return nil, nil
+}
+
+// noBackoff is a zero-sleep backoff function for use in tests.
+func noBackoff(_ int) time.Duration { return 0 }

@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,22 @@ import (
 // lower confidence. Set SYNC_FORMATS to override (e.g. "PremierDraft,QuickDraft,Sealed").
 var defaultFormats = []string{"PremierDraft", "QuickDraft"}
 
+const (
+	// defaultMaxRetries is the number of retry attempts per fetch/upsert on transient
+	// errors. A value of 2 means up to 3 total attempts (1 initial + 2 retries).
+	defaultMaxRetries = 2
+
+	// defaultMaxConsecutiveSkipDays is the number of consecutive daily invocations that
+	// must return 0 cards before the handler returns an error for that set. This causes
+	// EventBridge Scheduler to retry and, if all retries fail, route to the DLQ and
+	// trigger the SyncLambdaErrorAlarm. See: docs/runbooks/sync-dlq-alarms.md
+	defaultMaxConsecutiveSkipDays = 3
+
+	// skipHashPrefix namespaces the consecutive-skip counter inside the sync_hashes
+	// table so it cannot collide with ADR-005 payload hashes (which use set/format keys).
+	skipHashPrefix = "skip_count:"
+)
+
 // Fetcher retrieves card and color ratings from an external source.
 type Fetcher interface {
 	FetchCardRatings(ctx context.Context, setCode, format string) ([]seventeenlands.CardRating, error)
@@ -33,16 +50,24 @@ type Fetcher interface {
 // SyncHandler is the Lambda handler that fetches card ratings for all active sets
 // and persists them to Postgres. Each invocation performs a single full refresh.
 type SyncHandler struct {
-	fetcher      Fetcher
-	store        datasets.Store
-	overrideSets []string // non-empty when caller provides an explicit set list
-	formats      []string // draft formats to sync; read from SYNC_FORMATS env var
+	fetcher             Fetcher
+	store               datasets.Store
+	overrideSets        []string // non-empty when caller provides an explicit set list
+	formats             []string // draft formats to sync; read from SYNC_FORMATS env var
+	maxRetries          int      // per-fetch/upsert retry attempts (0 = no retries)
+	maxConsecutiveSkips int      // zero-card invocations before returning error (0 = disabled)
+	// retryBackoff returns the duration to sleep before attempt n (1-indexed).
+	// Defaults to exponentialBackoff. Injectable for tests to use noBackoff.
+	retryBackoff func(attempt int) time.Duration
 }
 
 // New creates a SyncHandler. overrideSets may be nil/empty to use DB-driven active sets.
 //
 // The formats list is read from SYNC_FORMATS (comma-separated). If unset, defaultFormats
 // is used: PremierDraft and QuickDraft.
+//
+// Retry counts are read from SYNC_MAX_RETRIES and SYNC_MAX_CONSECUTIVE_SKIP_DAYS env vars;
+// defaults are defaultMaxRetries and defaultMaxConsecutiveSkipDays respectively.
 func New(fetcher Fetcher, store datasets.Store, overrideSets []string) *SyncHandler {
 	formats := defaultFormats
 	if v := os.Getenv("SYNC_FORMATS"); v != "" {
@@ -57,22 +82,68 @@ func New(fetcher Fetcher, store datasets.Store, overrideSets []string) *SyncHand
 		}
 	}
 
+	maxRetries := defaultMaxRetries
+	if v := os.Getenv("SYNC_MAX_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			maxRetries = n
+		}
+	}
+
+	maxConsecutiveSkips := defaultMaxConsecutiveSkipDays
+	if v := os.Getenv("SYNC_MAX_CONSECUTIVE_SKIP_DAYS"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			maxConsecutiveSkips = n
+		}
+	}
+
 	return &SyncHandler{
-		fetcher:      fetcher,
-		store:        store,
-		overrideSets: overrideSets,
-		formats:      formats,
+		fetcher:             fetcher,
+		store:               store,
+		overrideSets:        overrideSets,
+		formats:             formats,
+		maxRetries:          maxRetries,
+		maxConsecutiveSkips: maxConsecutiveSkips,
+		retryBackoff:        exponentialBackoff,
 	}
 }
 
 // NewWithFormats creates a SyncHandler with an explicit formats list, bypassing the
 // SYNC_FORMATS env var. Intended for tests that need deterministic format control.
+//
+// maxRetries and maxConsecutiveSkips are both 0 (disabled) to preserve existing test
+// expectations around exact fetch/upsert call counts.
 func NewWithFormats(fetcher Fetcher, store datasets.Store, overrideSets, formats []string) *SyncHandler {
 	return &SyncHandler{
-		fetcher:      fetcher,
-		store:        store,
-		overrideSets: overrideSets,
-		formats:      formats,
+		fetcher:             fetcher,
+		store:               store,
+		overrideSets:        overrideSets,
+		formats:             formats,
+		maxRetries:          0,
+		maxConsecutiveSkips: 0,
+		retryBackoff:        exponentialBackoff,
+	}
+}
+
+// NewWithOptions creates a SyncHandler with fully explicit configuration.
+// Intended for tests that need fine-grained control over retry and skip-guard behaviour.
+func NewWithOptions(
+	fetcher Fetcher,
+	store datasets.Store,
+	overrideSets, formats []string,
+	maxRetries, maxConsecutiveSkips int,
+	backoff func(attempt int) time.Duration,
+) *SyncHandler {
+	if backoff == nil {
+		backoff = exponentialBackoff
+	}
+	return &SyncHandler{
+		fetcher:             fetcher,
+		store:               store,
+		overrideSets:        overrideSets,
+		formats:             formats,
+		maxRetries:          maxRetries,
+		maxConsecutiveSkips: maxConsecutiveSkips,
+		retryBackoff:        backoff,
 	}
 }
 
@@ -81,6 +152,10 @@ func NewWithFormats(fetcher Fetcher, store datasets.Store, overrideSets, formats
 //
 // The event payload is ignored — EventBridge scheduled events carry no
 // application-level data. Any invocation triggers a full sync.
+//
+// If any set trips the consecutive-skip guard, Handle returns the first such error so
+// EventBridge Scheduler retries the invocation and, after exhausting retries, routes it
+// to the DLQ where the SyncLambdaErrorAlarm will fire.
 func (h *SyncHandler) Handle(ctx context.Context, _ any) error {
 	sets, err := h.activeSets(ctx)
 	if err != nil {
@@ -95,90 +170,160 @@ func (h *SyncHandler) Handle(ctx context.Context, _ any) error {
 	log.Printf("[sync] fetching ratings for %d set(s) x %d format(s): sets=%v formats=%v",
 		len(sets), len(h.formats), sets, h.formats)
 
+	var firstErr error
 	for _, setCode := range sets {
-		for _, format := range h.formats {
-			if ctx.Err() != nil {
-				return ctx.Err()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := h.syncSet(ctx, setCode); err != nil {
+			log.Printf("[sync] syncSet %s: %v", setCode, err)
+			if firstErr == nil {
+				firstErr = err
 			}
-
-			ratings, err := h.fetcher.FetchCardRatings(ctx, setCode, format)
-			if err != nil {
-				log.Printf("[sync] fetch %s/%s: %v", setCode, format, err)
-				continue
-			}
-
-			if len(ratings) == 0 {
-				log.Printf("[sync] WARNING: 0 cards returned for %s/%s — set code may not match 17Lands expansion code", setCode, format)
-				continue
-			}
-
-			// ADR-005: compute a SHA-256 hash over the sorted payload and skip the
-			// upsert when the hash matches the previously stored value in sync_hashes.
-			hashKey := setCode + "/" + format
-			newHash, err := computeRatingsHash(ratings)
-			if err != nil {
-				log.Printf("[sync] hash compute %s/%s: %v", setCode, format, err)
-				continue
-			}
-
-			storedHash, err := h.store.GetHash(ctx, hashKey)
-			if err != nil {
-				log.Printf("[sync] get hash %s/%s: %v — proceeding with upsert", setCode, format, err)
-				// Non-fatal: fall through and upsert anyway.
-				storedHash = ""
-			}
-
-			if storedHash != "" && storedHash == newHash {
-				log.Printf("[sync] skipped %s/%s: payload unchanged (hash=%s)", setCode, format, newHash[:8])
-				continue
-			}
-
-			sr := draftdata.SetRatings{
-				SetCode:     setCode,
-				DraftFormat: format,
-				FetchedAt:   time.Now().UTC(),
-				Cards:       ratings,
-			}
-
-			if err := h.store.UpsertRatings(ctx, sr); err != nil {
-				log.Printf("[sync] upsert %s/%s: %v", setCode, format, err)
-				continue
-			}
-
-			if err := h.store.SetHash(ctx, hashKey, newHash); err != nil {
-				// Non-fatal: the upsert succeeded; log and continue so the next run
-				// simply re-upserts rather than silently losing data.
-				log.Printf("[sync] set hash %s/%s: %v", setCode, format, err)
-			}
-
-			log.Printf("[sync] refreshed %s/%s: %d cards (hash=%s)", setCode, format, len(ratings), newHash[:8])
-
-			// Fetch and persist per-color-combination win rates. A failure here is
-			// non-fatal — card ratings are already stored and color data is best-effort.
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-
-			colorRatings, err := h.fetcher.FetchColorRatings(ctx, setCode, format)
-			if err != nil {
-				log.Printf("[sync] fetch color ratings %s/%s: %v", setCode, format, err)
-				continue
-			}
-
-			if len(colorRatings) == 0 {
-				log.Printf("[sync] no color ratings returned for %s/%s", setCode, format)
-				continue
-			}
-
-			if err := h.store.UpsertColorRatings(ctx, setCode, format, colorRatings); err != nil {
-				log.Printf("[sync] upsert color ratings %s/%s: %v", setCode, format, err)
-				continue
-			}
-
-			log.Printf("[sync] refreshed color ratings %s/%s: %d combinations", setCode, format, len(colorRatings))
 		}
 	}
 
+	return firstErr
+}
+
+// syncSet fetches and upserts ratings for all formats of a single set. It returns
+// an error only when the consecutive-skip guard trips for one of the formats.
+func (h *SyncHandler) syncSet(ctx context.Context, setCode string) error {
+	var firstErr error
+	for _, format := range h.formats {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := h.syncFormat(ctx, setCode, format); err != nil {
+			log.Printf("[sync] %s/%s: %v", setCode, format, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+// syncFormat fetches and upserts ratings for one (set, format) pair with retry.
+// Returns a non-nil error only when the consecutive-skip guard trips. Transient
+// fetch/upsert errors are retried and swallowed after exhausting retries.
+func (h *SyncHandler) syncFormat(ctx context.Context, setCode, format string) error {
+	var (
+		ratings  []seventeenlands.CardRating
+		fetchErr error
+	)
+
+	for attempt := 0; attempt <= h.maxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(h.retryBackoff(attempt)):
+			}
+		}
+
+		ratings, fetchErr = h.fetcher.FetchCardRatings(ctx, setCode, format)
+		if fetchErr == nil {
+			break
+		}
+		log.Printf("[sync] fetch %s/%s attempt %d/%d: %v", setCode, format, attempt+1, h.maxRetries+1, fetchErr)
+	}
+
+	if fetchErr != nil {
+		// All fetch attempts failed — non-fatal; caller logs at syncSet level if needed.
+		return nil
+	}
+
+	if len(ratings) == 0 {
+		log.Printf("[sync] WARNING: 0 cards returned for %s/%s — set code may not match 17Lands expansion code", setCode, format)
+		// Advance the consecutive-skip counter; returns an error when the threshold is exceeded.
+		return h.updateSkipGuard(ctx, setCode)
+	}
+
+	// Successful card response: reset the skip counter.
+	h.resetSkipGuard(ctx, setCode)
+
+	// ADR-005: compute a SHA-256 hash over the sorted payload and skip the
+	// upsert when the hash matches the previously stored value in sync_hashes.
+	hashKey := setCode + "/" + format
+	newHash, hashErr := computeRatingsHash(ratings)
+	if hashErr != nil {
+		log.Printf("[sync] hash compute %s/%s: %v — proceeding with upsert", setCode, format, hashErr)
+		newHash = ""
+	} else {
+		storedHash, getErr := h.store.GetHash(ctx, hashKey)
+		if getErr != nil {
+			log.Printf("[sync] get hash %s/%s: %v — proceeding with upsert", setCode, format, getErr)
+			storedHash = ""
+		}
+		if storedHash != "" && storedHash == newHash {
+			log.Printf("[sync] skipped %s/%s: payload unchanged (hash=%s)", setCode, format, newHash[:8])
+			return nil
+		}
+	}
+
+	sr := draftdata.SetRatings{
+		SetCode:     setCode,
+		DraftFormat: format,
+		FetchedAt:   time.Now().UTC(),
+		Cards:       ratings,
+	}
+
+	var upsertErr error
+	for attempt := 0; attempt <= h.maxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(h.retryBackoff(attempt)):
+			}
+		}
+		upsertErr = h.store.UpsertRatings(ctx, sr)
+		if upsertErr == nil {
+			break
+		}
+		log.Printf("[sync] upsert %s/%s attempt %d/%d: %v", setCode, format, attempt+1, h.maxRetries+1, upsertErr)
+	}
+
+	if upsertErr != nil {
+		log.Printf("[sync] upsert %s/%s failed after all retries: %v", setCode, format, upsertErr)
+		return nil
+	}
+
+	// Store the hash only after a successful upsert.
+	if newHash != "" {
+		if err := h.store.SetHash(ctx, hashKey, newHash); err != nil {
+			// Non-fatal: the upsert succeeded; log and continue so the next run
+			// simply re-upserts rather than silently losing data.
+			log.Printf("[sync] set hash %s/%s: %v", setCode, format, err)
+		}
+	}
+
+	log.Printf("[sync] refreshed %s/%s: %d cards (hash=%s)", setCode, format, len(ratings), newHash[:8])
+
+	// Fetch and persist per-color-combination win rates. A failure here is
+	// non-fatal — card ratings are already stored and color data is best-effort.
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	colorRatings, err := h.fetcher.FetchColorRatings(ctx, setCode, format)
+	if err != nil {
+		log.Printf("[sync] fetch color ratings %s/%s: %v", setCode, format, err)
+		return nil
+	}
+
+	if len(colorRatings) == 0 {
+		log.Printf("[sync] no color ratings returned for %s/%s", setCode, format)
+		return nil
+	}
+
+	if err := h.store.UpsertColorRatings(ctx, setCode, format, colorRatings); err != nil {
+		log.Printf("[sync] upsert color ratings %s/%s: %v", setCode, format, err)
+		return nil
+	}
+
+	log.Printf("[sync] refreshed color ratings %s/%s: %d combinations", setCode, format, len(colorRatings))
 	return nil
 }
 
@@ -188,6 +333,64 @@ func (h *SyncHandler) activeSets(ctx context.Context) ([]string, error) {
 	}
 
 	return h.store.GetActiveSets(ctx)
+}
+
+// updateSkipGuard increments the consecutive-zero-card counter for setCode in
+// the sync_hashes table (using a "skip_count:" prefix). When the counter reaches
+// h.maxConsecutiveSkips, it returns an error so the Lambda invocation fails and
+// triggers EventBridge retries and (eventually) the DLQ alarm.
+//
+// If h.maxConsecutiveSkips == 0, the guard is disabled and this is a no-op.
+func (h *SyncHandler) updateSkipGuard(ctx context.Context, setCode string) error {
+	if h.maxConsecutiveSkips <= 0 {
+		return nil
+	}
+
+	key := skipHashPrefix + setCode
+	stored, err := h.store.GetHash(ctx, key)
+	if err != nil {
+		log.Printf("[sync] skip guard: GetHash %s: %v — skipping guard check", setCode, err)
+		return nil
+	}
+
+	count := 0
+	if stored != "" {
+		if n, parseErr := strconv.Atoi(stored); parseErr == nil {
+			count = n
+		}
+	}
+	count++
+
+	log.Printf("[sync] skip guard: set %s returned 0 cards for %d consecutive invocation(s)", setCode, count)
+
+	if setErr := h.store.SetHash(ctx, key, strconv.Itoa(count)); setErr != nil {
+		log.Printf("[sync] skip guard: SetHash %s: %v", setCode, setErr)
+	}
+
+	if count >= h.maxConsecutiveSkips {
+		return fmt.Errorf("set %s returned 0 cards for %d consecutive invocations (threshold=%d) — check 17Lands expansion code or upstream outage",
+			setCode, count, h.maxConsecutiveSkips)
+	}
+
+	return nil
+}
+
+// resetSkipGuard clears the consecutive-zero-card counter for setCode when a
+// successful (non-empty) card response is received.
+func (h *SyncHandler) resetSkipGuard(ctx context.Context, setCode string) {
+	if h.maxConsecutiveSkips <= 0 {
+		return
+	}
+
+	key := skipHashPrefix + setCode
+	stored, err := h.store.GetHash(ctx, key)
+	if err != nil || stored == "" || stored == "0" {
+		return
+	}
+
+	if err := h.store.SetHash(ctx, key, "0"); err != nil {
+		log.Printf("[sync] skip guard reset: SetHash %s: %v", setCode, err)
+	}
 }
 
 // computeRatingsHash returns a deterministic SHA-256 hex string over the given
@@ -207,4 +410,14 @@ func computeRatingsHash(ratings []seventeenlands.CardRating) (string, error) {
 
 	sum := sha256.Sum256(b)
 	return fmt.Sprintf("%x", sum), nil
+}
+
+// exponentialBackoff returns the backoff duration for a given attempt number (1-indexed).
+// Durations: attempt 1 → 2s, 2 → 4s, 3 → 8s, capped at 30s.
+func exponentialBackoff(attempt int) time.Duration {
+	d := time.Duration(1<<uint(attempt)) * time.Second
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	return d
 }
