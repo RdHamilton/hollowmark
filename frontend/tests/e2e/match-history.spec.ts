@@ -169,4 +169,56 @@ test.describe('Match History', () => {
       }
     });
   });
+
+  test.describe('Daemon independence — no ERR_CONNECTION_REFUSED (#2061)', () => {
+    test('should not emit ERR_CONNECTION_REFUSED errors when navigating to Match History page', async ({ page }) => {
+      // Collect all console errors to detect failed network requests to port 9001
+      // (the daemon port). Before the fix in PR #2058, getHealth() was called without
+      // an isDesktopApp() guard and produced ERR_CONNECTION_REFUSED when the daemon
+      // was offline. This test ensures the guard is in place.
+      const daemonErrors: string[] = [];
+      page.on('console', (msg) => {
+        if (msg.type() === 'error') {
+          const text = msg.text();
+          // Flag any error mentioning port 9001 or ERR_CONNECTION_REFUSED
+          if (
+            text.includes('ERR_CONNECTION_REFUSED') ||
+            text.includes('9001')
+          ) {
+            daemonErrors.push(text);
+          }
+        }
+      });
+
+      // Wait for the page to finish loading so all API calls have fired
+      await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {/* ignore timeout */});
+
+      // No ERR_CONNECTION_REFUSED errors should have been emitted.
+      // If this fails, getHealth() is being called without the isDesktopApp() guard.
+      expect(
+        daemonErrors,
+        `Match History page emitted daemon connection errors: ${daemonErrors.join('; ')}`
+      ).toHaveLength(0);
+    });
+
+    test('should not make network requests to port 9001 on initial load', async ({ page }) => {
+      // Intercept all network requests and flag any directed to port 9001 (the daemon).
+      // The match history page should only contact the BFF on port 8080.
+      const daemonRequests: string[] = [];
+      page.on('request', (request) => {
+        const url = request.url();
+        if (url.includes('9001')) {
+          daemonRequests.push(url);
+        }
+      });
+
+      // Wait for network to settle so all API calls have fired
+      await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {/* ignore timeout */});
+
+      expect(
+        daemonRequests,
+        `Match History page sent requests to the daemon (port 9001): ${daemonRequests.join(', ')}`
+      ).toHaveLength(0);
+    });
+  });
 });
