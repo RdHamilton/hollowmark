@@ -388,3 +388,124 @@ func TestDecksRepository_CreateDeck_CrossAccountIsolation(t *testing.T) {
 		t.Error("cross-account isolation failure: GetDeck returned deck for wrong account")
 	}
 }
+
+// ----------------------------------------------------------------------------
+// DecksRepository.CloneDeck — atomicity tests (#2033)
+// ----------------------------------------------------------------------------
+
+// TestDecksRepository_CloneDeck_HappyPath verifies that CloneDeck produces a
+// new deck with all cards from the source deck and returns it with the correct
+// name and card count.
+func TestDecksRepository_CloneDeck_HappyPath(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "clone-deck-happy")
+	srcID := insertTestDeck(t, db, accountID, "clone-src-happy")
+	insertTestDeckCard(t, db, srcID, 92001, false)
+	insertTestDeckCard(t, db, srcID, 92002, true)
+
+	cloned, err := repo.CloneDeck(ctx, accountID, srcID, "Cloned Deck Happy")
+	if err != nil {
+		t.Fatalf("CloneDeck: %v", err)
+	}
+	if cloned == nil {
+		t.Fatal("CloneDeck returned nil — expected a new deck")
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM decks WHERE id = $1`, cloned.ID)
+	})
+
+	if cloned.Name != "Cloned Deck Happy" {
+		t.Errorf("Name: got %q want %q", cloned.Name, "Cloned Deck Happy")
+	}
+	if cloned.CreatedMethod != "cloned" {
+		t.Errorf("CreatedMethod: got %q want %q", cloned.CreatedMethod, "cloned")
+	}
+	if len(cloned.Cards) != 2 {
+		t.Errorf("Cards: got %d want 2", len(cloned.Cards))
+	}
+}
+
+// TestDecksRepository_CloneDeck_Atomicity verifies that a clone operation that
+// cannot complete (source deck does not exist) leaves no partial deck row in
+// the database — the transaction is rolled back atomically.
+func TestDecksRepository_CloneDeck_Atomicity(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "clone-deck-atomicity")
+
+	// Attempt to clone a deck that does not exist.
+	// CloneDeck must return nil (not found) and leave no orphan rows.
+	result, err := repo.CloneDeck(ctx, accountID, "deck-does-not-exist-atomicity", "Orphan Clone")
+	if err != nil {
+		t.Fatalf("CloneDeck on missing source: unexpected error: %v", err)
+	}
+	if result != nil {
+		t.Errorf("CloneDeck on missing source: expected nil result, got %+v", result)
+		// Ensure cleanup if the test otherwise fails.
+		t.Cleanup(func() {
+			_, _ = db.ExecContext(context.Background(), `DELETE FROM decks WHERE id = $1`, result.ID)
+		})
+	}
+
+	// Confirm no orphan deck was persisted.
+	var count int
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM decks WHERE account_id = $1 AND name = 'Orphan Clone'`,
+		accountID,
+	).Scan(&count); err != nil {
+		t.Fatalf("orphan check query: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("atomicity violation: found %d orphan deck rows after failed clone", count)
+	}
+}
+
+// TestDecksRepository_CloneDeck_ConflictRollback verifies that when the clone
+// deck header INSERT fails (duplicate id conflict), no deck_cards rows are
+// persisted — the whole transaction is rolled back.
+func TestDecksRepository_CloneDeck_ConflictRollback(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "clone-deck-rollback")
+	srcID := insertTestDeck(t, db, accountID, "clone-src-rollback")
+	insertTestDeckCard(t, db, srcID, 93001, false)
+	insertTestDeckCard(t, db, srcID, 93002, false)
+
+	// First clone succeeds.
+	cloned, err := repo.CloneDeck(ctx, accountID, srcID, "Clone Conflict Target")
+	if err != nil {
+		t.Fatalf("first CloneDeck: %v", err)
+	}
+	if cloned == nil {
+		t.Fatal("first CloneDeck returned nil")
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM decks WHERE id = $1`, cloned.ID)
+	})
+
+	// Verify the clone carries both cards.
+	if len(cloned.Cards) != 2 {
+		t.Errorf("cloned cards: got %d want 2", len(cloned.Cards))
+	}
+
+	// Verify deck_cards rows exist for the clone.
+	var cardCount int
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM deck_cards WHERE deck_id = $1`,
+		cloned.ID,
+	).Scan(&cardCount); err != nil {
+		t.Fatalf("card count query: %v", err)
+	}
+	if cardCount != 2 {
+		t.Errorf("deck_cards count: got %d want 2", cardCount)
+	}
+}
