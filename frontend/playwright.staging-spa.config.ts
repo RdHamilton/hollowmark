@@ -46,8 +46,11 @@ export default defineConfig({
   ],
 
   use: {
-    // Staging SPA base URL — override with STAGING_SPA_URL env var if needed
-    baseURL: process.env.STAGING_SPA_URL ?? 'https://stg-app.vaultmtg.app',
+    // Staging SPA base URL — override with STAGING_SPA_URL env var if needed.
+    // Use `||` so an empty-string CI secret falls back to the default — `??`
+    // only treats `undefined`/`null` as missing and left baseURL = '' in CI
+    // when the secret was set-but-empty (#1933).
+    baseURL: process.env.STAGING_SPA_URL || 'https://stg-app.vaultmtg.app',
 
     // Collect trace on failure for debugging
     trace: 'on-first-retry',
