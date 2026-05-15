@@ -89,11 +89,121 @@ export async function getDecks(options?: {
   return get<DeckListItem[]>(`/decks${query ? `?${query}` : ''}`);
 }
 
+// ---------------------------------------------------------------------------
+// BFF response shape (camelCase flat) → DeckWithCards adapter (#2009)
+// ---------------------------------------------------------------------------
+//
+// The BFF `GET /decks/:id` returns a flat camelCase object — the deck
+// fields and cards array live at the top level rather than nested under
+// a `deck` key.  gui.DeckWithCards (generated from Wails bindings) expects
+// source["deck"] to contain a models.Deck (PascalCase fields).
+//
+// This adapter reshapes the flat BFF response so DeckBuilder.tsx gets the
+// `{deck, cards, tags}` structure it requires.
+
+interface BffDeckCardRaw {
+  cardId: number;
+  quantity: number;
+  board: string;
+  fromDraftPick: boolean;
+  name?: string;
+  setCode?: string;
+  manaCost?: string;
+  cmc?: number;
+  typeLine?: string;
+  rarity?: string;
+  imageUri?: string;
+  colors?: string[];
+}
+
+interface BffDeckWithCardsRaw {
+  id: string;
+  name: string;
+  format: string;
+  source: string;
+  draftEventId?: string | null;
+  matchesPlayed?: number;
+  matchesWon?: number;
+  gamesPlayed?: number;
+  gamesWon?: number;
+  winRate?: number;
+  isAppCreated?: boolean;
+  createdAt?: string;
+  modifiedAt?: string;
+  lastPlayed?: string | null;
+  colorIdentity?: string;
+  description?: string;
+  cardCount?: number;
+  tags?: string[];
+  cards?: BffDeckCardRaw[];
+}
+
+/**
+ * Reshape a flat camelCase BFF deck-with-cards response into the PascalCase
+ * `{deck, cards, tags}` shape that DeckBuilder.tsx expects via gui.DeckWithCards.
+ */
+function adaptBffDeckResponse(raw: BffDeckWithCardsRaw): DeckWithCards {
+  // Build a models.Deck-compatible PascalCase object.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const deckSrc: Record<string, any> = {
+    ID: raw.id,
+    Name: raw.name,
+    Format: raw.format,
+    Source: raw.source,
+    DraftEventID: raw.draftEventId ?? undefined,
+    Description: raw.description,
+    ColorIdentity: raw.colorIdentity,
+    MatchesPlayed: raw.matchesPlayed ?? 0,
+    MatchesWon: raw.matchesWon ?? 0,
+    GamesPlayed: raw.gamesPlayed ?? 0,
+    GamesWon: raw.gamesWon ?? 0,
+    CreatedAt: raw.createdAt,
+    ModifiedAt: raw.modifiedAt,
+    LastPlayed: raw.lastPlayed ?? undefined,
+    AccountID: 0, // not returned by BFF list endpoint; safe default
+  };
+
+  // Build models.DeckCard-compatible PascalCase objects.
+  const cards: models.DeckCard[] = (raw.cards ?? []).map((c) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const src: Record<string, any> = {
+      CardID: c.cardId,
+      Quantity: c.quantity,
+      Board: c.board,
+      FromDraftPick: c.fromDraftPick ?? false,
+      ID: 0,
+      DeckID: raw.id,
+    };
+    return new models.DeckCard(src);
+  });
+
+  // Build the gui.DeckWithCards from the reshaped source.
+  return new gui.DeckWithCards({
+    deck: deckSrc,
+    cards,
+    tags: (raw.tags ?? []).map((t) => ({ Tag: t })),
+  });
+}
+
 /**
  * Get a single deck by ID with cards.
+ *
+ * The BFF returns a flat camelCase response; adaptBffDeckResponse reshapes it
+ * into the PascalCase {deck, cards, tags} structure DeckBuilder.tsx expects,
+ * preventing the "Invalid deck data" error (#2009).
  */
 export async function getDeck(deckId: string): Promise<DeckWithCards> {
-  return get<DeckWithCards>(`/decks/${deckId}`);
+  const raw = await get<BffDeckWithCardsRaw>(`/decks/${deckId}`);
+  return adaptBffDeckResponse(raw);
+}
+
+/**
+ * Get a single deck by draft event ID with cards.
+ * Applies the same BFF response adapter as getDeck (#2009).
+ */
+export async function getDeckByDraftEvent(draftEventId: string): Promise<DeckWithCards> {
+  const raw = await get<BffDeckWithCardsRaw>(`/decks/by-draft/${draftEventId}`);
+  return adaptBffDeckResponse(raw);
 }
 
 /**
@@ -234,13 +344,6 @@ export async function getDeckLibrary(filter: gui.DeckLibraryFilter): Promise<Dec
  */
 export async function cloneDeck(deckId: string, newName: string): Promise<Deck> {
   return post<Deck>(`/decks/${deckId}/clone`, { name: newName });
-}
-
-/**
- * Get deck by draft event ID.
- */
-export async function getDeckByDraftEvent(draftEventId: string): Promise<DeckWithCards> {
-  return get<DeckWithCards>(`/decks/by-draft/${draftEventId}`);
 }
 
 /**
