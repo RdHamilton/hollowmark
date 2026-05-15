@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -107,8 +108,13 @@ func (r *DecksRepository) ListDecks(ctx context.Context, accountID int64, f Deck
 	             d.matches_played, d.matches_won, d.games_played, d.games_won,
 	             d.is_app_created, d.created_at, d.modified_at, d.last_played,
 	             d.color_identity, d.description, d.created_method, d.seed_card_id,
-	             COALESCE((SELECT SUM(quantity) FROM deck_cards WHERE deck_id = d.id), 0) AS card_count
+	             COALESCE(cc.card_count, 0) AS card_count
 	      FROM decks d
+	      LEFT JOIN (
+	          SELECT deck_id, SUM(quantity) AS card_count
+	          FROM deck_cards
+	          GROUP BY deck_id
+	      ) cc ON cc.deck_id = d.id
 	      WHERE ` + strings.Join(clauses, " AND ") + `
 	      ORDER BY d.modified_at DESC
 	      LIMIT 200`
@@ -316,7 +322,8 @@ func (r *DecksRepository) DeleteDeck(ctx context.Context, accountID int64, deckI
 }
 
 // CloneDeck duplicates an existing deck (and its cards) under a new id +
-// name. Returns the new deck.
+// name inside a single transaction. A forced error at any point rolls back
+// the entire clone so no partial deck is left behind. Returns the new deck.
 func (r *DecksRepository) CloneDeck(ctx context.Context, accountID int64, deckID, newName string) (*DeckDetailRow, error) {
 	src, err := r.GetDeck(ctx, accountID, deckID)
 	if err != nil {
@@ -325,21 +332,56 @@ func (r *DecksRepository) CloneDeck(ctx context.Context, accountID int64, deckID
 	if src == nil {
 		return nil, nil
 	}
+
+	txer, ok := r.db.(interface {
+		BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("clone deck: DB does not support transactions")
+	}
+
+	tx, err := txer.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("clone deck begin tx: %w", err)
+	}
+
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
 	newID := generateDeckID(accountID, newName)
+
 	const insertDeck = `INSERT INTO decks (id, account_id, name, format, source, created_method, is_app_created, created_at, modified_at)
 	                    VALUES ($1, $2, $3, $4, $5, 'cloned', FALSE, NOW(), NOW())`
-	if _, err := r.db.ExecContext(ctx, insertDeck, newID, accountID, newName, src.Format, src.Source); err != nil {
-		return nil, err
+	if _, err = tx.ExecContext(ctx, insertDeck, newID, accountID, newName, src.Format, src.Source); err != nil {
+		return nil, fmt.Errorf("clone deck header: %w", err)
 	}
-	for _, c := range src.Cards {
-		if _, err := r.db.ExecContext(
-			ctx,
-			`INSERT INTO deck_cards (deck_id, card_id, quantity, board) VALUES ($1, $2, $3, $4)`,
-			newID, c.CardID, c.Quantity, c.Board,
-		); err != nil {
-			return nil, err
+
+	if len(src.Cards) > 0 {
+		// Build a single multi-row INSERT for all cards.
+		placeholders := make([]string, 0, len(src.Cards))
+		cardArgs := make([]any, 0, len(src.Cards)*4)
+		for i, c := range src.Cards {
+			base := i * 4
+			placeholders = append(
+				placeholders,
+				fmt.Sprintf("($%d, $%d, $%d, $%d)", base+1, base+2, base+3, base+4),
+			)
+			cardArgs = append(cardArgs, newID, c.CardID, c.Quantity, c.Board)
+		}
+		cardSQL := "INSERT INTO deck_cards (deck_id, card_id, quantity, board) VALUES " +
+			strings.Join(placeholders, ", ")
+		if _, err = tx.ExecContext(ctx, cardSQL, cardArgs...); err != nil {
+			return nil, fmt.Errorf("clone deck cards: %w", err)
 		}
 	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("clone deck commit: %w", err)
+	}
+
 	return r.GetDeck(ctx, accountID, newID)
 }
 
