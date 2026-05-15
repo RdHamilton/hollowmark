@@ -63,7 +63,11 @@ func (s *PostgresStore) UpsertRatings(ctx context.Context, ratings draftdata.Set
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			log.Printf("[sync] UpsertRatings: rollback error: %v", err)
+		}
+	}()
 
 	if _, err := tx.Exec(
 		ctx,
@@ -153,7 +157,11 @@ func (s *PostgresStore) UpsertColorRatings(ctx context.Context, setCode, draftFo
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			log.Printf("[sync] UpsertColorRatings: rollback error: %v", err)
+		}
+	}()
 
 	if _, err := tx.Exec(
 		ctx,
