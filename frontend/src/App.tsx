@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'r
 import { useEffect, useState } from 'react';
 import { useAuth, useUser } from '@clerk/react';
 import * as Sentry from '@sentry/react';
+import { useSettings } from './hooks/useSettings';
 import Layout from './components/Layout';
 import ToastContainer from './components/ToastContainer';
 import WinRateTrend from './pages/WinRateTrend';
@@ -64,6 +65,35 @@ function SentryUserSync() {
       Sentry.setUser(null);
     }
   }, [isSignedIn, user]);
+
+  return null;
+}
+
+// Applies the persisted theme to the document root so CSS selectors like
+// [data-theme="light"] can cascade across all components. For "auto" mode
+// it reads the OS preference and subscribes to changes so the DOM stays in
+// sync when the user switches OS themes without reloading (AC2).
+function ThemeSync() {
+  const { theme } = useSettings();
+
+  useEffect(() => {
+    const root = document.documentElement;
+
+    if (theme === 'auto') {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const apply = (dark: boolean) => {
+        root.setAttribute('data-theme', dark ? 'dark' : 'light');
+      };
+      apply(mediaQuery.matches);
+      const listener = (e: MediaQueryListEvent) => apply(e.matches);
+      mediaQuery.addEventListener('change', listener);
+      return () => {
+        mediaQuery.removeEventListener('change', listener);
+      };
+    } else {
+      root.setAttribute('data-theme', theme ?? 'dark');
+    }
+  }, [theme]);
 
   return null;
 }
@@ -166,6 +196,7 @@ function App() {
       <ClerkApiClientSync />
       <SseInitializer />
       <SentryUserSync />
+      <ThemeSync />
       <ReplayEventHandler />
       <KeyboardShortcutsHandler />
       <Layout>

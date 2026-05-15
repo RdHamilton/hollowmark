@@ -6,6 +6,63 @@ import { mockEventEmitter } from '@/test/mocks/websocketMock';
 import { resetReplayState, getReplayState } from './utils/replayState';
 import { gui } from '@/types/models';
 
+// useSettings mock — used by ThemeSync tests.
+// Hoisted so vi.mock factory can reference it.
+const mockUseSettingsHook = vi.fn(() => ({
+  theme: 'dark',
+  autoRefresh: false,
+  refreshInterval: 30,
+  showNotifications: true,
+  daemonMode: 'standalone',
+  daemonPort: 9999,
+  mlEnabled: true,
+  metaGoldfishEnabled: true,
+  metaTop8Enabled: true,
+  metaWeight: 0.3,
+  personalWeight: 0.2,
+  suggestionFrequency: 'medium',
+  minimumConfidence: 50,
+  showCardAdditions: true,
+  showCardRemovals: true,
+  showArchetypeChanges: true,
+  learnFromMatches: true,
+  learnFromDeckChanges: true,
+  retentionDays: 90,
+  maxSuggestionsPerView: 5,
+  rotationNotificationsEnabled: true,
+  rotationNotificationThreshold: 30,
+  isLoading: false,
+  isSaving: false,
+  error: null,
+  setAutoRefresh: vi.fn(),
+  setRefreshInterval: vi.fn(),
+  setShowNotifications: vi.fn(),
+  setTheme: vi.fn(),
+  setMLEnabled: vi.fn(),
+  setMetaGoldfishEnabled: vi.fn(),
+  setMetaTop8Enabled: vi.fn(),
+  setMetaWeight: vi.fn(),
+  setPersonalWeight: vi.fn(),
+  setSuggestionFrequency: vi.fn(),
+  setMinimumConfidence: vi.fn(),
+  setShowCardAdditions: vi.fn(),
+  setShowCardRemovals: vi.fn(),
+  setShowArchetypeChanges: vi.fn(),
+  setLearnFromMatches: vi.fn(),
+  setLearnFromDeckChanges: vi.fn(),
+  setRetentionDays: vi.fn(),
+  setMaxSuggestionsPerView: vi.fn(),
+  setRotationNotificationsEnabled: vi.fn(),
+  setRotationNotificationThreshold: vi.fn(),
+  saveSettings: vi.fn(),
+  resetToDefaults: vi.fn(),
+  reloadSettings: vi.fn(),
+}));
+
+vi.mock('./hooks/useSettings', () => ({
+  useSettings: () => mockUseSettingsHook(),
+}));
+
 // Controllable Clerk mock — defaults to signed-in so all existing route tests pass.
 // Per-test override: mockUseAuth.mockReturnValueOnce({ ... }) for signed-out scenarios.
 const mockUseAuth = vi.fn(() => ({
@@ -506,6 +563,97 @@ describe('App', () => {
     it('should export subscribeToReplayState', async () => {
       const { subscribeToReplayState: exportedSubscribeToReplayState } = await import('./App');
       expect(typeof exportedSubscribeToReplayState).toBe('function');
+    });
+  });
+
+  describe('ThemeSync — applies persisted theme to document root (#2022)', () => {
+    afterEach(() => {
+      // Clean up data-theme attribute between tests
+      document.documentElement.removeAttribute('data-theme');
+    });
+
+    it('AC1: sets data-theme="dark" when theme is dark', async () => {
+      mockUseSettingsHook.mockReturnValue({ ...mockUseSettingsHook(), theme: 'dark' });
+
+      renderAppWithRoute('/');
+
+      await waitFor(() => {
+        expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+      });
+    });
+
+    it('AC1: sets data-theme="light" when theme is light', async () => {
+      mockUseSettingsHook.mockReturnValue({ ...mockUseSettingsHook(), theme: 'light' });
+
+      renderAppWithRoute('/');
+
+      await waitFor(() => {
+        expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+      });
+    });
+
+    it('AC2: sets data-theme based on OS preference when theme is auto (dark OS)', async () => {
+      mockUseSettingsHook.mockReturnValue({ ...mockUseSettingsHook(), theme: 'auto' });
+
+      // jsdom matchMedia defaults to not-dark; mock dark mode
+      Object.defineProperty(window, 'matchMedia', {
+        writable: true,
+        value: vi.fn((query: string) => ({
+          matches: query === '(prefers-color-scheme: dark)',
+          media: query,
+          onchange: null,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn(),
+        })),
+      });
+
+      renderAppWithRoute('/');
+
+      await waitFor(() => {
+        expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+      });
+    });
+
+    it('AC2: sets data-theme="light" when theme is auto and OS is light', async () => {
+      mockUseSettingsHook.mockReturnValue({ ...mockUseSettingsHook(), theme: 'auto' });
+
+      Object.defineProperty(window, 'matchMedia', {
+        writable: true,
+        value: vi.fn((query: string) => ({
+          matches: false, // OS is light
+          media: query,
+          onchange: null,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn(),
+        })),
+      });
+
+      renderAppWithRoute('/');
+
+      await waitFor(() => {
+        expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+      });
+    });
+
+    it('AC4: re-applies theme when theme value changes without page reload', async () => {
+      // Start with dark
+      mockUseSettingsHook.mockReturnValue({ ...mockUseSettingsHook(), theme: 'dark' });
+
+      const { rerender } = renderAppWithRoute('/');
+
+      await waitFor(() => {
+        expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+      });
+
+      // Switch to light via mock update
+      mockUseSettingsHook.mockReturnValue({ ...mockUseSettingsHook(), theme: 'light' });
+      rerender(<App />);
+
+      await waitFor(() => {
+        expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+      });
     });
   });
 });
