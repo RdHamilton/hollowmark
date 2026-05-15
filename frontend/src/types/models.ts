@@ -38,8 +38,6 @@ export namespace gui {
 	    refreshInterval: number;
 	    showNotifications: boolean;
 	    theme: string;
-	    daemonPort: number;
-	    daemonMode: string;
 	    mlEnabled: boolean;
 	    metaGoldfishEnabled: boolean;
 	    metaTop8Enabled: boolean;
@@ -68,8 +66,6 @@ export namespace gui {
 	        this.refreshInterval = source["refreshInterval"];
 	        this.showNotifications = source["showNotifications"];
 	        this.theme = source["theme"];
-	        this.daemonPort = source["daemonPort"];
-	        this.daemonMode = source["daemonMode"];
 	        this.mlEnabled = source["mlEnabled"];
 	        this.metaGoldfishEnabled = source["metaGoldfishEnabled"];
 	        this.metaTop8Enabled = source["metaTop8Enabled"];

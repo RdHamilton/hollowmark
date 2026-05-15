@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import { useDaemonConnection } from './useDaemonConnection';
 
 // Mock Clerk useAuth
@@ -12,16 +12,8 @@ vi.mock('@/services/api/bffHealth', () => ({
   getDaemonHealth: vi.fn(),
 }));
 
-// Mock showToast
-vi.mock('../components/ToastContainer', () => ({
-  showToast: {
-    show: vi.fn(),
-  },
-}));
-
 import { useAuth } from '@clerk/react';
 import { getDaemonHealth } from '@/services/api/bffHealth';
-import { showToast } from '../components/ToastContainer';
 
 const mockUseAuth = vi.mocked(useAuth);
 const mockGetDaemonHealth = vi.mocked(getDaemonHealth);
@@ -60,26 +52,39 @@ describe('useDaemonConnection', () => {
       expect(result.current.connectionStatus.port).toBe(9999);
     });
 
-    it('returns default daemon mode', () => {
+    // AC7: no-op handlers and derived state are removed from the hook.
+    it('does not expose daemonMode (AC7)', () => {
       const { result } = renderHook(() => useDaemonConnection());
-
-      expect(result.current.daemonMode).toBe('auto');
+      expect((result.current as any).daemonMode).toBeUndefined();
     });
 
-    it('returns default daemon port', () => {
+    it('does not expose daemonPort (AC7)', () => {
       const { result } = renderHook(() => useDaemonConnection());
-
-      expect(result.current.daemonPort).toBe(9999);
+      expect((result.current as any).daemonPort).toBeUndefined();
     });
 
-    it('returns isReconnecting as false', () => {
+    it('does not expose isReconnecting (AC7)', () => {
       const { result } = renderHook(() => useDaemonConnection());
+      expect((result.current as any).isReconnecting).toBeUndefined();
+    });
 
-      expect(result.current.isReconnecting).toBe(false);
+    it('does not expose handleDaemonPortChange (AC7)', () => {
+      const { result } = renderHook(() => useDaemonConnection());
+      expect((result.current as any).handleDaemonPortChange).toBeUndefined();
+    });
+
+    it('does not expose handleReconnect (AC7)', () => {
+      const { result } = renderHook(() => useDaemonConnection());
+      expect((result.current as any).handleReconnect).toBeUndefined();
+    });
+
+    it('does not expose handleModeChange (AC7)', () => {
+      const { result } = renderHook(() => useDaemonConnection());
+      expect((result.current as any).handleModeChange).toBeUndefined();
     });
   });
 
-  // AC2 (#2020): useDaemonConnection uses the same BFF endpoint as DaemonHealthIndicator
+  // AC2 (#2020 / #2021): useDaemonConnection uses the same BFF endpoint as DaemonHealthIndicator
   // regardless of desktop/browser context — no isDesktopApp() guard.
   describe('polls BFF health in all contexts — single source of truth (#2020)', () => {
     it('calls getDaemonHealth on mount when signed in (browser context)', async () => {
@@ -140,125 +145,10 @@ describe('useDaemonConnection', () => {
 
       renderHook(() => useDaemonConnection());
 
-      await act(async () => {
-        await Promise.resolve();
-      });
+      // Give any async effects a chance to run.
+      await new Promise((r) => setTimeout(r, 50));
 
       expect(mockGetDaemonHealth).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('handleDaemonPortChange', () => {
-    it('updates daemon port state', async () => {
-      const { result } = renderHook(() => useDaemonConnection());
-
-      await act(async () => {
-        await result.current.handleDaemonPortChange(8080);
-      });
-
-      expect(result.current.daemonPort).toBe(8080);
-    });
-
-    it('rejects ports below 1024', async () => {
-      const { result } = renderHook(() => useDaemonConnection());
-      const initialPort = result.current.daemonPort;
-
-      await act(async () => {
-        await result.current.handleDaemonPortChange(1000);
-      });
-
-      expect(result.current.daemonPort).toBe(initialPort);
-    });
-
-    it('rejects ports above 65535', async () => {
-      const { result } = renderHook(() => useDaemonConnection());
-      const initialPort = result.current.daemonPort;
-
-      await act(async () => {
-        await result.current.handleDaemonPortChange(70000);
-      });
-
-      expect(result.current.daemonPort).toBe(initialPort);
-    });
-  });
-
-  describe('handleReconnect', () => {
-    it('sets isReconnecting to true during reconnection', async () => {
-      const { result } = renderHook(() => useDaemonConnection());
-
-      let reconnectPromise: Promise<void>;
-      act(() => {
-        reconnectPromise = result.current.handleReconnect();
-      });
-
-      expect(result.current.isReconnecting).toBe(true);
-
-      await act(async () => {
-        await reconnectPromise;
-      });
-
-      expect(result.current.isReconnecting).toBe(false);
-    });
-
-    it('shows success toast on successful reconnect', async () => {
-      const { result } = renderHook(() => useDaemonConnection());
-
-      await act(async () => {
-        await result.current.handleReconnect();
-      });
-
-      expect(showToast.show).toHaveBeenCalledWith(
-        'Successfully reconnected to daemon',
-        'success'
-      );
-    });
-  });
-
-  describe('handleModeChange', () => {
-    it('updates daemon mode state', async () => {
-      const { result } = renderHook(() => useDaemonConnection());
-
-      await act(async () => {
-        await result.current.handleModeChange('standalone');
-      });
-
-      expect(result.current.daemonMode).toBe('standalone');
-    });
-
-    it('does not fail for auto mode', async () => {
-      const { result } = renderHook(() => useDaemonConnection());
-
-      await act(async () => {
-        await result.current.handleModeChange('auto');
-      });
-
-      expect(result.current.daemonMode).toBe('auto');
-    });
-
-    it('shows success toast for standalone mode switch', async () => {
-      const { result } = renderHook(() => useDaemonConnection());
-
-      await act(async () => {
-        await result.current.handleModeChange('standalone');
-      });
-
-      expect(showToast.show).toHaveBeenCalledWith(
-        'Switched to standalone mode',
-        'success'
-      );
-    });
-
-    it('shows success toast for daemon mode switch', async () => {
-      const { result } = renderHook(() => useDaemonConnection());
-
-      await act(async () => {
-        await result.current.handleModeChange('daemon');
-      });
-
-      expect(showToast.show).toHaveBeenCalledWith(
-        'Switched to daemon mode',
-        'success'
-      );
     });
   });
 });

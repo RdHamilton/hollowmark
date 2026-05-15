@@ -68,8 +68,6 @@ const defaultSettings = {
   refreshInterval: 30,
   showNotifications: true,
   theme: 'dark',
-  daemonPort: 9999,
-  daemonMode: 'standalone',
 };
 
 describe('Settings', () => {
@@ -186,9 +184,8 @@ describe('Settings', () => {
     });
 
     it('displays connected status when daemon is connected', async () => {
-      // useDaemonConnection now calls getDaemonHealth (BFF proxy) — issue #1926.
-      // Set the desktop context flag so loadConnectionStatus runs the probe.
-      (window as Window).__VAULTMTG_DESKTOP__ = true;
+      // useDaemonConnection now calls getDaemonHealth (BFF proxy) in all contexts
+      // (no isDesktopApp() guard — #2020 / #2021).
       mockGetDaemonHealth.mockResolvedValue({ status: 'connected' });
 
       render(<Settings />);
@@ -196,14 +193,11 @@ describe('Settings', () => {
       await waitFor(() => {
         expect(screen.getByText('Connected to Daemon')).toBeInTheDocument();
       });
-
-      delete (window as Window).__VAULTMTG_DESKTOP__;
     });
 
     it('displays reconnecting status', async () => {
-      // useDaemonConnection now calls getDaemonHealth (BFF proxy) — issue #1926.
-      // Set the desktop context flag so loadConnectionStatus runs the probe.
-      (window as Window).__VAULTMTG_DESKTOP__ = true;
+      // useDaemonConnection now calls getDaemonHealth (BFF proxy) in all contexts
+      // (no isDesktopApp() guard — #2020 / #2021).
       mockGetDaemonHealth.mockResolvedValue({ status: 'reconnecting' });
 
       render(<Settings />);
@@ -211,11 +205,10 @@ describe('Settings', () => {
       await waitFor(() => {
         expect(screen.getByText('Reconnecting...')).toBeInTheDocument();
       });
-
-      delete (window as Window).__VAULTMTG_DESKTOP__;
     });
 
-    it('renders Connection Mode selector', async () => {
+    // AC1–AC3: connection mode dropdown, daemon port input, reconnect button are removed (#2021).
+    it('does not render Connection Mode selector (AC1)', async () => {
       render(<Settings />);
 
       // Expand connection section
@@ -225,7 +218,7 @@ describe('Settings', () => {
       }
 
       await waitFor(() => {
-        expect(screen.getByText('Connection Mode')).toBeInTheDocument();
+        expect(screen.queryByText('Connection Mode')).not.toBeInTheDocument();
       });
     });
 
