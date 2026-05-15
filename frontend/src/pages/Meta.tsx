@@ -21,7 +21,29 @@ const META_FORMATS = [
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Storage key for per-format last refresh timestamps
-const META_REFRESH_TIMESTAMPS_KEY = 'mtga-companion-meta-refresh-timestamps';
+const META_REFRESH_TIMESTAMPS_KEY = 'vaultmtg-meta-refresh-timestamps';
+// Legacy key from pre-rebrand; migrated on first load
+const META_REFRESH_TIMESTAMPS_KEY_LEGACY = 'mtga-companion-meta-refresh-timestamps';
+
+/**
+ * One-time migration: copy data from the legacy localStorage key to the new
+ * VaultMTG-namespaced key and remove the old key so it no longer persists.
+ * Safe to call multiple times — no-ops if the legacy key is absent.
+ */
+function migrateLegacyRefreshTimestamps(): void {
+  try {
+    const legacy = localStorage.getItem(META_REFRESH_TIMESTAMPS_KEY_LEGACY);
+    if (legacy !== null) {
+      // Only overwrite new key if it doesn't already have data
+      if (!localStorage.getItem(META_REFRESH_TIMESTAMPS_KEY)) {
+        localStorage.setItem(META_REFRESH_TIMESTAMPS_KEY, legacy);
+      }
+      localStorage.removeItem(META_REFRESH_TIMESTAMPS_KEY_LEGACY);
+    }
+  } catch {
+    // Ignore localStorage errors (private browsing, quota exceeded, etc.)
+  }
+}
 
 // Get last refresh timestamp for a format from localStorage
 function getLastRefreshTimestamp(format: string): number | null {
@@ -84,6 +106,11 @@ export default function Meta() {
   const [selectedArchetype, setSelectedArchetype] = useState<gui.ArchetypeInfo | null>(null);
   const [autoRefreshing, setAutoRefreshing] = useState(false);
   const { startDownload, updateProgress, completeDownload, failDownload } = useDownload();
+
+  // Run legacy localStorage key migration once on component mount
+  useEffect(() => {
+    migrateLegacyRefreshTimestamps();
+  }, []);
 
   // Load dashboard data when format changes
   useEffect(() => {

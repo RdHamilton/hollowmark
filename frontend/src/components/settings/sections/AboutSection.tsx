@@ -51,7 +51,7 @@ export function AboutSection({
         )}
         <div className="setting-control about-button-container">
           <button className="action-button" onClick={onShowAboutDialog}>
-            About MTGA Companion
+            About VaultMTG
           </button>
         </div>
       </div>

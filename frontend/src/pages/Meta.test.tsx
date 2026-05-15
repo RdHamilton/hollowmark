@@ -258,10 +258,12 @@ describe('Meta', () => {
     beforeEach(() => {
       // Remove any stored refresh timestamp so isDataStale returns true,
       // which triggers the auto-refresh effect after initial load.
+      localStorage.removeItem('vaultmtg-meta-refresh-timestamps');
       localStorage.removeItem('mtga-companion-meta-refresh-timestamps');
     });
 
     afterEach(() => {
+      localStorage.removeItem('vaultmtg-meta-refresh-timestamps');
       localStorage.removeItem('mtga-companion-meta-refresh-timestamps');
     });
 
