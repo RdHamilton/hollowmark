@@ -20,13 +20,13 @@ describe('AboutDialog', () => {
     it('should render when isOpen is true', () => {
       render(<AboutDialog isOpen={true} onClose={vi.fn()} />);
 
-      expect(screen.getByText('About MTGA Companion')).toBeInTheDocument();
+      expect(screen.getByText('About VaultMTG')).toBeInTheDocument();
     });
 
     it('should not render when isOpen is false', () => {
       render(<AboutDialog isOpen={false} onClose={vi.fn()} />);
 
-      expect(screen.queryByText('About MTGA Companion')).not.toBeInTheDocument();
+      expect(screen.queryByText('About VaultMTG')).not.toBeInTheDocument();
     });
 
     it('should render modal overlay when open', () => {
@@ -48,7 +48,7 @@ describe('AboutDialog', () => {
     it('should render dialog title', () => {
       render(<AboutDialog isOpen={true} onClose={vi.fn()} />);
 
-      const title = screen.getByText('About MTGA Companion');
+      const title = screen.getByText('About VaultMTG');
       expect(title.tagName).toBe('H2');
     });
 
@@ -83,7 +83,7 @@ describe('AboutDialog', () => {
     it('should render app name', () => {
       render(<AboutDialog isOpen={true} onClose={vi.fn()} />);
 
-      const appName = screen.getByText('MTGA Companion');
+      const appName = screen.getByText('VaultMTG');
       expect(appName).toHaveClass('app-name');
       expect(appName.tagName).toBe('H3');
     });
@@ -123,7 +123,7 @@ describe('AboutDialog', () => {
     it('should render about description', () => {
       render(<AboutDialog isOpen={true} onClose={vi.fn()} />);
 
-      expect(screen.getByText(/MTGA Companion is a desktop application/)).toBeInTheDocument();
+      expect(screen.getByText(/VaultMTG is a desktop application/)).toBeInTheDocument();
       expect(screen.getByText(/tracking and analyzing your Magic: The Gathering Arena matches/)).toBeInTheDocument();
     });
   });
@@ -351,10 +351,10 @@ describe('AboutDialog', () => {
       render(<AboutDialog isOpen={true} onClose={vi.fn()} />);
 
       // Main title is h2
-      expect(screen.getByText('About MTGA Companion').tagName).toBe('H2');
+      expect(screen.getByText('About VaultMTG').tagName).toBe('H2');
 
       // App name is h3
-      expect(screen.getByText('MTGA Companion').tagName).toBe('H3');
+      expect(screen.getByText('VaultMTG').tagName).toBe('H3');
 
       // Section titles are h4
       const sectionHeadings = ['About', 'Features', 'Acknowledgments', 'License', 'Links'];
@@ -401,10 +401,10 @@ describe('AboutDialog', () => {
       render(<AboutDialog isOpen={true} onClose={vi.fn()} />);
 
       const h2 = screen.getByRole('heading', { level: 2 });
-      expect(h2).toHaveTextContent('About MTGA Companion');
+      expect(h2).toHaveTextContent('About VaultMTG');
 
       const h3 = screen.getByRole('heading', { level: 3 });
-      expect(h3).toHaveTextContent('MTGA Companion');
+      expect(h3).toHaveTextContent('VaultMTG');
     });
 
     it('should have clickable buttons', () => {
@@ -428,13 +428,13 @@ describe('AboutDialog', () => {
       const { rerender } = render(<AboutDialog isOpen={false} onClose={onClose} />);
 
       rerender(<AboutDialog isOpen={true} onClose={onClose} />);
-      expect(screen.getByText('About MTGA Companion')).toBeInTheDocument();
+      expect(screen.getByText('About VaultMTG')).toBeInTheDocument();
 
       rerender(<AboutDialog isOpen={false} onClose={onClose} />);
-      expect(screen.queryByText('About MTGA Companion')).not.toBeInTheDocument();
+      expect(screen.queryByText('About VaultMTG')).not.toBeInTheDocument();
 
       rerender(<AboutDialog isOpen={true} onClose={onClose} />);
-      expect(screen.getByText('About MTGA Companion')).toBeInTheDocument();
+      expect(screen.getByText('About VaultMTG')).toBeInTheDocument();
     });
 
     it('should handle multiple close calls', () => {

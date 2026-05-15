@@ -15,6 +15,6 @@ describe('Download Page', () => {
 
   it('should display the page title', () => {
     render(<Download />);
-    expect(screen.getByText('Get Started with MTGA Companion')).toBeInTheDocument();
+    expect(screen.getByText('Get Started with VaultMTG')).toBeInTheDocument();
   });
 });
