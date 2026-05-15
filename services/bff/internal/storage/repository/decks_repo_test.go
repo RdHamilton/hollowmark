@@ -1,0 +1,210 @@
+package repository_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
+)
+
+// insertTestDeck inserts a minimal deck row owned by accountID and returns the
+// deck id.  The row (and its cascade children) are cleaned up via t.Cleanup.
+func insertTestDeck(t *testing.T, db *sql.DB, accountID int64, suffix string) string {
+	t.Helper()
+	id := fmt.Sprintf("test-deck-%s", suffix)
+	now := time.Now().UTC()
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO decks
+			(id, account_id, name, format, source, is_app_created, created_method, created_at, modified_at)
+		 VALUES ($1, $2, $3, $4, $5, FALSE, 'imported', $6, $7)`,
+		id, accountID, "Test Deck "+suffix, "standard", "constructed", now, now,
+	)
+	if err != nil {
+		t.Fatalf("insertTestDeck %q: %v", id, err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM decks WHERE id = $1`, id)
+	})
+	return id
+}
+
+// insertTestDeckCard inserts a deck_cards row using a raw SQL INSERT so the
+// test can control the from_draft_pick value directly.  The row is removed
+// via the parent deck's ON DELETE CASCADE, so no separate cleanup is needed.
+func insertTestDeckCard(t *testing.T, db *sql.DB, deckID string, cardID int, fromDraftPick bool) {
+	t.Helper()
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO deck_cards (deck_id, card_id, quantity, board, from_draft_pick)
+		 VALUES ($1, $2, 1, 'main', $3)
+		 ON CONFLICT (deck_id, card_id, board) DO NOTHING`,
+		deckID, cardID, fromDraftPick,
+	)
+	if err != nil {
+		t.Fatalf("insertTestDeckCard deck=%q card=%d: %v", deckID, cardID, err)
+	}
+}
+
+// insertTestDeckCardAsInteger inserts a deck_cards row using an explicit
+// INTEGER cast for from_draft_pick.  This mirrors the pre-migration schema
+// where the column type was INTEGER (0/1) rather than BOOLEAN, and validates
+// that the `::boolean` CAST added to deckCards() handles the coercion without
+// a scan-time type error.
+func insertTestDeckCardAsInteger(t *testing.T, db *sql.DB, deckID string, cardID int, fromDraftPickInt int) {
+	t.Helper()
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO deck_cards (deck_id, card_id, quantity, board, from_draft_pick)
+		 VALUES ($1, $2, 1, 'main', $3::boolean)
+		 ON CONFLICT (deck_id, card_id, board) DO NOTHING`,
+		deckID, cardID, fromDraftPickInt,
+	)
+	if err != nil {
+		t.Fatalf("insertTestDeckCardAsInteger deck=%q card=%d int=%d: %v", deckID, cardID, fromDraftPickInt, err)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// DecksRepository.GetDeck — from_draft_pick scan correctness (#1973 CAST fix)
+// ----------------------------------------------------------------------------
+
+// TestDecksRepository_GetDeck_FromDraftPickFalse verifies that a deck_cards
+// row with from_draft_pick = FALSE scans into DeckCardRow.FromDraftPick = false
+// without error.  This exercises the `(dc.from_draft_pick::boolean)` CAST
+// introduced in #1973 for pgx/v5 compatibility.
+func TestDecksRepository_GetDeck_FromDraftPickFalse(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "decks-repo-fdp-false")
+	deckID := insertTestDeck(t, db, accountID, "fdp-false")
+	insertTestDeckCard(t, db, deckID, 90001, false)
+
+	detail, err := repo.GetDeck(ctx, accountID, deckID)
+	if err != nil {
+		t.Fatalf("GetDeck: %v", err)
+	}
+	if detail == nil {
+		t.Fatal("GetDeck returned nil — deck not found")
+	}
+	if len(detail.Cards) != 1 {
+		t.Fatalf("expected 1 card, got %d", len(detail.Cards))
+	}
+	if detail.Cards[0].FromDraftPick != false {
+		t.Errorf("FromDraftPick: got true, want false")
+	}
+}
+
+// TestDecksRepository_GetDeck_FromDraftPickTrue verifies that a deck_cards
+// row with from_draft_pick = TRUE scans into DeckCardRow.FromDraftPick = true
+// without error.
+func TestDecksRepository_GetDeck_FromDraftPickTrue(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "decks-repo-fdp-true")
+	deckID := insertTestDeck(t, db, accountID, "fdp-true")
+	insertTestDeckCard(t, db, deckID, 90002, true)
+
+	detail, err := repo.GetDeck(ctx, accountID, deckID)
+	if err != nil {
+		t.Fatalf("GetDeck: %v", err)
+	}
+	if detail == nil {
+		t.Fatal("GetDeck returned nil — deck not found")
+	}
+	if len(detail.Cards) != 1 {
+		t.Fatalf("expected 1 card, got %d", len(detail.Cards))
+	}
+	if detail.Cards[0].FromDraftPick != true {
+		t.Errorf("FromDraftPick: got false, want true")
+	}
+}
+
+// TestDecksRepository_GetDeck_FromDraftPickIntegerCast verifies that the
+// `::boolean` CAST in deckCards() correctly coerces an INTEGER-encoded value
+// (0 = false, 1 = true) into the Go bool field.  On incrementally-migrated
+// databases the column type is INTEGER; the CAST makes the scan compatible
+// with both INTEGER and BOOLEAN column types.
+func TestDecksRepository_GetDeck_FromDraftPickIntegerCast(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	// --- integer value 0 → false ---
+	accountID0 := insertTestAccount(t, db, "decks-repo-int-cast-0")
+	deckID0 := insertTestDeck(t, db, accountID0, "int-cast-0")
+	insertTestDeckCardAsInteger(t, db, deckID0, 90003, 0)
+
+	detail0, err := repo.GetDeck(ctx, accountID0, deckID0)
+	if err != nil {
+		t.Fatalf("GetDeck (int=0): %v", err)
+	}
+	if detail0 == nil || len(detail0.Cards) != 1 {
+		t.Fatalf("GetDeck (int=0): expected 1 card, got %v", detail0)
+	}
+	if detail0.Cards[0].FromDraftPick != false {
+		t.Errorf("FromDraftPick (int=0): got true, want false")
+	}
+
+	// --- integer value 1 → true ---
+	accountID1 := insertTestAccount(t, db, "decks-repo-int-cast-1")
+	deckID1 := insertTestDeck(t, db, accountID1, "int-cast-1")
+	insertTestDeckCardAsInteger(t, db, deckID1, 90004, 1)
+
+	detail1, err := repo.GetDeck(ctx, accountID1, deckID1)
+	if err != nil {
+		t.Fatalf("GetDeck (int=1): %v", err)
+	}
+	if detail1 == nil || len(detail1.Cards) != 1 {
+		t.Fatalf("GetDeck (int=1): expected 1 card, got %v", detail1)
+	}
+	if detail1.Cards[0].FromDraftPick != true {
+		t.Errorf("FromDraftPick (int=1): got false, want true")
+	}
+}
+
+// TestDecksRepository_GetDeck_NotFound verifies that GetDeck returns (nil, nil)
+// when the deck does not exist for the given account.
+func TestDecksRepository_GetDeck_NotFound(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "decks-repo-notfound")
+
+	detail, err := repo.GetDeck(ctx, accountID, "deck-does-not-exist-xyz")
+	if err != nil {
+		t.Fatalf("GetDeck: unexpected error: %v", err)
+	}
+	if detail != nil {
+		t.Errorf("GetDeck: expected nil for missing deck, got %+v", detail)
+	}
+}
+
+// TestDecksRepository_GetDeck_CrossAccountIsolation verifies that GetDeck does
+// not return a deck owned by a different account.
+func TestDecksRepository_GetDeck_CrossAccountIsolation(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	ownerID := insertTestAccount(t, db, "decks-repo-owner")
+	otherID := insertTestAccount(t, db, "decks-repo-other")
+	deckID := insertTestDeck(t, db, ownerID, "isolation")
+
+	// Query deck using a different account — must return nil (not found).
+	detail, err := repo.GetDeck(ctx, otherID, deckID)
+	if err != nil {
+		t.Fatalf("GetDeck cross-account: %v", err)
+	}
+	if detail != nil {
+		t.Errorf("cross-account isolation failure: GetDeck returned deck for wrong account")
+	}
+}
