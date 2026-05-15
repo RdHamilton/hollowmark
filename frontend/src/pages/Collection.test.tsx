@@ -572,7 +572,7 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByText(/Page 1 of/)).toBeInTheDocument();
+        expect(screen.getByTestId('collection-page-jump')).toBeInTheDocument();
       });
       expect(screen.getByRole('button', { name: 'First' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Previous' })).toBeInTheDocument();
@@ -607,13 +607,15 @@ describe('Collection', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await waitFor(() => {
-        expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+        const jumpInput = screen.getByTestId('collection-page-jump') as HTMLInputElement;
+        expect(jumpInput.value).toBe('1');
       });
 
       fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
       await waitFor(() => {
-        expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+        const jumpInput = screen.getByTestId('collection-page-jump') as HTMLInputElement;
+        expect(jumpInput.value).toBe('2');
       });
     });
 
@@ -630,7 +632,121 @@ describe('Collection', () => {
       await waitFor(() => {
         expect(screen.getByRole('img', { name: 'Lightning Bolt' })).toBeInTheDocument();
       });
-      expect(screen.queryByText(/Page/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId('collection-page-jump')).not.toBeInTheDocument();
+    });
+
+    describe('Page-jump input (#2014)', () => {
+      it('AC1: user can jump to a specific page by typing and pressing Enter', async () => {
+        const mockCards = createManyCards(300); // 6 pages of 50
+        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+        mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
+        mockCardsApi.getAllSetInfo.mockResolvedValue([]);
+
+        renderWithRouter(<Collection />);
+
+        await vi.advanceTimersByTimeAsync(100);
+
+        await waitFor(() => {
+          expect(screen.getByTestId('collection-page-jump')).toBeInTheDocument();
+        });
+
+        const jumpInput = screen.getByTestId('collection-page-jump') as HTMLInputElement;
+        fireEvent.change(jumpInput, { target: { value: '4' } });
+        fireEvent.keyDown(jumpInput, { key: 'Enter' });
+
+        await waitFor(() => {
+          expect(jumpInput.value).toBe('4');
+          // Page 4 is active — windowed button 4 should be the active one
+          expect(screen.getByTestId('collection-pagination-current')).toHaveTextContent('4');
+        });
+      });
+
+      it('AC2: out-of-range value resets to current page without navigation', async () => {
+        const mockCards = createManyCards(150); // 3 pages of 50
+        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+        mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
+        mockCardsApi.getAllSetInfo.mockResolvedValue([]);
+
+        renderWithRouter(<Collection />);
+
+        await vi.advanceTimersByTimeAsync(100);
+
+        await waitFor(() => {
+          expect(screen.getByTestId('collection-page-jump')).toBeInTheDocument();
+        });
+
+        const jumpInput = screen.getByTestId('collection-page-jump') as HTMLInputElement;
+
+        // Enter a value > totalPages (3)
+        fireEvent.change(jumpInput, { target: { value: '99' } });
+        fireEvent.keyDown(jumpInput, { key: 'Enter' });
+
+        await waitFor(() => {
+          // Should reset to current page (1), not navigate to page 99
+          expect(jumpInput.value).toBe('1');
+        });
+      });
+
+      it('AC3: blurring the input triggers navigation', async () => {
+        const mockCards = createManyCards(150); // 3 pages
+        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+        mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
+        mockCardsApi.getAllSetInfo.mockResolvedValue([]);
+
+        renderWithRouter(<Collection />);
+
+        await vi.advanceTimersByTimeAsync(100);
+
+        await waitFor(() => {
+          expect(screen.getByTestId('collection-page-jump')).toBeInTheDocument();
+        });
+
+        const jumpInput = screen.getByTestId('collection-page-jump') as HTMLInputElement;
+        fireEvent.change(jumpInput, { target: { value: '2' } });
+        fireEvent.blur(jumpInput);
+
+        await waitFor(() => {
+          expect(jumpInput.value).toBe('2');
+          expect(screen.getByTestId('collection-pagination-current')).toHaveTextContent('2');
+        });
+      });
+
+      it('AC5: First/Previous/Next/Last controls still work after page-jump is added', async () => {
+        const mockCards = createManyCards(75); // 2 pages
+        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+        mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
+        mockCardsApi.getAllSetInfo.mockResolvedValue([]);
+
+        renderWithRouter(<Collection />);
+
+        await vi.advanceTimersByTimeAsync(100);
+
+        await waitFor(() => {
+          expect(screen.getByTestId('collection-page-jump')).toBeInTheDocument();
+        });
+
+        // First/Prev disabled on page 1
+        expect(screen.getByRole('button', { name: 'First' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+
+        // Navigate forward
+        fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        await waitFor(() => {
+          const jumpInput = screen.getByTestId('collection-page-jump') as HTMLInputElement;
+          expect(jumpInput.value).toBe('2');
+        });
+
+        // Next/Last disabled on last page
+        expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Last' })).toBeDisabled();
+
+        // Navigate back with Previous
+        fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+        await waitFor(() => {
+          const jumpInput = screen.getByTestId('collection-page-jump') as HTMLInputElement;
+          expect(jumpInput.value).toBe('1');
+        });
+      });
     });
   });
 
