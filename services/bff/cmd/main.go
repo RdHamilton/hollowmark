@@ -589,7 +589,7 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// Defaults to localhost-only values when the variable is not set.
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: cfg.AllowedOrigins,
-		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{"Authorization", "Content-Type", "X-Request-ID"},
 	}))
 
@@ -828,6 +828,7 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 			r.With(auth).Get("/api/v1/decks/{deckId}/recommendations/swap", d.SwapRecommendations)
 			r.With(auth).Get("/api/v1/decks/{deckId}/recommendations/all", d.AllRecommendations)
 			r.With(auth).Post("/api/v1/decks/{deckId}/clone", d.Clone)
+			r.With(auth).Post("/api/v1/decks/{deckId}/export", d.Export)
 			// Generic by-id GET/PUT/DELETE — mounted last so the literal
 			// paths above win.
 			r.With(auth).Get("/api/v1/decks/{deckId}", d.Get)

@@ -622,7 +622,7 @@ func (r *DecksRepository) deckOwned(ctx context.Context, accountID int64, deckID
 
 // deckCards returns the joined deck_cards rows for a deck.
 func (r *DecksRepository) deckCards(ctx context.Context, deckID string) ([]DeckCardRow, error) {
-	const q = `SELECT dc.card_id, dc.quantity, dc.board, dc.from_draft_pick,
+	const q = `SELECT dc.card_id, dc.quantity, dc.board, (dc.from_draft_pick::boolean),
 	                  COALESCE(c.name, ''), COALESCE(c.set_code, ''),
 	                  COALESCE(c.mana_cost, ''), COALESCE(c.cmc, 0),
 	                  COALESCE(c.colors, '[]'), COALESCE(c.type_line, ''),
