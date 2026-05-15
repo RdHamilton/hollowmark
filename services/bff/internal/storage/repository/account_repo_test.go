@@ -3,6 +3,7 @@ package repository_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
@@ -181,6 +182,86 @@ func TestAccountRepository_GetOrCreateByClientID_CrossTenantRejected(t *testing.
 
 	if count != 1 {
 		t.Errorf("expected exactly 1 accounts row for client_id, got %d — duplicate insert not prevented", count)
+	}
+}
+
+// TestAccountRepository_GetOrCreateByClientID_ConcurrentRetry verifies that
+// when multiple goroutines race to call GetOrCreateByClientID with the same
+// clientID at the same time, all callers receive the same non-zero account ID
+// and no errors.  This exercises the ON CONFLICT DO NOTHING → re-SELECT retry
+// path in GetOrCreateByClientID.
+func TestAccountRepository_GetOrCreateByClientID_ConcurrentRetry(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewAccountRepository(db)
+
+	// Seed a single user that all goroutines will race under.
+	clerkID := "clerk_concurrent_" + t.Name()
+	var userID int64
+	err := db.QueryRowContext(
+		context.Background(),
+		`INSERT INTO users (email, clerk_user_id) VALUES ($1, $2) RETURNING id`,
+		clerkID+"@test.local", clerkID,
+	).Scan(&userID)
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	clientID := "MTGA_concurrent_" + t.Name()
+
+	const goroutines = 8
+
+	type result struct {
+		id  int64
+		err error
+	}
+
+	results := make(chan result, goroutines)
+
+	var wg sync.WaitGroup
+	// ready is closed to release all goroutines simultaneously, maximising the
+	// chance that they hit the INSERT window at the same instant.
+	ready := make(chan struct{})
+
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-ready
+			id, err := repo.GetOrCreateByClientID(context.Background(), clientID, userID)
+			results <- result{id, err}
+		}()
+	}
+
+	// Release all goroutines at once.
+	close(ready)
+	wg.Wait()
+	close(results)
+
+	// Collect and validate.
+	var first int64
+	for r := range results {
+		if r.err != nil {
+			t.Errorf("goroutine returned error: %v", r.err)
+			continue
+		}
+		if r.id == 0 {
+			t.Error("goroutine returned zero account ID")
+			continue
+		}
+		if first == 0 {
+			first = r.id
+		} else if r.id != first {
+			t.Errorf("goroutine returned inconsistent account ID: got %d, want %d", r.id, first)
+		}
+	}
+
+	if first != 0 {
+		t.Cleanup(func() {
+			_, _ = db.ExecContext(context.Background(), "DELETE FROM accounts WHERE id = $1", first)
+		})
 	}
 }
 
