@@ -19,7 +19,7 @@ import { defineConfig, devices } from '@playwright/test';
  *   SMOKE_CLERK_PASSWORD   — Clerk test account password (required for auth tests)
  *
  * Suite constraints:
- *   - 30 s per test timeout
+ *   - 60 s per test timeout (increased from 30 s — CI networkidle too strict, see #1949)
  *   - Sequential (workers: 1) — avoids hammering staging with parallel sessions
  *   - No retries — staging instability should surface as a real failure
  */
@@ -27,8 +27,8 @@ export default defineConfig({
   testDir: './tests/e2e/staging',
   testMatch: /staging-spa-smoke\.spec\.ts/,
 
-  // Individual test timeout
-  timeout: 30 * 1000,
+  // Individual test timeout — 60 s to handle CI runner latency (#1949)
+  timeout: 60 * 1000,
 
   // Sequential — one worker against shared staging environment
   fullyParallel: false,
