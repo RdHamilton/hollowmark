@@ -96,7 +96,7 @@ func (c *Client) doWithRetry(ctx context.Context, req *http.Request) (*http.Resp
 
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
 		if attempt > 0 {
-			backoff := c.baseBackoff * (1 << uint(attempt-1)) //nolint:gomnd
+			backoff := c.baseBackoff * (1 << uint(attempt-1)) //nolint:mnd
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
