@@ -125,9 +125,9 @@ func (c *Client) doWithRetry(ctx context.Context, req *http.Request) (*http.Resp
 	if err != nil {
 		return nil, err
 	}
-	// Last attempt returned a retryable status — return it so the caller can log
-	// the exact status code.
-	return resp, nil
+	// All retries exhausted on a retryable status — body is already drained and
+	// closed; return an error rather than the unusable response.
+	return nil, fmt.Errorf("17lands returned %d after %d attempts", resp.StatusCode, c.maxRetries+1)
 }
 
 // FetchCardRatings retrieves card ratings for the given set and draft format.
