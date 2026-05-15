@@ -28,6 +28,7 @@ import ColorRatingsPanel from '../components/ColorRatingsPanel';
 import CurrentPackPicker from '../components/CurrentPackPicker';
 import { analyzeSynergies, shouldHighlightCard } from '../utils/synergy';
 import { useDownload } from '@/context/DownloadContext';
+import { useSettings } from '@/hooks/useSettings';
 import EmptyState from '../components/EmptyState';
 import './Draft.css';
 
@@ -60,6 +61,8 @@ interface HistoricalDraftDetailState {
 
 const Draft: React.FC = () => {
     const navigate = useNavigate();
+    // AC3: read auto-refresh from global settings preference (#2023).
+    const { autoRefresh } = useSettings();
 
     const [state, setState] = useState<DraftState>({
         session: null,
@@ -682,7 +685,7 @@ const Draft: React.FC = () => {
                             <FormatInsights
                                 setCode={historicalDetailState.session.SetCode}
                                 draftFormat={historicalDetailState.session.EventName}
-                                autoRefresh={false}
+                                autoRefresh={autoRefresh}
                             />
                         )}
                     </div>
@@ -1057,14 +1060,14 @@ const Draft: React.FC = () => {
                     />
 
                     {/* Performance Metrics (Debug) */}
-                    <PerformanceMetrics autoRefresh={true} refreshInterval={5000} />
+                    <PerformanceMetrics autoRefresh={autoRefresh} refreshInterval={5000} />
 
                     {/* Format Meta Insights */}
                     {state.session && (
                         <FormatInsights
                             setCode={state.session.SetCode}
                             draftFormat={state.session.EventName}
-                            autoRefresh={false}
+                            autoRefresh={autoRefresh}
                         />
                     )}
                 </div>
