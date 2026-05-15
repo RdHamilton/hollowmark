@@ -468,6 +468,71 @@ describe('ResultBreakdown', () => {
         expect(screen.getByText('40 Matches Lost')).toBeInTheDocument();
       });
     });
+
+    // AC1, AC3, AC4 — zero-match guard (#2019)
+    it('should show empty state instead of breakdown bar when TotalMatches is 0', async () => {
+      mockMatches.getStats.mockResolvedValue(
+        createMockStatistics({
+          TotalMatches: 0,
+          MatchesWon: 0,
+          MatchesLost: 0,
+          WinRate: 0,
+          TotalGames: 0,
+          GamesWon: 0,
+          GamesLost: 0,
+          GameWinRate: 0,
+        })
+      );
+
+      renderWithProvider(<ResultBreakdown />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('breakdown-empty-state')).toBeInTheDocument();
+      });
+
+      // The empty state message must be visible.
+      expect(screen.getByText('No matches played yet')).toBeInTheDocument();
+    });
+
+    it('should not show "100% Losses" bar when TotalMatches is 0', async () => {
+      mockMatches.getStats.mockResolvedValue(
+        createMockStatistics({
+          TotalMatches: 0,
+          MatchesWon: 0,
+          MatchesLost: 0,
+          WinRate: 0,
+          TotalGames: 0,
+          GamesWon: 0,
+          GamesLost: 0,
+          GameWinRate: 0,
+        })
+      );
+
+      renderWithProvider(<ResultBreakdown />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('breakdown-empty-state')).toBeInTheDocument();
+      });
+
+      // The misleading "100% Losses" text must NOT appear.
+      expect(screen.queryByText('100% Losses')).not.toBeInTheDocument();
+      // Neither win nor loss percentage labels should appear.
+      expect(screen.queryByText(/% Wins/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/% Losses/)).not.toBeInTheDocument();
+    });
+
+    it('should not show breakdown-empty-state when user has matches', async () => {
+      mockMatches.getStats.mockResolvedValue(createMockStatistics({ TotalMatches: 10, WinRate: 0.6 }));
+
+      renderWithProvider(<ResultBreakdown />);
+
+      await waitFor(() => {
+        expect(screen.getByText('60% Wins')).toBeInTheDocument();
+      });
+
+      // Empty state must NOT be shown when there is data.
+      expect(screen.queryByTestId('breakdown-empty-state')).not.toBeInTheDocument();
+    });
   });
 
   describe('Metric Labels', () => {
