@@ -12,6 +12,11 @@ import { test, expect, type Page } from '@playwright/test';
  *   a clear message so developers running locally don't see failures they
  *   cannot fix.
  *
+ * waitUntil strategy (#1949):
+ *   All page.goto() calls use 'domcontentloaded' instead of 'networkidle'.
+ *   Background analytics/CDN requests can keep the network busy indefinitely
+ *   on GitHub-hosted runners, causing intermittent 30 s timeouts.
+ *
  * Assertion strategy per route:
  *   1. Page has content (no blank screen) — document.body has child elements
  *   2. No React error boundary visible
@@ -115,7 +120,7 @@ async function assertPageIsHealthy(page: Page, route: string): Promise<void> {
  */
 async function signIn(page: Page): Promise<void> {
   // Navigate to the app root — Clerk will redirect to sign-in if not authenticated
-  await page.goto(BASE_URL + '/match-history', { waitUntil: 'networkidle' });
+  await page.goto(BASE_URL + '/match-history', { waitUntil: 'domcontentloaded' });
 
   // Wait for Clerk sign-in form — handles both hosted UI and embedded UI
   const emailInput = page.locator('input[name="identifier"], input[type="email"], input[name="emailAddress"]').first();
@@ -142,7 +147,7 @@ async function signIn(page: Page): Promise<void> {
   );
 
   // Give React a moment to mount after sign-in redirect
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('load');
 }
 
 // ---------------------------------------------------------------------------
@@ -152,7 +157,7 @@ async function signIn(page: Page): Promise<void> {
 test.describe('Staging SPA smoke: public routes', () => {
   for (const route of PUBLIC_ROUTES) {
     test(`${route} — no blank screen, no error boundary`, async ({ page }) => {
-      await page.goto(BASE_URL + route, { waitUntil: 'networkidle' });
+      await page.goto(BASE_URL + route, { waitUntil: 'domcontentloaded' });
       await assertPageIsHealthy(page, route);
     });
   }
@@ -164,7 +169,7 @@ test.describe('Staging SPA smoke: public routes', () => {
 
 test.describe('Staging SPA smoke: root redirect', () => {
   test('/ redirects to /match-history or /sign-in (not blank)', async ({ page }) => {
-    await page.goto(BASE_URL + '/', { waitUntil: 'networkidle' });
+    await page.goto(BASE_URL + '/', { waitUntil: 'domcontentloaded' });
 
     // Should land on either match-history (if already authed) or sign-in
     const currentPath = new URL(page.url()).pathname;
@@ -226,7 +231,7 @@ test.describe('Staging SPA smoke: protected routes (authenticated)', () => {
         return;
       }
 
-      await sharedPage.goto(BASE_URL + route, { waitUntil: 'networkidle' });
+      await sharedPage.goto(BASE_URL + route, { waitUntil: 'domcontentloaded' });
 
       // If Clerk redirected us to sign-in, the session expired — fail loudly
       const currentPath = new URL(sharedPage.url()).pathname;
