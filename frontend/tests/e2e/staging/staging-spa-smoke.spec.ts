@@ -29,7 +29,10 @@ import { test, expect, type Page } from '@playwright/test';
 
 const SMOKE_EMAIL = process.env.SMOKE_CLERK_EMAIL ?? '';
 const SMOKE_PASSWORD = process.env.SMOKE_CLERK_PASSWORD ?? '';
-const BASE_URL = process.env.STAGING_SPA_URL ?? 'https://stg-app.vaultmtg.app';
+// Use `||` (not `??`) so that an empty-string CI secret falls back to the
+// default. `??` only falls back on `undefined`/`null`, which left
+// BASE_URL = '' when STAGING_SPA_URL was set-but-empty in CI (#1933).
+const BASE_URL = process.env.STAGING_SPA_URL || 'https://stg-app.vaultmtg.app';
 
 // ---------------------------------------------------------------------------
 // Routes from App.tsx
