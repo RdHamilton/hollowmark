@@ -285,36 +285,46 @@ const ResultBreakdown = () => {
           {/* Win/Loss Breakdown */}
           <div className="metric-section">
             <h2 className="section-title">Win/Loss Breakdown</h2>
-            <div className="breakdown-container">
-              <div className="breakdown-bar">
-                <div
-                  className="breakdown-segment wins"
-                  style={{ width: `${metrics.WinRate * 100}%` }}
-                >
-                  <span className="breakdown-label">
-                    {formatWinRate(metrics.WinRate)} Wins
-                  </span>
+            {metrics.TotalMatches === 0 ? (
+              <div className="breakdown-empty" data-testid="breakdown-empty-state">
+                <span className="breakdown-empty-icon">📊</span>
+                <p className="breakdown-empty-text">No matches played yet</p>
+                <p className="breakdown-empty-subtext">
+                  Play some matches to see your win/loss breakdown.
+                </p>
+              </div>
+            ) : (
+              <div className="breakdown-container">
+                <div className="breakdown-bar">
+                  <div
+                    className="breakdown-segment wins"
+                    style={{ width: `${metrics.WinRate * 100}%` }}
+                  >
+                    <span className="breakdown-label">
+                      {formatWinRate(metrics.WinRate)} Wins
+                    </span>
+                  </div>
+                  <div
+                    className="breakdown-segment losses"
+                    style={{ width: `${(1 - metrics.WinRate) * 100}%` }}
+                  >
+                    <span className="breakdown-label">
+                      {formatWinRate(1 - metrics.WinRate)} Losses
+                    </span>
+                  </div>
                 </div>
-                <div
-                  className="breakdown-segment losses"
-                  style={{ width: `${(1 - metrics.WinRate) * 100}%` }}
-                >
-                  <span className="breakdown-label">
-                    {formatWinRate(1 - metrics.WinRate)} Losses
-                  </span>
+                <div className="breakdown-stats">
+                  <div className="breakdown-stat">
+                    <span className="stat-dot wins"></span>
+                    <span>{metrics.MatchesWon} Matches Won</span>
+                  </div>
+                  <div className="breakdown-stat">
+                    <span className="stat-dot losses"></span>
+                    <span>{metrics.MatchesLost} Matches Lost</span>
+                  </div>
                 </div>
               </div>
-              <div className="breakdown-stats">
-                <div className="breakdown-stat">
-                  <span className="stat-dot wins"></span>
-                  <span>{metrics.MatchesWon} Matches Won</span>
-                </div>
-                <div className="breakdown-stat">
-                  <span className="stat-dot losses"></span>
-                  <span>{metrics.MatchesLost} Matches Lost</span>
-                </div>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       )}
