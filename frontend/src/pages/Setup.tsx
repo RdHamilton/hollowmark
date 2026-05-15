@@ -19,6 +19,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { trackEvent, type Platform } from '@/services/analytics';
+import { isDesktopApp } from '@/lib/runtimeContext';
 import './Setup.css';
 
 function detectPlatform(): Platform {
@@ -183,6 +184,14 @@ export default function Setup() {
     if (!pollActive) return;
 
     trackEvent({ name: 'setup_page_viewed', properties: { platform } });
+
+    // Only probe the local daemon in the desktop app context. In browser-only
+    // sessions isDesktopApp() returns false, so we skip the interval entirely
+    // to avoid ERR_CONNECTION_REFUSED noise from `http://localhost:9001/health`.
+    // This matches the pattern used in useDaemonConnection.ts (#1927 AC1).
+    if (!isDesktopApp()) {
+      return;
+    }
 
     // Timeout → error state after 60s
     timeoutRef.current = setTimeout(() => {
