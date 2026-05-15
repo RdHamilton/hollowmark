@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -515,6 +516,49 @@ func TestDecksGenerate_StubReturnsShape(t *testing.T) {
 	h.Generate(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// ─── Error paths (issue #1973) ─────────────────────────────────────────────
+
+// TestDecksExport_NotFound verifies that Export returns 404 when the deck
+// does not exist for the authenticated account (Bug 2 — route now registered).
+func TestDecksExport_NotFound(t *testing.T) {
+	reader := &stubDecksReader{deck: nil}
+	h := handlers.NewDecksHandler(reader, &decksAccountLookup{accountID: 7, found: true})
+	req := authedDecksRequest(t, http.MethodPost, "/api/v1/decks/missing/export", nil, 168)
+	req = chiDecksContext(req, "deckId", "missing")
+	rr := httptest.NewRecorder()
+	h.Export(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("want 404, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestDecksExport_DBError verifies that Export returns 500 when GetDeck fails.
+func TestDecksExport_DBError(t *testing.T) {
+	reader := &stubDecksReader{deckErr: errors.New("db unavailable")}
+	h := handlers.NewDecksHandler(reader, &decksAccountLookup{accountID: 7, found: true})
+	req := authedDecksRequest(t, http.MethodPost, "/api/v1/decks/d1/export", nil, 168)
+	req = chiDecksContext(req, "deckId", "d1")
+	rr := httptest.NewRecorder()
+	h.Export(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("want 500, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestDecksGet_DBError verifies that Get returns 500 when GetDeck errors
+// (Bug 3 — from_draft_pick type mismatch on legacy INTEGER schema).
+func TestDecksGet_DBError(t *testing.T) {
+	reader := &stubDecksReader{deckErr: errors.New("db unavailable")}
+	h := handlers.NewDecksHandler(reader, &decksAccountLookup{accountID: 7, found: true})
+	req := authedDecksRequest(t, http.MethodGet, "/api/v1/decks/d1", nil, 168)
+	req = chiDecksContext(req, "deckId", "d1")
+	rr := httptest.NewRecorder()
+	h.Get(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("want 500, got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
 
