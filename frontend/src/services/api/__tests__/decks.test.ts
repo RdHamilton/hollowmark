@@ -42,13 +42,67 @@ describe('decks API', () => {
     });
   });
 
-  describe('getDeck', () => {
-    it('should call get with correct path', async () => {
-      vi.mocked(get).mockResolvedValue({ deck: {}, cards: [] });
+  describe('getDeck (#2009 — BFF response adapter)', () => {
+    it('calls GET /decks/:id', async () => {
+      vi.mocked(get).mockResolvedValue({
+        id: 'deck-123', name: 'Test', format: 'standard', source: 'constructed',
+        cards: [], tags: [],
+      });
 
       await decks.getDeck('deck-123');
 
       expect(get).toHaveBeenCalledWith('/decks/deck-123');
+    });
+
+    it('reshapes flat BFF camelCase response into {deck, cards} PascalCase shape', async () => {
+      const rawBffResponse = {
+        id: 'deck-abc',
+        name: 'My Deck',
+        format: 'standard',
+        source: 'constructed',
+        draftEventId: null,
+        matchesPlayed: 5,
+        matchesWon: 3,
+        gamesPlayed: 12,
+        gamesWon: 7,
+        cards: [
+          { cardId: 100, quantity: 4, board: 'main', fromDraftPick: false },
+          { cardId: 200, quantity: 2, board: 'sideboard', fromDraftPick: false },
+        ],
+        tags: ['aggro', 'red'],
+      };
+      vi.mocked(get).mockResolvedValue(rawBffResponse);
+
+      const result = await decks.getDeck('deck-abc');
+
+      // deck must be populated (not undefined — this was the bug in #2009)
+      expect(result.deck).toBeDefined();
+      expect(result.deck!.ID).toBe('deck-abc');
+      expect(result.deck!.Name).toBe('My Deck');
+      expect(result.deck!.Format).toBe('standard');
+      expect(result.deck!.Source).toBe('constructed');
+
+      // cards must be mapped to PascalCase
+      expect(result.cards).toHaveLength(2);
+      expect(result.cards[0].CardID).toBe(100);
+      expect(result.cards[0].Quantity).toBe(4);
+      expect(result.cards[0].Board).toBe('main');
+      expect(result.cards[1].CardID).toBe(200);
+      expect(result.cards[1].Quantity).toBe(2);
+      expect(result.cards[1].Board).toBe('sideboard');
+    });
+
+    it('does not set deck to undefined when BFF returns valid data (regression guard)', async () => {
+      vi.mocked(get).mockResolvedValue({
+        id: 'deck-xyz', name: 'Regression Guard', format: 'historic',
+        source: 'constructed', cards: [], tags: [],
+      });
+
+      const result = await decks.getDeck('deck-xyz');
+
+      // This is the exact check that triggered "Invalid deck data" before #2009.
+      expect(result.deck).toBeDefined();
+      expect(result.deck).not.toBeUndefined();
     });
   });
 
