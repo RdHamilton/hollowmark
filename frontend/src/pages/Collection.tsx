@@ -42,6 +42,7 @@ export default function Collection() {
   const [totalCount, setTotalCount] = useState(0);
   const [filterCount, setFilterCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageJumpInput, setPageJumpInput] = useState<string>('1');
   const [showSetCompletion, setShowSetCompletion] = useState(false);
   const [collectionValue, setCollectionValue] = useState<{ totalValueUsd: number } | null>(null);
 
@@ -272,6 +273,31 @@ export default function Collection() {
   }, [processedCards, currentPage]);
 
   const totalPages = Math.ceil(processedCards.length / ITEMS_PER_PAGE);
+
+  // Keep page-jump input in sync when page changes via First/Prev/Next/Last
+  useEffect(() => {
+    setPageJumpInput(String(currentPage));
+  }, [currentPage]);
+
+  const handlePageJump = useCallback(() => {
+    const parsed = parseInt(pageJumpInput, 10);
+    if (isNaN(parsed) || parsed < 1 || parsed > totalPages) {
+      setPageJumpInput(String(currentPage));
+      return;
+    }
+    setCurrentPage(parsed);
+  }, [pageJumpInput, currentPage, totalPages]);
+
+  // Build windowed page buttons: show ±2 pages around current (AC standard pattern)
+  const windowedPages = useMemo(() => {
+    const pages: number[] = [];
+    const start = Math.max(1, currentPage - 2);
+    const end = Math.min(totalPages, currentPage + 2);
+    for (let p = start; p <= end; p++) {
+      pages.push(p);
+    }
+    return pages;
+  }, [currentPage, totalPages]);
 
   if (loading && cards.length === 0) {
     return (
@@ -546,9 +572,41 @@ export default function Collection() {
               >
                 Previous
               </button>
-              <span className="page-info">
-                Page {currentPage} of {totalPages}
-              </span>
+
+              {/* Windowed page buttons ±2 around current page */}
+              {windowedPages[0] > 1 && <span className="page-ellipsis">…</span>}
+              {windowedPages.map((p) => (
+                <button
+                  key={p}
+                  className={`page-button${p === currentPage ? ' page-button--active' : ''}`}
+                  onClick={() => setCurrentPage(p)}
+                  data-testid={p === currentPage ? 'collection-pagination-current' : undefined}
+                  aria-current={p === currentPage ? 'page' : undefined}
+                >
+                  {p}
+                </button>
+              ))}
+              {windowedPages[windowedPages.length - 1] < totalPages && <span className="page-ellipsis">…</span>}
+
+              {/* Page-jump input (AC1/AC2/AC3) */}
+              <label className="page-jump-label" htmlFor="collection-page-jump">
+                Go to page
+                <input
+                  id="collection-page-jump"
+                  className="page-jump-input"
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  value={pageJumpInput}
+                  data-testid="collection-page-jump"
+                  onChange={(e) => setPageJumpInput(e.target.value)}
+                  onBlur={handlePageJump}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handlePageJump();
+                  }}
+                />
+              </label>
+
               <button
                 className="page-button"
                 disabled={currentPage === totalPages}
