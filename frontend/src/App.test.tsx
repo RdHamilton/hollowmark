@@ -13,8 +13,6 @@ const mockUseSettingsHook = vi.fn(() => ({
   autoRefresh: false,
   refreshInterval: 30,
   showNotifications: true,
-  daemonMode: 'standalone',
-  daemonPort: 9999,
   mlEnabled: true,
   metaGoldfishEnabled: true,
   metaTop8Enabled: true,
