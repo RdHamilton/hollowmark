@@ -1,12 +1,14 @@
 /**
  * Setup Page — Component Tests
  *
- * Covers: #1644 (install warnings), #1645 (PKCE pairing states)
+ * Covers: #1644 (install warnings), #1645 (PKCE pairing states),
+ *         #1927 (gate daemon polling behind isDesktopApp() runtime check)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Setup from './Setup';
+import { isDesktopApp } from '@/lib/runtimeContext';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -15,6 +17,14 @@ import Setup from './Setup';
 vi.mock('@/services/analytics', () => ({
   trackEvent: vi.fn(),
 }));
+
+// Mock runtimeContext so we can flip desktop/browser per suite.
+// Default behaviour is set per-suite via `mockIsDesktopApp.mockReturnValue(...)`.
+vi.mock('@/lib/runtimeContext', () => ({
+  isDesktopApp: vi.fn(),
+}));
+
+const mockIsDesktopApp = vi.mocked(isDesktopApp);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -39,8 +49,10 @@ function setNavigatorPlatform(platform: string, ua: string) {
 
 describe('Setup — page structure', () => {
   beforeEach(() => {
-    // Default: daemon never responds
+    // Default: daemon never responds; desktop context so the poll wiring runs
+    // and we can exercise the full effect path.
     global.fetch = vi.fn(() => Promise.reject(new Error('daemon not running')));
+    mockIsDesktopApp.mockReturnValue(true);
     vi.useFakeTimers();
   });
 
@@ -104,6 +116,7 @@ describe('Setup — page structure', () => {
 describe('Setup — macOS platform', () => {
   beforeEach(() => {
     global.fetch = vi.fn(() => Promise.reject(new Error('daemon not running')));
+    mockIsDesktopApp.mockReturnValue(true);
     vi.useFakeTimers();
     setNavigatorPlatform('MacIntel', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)');
   });
@@ -151,6 +164,7 @@ describe('Setup — macOS platform', () => {
 describe('Setup — Windows platform', () => {
   beforeEach(() => {
     global.fetch = vi.fn(() => Promise.reject(new Error('daemon not running')));
+    mockIsDesktopApp.mockReturnValue(true);
     vi.useFakeTimers();
     setNavigatorPlatform(
       'Win32',
@@ -193,6 +207,7 @@ describe('Setup — Windows platform', () => {
 describe('Setup — pairing: waiting state', () => {
   beforeEach(() => {
     global.fetch = vi.fn(() => Promise.reject(new Error('daemon not running')));
+    mockIsDesktopApp.mockReturnValue(true);
     vi.useFakeTimers();
   });
 
@@ -225,6 +240,7 @@ describe('Setup — pairing: waiting state', () => {
 
 describe('Setup — pairing: success state', () => {
   beforeEach(() => {
+    mockIsDesktopApp.mockReturnValue(true);
     vi.useFakeTimers();
   });
 
@@ -272,6 +288,7 @@ describe('Setup — pairing: success state', () => {
 describe('Setup — pairing: timeout/error state', () => {
   beforeEach(() => {
     global.fetch = vi.fn(() => Promise.reject(new Error('daemon not running')));
+    mockIsDesktopApp.mockReturnValue(true);
     vi.useFakeTimers();
   });
 
@@ -324,5 +341,97 @@ describe('Setup — pairing: timeout/error state', () => {
     });
 
     expect(screen.getByTestId('pairing-waiting')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Runtime context gating (#1927)
+//
+// On any browser-only session `isDesktopApp()` returns `false`. Setup.tsx must
+// short-circuit the polling effect so it never calls `fetch` against the local
+// daemon — the previous implementation hit `http://localhost:9001/health`
+// unconditionally and produced ERR_CONNECTION_REFUSED noise (#1927 AC1).
+// ---------------------------------------------------------------------------
+
+describe('Setup — runtime context gating (#1927)', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn(() => Promise.reject(new Error('daemon not running')));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  describe('browser context (isDesktopApp() returns false)', () => {
+    beforeEach(() => {
+      mockIsDesktopApp.mockReturnValue(false);
+    });
+
+    it('does NOT call fetch against the local daemon', async () => {
+      renderSetup();
+
+      // Advance past several poll intervals (3s each) and the 60s timeout.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('never hits localhost:9001 even after the full timeout window', async () => {
+      renderSetup();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(61_000);
+      });
+
+      // No fetch at all — no calls to any URL, daemon or otherwise.
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      // Specifically: no daemon-health calls.
+      const daemonCalls = fetchMock.mock.calls.filter(([url]) =>
+        typeof url === 'string' && url.includes('localhost:9001'),
+      );
+      expect(daemonCalls).toHaveLength(0);
+    });
+
+    it('keeps the pairing UI in the waiting state without polling', async () => {
+      renderSetup();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+
+      // Without the desktop poll wiring, the waiting state is the steady state
+      // until the user navigates away. No success transition (no daemon to
+      // confirm) and no timeout (timeout only schedules inside the gated
+      // branch).
+      expect(screen.getByTestId('pairing-waiting')).toBeInTheDocument();
+    });
+  });
+
+  describe('desktop context (isDesktopApp() returns true)', () => {
+    beforeEach(() => {
+      mockIsDesktopApp.mockReturnValue(true);
+    });
+
+    it('DOES call fetch against the local daemon on the poll interval', async () => {
+      renderSetup();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_100);
+      });
+
+      expect(fetchMock).toHaveBeenCalled();
+      const daemonCalls = fetchMock.mock.calls.filter(([url]) =>
+        typeof url === 'string' && url.includes('localhost:9001/health'),
+      );
+      expect(daemonCalls.length).toBeGreaterThan(0);
+    });
   });
 });
