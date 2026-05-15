@@ -81,7 +81,7 @@ func (c *Client) FetchSets(ctx context.Context) ([]ScryfallSet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch sets: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // network close errors on response bodies are not actionable
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("scryfall returned %d for /sets", resp.StatusCode)

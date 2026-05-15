@@ -151,7 +151,7 @@ func (c *Client) FetchCardRatings(ctx context.Context, setCode, format string) (
 	if err != nil {
 		return nil, fmt.Errorf("fetch ratings: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // network close errors on response bodies are not actionable
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("17lands returned %d for set %s/%s", resp.StatusCode, setCode, format)
@@ -187,7 +187,7 @@ func (c *Client) FetchColorRatings(ctx context.Context, setCode, format string) 
 	if err != nil {
 		return nil, fmt.Errorf("fetch color ratings: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // network close errors on response bodies are not actionable
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("17lands returned %d for color ratings %s/%s", resp.StatusCode, setCode, format)
