@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiAdapter } from '@/services/adapter';
+import { useSettings } from '@/hooks/useSettings';
 import TemporalTrends from '@/components/TemporalTrends';
 import CommunityComparison from '@/components/CommunityComparison';
 import FormatInsights from '@/components/FormatInsights';
@@ -9,8 +10,9 @@ const DraftAnalytics: React.FC = () => {
   const [availableSets, setAvailableSets] = useState<string[]>([]);
   const [selectedSet, setSelectedSet] = useState<string>('');
   const [draftFormat, setDraftFormat] = useState<string>('PremierDraft');
-  const [autoRefresh, setAutoRefresh] = useState(false);
   const [loading, setLoading] = useState(true);
+  // AC1/AC2: read from global settings — do not manage local auto-refresh state (#2023).
+  const { autoRefresh } = useSettings();
 
   useEffect(() => {
     async function fetchSets() {
@@ -79,16 +81,6 @@ const DraftAnalytics: React.FC = () => {
               <option value="QuickDraft">Quick Draft</option>
               <option value="TradDraft">Traditional Draft</option>
             </select>
-          </div>
-          <div className="draft-analytics__filter draft-analytics__filter--toggle">
-            <label>
-              <input
-                type="checkbox"
-                checked={autoRefresh}
-                onChange={(e) => setAutoRefresh(e.target.checked)}
-              />
-              Auto-refresh
-            </label>
           </div>
         </div>
       </div>
