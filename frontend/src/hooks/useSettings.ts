@@ -7,8 +7,6 @@ interface SettingsState {
   refreshInterval: number;
   showNotifications: boolean;
   theme: string;
-  daemonPort: number;
-  daemonMode: string;
   // ML Settings
   mlEnabled: boolean;
   metaGoldfishEnabled: boolean;
@@ -69,8 +67,6 @@ const defaultSettings: Omit<SettingsState, 'isLoading' | 'isSaving' | 'error'> =
   refreshInterval: 30,
   showNotifications: true,
   theme: 'dark',
-  daemonPort: 9999,
-  daemonMode: 'standalone',
   // ML defaults
   mlEnabled: true,
   metaGoldfishEnabled: true,
@@ -111,8 +107,6 @@ export function useSettings(): UseSettingsReturn {
           refreshInterval: backendSettings.refreshInterval ?? defaultSettings.refreshInterval,
           showNotifications: backendSettings.showNotifications ?? defaultSettings.showNotifications,
           theme: backendSettings.theme ?? defaultSettings.theme,
-          daemonPort: backendSettings.daemonPort ?? defaultSettings.daemonPort,
-          daemonMode: backendSettings.daemonMode ?? defaultSettings.daemonMode,
           // ML settings
           mlEnabled: backendSettings.mlEnabled ?? defaultSettings.mlEnabled,
           metaGoldfishEnabled: backendSettings.metaGoldfishEnabled ?? defaultSettings.metaGoldfishEnabled,
@@ -246,8 +240,6 @@ export function useSettings(): UseSettingsReturn {
         refreshInterval: settings.refreshInterval,
         showNotifications: settings.showNotifications,
         theme: settings.theme,
-        daemonPort: settings.daemonPort,
-        daemonMode: settings.daemonMode,
         // ML settings
         mlEnabled: settings.mlEnabled,
         metaGoldfishEnabled: settings.metaGoldfishEnabled,

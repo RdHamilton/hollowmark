@@ -87,12 +87,6 @@ const Settings = () => {
   // Custom hooks for state management
   const {
     connectionStatus,
-    daemonMode,
-    daemonPort,
-    isReconnecting,
-    handleDaemonPortChange,
-    handleReconnect,
-    handleModeChange,
   } = useDaemonConnection();
 
   const {
@@ -153,12 +147,6 @@ const Settings = () => {
         content: (
           <DaemonConnectionSection
             connectionStatus={connectionStatus}
-            daemonMode={daemonMode}
-            daemonPort={daemonPort}
-            isReconnecting={isReconnecting}
-            onDaemonPortChange={handleDaemonPortChange}
-            onReconnect={handleReconnect}
-            onModeChange={handleModeChange}
           />
         ),
       },
