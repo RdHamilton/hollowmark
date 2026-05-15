@@ -1,9 +1,16 @@
 /**
  * System API service.
  * Replaces Wails system-related function bindings.
+ *
+ * Client routing:
+ *   - daemonClient (port 9001): daemon lifecycle endpoints — /system/status,
+ *     /system/daemon/*, /system/version, /system/database/*, /system/uninstall
+ *   - apiClient / BFF (port 8080): user-data endpoints — /system/health,
+ *     /system/account, /feedback/ml-training
  */
 
-import { get, post } from '../daemonClient';
+import { get as daemonGet, post as daemonPost } from '../daemonClient';
+import { get as bffGet } from '../apiClient';
 import { gui, models } from '@/types/models';
 
 // Re-export types for convenience
@@ -72,65 +79,76 @@ export interface HealthStatus {
 
 /**
  * Get the current connection status.
+ * Routes through the daemon client (port 9001) — daemon-specific endpoint.
  */
 export async function getStatus(): Promise<ConnectionStatus> {
-  return get<ConnectionStatus>('/system/status');
+  return daemonGet<ConnectionStatus>('/system/status');
 }
 
 /**
  * Get the system health status including backend sync timestamps.
+ * Routes through the BFF client (port 8080) — user-data endpoint, safe for
+ * web app users who have no local daemon running (#2007).
  */
 export async function getHealth(): Promise<HealthStatus> {
-  return get<HealthStatus>('/system/health');
+  return bffGet<HealthStatus>('/system/health');
 }
 
 /**
  * Get the daemon connection status.
+ * Routes through the daemon client (port 9001) — daemon-specific endpoint.
  */
 export async function getDaemonStatus(): Promise<DaemonStatus> {
-  return get<DaemonStatus>('/system/daemon/status');
+  return daemonGet<DaemonStatus>('/system/daemon/status');
 }
 
 /**
  * Connect to the daemon.
+ * Routes through the daemon client (port 9001) — daemon-specific endpoint.
  */
 export async function connectDaemon(): Promise<{ status: string }> {
-  return post<{ status: string }>('/system/daemon/connect');
+  return daemonPost<{ status: string }>('/system/daemon/connect');
 }
 
 /**
  * Disconnect from the daemon.
+ * Routes through the daemon client (port 9001) — daemon-specific endpoint.
  */
 export async function disconnectDaemon(): Promise<{ status: string }> {
-  return post<{ status: string }>('/system/daemon/disconnect');
+  return daemonPost<{ status: string }>('/system/daemon/disconnect');
 }
 
 /**
  * Get the application version.
+ * Routes through the daemon client (port 9001) — daemon-specific endpoint.
  */
 export async function getVersion(): Promise<VersionInfo> {
-  return get<VersionInfo>('/system/version');
+  return daemonGet<VersionInfo>('/system/version');
 }
 
 /**
  * Get the database path.
+ * Routes through the daemon client (port 9001) — daemon-specific endpoint.
  */
 export async function getDatabasePath(): Promise<{ path: string }> {
-  return get<{ path: string }>('/system/database/path');
+  return daemonGet<{ path: string }>('/system/database/path');
 }
 
 /**
  * Set the database path.
+ * Routes through the daemon client (port 9001) — daemon-specific endpoint.
  */
 export async function setDatabasePath(path: string): Promise<{ status: string }> {
-  return post<{ status: string }>('/system/database/path', { path });
+  return daemonPost<{ status: string }>('/system/database/path', { path });
 }
 
 /**
  * Get current account.
+ * Routes through the BFF client (port 8080) — user-data endpoint, not a
+ * daemon-local endpoint. Fixes ERR_CONNECTION_REFUSED on Quest page (#2008).
  */
 export async function getCurrentAccount(): Promise<models.Account> {
-  return get<models.Account>('/system/account');
+  return bffGet<models.Account>('/system/account');
 }
 
 /**
@@ -153,12 +171,13 @@ export interface UninstallResponse {
  */
 export async function uninstallDaemon(opts: { purge?: boolean } = {}): Promise<UninstallResponse> {
   const params = opts.purge ? '?purge=true' : '';
-  return post<UninstallResponse>(`/system/uninstall${params}`);
+  return daemonPost<UninstallResponse>(`/system/uninstall${params}`);
 }
 
 /**
  * Export ML training data.
+ * Routes through the BFF client (port 8080) — user-data endpoint.
  */
 export async function exportMLTrainingData(limit: number): Promise<gui.MLTrainingDataExport> {
-  return get<gui.MLTrainingDataExport>(`/feedback/ml-training?limit=${limit}`);
+  return bffGet<gui.MLTrainingDataExport>(`/feedback/ml-training?limit=${limit}`);
 }
