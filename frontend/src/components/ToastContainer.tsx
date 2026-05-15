@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { EventsOn } from '@/services/websocketClient';
 import Toast from './Toast';
 import { getReplayState, subscribeToReplayState } from '../App';
+import { useSettings } from '../hooks/useSettings';
 import { gui } from '@/types/models';
 
 interface ToastData {
@@ -17,6 +18,12 @@ const ToastContainer = () => {
   const isReplayActiveRef = useRef(getReplayState().isActive);
   const draftUpdateCountRef = useRef(0);
   const draftUpdateTimerRef = useRef<number | null>(null);
+  // AC1/AC2 (#2024): read user's notification preference so success/info toasts
+  // from game events can be suppressed. Error and warning toasts always show
+  // because they are action feedback, not optional notifications.
+  const { showNotifications } = useSettings();
+  const showNotificationsRef = useRef(showNotifications);
+  showNotificationsRef.current = showNotifications;
 
   const addToast = useCallback((message: string, type: 'success' | 'info' | 'warning' | 'error' = 'info') => {
     const id = toastIdCounter++;
@@ -51,13 +58,19 @@ const ToastContainer = () => {
   }, []);
 
   useEffect(() => {
-    // Register global toast function
-    showToast.setAddFn(addToast);
+    // Register global toast function — errors and warnings always fire;
+    // success and info toasts respect the showNotifications preference.
+    showToast.setAddFn((message, type = 'info') => {
+      if (type === 'error' || type === 'warning' || showNotificationsRef.current) {
+        addToast(message, type);
+      }
+    });
   }, [addToast]);
 
   useEffect(() => {
     // Listen for stats:updated events from backend
     const unsubscribeStats = EventsOn('stats:updated', (data: unknown) => {
+      if (!showNotificationsRef.current) return;
       const eventData = gui.StatsUpdatedEvent.createFrom(data);
       const matches = eventData.matches || 0;
       const games = eventData.games || 0;
@@ -72,6 +85,7 @@ const ToastContainer = () => {
 
     // Listen for rank:updated events
     const unsubscribeRank = EventsOn('rank:updated', (data: unknown) => {
+      if (!showNotificationsRef.current) return;
       const eventData = gui.RankUpdatedEvent.createFrom(data);
       const format = eventData.format || 'Ranked';
       const tier = eventData.tier || '';
@@ -87,6 +101,7 @@ const ToastContainer = () => {
 
     // Listen for quest update events
     const unsubscribeQuest = EventsOn('quest:updated', (data: unknown) => {
+      if (!showNotificationsRef.current) return;
       const eventData = gui.QuestUpdatedEvent.createFrom(data);
       const completed = eventData.completed || 0;
       const count = eventData.count || 0;
@@ -121,7 +136,7 @@ const ToastContainer = () => {
 
         // Show batched toast after 2 seconds of no new updates
         draftUpdateTimerRef.current = window.setTimeout(() => {
-          if (draftUpdateCountRef.current > 0) {
+          if (draftUpdateCountRef.current > 0 && showNotificationsRef.current) {
             addToast(
               `Replay: ${draftUpdateCountRef.current} draft update${draftUpdateCountRef.current !== 1 ? 's' : ''} processed`,
               'info'
@@ -132,8 +147,8 @@ const ToastContainer = () => {
         return;
       }
 
-      // Normal mode: show toast immediately
-      if (count > 0) {
+      // Normal mode: show toast immediately (if notifications enabled)
+      if (count > 0 && showNotificationsRef.current) {
         addToast(
           `Draft session${count > 1 ? 's' : ''} stored! (${count} session${count > 1 ? 's' : ''}, ${picks} pick${picks !== 1 ? 's' : ''})`,
           'success'
@@ -143,6 +158,8 @@ const ToastContainer = () => {
 
     // Listen for collection:updated events
     const unsubscribeCollection = EventsOn('collection:updated', (data: unknown) => {
+      if (!showNotificationsRef.current) return;
+
       const eventData = gui.CollectionUpdatedEvent.createFrom(data);
       const newCards = eventData.newCards || 0;
       const cardsAdded = eventData.cardsAdded || 0;

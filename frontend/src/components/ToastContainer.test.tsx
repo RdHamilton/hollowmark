@@ -4,6 +4,12 @@ import { render } from '../test/utils/testUtils';
 import ToastContainer from './ToastContainer';
 import { mockEventEmitter } from '@/test/mocks/websocketMock';
 
+// Control showNotifications per-test (#2024).
+const mockUseSettings = vi.fn(() => ({ showNotifications: true }));
+vi.mock('../hooks/useSettings', () => ({
+  useSettings: () => mockUseSettings(),
+}));
+
 // Mock the getReplayState and subscribeToReplayState functions
 const mockReplayState = {
   isActive: false,
@@ -39,6 +45,8 @@ describe('ToastContainer Component', () => {
     mockSubscribers.length = 0;
     mockReplayState.isActive = false;
     mockReplayState.isPaused = false;
+    // Default: notifications enabled.
+    mockUseSettings.mockReturnValue({ showNotifications: true });
   });
 
   describe('Toast Display', () => {
@@ -353,6 +361,119 @@ describe('ToastContainer Component', () => {
 
       // Should unmount without errors
       expect(() => unmount()).not.toThrow();
+    });
+  });
+
+  describe('showNotifications=false (AC1/AC2 #2024)', () => {
+    beforeEach(() => {
+      mockUseSettings.mockReturnValue({ showNotifications: false });
+    });
+
+    it('should suppress stats:updated success toasts when notifications disabled', async () => {
+      render(<ToastContainer />);
+
+      mockEventEmitter.emit('stats:updated', { matches: 1, games: 2 });
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      expect(screen.queryByText(/New match detected/i)).not.toBeInTheDocument();
+    });
+
+    it('should suppress rank:updated info toasts when notifications disabled', async () => {
+      render(<ToastContainer />);
+
+      mockEventEmitter.emit('rank:updated', { format: 'Standard', tier: 'Gold', step: '3' });
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      expect(screen.queryByText(/Rank updated/i)).not.toBeInTheDocument();
+    });
+
+    it('should suppress quest:updated toasts when notifications disabled', async () => {
+      render(<ToastContainer />);
+
+      mockEventEmitter.emit('quest:updated', { completed: 1, count: 1 });
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      expect(screen.queryByText(/Quest completed/i)).not.toBeInTheDocument();
+    });
+
+    it('should suppress collection:updated toasts when notifications disabled', async () => {
+      render(<ToastContainer />);
+
+      mockEventEmitter.emit('collection:updated', { newCards: 5, cardsAdded: 10 });
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      expect(screen.queryByText(/Collection updated/i)).not.toBeInTheDocument();
+    });
+
+    it('should suppress draft:updated toasts when notifications disabled', async () => {
+      render(<ToastContainer />);
+
+      mockEventEmitter.emit('draft:updated', { count: 1, picks: 5 });
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      expect(screen.queryByText(/Draft session stored/i)).not.toBeInTheDocument();
+    });
+
+    it('should still show error toasts from showToast when notifications disabled', async () => {
+      const { showToast } = await import('./ToastContainer');
+
+      render(<ToastContainer />);
+
+      // Give showToast.setAddFn time to register
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      showToast.show('Critical error occurred', 'error');
+
+      await waitFor(() => {
+        expect(screen.getByText('Critical error occurred')).toBeInTheDocument();
+      });
+    });
+
+    it('should still show warning toasts from showToast when notifications disabled', async () => {
+      const { showToast } = await import('./ToastContainer');
+
+      render(<ToastContainer />);
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      showToast.show('Warning message', 'warning');
+
+      await waitFor(() => {
+        expect(screen.getByText('Warning message')).toBeInTheDocument();
+      });
+    });
+
+    it('should suppress info toasts from showToast when notifications disabled', async () => {
+      const { showToast } = await import('./ToastContainer');
+
+      render(<ToastContainer />);
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      showToast.show('Info message', 'info');
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      expect(screen.queryByText('Info message')).not.toBeInTheDocument();
+    });
+
+    it('should suppress success toasts from showToast when notifications disabled', async () => {
+      const { showToast } = await import('./ToastContainer');
+
+      render(<ToastContainer />);
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      showToast.show('Success message', 'success');
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      expect(screen.queryByText('Success message')).not.toBeInTheDocument();
     });
   });
 });
