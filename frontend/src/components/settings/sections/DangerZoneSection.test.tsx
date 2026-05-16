@@ -23,6 +23,22 @@ describe('DangerZoneSection', () => {
       expect(container.firstChild).toBeNull();
     });
 
+    it('fires console.warn in DEV mode when onUninstallDaemon is omitted', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      render(<DangerZoneSection isConnected={true} />);
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[DangerZoneSection] onUninstallDaemon prop is undefined — component will render null. Check parent component.',
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('does not fire console.warn when onUninstallDaemon is provided', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      render(<DangerZoneSection isConnected={true} onUninstallDaemon={vi.fn()} />);
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
     it('renders the section title when onUninstallDaemon is provided', () => {
       render(
         <DangerZoneSection isConnected={true} onUninstallDaemon={vi.fn()} />,
