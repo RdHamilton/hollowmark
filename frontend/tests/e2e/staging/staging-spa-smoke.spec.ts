@@ -130,9 +130,13 @@ async function signIn(page: Page): Promise<void> {
   // Navigate to a protected route — ProtectedRoute will render the sign-in prompt
   await page.goto(BASE_URL + '/match-history', { waitUntil: 'domcontentloaded' });
 
-  // Wait for the ProtectedRoute sign-in button to appear
+  // Wait for Clerk to finish initializing — the loading spinner must clear before
+  // the sign-in button appears. Staging CI runners can take >15 s for Clerk init.
+  await page.locator('[data-testid="protected-route-loading"]').waitFor({ state: 'hidden', timeout: 30_000 });
+
+  // Now ProtectedRoute renders the sign-in button
   const signInBtn = page.locator('[data-testid="protected-route-sign-in-btn"]');
-  await signInBtn.waitFor({ state: 'visible', timeout: 15_000 });
+  await signInBtn.waitFor({ state: 'visible', timeout: 10_000 });
 
   // Click to open the Clerk modal
   await signInBtn.click();
