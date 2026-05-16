@@ -80,6 +80,22 @@ jobs:
           flags: daemon
           fail_ci_if_error: false
 
+      # Run services/contract tests — the contract package has no dependencies on the daemon
+      # module, so it is tested independently to catch marshal/unmarshal regressions (#2089).
+      - name: Run contract tests
+        working-directory: services/contract
+        env:
+          GONOSUMDB: github.com/RdHamilton/MTGA-Companion
+          GOPRIVATE: github.com/RdHamilton/MTGA-Companion
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload contract coverage
+        uses: codecov/codecov-action@v6
+        with:
+          files: ./services/contract/coverage.out
+          flags: contract
+          fail_ci_if_error: false
+
       # Run pkg/logparse tests — this package was extracted from services/daemon/internal/logreader
       # and must be validated whenever daemon or logparse files change (#1524).
       - name: Download pkg/logparse dependencies
