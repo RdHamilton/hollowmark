@@ -9,6 +9,7 @@ import { AppProvider } from './context/AppContext'
 import { DownloadProvider } from './context/DownloadContext'
 import { TaskProgressProvider } from './context/TaskProgressContext'
 import { initializeServices } from './services/adapter'
+import StagingErrorBoundary from './components/StagingErrorBoundary'
 
 // Social OAuth providers (Google, Facebook, Apple) are enabled in the Clerk Dashboard
 // under "Social connections" — no additional code required here.
@@ -41,15 +42,17 @@ const renderApp = () => {
   createRoot(rootElement).render(
     <StrictMode>
       <Sentry.ErrorBoundary fallback={<p>Something went wrong</p>}>
-        <ClerkProvider publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY} ui={ui}>
-          <AppProvider>
-            <DownloadProvider>
-              <TaskProgressProvider>
-                <App />
-              </TaskProgressProvider>
-            </DownloadProvider>
-          </AppProvider>
-        </ClerkProvider>
+        <StagingErrorBoundary>
+          <ClerkProvider publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY} ui={ui}>
+            <AppProvider>
+              <DownloadProvider>
+                <TaskProgressProvider>
+                  <App />
+                </TaskProgressProvider>
+              </DownloadProvider>
+            </AppProvider>
+          </ClerkProvider>
+        </StagingErrorBoundary>
       </Sentry.ErrorBoundary>
     </StrictMode>,
   )
