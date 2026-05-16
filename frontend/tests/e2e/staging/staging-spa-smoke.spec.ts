@@ -113,32 +113,50 @@ async function assertPageIsHealthy(page: Page, route: string): Promise<void> {
 }
 
 /**
- * Sign in using Clerk's modal sign-in flow.
+ * Ensure the test account is signed in before protected-route tests run.
  *
  * ProtectedRoute does NOT redirect unauthenticated users to a /sign-in page —
  * it renders an inline prompt with a SignInButton that opens a Clerk modal.
- * This helper clicks that button, fills credentials in the modal, and waits
- * until the authenticated shell is visible before returning.
  *
- * Flow:
+ * The CI runner's Clerk session persists across workflow runs, so the account
+ * may already be authenticated when this helper runs. Two states are handled:
+ *
+ * Already authenticated:
+ *   1. Navigate to /match-history — ProtectedRoute renders page content directly.
+ *   2. Return immediately (nothing to do).
+ *
+ * Not yet authenticated:
  *   1. Navigate to /match-history — ProtectedRoute renders the sign-in prompt.
  *   2. Click the "Sign In" button to open the Clerk modal.
  *   3. Fill email → Continue → fill password → Submit in the modal.
- *   4. Wait until the page is no longer on /sign-in (modal closes and app mounts).
+ *   4. Wait until the modal closes and the page content mounts.
  */
 async function signIn(page: Page): Promise<void> {
-  // Navigate to a protected route — ProtectedRoute will render the sign-in prompt
+  // Navigate to a protected route — ProtectedRoute renders the sign-in prompt
+  // when not authenticated, or the page content when already authenticated.
   await page.goto(BASE_URL + '/match-history', { waitUntil: 'domcontentloaded' });
 
-  // Wait for Clerk to finish initializing — the loading spinner must clear before
-  // the sign-in button appears. Staging CI runners can take >15 s for Clerk init.
+  // Wait for Clerk to finish initializing (loading spinner disappears).
   await page.locator('[data-testid="protected-route-loading"]').waitFor({ state: 'hidden', timeout: 30_000 });
 
-  // Now ProtectedRoute renders the sign-in button
+  // After init, either the sign-in button or the page content will be visible.
+  // The CI runner's Clerk session can persist across workflow runs, meaning the
+  // test account may already be authenticated. Handle both states.
   const signInBtn = page.locator('[data-testid="protected-route-sign-in-btn"]');
-  await signInBtn.waitFor({ state: 'visible', timeout: 10_000 });
+  const matchHistoryContent = page.locator('[data-testid="match-history-page"]');
 
-  // Click to open the Clerk modal
+  // Wait for either to appear (whichever state we're in)
+  await page.waitForSelector(
+    '[data-testid="protected-route-sign-in-btn"], [data-testid="match-history-page"]',
+    { timeout: 15_000 },
+  );
+
+  // Already authenticated — nothing to do
+  if (await matchHistoryContent.isVisible()) {
+    return;
+  }
+
+  // Not yet authenticated — complete the modal sign-in flow
   await signInBtn.click();
 
   // Wait for Clerk modal sign-in form — the modal renders inside a portal
@@ -159,9 +177,7 @@ async function signIn(page: Page): Promise<void> {
   const submitBtn = page.locator('button[type="submit"]').first();
   await submitBtn.click();
 
-  // Wait until the Clerk modal closes and the app shell is mounted.
-  // ProtectedRoute switches to <Outlet /> once isSignedIn is true, so we
-  // wait for the match-history page container to appear.
+  // Wait until the Clerk modal closes and the page content mounts
   await page.waitForSelector('[data-testid="match-history-page"]', { timeout: 20_000 });
 
   // Give React a moment to fully settle after sign-in
