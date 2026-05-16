@@ -27,7 +27,7 @@ _make_stub_dir() {
 # Absorb all flags; write empty content to -o <file> if present.
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -o) shift; touch "$1" ;;
+    -o) shift; > "$1" ;;
   esac
   shift
 done
@@ -153,7 +153,7 @@ EOF
 echo "stub-curl-args: $*" >&2
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -o) shift; touch "$1" ;;
+    -o) shift; > "$1" ;;
   esac
   shift
 done
@@ -195,17 +195,45 @@ echo "arm64"
 EOF
   chmod +x "${stub_dir}/uname"
 
-  # Remove jq from the stub dir entirely so command -v jq returns false
-  # and the script falls through to the python3 path.
-  # (A stub that exits 127 is still found by command -v, causing set -e to
-  # abort the script before the fallback branch is reached.)
-  rm -f "${stub_dir}/jq"
+  # Shadow jq by using a restricted PATH that only contains stub_dir, /bin,
+  # and the Homebrew prefix for python3.  We deliberately omit /usr/bin (and
+  # any other directory that ships a real jq) so that `command -v jq` returns
+  # false and install.sh falls through to the python3 fallback.
+  #
+  # Why not a non-executable stub?  `command -v` skips non-executables in
+  # stub_dir and then continues searching the rest of PATH, so the real jq
+  # (e.g. /usr/bin/jq) would still be found.
+  #
+  # Why not an executable stub that exits non-zero?  install.sh runs under
+  # `set -euo pipefail`, so any non-zero jq exit aborts the script entirely
+  # before the python3 branch can run.
+  #
+  # The restricted PATH also requires a mktemp stub because /usr/bin/mktemp
+  # is no longer reachable; all other commands used by install.sh are either
+  # bash builtins or live in /bin or the Homebrew prefix.
+  cat > "${stub_dir}/mktemp" <<'MKTEMP'
+#!/usr/bin/env bash
+TMPFILE="${TMPDIR:-/tmp}/stub-mktemp-$$-${RANDOM}"
+if [[ "$1" == "-d" ]]; then
+  mkdir -p "${TMPFILE}"
+else
+  > "${TMPFILE}"
+fi
+echo "${TMPFILE}"
+MKTEMP
+  chmod +x "${stub_dir}/mktemp"
 
   local fake_home
-  fake_home="$(mktemp -d)"
+  fake_home="${BATS_TEST_TMPDIR}/home-$$"
+  mkdir -p "${fake_home}"
+
+  # Restrict PATH: stub_dir first, then /bin (chmod, mkdir, rm, cat),
+  # then /opt/homebrew/bin (python3).  /usr/bin is intentionally excluded
+  # so that the real jq is unreachable.
+  local restricted_path="${stub_dir}:/bin:/opt/homebrew/bin"
 
   run env \
-    PATH="${stub_dir}:${PATH}" \
+    PATH="${restricted_path}" \
     HOME="${fake_home}" \
     RELEASE_TAG="daemon/v0.1.0" \
     DRY_RUN=1 \
