@@ -1,0 +1,1 @@
+{"request":"{\"Summary\":{\"DeckId\":\"deck-fixture-abc123\",\"Name\":\"Fixture Burn Deck\",\"Attributes\":[{\"name\":\"Format\",\"value\":\"Standard\"}]},\"Deck\":{\"MainDeck\":[{\"cardId\":12345,\"quantity\":4},{\"cardId\":67890,\"quantity\":4},{\"cardId\":11111,\"quantity\":2}],\"Sideboard\":[]}}"}
