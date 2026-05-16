@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useUser } from '@clerk/react';
 import { useNavigate } from 'react-router-dom';
 import './Profile.css';
@@ -57,6 +57,20 @@ const Profile = ({ useUserHook = defaultUseUser }: ProfilePageProps) => {
   const [avatarSuccess, setAvatarSuccess] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
+  // Auto-dismiss success banners after 3 s; clear timer on unmount to prevent
+  // state updates on an unmounted component.
+  useEffect(() => {
+    if (!nameSuccess) return;
+    const timerId = setTimeout(() => setNameSuccess(false), 3000);
+    return () => clearTimeout(timerId);
+  }, [nameSuccess]);
+
+  useEffect(() => {
+    if (!avatarSuccess) return;
+    const timerId = setTimeout(() => setAvatarSuccess(false), 3000);
+    return () => clearTimeout(timerId);
+  }, [avatarSuccess]);
+
   const handleEditNameStart = () => {
     setFirstName(user?.firstName ?? '');
     setLastName(user?.lastName ?? '');
@@ -78,7 +92,6 @@ const Profile = ({ useUserHook = defaultUseUser }: ProfilePageProps) => {
       await user.update({ firstName: firstName.trim(), lastName: lastName.trim() });
       setIsEditingName(false);
       setNameSuccess(true);
-      setTimeout(() => setNameSuccess(false), 3000);
     } catch (err) {
       setNameError(err instanceof Error ? err.message : 'Failed to update display name.');
     } finally {
@@ -96,7 +109,6 @@ const Profile = ({ useUserHook = defaultUseUser }: ProfilePageProps) => {
     try {
       await user.setProfileImage({ file });
       setAvatarSuccess(true);
-      setTimeout(() => setAvatarSuccess(false), 3000);
     } catch (err) {
       setAvatarError(err instanceof Error ? err.message : 'Failed to upload avatar.');
     } finally {
