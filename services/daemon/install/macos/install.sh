@@ -13,6 +13,12 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
+# DRY_RUN mode — set DRY_RUN=1 to skip sudo and launchctl calls.
+# Used by automated tests (bats) to exercise the script safely.
+# ---------------------------------------------------------------------------
+DRY_RUN="${DRY_RUN:-}"
+
+# ---------------------------------------------------------------------------
 # Configuration — edit these for a specific release.
 # ---------------------------------------------------------------------------
 GITHUB_REPO="RdHamilton/MTGA-Companion"
@@ -86,7 +92,11 @@ curl -fsSL --progress-bar -o "${TMP_BIN}" "${DOWNLOAD_URL}"
 # ---------------------------------------------------------------------------
 chmod +x "${TMP_BIN}"
 echo "Installing binary to ${INSTALL_DIR}/${BINARY_NAME} (may prompt for sudo)..."
-sudo install -m 755 "${TMP_BIN}" "${INSTALL_DIR}/${BINARY_NAME}"
+if [[ -z "${DRY_RUN}" ]]; then
+  sudo install -m 755 "${TMP_BIN}" "${INSTALL_DIR}/${BINARY_NAME}"
+else
+  echo "[DRY_RUN] would install binary to ${INSTALL_DIR}/${BINARY_NAME}"
+fi
 rm -f "${TMP_BIN}"
 
 echo "Binary installed: ${INSTALL_DIR}/${BINARY_NAME}"
@@ -175,7 +185,11 @@ echo "launchd plist written: ${PLIST_PATH}"
 # Load (and enable) the launchd job.
 # -w flag persists the job across reboots by writing to the LaunchAgents DB.
 # ---------------------------------------------------------------------------
-launchctl load -w "${PLIST_PATH}"
+if [[ -z "${DRY_RUN}" ]]; then
+  launchctl load -w "${PLIST_PATH}"
+else
+  echo "[DRY_RUN] would run: launchctl load -w ${PLIST_PATH}"
+fi
 
 echo ""
 echo "MTGA Companion daemon installed and running."

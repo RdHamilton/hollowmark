@@ -25,6 +25,7 @@ on:
       - 'services/daemon/**'
       - 'services/contract/**'
       - 'pkg/logparse/**'
+      - 'services/daemon/install/**'
       - '.github/workflows/daemon.yml'
   workflow_dispatch: {}
 
@@ -167,3 +168,18 @@ jobs:
           GOPRIVATE: github.com/RdHamilton/MTGA-Companion
           MTGA_DAEMON_HEADLESS: "1"
         run: go test -v -race -tags integration -run TestDaemonBinarySmoke -timeout 5m ./internal/daemon/...
+
+  macos-install-test:
+    name: macOS Install Script Tests
+    runs-on: macos-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install bats-core
+        run: brew install bats-core
+
+      - name: Run install script tests
+        run: bats services/daemon/install/macos/install_test.bats
