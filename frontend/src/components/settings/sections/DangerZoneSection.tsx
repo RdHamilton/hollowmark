@@ -65,6 +65,9 @@ export function DangerZoneSection({
   };
 
   if (!onUninstallDaemon) {
+    if (import.meta.env.DEV) {
+      console.warn('[DangerZoneSection] onUninstallDaemon prop is undefined — component will render null. Check parent component.');
+    }
     return null;
   }
 
