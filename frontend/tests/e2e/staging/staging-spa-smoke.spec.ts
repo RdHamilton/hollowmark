@@ -48,9 +48,10 @@ const PUBLIC_ROUTES = ['/download', '/setup'] as const;
 
 /**
  * Protected routes — require Clerk sign-in.
- * `/` redirects to `/match-history` so it is covered by the protected list.
+ * `/` redirects to `/home` so it is covered by the protected list.
  */
 const PROTECTED_ROUTES = [
+  '/home',
   '/match-history',
   '/quests',
   '/draft',
@@ -112,22 +113,36 @@ async function assertPageIsHealthy(page: Page, route: string): Promise<void> {
 }
 
 /**
- * Sign in using Clerk's hosted sign-in flow.
+ * Sign in using Clerk's modal sign-in flow.
  *
- * Clerk's sign-in UI path may vary. We navigate to the SPA root and let
- * Clerk's ProtectedRoute redirect us to /sign-in, then fill in credentials.
- * Waits until the SPA's authenticated shell is visible before returning.
+ * ProtectedRoute does NOT redirect unauthenticated users to a /sign-in page —
+ * it renders an inline prompt with a SignInButton that opens a Clerk modal.
+ * This helper clicks that button, fills credentials in the modal, and waits
+ * until the authenticated shell is visible before returning.
+ *
+ * Flow:
+ *   1. Navigate to /match-history — ProtectedRoute renders the sign-in prompt.
+ *   2. Click the "Sign In" button to open the Clerk modal.
+ *   3. Fill email → Continue → fill password → Submit in the modal.
+ *   4. Wait until the page is no longer on /sign-in (modal closes and app mounts).
  */
 async function signIn(page: Page): Promise<void> {
-  // Navigate to the app root — Clerk will redirect to sign-in if not authenticated
+  // Navigate to a protected route — ProtectedRoute will render the sign-in prompt
   await page.goto(BASE_URL + '/match-history', { waitUntil: 'domcontentloaded' });
 
-  // Wait for Clerk sign-in form — handles both hosted UI and embedded UI
+  // Wait for the ProtectedRoute sign-in button to appear
+  const signInBtn = page.locator('[data-testid="protected-route-sign-in-btn"]');
+  await signInBtn.waitFor({ state: 'visible', timeout: 15_000 });
+
+  // Click to open the Clerk modal
+  await signInBtn.click();
+
+  // Wait for Clerk modal sign-in form — the modal renders inside a portal
   const emailInput = page.locator('input[name="identifier"], input[type="email"], input[name="emailAddress"]').first();
   await emailInput.waitFor({ state: 'visible', timeout: 15_000 });
   await emailInput.fill(SMOKE_EMAIL);
 
-  // Click Continue / Next if present (Clerk two-step sign-in)
+  // Click Continue / Next (Clerk two-step sign-in)
   const continueBtn = page.locator('button[type="submit"]').first();
   await continueBtn.click();
 
@@ -140,13 +155,12 @@ async function signIn(page: Page): Promise<void> {
   const submitBtn = page.locator('button[type="submit"]').first();
   await submitBtn.click();
 
-  // Wait until we are back on the SPA (not on /sign-in any more)
-  await page.waitForFunction(
-    () => !window.location.pathname.startsWith('/sign-in'),
-    { timeout: 20_000 },
-  );
+  // Wait until the Clerk modal closes and the app shell is mounted.
+  // ProtectedRoute switches to <Outlet /> once isSignedIn is true, so we
+  // wait for the match-history page container to appear.
+  await page.waitForSelector('[data-testid="match-history-page"]', { timeout: 20_000 });
 
-  // Give React a moment to mount after sign-in redirect
+  // Give React a moment to fully settle after sign-in
   await page.waitForLoadState('load');
 }
 
@@ -168,13 +182,15 @@ test.describe('Staging SPA smoke: public routes', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('Staging SPA smoke: root redirect', () => {
-  test('/ redirects to /match-history or /sign-in (not blank)', async ({ page }) => {
+  test('/ redirects to /home or /sign-in (not blank)', async ({ page }) => {
     await page.goto(BASE_URL + '/', { waitUntil: 'domcontentloaded' });
 
-    // Should land on either match-history (if already authed) or sign-in
+    // Should land on /home (authenticated), /sign-in, or still / while loading
+    // App.tsx: <Route path="/" element={<Navigate to="/home" replace />} />
     const currentPath = new URL(page.url()).pathname;
     const isExpectedPath =
-      currentPath === '/match-history' ||
+      currentPath === '/home' ||
+      currentPath === '/match-history' || // allow legacy redirect in case of stale deploy
       currentPath.startsWith('/sign-in') ||
       currentPath === '/';
 
