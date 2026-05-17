@@ -122,7 +122,7 @@ func Run(ctx context.Context, cfg Config, headless bool) (*TokenResponse, error)
 		return nil, fmt.Errorf("pkce: generate verifier: %w", err)
 	}
 
-	port, listener, err := bindCallbackPort()
+	port, listeners, err := bindCallbackPort()
 	if err != nil {
 		return nil, fmt.Errorf("pkce: bind callback port: %w", err)
 	}
@@ -131,7 +131,9 @@ func Run(ctx context.Context, cfg Config, headless bool) (*TokenResponse, error)
 
 	authURL, err := buildAuthURL(cfg, challenge, redirectURI)
 	if err != nil {
-		_ = listener.Close()
+		for _, l := range listeners {
+			_ = l.Close()
+		}
 		return nil, fmt.Errorf("pkce: build auth URL: %w", err)
 	}
 
@@ -146,7 +148,7 @@ func Run(ctx context.Context, cfg Config, headless bool) (*TokenResponse, error)
 	}
 
 	// Wait for the callback server to receive the auth code.
-	code, err := waitForCode(ctx, listener)
+	code, err := waitForCode(ctx, listeners)
 	if err != nil {
 		return nil, fmt.Errorf("pkce: wait for callback: %w", err)
 	}
@@ -173,14 +175,25 @@ func generatePKCE() (verifier, challenge string, err error) {
 }
 
 // bindCallbackPort tries PrimaryPort then FallbackPort.
-func bindCallbackPort() (port int, l net.Listener, err error) {
+// For each candidate port it attempts to bind both tcp4 (127.0.0.1) and tcp6
+// ([::1]) so the callback server accepts connections from browsers regardless
+// of which loopback address the OS resolves "localhost" to.  macOS resolves
+// "localhost" to ::1 first; browsers do not fall back to IPv4 on
+// Connection Refused, so an IPv4-only bind causes auth to time out in the browser.
+func bindCallbackPort() (port int, listeners []net.Listener, err error) {
 	for _, p := range []int{PrimaryPort, FallbackPort} {
-		l, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
-		if err == nil {
-			return p, l, nil
+		var bound []net.Listener
+		if l4, e := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", p)); e == nil {
+			bound = append(bound, l4)
+		}
+		if l6, e := net.Listen("tcp6", fmt.Sprintf("[::1]:%d", p)); e == nil {
+			bound = append(bound, l6)
+		}
+		if len(bound) > 0 {
+			return p, bound, nil
 		}
 	}
-	return 0, nil, fmt.Errorf("could not bind ports %d or %d: %w", PrimaryPort, FallbackPort, err)
+	return 0, nil, fmt.Errorf("could not bind on ports %d or %d (tried tcp4+tcp6)", PrimaryPort, FallbackPort)
 }
 
 // buildAuthURL constructs the Clerk OAuth authorization URL.
@@ -209,9 +222,12 @@ func buildAuthURL(cfg Config, challenge, redirectURI string) (string, error) {
 	return base + "?" + params.Encode(), nil
 }
 
-// waitForCode starts the one-shot callback server and waits until it receives
-// the OAuth authorization code, ctx is cancelled, or callbackTimeout elapses.
-func waitForCode(ctx context.Context, l net.Listener) (string, error) {
+// waitForCode starts the one-shot callback server on every listener (IPv4 and
+// IPv6) and waits until it receives the OAuth authorization code, ctx is
+// cancelled, or callbackTimeout elapses.  A single http.Server is shared
+// across all listeners so the first arriving code wins regardless of which
+// network path the browser used.
+func waitForCode(ctx context.Context, listeners []net.Listener) (string, error) {
 	codeCh := make(chan string, 1)
 	errCh := make(chan error, 1)
 
@@ -263,14 +279,18 @@ func waitForCode(ctx context.Context, l net.Listener) (string, error) {
 
 	srv := &http.Server{Handler: mux}
 
-	go func() {
-		if serveErr := srv.Serve(l); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			select {
-			case errCh <- fmt.Errorf("callback server: %w", serveErr):
-			default:
+	// Start one Serve goroutine per listener. Both IPv4 and IPv6 listeners
+	// share the same mux and codeCh — whichever the browser hits first wins.
+	for _, l := range listeners {
+		go func(l net.Listener) {
+			if serveErr := srv.Serve(l); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				select {
+				case errCh <- fmt.Errorf("callback server: %w", serveErr):
+				default:
+				}
 			}
-		}
-	}()
+		}(l)
+	}
 
 	defer func() {
 		shutCtx, cancel := context.WithTimeout(context.Background(), serverShutdownTimeout)
