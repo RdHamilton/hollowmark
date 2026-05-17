@@ -224,7 +224,7 @@ func TestWaitForCode_HappyPath(t *testing.T) {
 		}
 	}()
 
-	code, err := waitForCode(ctx, l)
+	code, err := waitForCode(ctx, []net.Listener{l})
 	require.NoError(t, err)
 	assert.Equal(t, "mycode123", code)
 
@@ -268,7 +268,7 @@ func TestWaitForCode_NoConsentLoop(t *testing.T) {
 		// that waitForCode returned after the first request, not the second.
 	}()
 
-	code, err := waitForCode(ctx, l)
+	code, err := waitForCode(ctx, []net.Listener{l})
 	require.NoError(t, err)
 	assert.Equal(t, "firstcode", code, "only the first code must be returned")
 }
@@ -291,7 +291,7 @@ func TestWaitForCode_ErrorParam(t *testing.T) {
 		}
 	}()
 
-	_, err = waitForCode(ctx, l)
+	_, err = waitForCode(ctx, []net.Listener{l})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "access_denied")
 }
@@ -304,7 +304,7 @@ func TestWaitForCode_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err = waitForCode(ctx, l)
+	_, err = waitForCode(ctx, []net.Listener{l})
 	require.Error(t, err)
 }
 
@@ -319,15 +319,109 @@ func TestConstants(t *testing.T) {
 		"SuccessRedirectURL must be an absolute HTTPS URL, got: %s", SuccessRedirectURL)
 }
 
+// TestBindCallbackPort_DualStack verifies that bindCallbackPort (or its
+// underlying dual-stack bind logic) returns two listeners — one on 127.0.0.1
+// (tcp4) and one on [::1] (tcp6) — when both loopback stacks are available and
+// the port is free on both.
+//
+// The test allocates a free port via tcp4 port :0, releases it, then
+// immediately binds both stacks on that same port. This avoids relying on the
+// real production ports (51423/51424) which may already be in use on a
+// developer machine running the daemon.
+//
+// If IPv6 loopback is not available the test is skipped so CI on IPv4-only
+// hosts still passes.
+func TestBindCallbackPort_DualStack(t *testing.T) {
+	// Pre-check: is IPv6 loopback available?
+	probe, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skip("IPv6 loopback not available on this host — skipping dual-stack test")
+	}
+	_ = probe.Close()
+
+	// Find a free port by binding tcp4 :0, noting the assigned port, then
+	// releasing it so we can immediately re-bind both stacks on the same port.
+	freeL, err := net.Listen("tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	freePort := freeL.Addr().(*net.TCPAddr).Port
+	_ = freeL.Close()
+
+	// Bind both stacks on the free port — exactly what bindCallbackPort does.
+	var bound []net.Listener
+	if l4, e := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", freePort)); e == nil {
+		bound = append(bound, l4)
+	}
+	if l6, e := net.Listen("tcp6", fmt.Sprintf("[::1]:%d", freePort)); e == nil {
+		bound = append(bound, l6)
+	}
+	for _, l := range bound {
+		_ = l.Close()
+	}
+
+	assert.GreaterOrEqual(t, len(bound), 2,
+		"expected at least 2 listeners (IPv4 + IPv6) on port %d when both stacks are available", freePort)
+}
+
+// TestWaitForCode_IPv6 starts the callback server via waitForCode, sends a GET
+// to the IPv6 loopback address, and verifies the code is received correctly.
+// The test is skipped when IPv6 loopback is not available on the host.
+func TestWaitForCode_IPv6(t *testing.T) {
+	// Pre-check: is IPv6 loopback available?
+	probe, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skip("IPv6 loopback not available on this host — skipping IPv6 test")
+	}
+	_ = probe.Close()
+
+	// Bind an IPv6-only listener on a random port.
+	l6, err := net.Listen("tcp6", "[::1]:0")
+	require.NoError(t, err)
+
+	port := l6.Addr().(*net.TCPAddr).Port
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	callbackURL := fmt.Sprintf("http://[::1]:%d%s?code=ipv6testcode", port, CallbackPath)
+
+	resultCh := make(chan redirectResult, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		noFollow := &http.Client{
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+		resp, getErr := noFollow.Get(callbackURL) //nolint:noctx
+		if getErr == nil {
+			resultCh <- redirectResult{
+				statusCode: resp.StatusCode,
+				location:   resp.Header.Get("Location"),
+			}
+			_ = resp.Body.Close()
+		} else {
+			resultCh <- redirectResult{}
+		}
+	}()
+
+	code, err := waitForCode(ctx, []net.Listener{l6})
+	require.NoError(t, err)
+	assert.Equal(t, "ipv6testcode", code)
+
+	result := <-resultCh
+	assert.Equal(t, http.StatusFound, result.statusCode, "IPv6 callback must respond with 302 redirect")
+	assert.Equal(t, SuccessRedirectURL, result.location, "redirect must point to SuccessRedirectURL")
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 func startListener(t *testing.T) (*net.TCPListener, error) {
 	t.Helper()
-	addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+	addr, err := net.ResolveTCPAddr("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
-	return net.ListenTCP("tcp", addr)
+	return net.ListenTCP("tcp4", addr)
 }
 
 func listenerPort(l net.Listener) int {
