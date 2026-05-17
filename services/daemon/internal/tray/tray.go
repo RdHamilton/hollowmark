@@ -26,6 +26,7 @@ const (
 	StatusConnected
 	StatusWaitingForArena
 	StatusError
+	StatusKeychainError
 )
 
 func (s Status) label() string {
@@ -36,6 +37,8 @@ func (s Status) label() string {
 		return "◌ Waiting for Arena..."
 	case StatusError:
 		return "✕ Error — check logs"
+	case StatusKeychainError:
+		return "⚠ Keychain unavailable — click Try Again"
 	default:
 		return "◌ Starting..."
 	}
@@ -56,6 +59,7 @@ type App struct {
 	miLastSync    *systray.MenuItem
 	miSyncNow     *systray.MenuItem
 	miGrantAccess *systray.MenuItem
+	miTryAgain    *systray.MenuItem
 	miOpenApp     *systray.MenuItem
 	miQuit        *systray.MenuItem
 
@@ -63,6 +67,8 @@ type App struct {
 	SyncNow chan struct{}
 	// GrantAccess is signalled when the user clicks "Grant Access".
 	GrantAccess chan struct{}
+	// TryAgain is signalled when the user clicks "Try Again" (keychain retry).
+	TryAgain chan struct{}
 }
 
 // New creates an App. appURL is opened when "Open VaultMTG" is clicked.
@@ -76,6 +82,7 @@ func New(appURL string, openURL func(string) error, onQuit func()) *App {
 		status:      StatusStarting,
 		SyncNow:     make(chan struct{}, 1),
 		GrantAccess: make(chan struct{}, 1),
+		TryAgain:    make(chan struct{}, 1),
 	}
 }
 
@@ -125,6 +132,21 @@ func (a *App) SetHelperInstalled(installed bool) {
 	}
 }
 
+// SetKeychainError shows or hides the "Try Again" item and updates the status label.
+// Call with true when keychain is unavailable; false to restore normal state.
+func (a *App) SetKeychainError(show bool) {
+	if show {
+		a.SetStatus(StatusKeychainError)
+		if a.miTryAgain != nil {
+			a.miTryAgain.Show()
+		}
+	} else {
+		if a.miTryAgain != nil {
+			a.miTryAgain.Hide()
+		}
+	}
+}
+
 // SetLastSync updates the "last synced" timestamp label. Safe to call from any goroutine.
 func (a *App) SetLastSync(t time.Time) {
 	a.lastSync = t
@@ -159,6 +181,9 @@ func (a *App) setup() {
 	// daemon confirms the helper is running.
 	a.miSyncNow.Hide()
 
+	a.miTryAgain = systray.AddMenuItem("Try Again", "Retry reading from macOS keychain")
+	a.miTryAgain.Hide()
+
 	systray.AddSeparator()
 
 	a.miOpenApp = systray.AddMenuItem("Open VaultMTG", "Open the VaultMTG web app")
@@ -179,6 +204,11 @@ func (a *App) loop() {
 		case <-a.miGrantAccess.ClickedCh:
 			select {
 			case a.GrantAccess <- struct{}{}:
+			default:
+			}
+		case <-a.miTryAgain.ClickedCh:
+			select {
+			case a.TryAgain <- struct{}{}:
 			default:
 			}
 		case <-a.miOpenApp.ClickedCh:
