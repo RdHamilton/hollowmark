@@ -182,4 +182,6 @@ jobs:
         run: brew install bats-core
 
       - name: Run install script tests
-        run: bats services/daemon/install/macos/install_test.bats
+        run: |
+          bats services/daemon/install/macos/install_test.bats
+          bats services/daemon/install/macos/pkg/postinstall_test.bats
