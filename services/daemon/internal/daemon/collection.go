@@ -21,11 +21,17 @@ type TrayHooks struct {
 	SyncNow <-chan struct{}
 	// GrantAccess is signalled by the tray when the user clicks "Grant Access".
 	GrantAccess <-chan struct{}
+	// TryAgain is signalled by the tray when the user clicks "Try Again"
+	// (keychain retry). Used by retryKeychain to skip the backoff timer.
+	TryAgain <-chan struct{}
 	// SetHelperInstalled updates the tray menu to show Sync Now (true) or
 	// Grant Access (false).
 	SetHelperInstalled func(bool)
 	// SetLastSync updates the "Collection: synced <time>" menu label.
 	SetLastSync func(time.Time)
+	// SetKeychainError shows or hides the keychain error state (StatusKeychainError
+	// + "Try Again" menu item) in the tray. Call with true when retrying; false when resolved.
+	SetKeychainError func(bool)
 }
 
 // WithTray attaches tray integration to the service.
