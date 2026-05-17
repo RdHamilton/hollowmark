@@ -20,6 +20,7 @@ func TestStatusLabel(t *testing.T) {
 		{StatusConnected, "● Connected"},
 		{StatusWaitingForArena, "◌ Waiting for Arena..."},
 		{StatusError, "✕ Error — check logs"},
+		{StatusKeychainError, "⚠ Keychain unavailable — click Try Again"},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, tc.s.label(), "Status(%d)", tc.s)
@@ -87,4 +88,32 @@ func TestAppQuitCallback(t *testing.T) {
 		a.onQuit()
 	}
 	assert.True(t, called)
+}
+
+func TestAppTryAgainChannel_NonBlocking(t *testing.T) {
+	a := newTestApp()
+	// Sending twice without draining should not block (buffered, cap=1).
+	a.TryAgain <- struct{}{}
+	select {
+	case a.TryAgain <- struct{}{}:
+		// dropped — channel full, not a panic
+	default:
+	}
+	assert.Len(t, a.TryAgain, 1)
+}
+
+func TestAppSetStatus_KeychainError(t *testing.T) {
+	a := newTestApp()
+	a.SetStatus(StatusKeychainError)
+	assert.Equal(t, StatusKeychainError, a.status)
+}
+
+// TestAppSetKeychainError_NoopWithoutMenu verifies that SetKeychainError does
+// not panic when miTryAgain is nil (i.e. before setup() has run in tests).
+func TestAppSetKeychainError_NoopWithoutMenu(t *testing.T) {
+	a := newTestApp()
+	// miTryAgain is nil — must not panic.
+	assert.NotPanics(t, func() { a.SetKeychainError(true) })
+	assert.Equal(t, StatusKeychainError, a.status)
+	assert.NotPanics(t, func() { a.SetKeychainError(false) })
 }

@@ -103,8 +103,10 @@ func main() {
 	svc.WithTray(daemon.TrayHooks{
 		SyncNow:            app.SyncNow,
 		GrantAccess:        app.GrantAccess,
+		TryAgain:           app.TryAgain,
 		SetHelperInstalled: app.SetHelperInstalled,
 		SetLastSync:        app.SetLastSync,
+		SetKeychainError:   app.SetKeychainError,
 	})
 
 	// Handle OS signals: forward SIGTERM/SIGINT to systray so onQuit fires cleanly.
