@@ -15,6 +15,7 @@ const (
 	StatusConnected
 	StatusWaitingForArena
 	StatusError
+	StatusKeychainError
 )
 
 func (s Status) label() string {
@@ -25,6 +26,8 @@ func (s Status) label() string {
 		return "◌ Waiting for Arena..."
 	case StatusError:
 		return "✕ Error — check logs"
+	case StatusKeychainError:
+		return "⚠ Keychain unavailable"
 	default:
 		return "◌ Starting..."
 	}
@@ -40,6 +43,7 @@ type App struct {
 	quit        chan struct{}
 	SyncNow     chan struct{}
 	GrantAccess chan struct{}
+	TryAgain    chan struct{}
 }
 
 // New creates a no-op App.
@@ -51,6 +55,7 @@ func New(appURL string, openURL func(string) error, onQuit func()) *App {
 		quit:        make(chan struct{}),
 		SyncNow:     make(chan struct{}, 1),
 		GrantAccess: make(chan struct{}, 1),
+		TryAgain:    make(chan struct{}, 1),
 	}
 }
 
@@ -77,3 +82,4 @@ func (a *App) Quit() {
 func (a *App) SetStatus(s Status)        { a.status = s }
 func (a *App) SetHelperInstalled(_ bool) {}
 func (a *App) SetLastSync(t time.Time)   { a.lastSync = t }
+func (a *App) SetKeychainError(_ bool)   {}

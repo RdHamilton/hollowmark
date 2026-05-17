@@ -72,6 +72,13 @@ type Service struct {
 	// trayHooks connects the tray icon to the daemon event loop.
 	// All fields are optional — nil channels block forever in select (safe no-op).
 	trayHooks TrayHooks
+	// keychainErr is set in New() if keychain.Get() fails at startup.
+	// Cleared on retry success inside retryKeychain. When non-nil, Run()
+	// calls retryKeychain before starting the event loop.
+	keychainErr error
+	// keychainGet is the function used to read the API key from the OS keychain.
+	// Defaults to keychain.Get; overridden in tests for deterministic behaviour.
+	keychainGet func() (string, error)
 }
 
 // New creates a Service from cfg.
@@ -84,11 +91,13 @@ func New(cfg *config.Config) *Service {
 	// legacy registrar refresher is no longer wired because the BFF no longer
 	// mounts /api/daemon/register (see ADR-009 / #1315).
 	token := ""
+	var keychainErr error
 	switch {
 	case cfg.Keychain:
 		key, err := keychain.Get()
 		if err != nil {
-			log.Printf("[daemon] warn: keychain.Get failed: %v — dispatcher will start with no bearer", err)
+			keychainErr = err
+			log.Printf("[daemon] warn: keychain.Get failed: %v — will retry on startup", err)
 		}
 		token = key
 	case cfg.DaemonJWT != "":
@@ -100,12 +109,14 @@ func New(cfg *config.Config) *Service {
 	sessionID := fmt.Sprintf("live-%s", uuid.New().String())
 
 	svc := &Service{
-		cfg:        cfg,
-		dispatcher: d,
-		sessionID:  sessionID,
-		regClient:  registrar.NewClient(cfg.CloudAPIURL),
-		version:    "dev",
-		draftState: draftstate.New(),
+		cfg:         cfg,
+		dispatcher:  d,
+		sessionID:   sessionID,
+		regClient:   registrar.NewClient(cfg.CloudAPIURL),
+		version:     "dev",
+		draftState:  draftstate.New(),
+		keychainErr: keychainErr,
+		keychainGet: keychain.Get,
 		ratings: ratingsclient.New(ratingsclient.Config{
 			BFFURL: cfg.CloudAPIURL,
 			Token:  token,
@@ -197,6 +208,57 @@ func (s *Service) register(ctx context.Context) (string, error) {
 	return resp.Token, nil
 }
 
+// keychainMaxRetries is the number of keychain retry attempts before the daemon
+// gives up and exits. Exposed as a var so tests can override it.
+var keychainMaxRetries = 3
+
+// keychainRetryBase is the base backoff duration for keychain retries. The
+// actual wait for attempt N is keychainRetryBase * N (2s, 4s, 8s). Exposed as
+// a var so tests can use shorter durations.
+var keychainRetryBase = 2 * time.Second
+
+// retryKeychain retries keychain.Get with exponential backoff, surfacing the
+// error state in the tray. Returns nil on success, an error after all retries
+// are exhausted or the context is cancelled.
+func (s *Service) retryKeychain(ctx context.Context) error {
+	if s.trayHooks.SetKeychainError != nil {
+		s.trayHooks.SetKeychainError(true)
+	}
+	defer func() {
+		if s.trayHooks.SetKeychainError != nil {
+			s.trayHooks.SetKeychainError(false)
+		}
+	}()
+
+	for attempt := 1; attempt <= keychainMaxRetries; attempt++ {
+		backoff := keychainRetryBase * time.Duration(attempt)
+		log.Printf("[daemon] keychain retry %d/%d in %s", attempt, keychainMaxRetries, backoff)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.trayHooks.TryAgain:
+			// User clicked Try Again — retry immediately, skipping backoff.
+			log.Printf("[daemon] keychain retry %d/%d triggered by user", attempt, keychainMaxRetries)
+		case <-time.After(backoff):
+			// Automatic retry after backoff.
+		}
+
+		key, err := s.keychainGet()
+		if err == nil && key != "" {
+			log.Printf("[daemon] keychain retry %d/%d succeeded", attempt, keychainMaxRetries)
+			s.keychainErr = nil
+			s.dispatcher.SetToken(key)
+			if s.ratings != nil {
+				s.ratings.SetToken(key)
+			}
+			return nil
+		}
+		log.Printf("[daemon] keychain retry %d/%d failed: %v", attempt, keychainMaxRetries, err)
+	}
+	return fmt.Errorf("keychain unavailable after %d retries", keychainMaxRetries)
+}
+
 // runUpdateCheck calls updatecheck.Check and swallows any panics. Errors are
 // already swallowed inside the updatecheck package itself; this wrapper ensures
 // the version check can never affect service health.
@@ -209,6 +271,15 @@ func (s *Service) runUpdateCheck(ctx context.Context) {
 
 // Run starts the daemon, blocks until ctx is cancelled.
 func (s *Service) Run(ctx context.Context) error {
+	// Phase 0: if the keychain was unavailable at startup, retry before
+	// starting the event loop. Returns an error if all retries fail —
+	// the caller (main.go) will quit cleanly.
+	if s.keychainErr != nil {
+		if err := s.retryKeychain(ctx); err != nil {
+			return fmt.Errorf("keychain unavailable after retries: %w", err)
+		}
+	}
+
 	// Phase 1: ensure we have a valid JWT before starting event dispatch.
 	// Skipped when cfg.Keychain is true — the PKCE flow's api_key does not
 	// expire and the legacy /api/daemon/register endpoint is not mounted.
