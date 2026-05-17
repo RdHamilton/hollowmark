@@ -12,7 +12,7 @@
 set -euo pipefail
 
 INSTALL_DIR="/usr/local/bin"
-BINARY_NAME="mtga-companion-daemon"
+BINARY_NAME="vaultmtg-daemon"
 PLIST_LABEL="com.mtga-companion.daemon"
 PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
 
@@ -46,6 +46,6 @@ fi
 
 echo ""
 echo "MTGA Companion daemon uninstalled."
-echo "Log file (${HOME}/Library/Logs/mtga-companion-daemon.log) was NOT removed."
-echo "Config file (~/.config/mtga-companion/daemon.yaml) was NOT removed."
+echo "Log file (${HOME}/Library/Logs/vaultmtg-daemon.log) was NOT removed."
+echo "Config file (~/.mtga-companion/daemon.json) was NOT removed."
 echo "Remove those manually if desired."
