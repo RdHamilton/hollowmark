@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 
-const STORAGE_KEY = 'mtga-companion-developer-mode';
+const STORAGE_KEY = 'vaultmtg-developer-mode';
 const CLICK_COUNT_THRESHOLD = 5;
 const CLICK_TIMEOUT_MS = 3000;
 

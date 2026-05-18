@@ -42,7 +42,7 @@ let config: ApiConfig = {
 // ---------------------------------------------------------------------------
 
 /** localStorage key under which the BFF API key is persisted. */
-const API_KEY_STORAGE_KEY = 'mtga-companion-api-key';
+const API_KEY_STORAGE_KEY = 'vaultmtg-api-key';
 
 /**
  * Retrieve the stored API key from localStorage.
