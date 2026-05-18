@@ -6,8 +6,10 @@
 # Release artifacts (cross-compiled binaries + GitHub Release) are handled
 # exclusively by daemon-release.yml, which triggers on `daemon/v*` tags.
 #
-# Binary naming: canonical artifact names are `mtga-companion-daemon-<os>-<arch>[.exe]`
-# as defined in daemon-release.yml.  Any local `make build` output must match.
+# Binary naming: canonical artifact names are `vaultmtg-daemon-<os>-<arch>[.exe]`
+# as defined in daemon-release.yml.  During the ADR-022 Phase 2 dual-naming
+# window, legacy `mtga-companion-daemon-*` copies are also published.
+# Any local `make build` output must match the canonical (new) names.
 
 name: Daemon CI
 

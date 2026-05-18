@@ -110,6 +110,23 @@ jobs:
           path: dist/daemon-universal_darwin_all/vaultmtg-daemon
           if-no-files-found: error
 
+      # ADR-022 Phase 2 dual-naming: upload Windows legacy-named binary to release.
+      # GoReleaser already published vaultmtg-daemon-windows-amd64.exe via the
+      # archives entries in .goreleaser.yml; this step creates the legacy copy.
+      # Remove in Phase 6 (#1764) once all in-field daemons have migrated.
+      - name: Upload legacy-named Windows binary to GitHub Release (dual-naming)
+        if: startsWith(github.ref, 'refs/tags/daemon/v')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          cp dist/vaultmtg-daemon-windows-amd64.exe \
+             dist/mtga-companion-daemon-windows-amd64.exe
+          gh release upload "$TAG" \
+            dist/mtga-companion-daemon-windows-amd64.exe \
+            --repo "${{ github.repository }}" \
+            --clobber
+
   sign-macos:
     name: Sign & Notarize macOS universal binary
     runs-on: macos-latest
@@ -129,6 +146,10 @@ jobs:
       BINARY: vaultmtg-daemon
       PKG: vaultmtg-daemon-darwin-universal.pkg
       DMG: vaultmtg-daemon-darwin-universal.dmg
+      # ADR-022 Phase 2 dual-naming: legacy artifact names.
+      # Remove PKG_LEGACY and DMG_LEGACY in Phase 6 (#1764).
+      PKG_LEGACY: mtga-companion-daemon-darwin-universal.pkg
+      DMG_LEGACY: mtga-companion-daemon-darwin-universal.dmg
 
     steps:
       - name: Checkout repository
@@ -287,16 +308,28 @@ jobs:
         run: |
           security delete-keychain build.keychain || true
 
+      - name: Create legacy-named macOS artifacts (dual-naming)
+        # ADR-022 Phase 2: copy signed .pkg/.dmg under the legacy mtga-companion-daemon-*
+        # names so in-field daemons checking the old artifact name keep receiving updates.
+        # Remove this step in Phase 6 (#1764) once all in-field daemons have migrated.
+        run: |
+          cp "${{ env.PKG }}" "${{ env.PKG_LEGACY }}"
+          cp "${{ env.DMG }}" "${{ env.DMG_LEGACY }}"
+
       - name: Upload signed macOS artifacts to GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Use the full daemon/v* tag so assets land on the correctly-namespaced
           # release, not a bare v* tag that squats the application release namespace.
+          # Uploads both new (vaultmtg-daemon-*) and legacy (mtga-companion-daemon-*)
+          # names per ADR-022 Phase 2 dual-naming. Remove legacy files in Phase 6 (#1764).
           TAG="${GITHUB_REF#refs/tags/}"
           gh release upload "$TAG" \
             "${{ env.PKG }}" \
             "${{ env.DMG }}" \
+            "${{ env.PKG_LEGACY }}" \
+            "${{ env.DMG_LEGACY }}" \
             --repo "${{ github.repository }}" \
             --clobber
 
