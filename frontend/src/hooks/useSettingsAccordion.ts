@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
-const STORAGE_KEY = 'mtga-companion-settings-expanded';
+const STORAGE_KEY = 'vaultmtg-settings-expanded';
 
 export interface AccordionSection {
   id: string;

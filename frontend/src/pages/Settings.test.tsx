@@ -445,8 +445,8 @@ describe('Settings', () => {
     });
 
     it('shows Developer Tools section when developer mode is enabled', () => {
-      // Enable developer mode in localStorage
-      localStorage.setItem('mtga-companion-developer-mode', 'true');
+      // Enable developer mode in localStorage (vaultmtg-* key post-migration)
+      localStorage.setItem('vaultmtg-developer-mode', 'true');
 
       render(<MemoryRouter><Settings /></MemoryRouter>);
 

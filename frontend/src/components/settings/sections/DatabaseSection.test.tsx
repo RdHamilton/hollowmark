@@ -15,7 +15,7 @@ describe('DatabaseSection', () => {
 
   it('renders database path input', () => {
     render(<DatabaseSection {...defaultProps} />);
-    expect(screen.getByPlaceholderText(/mtga\.db/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/vaultmtg\.db/)).toBeInTheDocument();
   });
 
   it('displays current database path', () => {
@@ -27,7 +27,7 @@ describe('DatabaseSection', () => {
     const onDbPathChange = vi.fn();
     render(<DatabaseSection {...defaultProps} onDbPathChange={onDbPathChange} />);
 
-    const input = screen.getByPlaceholderText(/mtga\.db/);
+    const input = screen.getByPlaceholderText(/vaultmtg\.db/);
     fireEvent.change(input, { target: { value: '/new/path' } });
 
     expect(onDbPathChange).toHaveBeenCalledWith('/new/path');
