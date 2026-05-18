@@ -29,8 +29,8 @@ import (
 	"strings"
 	"time"
 
-	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
+	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
 )
 
 // metaReader is the minimal repo surface the handler needs.

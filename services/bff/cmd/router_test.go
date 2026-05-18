@@ -13,14 +13,14 @@ import (
 	"testing"
 	"time"
 
-	contract "github.com/RdHamilton/MTGA-Companion/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
+	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/sse"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/config"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	contract "github.com/RdHamilton/vault-mtg/services/contract"
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/clerk/clerk-sdk-go/v2/clerktest"
-	"github.com/ramonehamilton/mtga-bff/internal/api/handlers"
-	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
-	"github.com/ramonehamilton/mtga-bff/internal/api/sse"
-	"github.com/ramonehamilton/mtga-bff/internal/config"
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
 )
 
 // stubUserRepo is a ClerkUserLookup stub that always returns a fixed user (id=1).

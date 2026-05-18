@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/MTGA-Companion/services/contract"
-	"github.com/ramonehamilton/mtga-daemon/internal/config"
-	"github.com/ramonehamilton/mtga-daemon/internal/logreader"
+	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/config"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

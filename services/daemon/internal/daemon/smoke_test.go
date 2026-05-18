@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/MTGA-Companion/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/contract"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,8 +82,8 @@ func buildDaemon(t *testing.T, dest string) {
 	cmd := exec.Command("go", "build", "-o", dest, cmdPkg)
 	cmd.Env = append(
 		os.Environ(),
-		"GONOSUMDB=github.com/RdHamilton/MTGA-Companion",
-		"GOPRIVATE=github.com/RdHamilton/MTGA-Companion",
+		"GONOSUMDB=github.com/RdHamilton/vault-mtg",
+		"GOPRIVATE=github.com/RdHamilton/vault-mtg",
 	)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "go build failed:\n%s", string(out))

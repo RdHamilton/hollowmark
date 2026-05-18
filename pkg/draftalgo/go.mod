@@ -1,4 +1,4 @@
-module github.com/RdHamilton/MTGA-Companion/pkg/draftalgo
+module github.com/RdHamilton/vault-mtg/pkg/draftalgo
 
 go 1.25.0
 

@@ -1,4 +1,4 @@
-module github.com/ramonehamilton/mtga-sync
+module github.com/RdHamilton/vault-mtg/services/sync
 
 go 1.25.0
 

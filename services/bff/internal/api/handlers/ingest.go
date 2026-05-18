@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	contract "github.com/RdHamilton/MTGA-Companion/services/contract"
+	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	contract "github.com/RdHamilton/vault-mtg/services/contract"
 	"github.com/posthog/posthog-go"
-	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
 )
 
 // EventBroadcaster is implemented by any type that can broadcast a daemon event

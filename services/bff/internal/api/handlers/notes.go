@@ -27,9 +27,9 @@ import (
 	"strings"
 	"time"
 
+	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
 	"github.com/go-chi/chi/v5"
-	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
 )
 
 // notesReader is the minimal repo surface the handler needs.

@@ -9,9 +9,9 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/RdHamilton/MTGA-Companion/services/contract"
-	"github.com/ramonehamilton/mtga-daemon/internal/collectionclient"
-	"github.com/ramonehamilton/mtga-daemon/internal/dispatch"
+	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/collectionclient"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/dispatch"
 )
 
 // TrayHooks lets the daemon update the tray icon and receive user actions.

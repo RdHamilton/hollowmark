@@ -42,13 +42,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/config"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/daemon"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/keychain"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/migrate"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/pkce"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/tray"
 	"github.com/google/uuid"
-	"github.com/ramonehamilton/mtga-daemon/internal/config"
-	"github.com/ramonehamilton/mtga-daemon/internal/daemon"
-	"github.com/ramonehamilton/mtga-daemon/internal/keychain"
-	"github.com/ramonehamilton/mtga-daemon/internal/migrate"
-	"github.com/ramonehamilton/mtga-daemon/internal/pkce"
-	"github.com/ramonehamilton/mtga-daemon/internal/tray"
 )
 
 // Version is the build-time version string injected via -ldflags -X main.Version=<ver>.

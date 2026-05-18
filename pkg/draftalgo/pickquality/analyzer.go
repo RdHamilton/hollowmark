@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/RdHamilton/MTGA-Companion/pkg/draftalgo"
+	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
 )
 
 // Alternative represents an alternative card pick with its rating.
