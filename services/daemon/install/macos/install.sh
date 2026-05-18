@@ -94,8 +94,13 @@ echo "Installing VaultMTG daemon ${RELEASE_TAG} (${ASSET_SUFFIX})..."
 DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_TAG}/${ASSET_NAME}"
 TMP_BIN="$(mktemp)"
 
-echo "Downloading ${DOWNLOAD_URL}..."
-curl -fsSL --progress-bar -o "${TMP_BIN}" "${DOWNLOAD_URL}"
+if [[ -z "${DRY_RUN}" ]]; then
+  echo "Downloading ${DOWNLOAD_URL}..."
+  curl -fsSL --progress-bar -o "${TMP_BIN}" "${DOWNLOAD_URL}"
+else
+  echo "[DRY_RUN] would download ${DOWNLOAD_URL}"
+  # mktemp (line above) already created the file; no placeholder needed.
+fi
 
 # ---------------------------------------------------------------------------
 # Install the binary.
