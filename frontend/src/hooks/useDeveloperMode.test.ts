@@ -3,7 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useDeveloperMode } from './useDeveloperMode';
 
 describe('useDeveloperMode', () => {
-  const STORAGE_KEY = 'mtga-companion-developer-mode';
+  const STORAGE_KEY = 'vaultmtg-developer-mode';
 
   beforeEach(() => {
     localStorage.clear();

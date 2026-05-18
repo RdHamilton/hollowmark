@@ -3,7 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useSettingsAccordion } from './useSettingsAccordion';
 
 describe('useSettingsAccordion', () => {
-  const STORAGE_KEY = 'mtga-companion-settings-expanded';
+  const STORAGE_KEY = 'vaultmtg-settings-expanded';
 
   const testSections = [
     { id: 'connection', label: 'Connection' },

@@ -104,7 +104,7 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 // Local storage key
-const STORAGE_KEY = 'mtga-companion-filters';
+const STORAGE_KEY = 'vaultmtg-filters';
 
 // Provider component
 interface AppProviderProps {

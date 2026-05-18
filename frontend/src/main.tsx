@@ -10,6 +10,12 @@ import { DownloadProvider } from './context/DownloadContext'
 import { TaskProgressProvider } from './context/TaskProgressContext'
 import { initializeServices } from './services/adapter'
 import StagingErrorBoundary from './components/StagingErrorBoundary'
+import { runLocalStorageMigration } from './utils/localStorageMigration'
+
+// Run the one-time localStorage key migration (mtga-companion-* → vaultmtg-*)
+// BEFORE rendering so every component reads from the new vaultmtg-* keys only.
+// The function is gated by a sentinel flag and is safe to call unconditionally.
+runLocalStorageMigration()
 
 // Social OAuth providers (Google, Facebook, Apple) are enabled in the Clerk Dashboard
 // under "Social connections" — no additional code required here.

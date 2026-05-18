@@ -17,7 +17,7 @@ export function DatabaseSection({ dbPath, onDbPathChange }: DatabaseSectionProps
             type="text"
             value={dbPath}
             onChange={(e) => onDbPathChange(e.target.value)}
-            placeholder="/Users/username/.vaultmtg/mtga.db"
+            placeholder="~/.vaultmtg/vaultmtg.db"
             className="text-input"
           />
           <button className="browse-button">Browse...</button>
