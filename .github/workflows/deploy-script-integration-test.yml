@@ -1,0 +1,77 @@
+name: Deploy Script Integration Test
+
+# Runs on every PR or push that touches deploy scripts, infra scripts,
+# migrations, or SQL grants — exactly the files whose cross-script contract
+# mismatches caused issues #2192 and #2197 during the v0.3.1 release.
+#
+# Also runs on a nightly schedule to surface regressions between releases.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/deploy/**'
+      - 'infra/scripts/**'
+      - 'infra/db/**'
+      - 'services/bff/internal/storage/migrations/**'
+      - 'tests/deploy-chain/**'
+      - '.github/workflows/deploy-script-integration-test.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/deploy/**'
+      - 'infra/scripts/**'
+      - 'infra/db/**'
+      - 'services/bff/internal/storage/migrations/**'
+      - 'tests/deploy-chain/**'
+      - '.github/workflows/deploy-script-integration-test.yml'
+  schedule:
+    # Nightly at 03:00 UTC — catches regressions between releases.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-chain-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-chain-integration:
+    name: Deploy Chain Integration Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # golang-migrate CLI is needed by the test harness to apply migrations
+      # and verify the post-migration version.
+      - name: Set up Go (for migrate CLI install)
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Cache migrate CLI binary
+        id: cache-migrate
+        uses: actions/cache@v5
+        with:
+          path: ~/go/bin/migrate
+          key: migrate-cli-${{ runner.os }}-v4.18.3
+
+      - name: Install golang-migrate CLI
+        if: steps.cache-migrate.outputs.cache-hit != 'true'
+        env:
+          GONOSUMDB: github.com/RdHamilton/MTGA-Companion
+          GOPRIVATE: github.com/RdHamilton/MTGA-Companion
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.3
+
+      - name: Install psql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Run deploy-chain integration test
+        run: bash tests/deploy-chain/deploy-chain-integration-test.sh
