@@ -79,6 +79,32 @@ trap cleanup EXIT
 info "Scratch dir: $SCRATCH"
 info "Repo root  : $REPO_ROOT"
 
+# ---------------------------------------------------------------------------
+# Install deploy-env.sh at /tmp/deploy-env.sh — every EC2-side script sources
+# it from that path (it is downloaded from S3 alongside each script before
+# execution on EC2).  The test harness places a patched copy here so that
+# BFF_ENV_FILE / BFF_ENV_DIR point into the scratch space rather than the
+# real /etc/mtga-companion paths that require root access.
+#
+# DB_PORT and DB_SSL_MODE are also overridden so run-migrations.sh (which
+# reads these vars from deploy-env.sh) connects to the throwaway Docker
+# Postgres on the test port without TLS.
+# ---------------------------------------------------------------------------
+PG_PORT=15432  # declared here so the sed patches below can reference it
+
+STUB_ENV_DIR="${SCRATCH}/etc/mtga-companion"
+STUB_ENV_FILE="${SCRATCH}/etc/mtga-companion/env"
+mkdir -p "$STUB_ENV_DIR"
+
+DEPLOY_ENV_STUB="/tmp/deploy-env.sh"
+sed \
+    -e "s|BFF_ENV_DIR=\"/etc/mtga-companion\"|BFF_ENV_DIR=\"${STUB_ENV_DIR}\"|" \
+    -e "s|BFF_ENV_FILE=\"/etc/mtga-companion/env\"|BFF_ENV_FILE=\"${STUB_ENV_FILE}\"|" \
+    -e 's|DB_PORT="5432"|DB_PORT="'"${PG_PORT}"'"|' \
+    -e 's|DB_SSL_MODE="sslmode=require"|DB_SSL_MODE="sslmode=disable"|' \
+    "${REPO_ROOT}/infra/config/deploy-env.sh" > "$DEPLOY_ENV_STUB"
+info "Installed patched deploy-env.sh at $DEPLOY_ENV_STUB (env paths, port, sslmode redirected for local test)"
+
 # ===========================================================================
 # Dependency check
 # ===========================================================================
@@ -138,9 +164,6 @@ DEPLOY_SHA="abc1234"
 # ===========================================================================
 info "Phase 1 — provision-env (SSM stubbed, writes env file to scratch)..."
 
-STUB_ENV_FILE="${SCRATCH}/etc/mtga-companion/env"
-mkdir -p "$(dirname "$STUB_ENV_FILE")"
-
 # Build a stub 'aws' CLI at the front of PATH so all scripts that call
 # `aws ssm get-parameter` or `aws secretsmanager get-secret-value` receive
 # canned local responses.  This is written once here and overwritten in
@@ -171,17 +194,10 @@ export PATH="${SCRATCH}:${PATH}"
 
 # Validate the provision-env.sh contract: the script must accept
 # (ENV_KEY SSM_PARAM_NAME [--with-decryption]) and write KEY=VALUE to
-# /etc/mtga-companion/env.  We redirect its writes to our scratch path by
-# patching both the ENV_FILE assignment and the mkdir call (both are
-# hardcoded in the script — it is designed to run as root on EC2).
-STUB_ETC_DIR="${SCRATCH}/etc/mtga-companion"
-mkdir -p "$STUB_ETC_DIR"
-
+# the BFF env file.  BFF_ENV_FILE / BFF_ENV_DIR are resolved from the
+# patched /tmp/deploy-env.sh installed above — no further path overrides needed.
 PROVISION_ENV="${SCRATCH}/provision-env-test.sh"
-sed \
-    -e "s|ENV_FILE=/etc/mtga-companion/env|ENV_FILE=${STUB_ENV_FILE}|" \
-    -e "s|mkdir -p /etc/mtga-companion|mkdir -p ${STUB_ETC_DIR}|" \
-    "${REPO_ROOT}/scripts/deploy/provision-env.sh" > "$PROVISION_ENV"
+cp "${REPO_ROOT}/scripts/deploy/provision-env.sh" "$PROVISION_ENV"
 chmod +x "$PROVISION_ENV"
 
 bash "$PROVISION_ENV" ALLOWED_ORIGINS /mtga-companion/production/ALLOWED_ORIGINS
@@ -189,10 +205,7 @@ bash "$PROVISION_ENV" CLERK_SECRET_KEY /mtga-companion/production/CLERK_SECRET_K
 
 # Contract check: provision-db-url.sh must write DATABASE_URL and DB_SECRET_ARN.
 PROVISION_DB="${SCRATCH}/provision-db-url-test.sh"
-sed \
-    -e "s|ENV_FILE=/etc/mtga-companion/env|ENV_FILE=${STUB_ENV_FILE}|" \
-    -e "s|mkdir -p /etc/mtga-companion|mkdir -p ${STUB_ETC_DIR}|" \
-    "${REPO_ROOT}/scripts/deploy/provision-db-url.sh" > "$PROVISION_DB"
+cp "${REPO_ROOT}/scripts/deploy/provision-db-url.sh" "$PROVISION_DB"
 chmod +x "$PROVISION_DB"
 
 bash "$PROVISION_DB"
@@ -301,14 +314,11 @@ AWSSTUB_PHASE3
 chmod +x "$STUB_AWS"
 
 # Patch run-migrations.sh for local test execution:
-#   - sslmode=require → sslmode=disable  (local Docker Postgres has no TLS)
-#   - port 5432 → local test port in DSN
-#   - psql call: inject -p PG_PORT so the grant step also uses the right port
-#   - remove dnf install block (psql already on PATH locally and in CI)
+#   - sslmode and DB_PORT are already redirected via the patched /tmp/deploy-env.sh
+#   - psql call: inject -p PG_PORT so the grant step uses the right port
+#   - remove dnf install block (psql already on PATH in CI)
 MIGRATE_SCRIPT="${SCRATCH}/run-migrations-test.sh"
 sed \
-    -e 's|sslmode=require|sslmode=disable|g' \
-    -e "s|:5432/|:${PG_PORT}/|g" \
     -e 's|dnf install -y postgresql15||g' \
     -e "s|PGPASSWORD=\"\$MASTER_PASSWORD\" psql|PGPASSWORD=\"\$MASTER_PASSWORD\" psql -p ${PG_PORT}|g" \
     "${REPO_ROOT}/infra/scripts/run-migrations.sh" > "$MIGRATE_SCRIPT"
