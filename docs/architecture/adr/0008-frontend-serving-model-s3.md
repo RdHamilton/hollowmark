@@ -14,7 +14,7 @@ production domains:
 
 - **`vaultmtg.app`** — public marketing site for the rebranded product.
 - **`app.vaultmtg.app`** — the React SPA (formerly served at
-  `vaultmtg.app`).
+  `mtgacompanion.com`).
 - **`rhamiltoneng.com`** — the Ray Hamilton Engineering portfolio / engineering
   brand site (separate Next.js project, repo `vault-mtg-web`).
 
