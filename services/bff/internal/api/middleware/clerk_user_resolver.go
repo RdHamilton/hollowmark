@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
 )
 
 // clerkUserUpsertRepo is the minimal interface ClerkUserResolver needs.

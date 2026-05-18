@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
 )
 
 // fakeDB implements the repository.DB interface using in-memory slices.

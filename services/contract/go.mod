@@ -1,4 +1,4 @@
-module github.com/RdHamilton/MTGA-Companion/services/contract
+module github.com/RdHamilton/vault-mtg/services/contract
 
 go 1.25.0
 

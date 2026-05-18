@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ramonehamilton/mtga-sync/internal/seventeenlands"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/seventeenlands"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

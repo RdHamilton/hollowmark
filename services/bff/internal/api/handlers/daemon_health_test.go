@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ramonehamilton/mtga-bff/internal/api/handlers"
-	"github.com/ramonehamilton/mtga-bff/internal/api/middleware"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
 )
 
 // stubDaemonHealthChecker is a test double for DaemonHealthChecker.

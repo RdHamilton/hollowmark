@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ramonehamilton/mtga-daemon/internal/localapi"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/localapi"
 )
 
 // schtasksCall records a single invocation of schtasks.

@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/config"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
 	"github.com/go-chi/chi/v5"
-	"github.com/ramonehamilton/mtga-bff/internal/api/handlers"
-	"github.com/ramonehamilton/mtga-bff/internal/config"
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
 )
 
 // stubRatingsGetter is a test double for DraftRatingsGetter.

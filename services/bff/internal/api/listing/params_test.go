@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ramonehamilton/mtga-bff/internal/api/listing"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/listing"
 )
 
 var testSortAllowlist = map[string]struct{}{

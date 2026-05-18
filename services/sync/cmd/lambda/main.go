@@ -33,14 +33,14 @@ import (
 	"os"
 	"strings"
 
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/datasets"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/dbconn"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/handler"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/seventeenlands"
 	awslambda "github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/rds/auth"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/ramonehamilton/mtga-sync/internal/datasets"
-	"github.com/ramonehamilton/mtga-sync/internal/dbconn"
-	"github.com/ramonehamilton/mtga-sync/internal/handler"
-	"github.com/ramonehamilton/mtga-sync/internal/seventeenlands"
 )
 
 func main() {

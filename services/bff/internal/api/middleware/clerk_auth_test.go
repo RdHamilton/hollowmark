@@ -15,7 +15,7 @@ import (
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/clerk/clerk-sdk-go/v2/clerktest"
 
-	"github.com/ramonehamilton/mtga-bff/internal/api/middleware"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
 )
 
 // jwksFromPublicKey serialises an *rsa.PublicKey into a minimal JWKS JSON

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/dbconn"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/rds/auth"
-	"github.com/ramonehamilton/mtga-sync/internal/dbconn"
 )
 
 // stubTokenProvider is a test double for dbconn.TokenProvider.

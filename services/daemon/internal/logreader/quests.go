@@ -3,7 +3,7 @@ package logreader
 import (
 	"fmt"
 
-	"github.com/RdHamilton/MTGA-Companion/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/contract"
 )
 
 // isQuestResponse reports whether an entry is a QuestGetQuests response.

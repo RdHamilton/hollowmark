@@ -6,6 +6,7 @@ use (
 	./pkg/draftalgo
 	./pkg/logparse
 	./services/bff
+	./services/collection-agent-helper
 	./services/contract
 	./services/daemon
 	./services/sync

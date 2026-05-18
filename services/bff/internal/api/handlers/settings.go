@@ -23,8 +23,8 @@ import (
 	"net/http"
 	"strings"
 
+	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
 	"github.com/go-chi/chi/v5"
-	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
 )
 
 // settingsReader is the minimal repository surface SettingsHandler needs.

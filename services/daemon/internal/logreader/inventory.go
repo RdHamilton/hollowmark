@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/RdHamilton/MTGA-Companion/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/contract"
 )
 
 // IsInventoryEntry reports whether the log entry is an inventory update event.
