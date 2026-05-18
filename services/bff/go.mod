@@ -51,4 +51,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
+// Phase-3 interim: github.com/RdHamilton/vault-mtg does not exist as a remote
+// repo until Phase 4 (repo rename). Remove after Phase 4 + module tagging.
+// Tracked: #2262
 replace github.com/RdHamilton/vault-mtg/services/contract => ../contract
