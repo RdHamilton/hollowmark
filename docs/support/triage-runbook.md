@@ -153,7 +153,7 @@ Use this command template (fill in fields before running):
 
 ```bash
 gh issue create \
-  --repo RdHamilton/MTGA-Companion \
+  --repo RdHamilton/vault-mtg \
   --title "bug: [concise description]" \
   --body "## Bug Report
 
