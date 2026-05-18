@@ -1,6 +1,6 @@
-# Go 1.25 Features in MTGA-Companion
+# Go 1.25 Features in VaultMTG
 
-This document describes Go 1.25 features implemented in MTGA-Companion and identifies areas for future adoption.
+This document describes Go 1.25 features implemented in VaultMTG and identifies areas for future adoption.
 
 ## Implementation Status (v1.4.1)
 

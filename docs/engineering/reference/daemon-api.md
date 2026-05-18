@@ -1,6 +1,6 @@
-# MTGA-Companion Daemon WebSocket API
+# VaultMTG Daemon WebSocket API
 
-This document describes the WebSocket API provided by the MTGA-Companion daemon for real-time communication between the daemon and client applications (GUI, custom tools, etc.).
+This document describes the WebSocket API provided by the VaultMTG daemon for real-time communication between the daemon and client applications (GUI, custom tools, etc.).
 
 ## Overview
 
