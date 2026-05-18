@@ -40,7 +40,7 @@ const mockExportResponse: ExportDraftTo17LandsResponse = {
     ],
     metadata: {
       exported_at: '2024-01-15T15:00:00Z',
-      exported_from: 'MTGA-Companion',
+      exported_from: 'VaultMTG',
       overall_grade: 'B+',
       overall_score: 78,
       predicted_win_rate: 0.55,
@@ -127,7 +127,7 @@ describe('Draft Export API', () => {
       const result = await exportDraftTo17Lands('test-session-123');
 
       expect(result.export.metadata).toBeDefined();
-      expect(result.export.metadata?.exported_from).toBe('MTGA-Companion');
+      expect(result.export.metadata?.exported_from).toBe('VaultMTG');
       expect(result.export.metadata?.overall_grade).toBe('B+');
       expect(result.export.metadata?.overall_score).toBe(78);
       expect(result.export.metadata?.predicted_win_rate).toBe(0.55);
@@ -199,7 +199,7 @@ describe('SeventeenLandsDraftExport types', () => {
       sideboard: [12347],
       metadata: {
         exported_at: '2024-01-15T15:00:00Z',
-        exported_from: 'MTGA-Companion',
+        exported_from: 'VaultMTG',
         overall_grade: 'A',
         overall_score: 90,
         predicted_win_rate: 0.65,
