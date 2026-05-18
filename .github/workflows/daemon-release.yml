@@ -110,23 +110,6 @@ jobs:
           path: dist/daemon-universal_darwin_all/vaultmtg-daemon
           if-no-files-found: error
 
-      # ADR-022 Phase 2 dual-naming: upload Windows legacy-named binary to release.
-      # GoReleaser already published vaultmtg-daemon-windows-amd64.exe via the
-      # archives entries in .goreleaser.yml; this step creates the legacy copy.
-      # Remove in Phase 6 (#1764) once all in-field daemons have migrated.
-      - name: Upload legacy-named Windows binary to GitHub Release (dual-naming)
-        if: startsWith(github.ref, 'refs/tags/daemon/v')
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ github.ref_name }}"
-          cp dist/vaultmtg-daemon-windows-amd64.exe \
-             dist/mtga-companion-daemon-windows-amd64.exe
-          gh release upload "$TAG" \
-            dist/mtga-companion-daemon-windows-amd64.exe \
-            --repo "${{ github.repository }}" \
-            --clobber
-
   sign-macos:
     name: Sign & Notarize macOS universal binary
     runs-on: macos-latest
