@@ -135,9 +135,10 @@ Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Silent
 
 $action  = New-ScheduledTaskAction -Execute $BinaryPath -Argument "-config `"$ConfigFile`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Env:USERNAME
+# No timeout — the daemon is long-running. Idempotency handled by Unregister-ScheduledTask above.
 $settings = New-ScheduledTaskSettingsSet `
-    -ExecutionTimeLimit ([TimeSpan]::Zero) `   # No timeout — the daemon is long-running.
-    -StartWhenAvailable $true                  # Idempotency handled by Unregister-ScheduledTask above.
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -StartWhenAvailable $true
 
 $principal = New-ScheduledTaskPrincipal `
     -UserId $Env:USERNAME `
