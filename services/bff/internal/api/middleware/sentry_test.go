@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
 	"github.com/getsentry/sentry-go"
-	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
 )
 
 // newTestHub returns a Sentry hub backed by an in-memory transport so that

@@ -22,11 +22,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/datasets"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/refresh"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/scryfall"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/seventeenlands"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/ramonehamilton/mtga-sync/internal/datasets"
-	"github.com/ramonehamilton/mtga-sync/internal/refresh"
-	"github.com/ramonehamilton/mtga-sync/internal/scryfall"
-	"github.com/ramonehamilton/mtga-sync/internal/seventeenlands"
 )
 
 func main() {

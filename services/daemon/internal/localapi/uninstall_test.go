@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ramonehamilton/mtga-daemon/internal/localapi"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/localapi"
 )
 
 // stubUninstaller records what was passed to Run and returns the

@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/RdHamilton/MTGA-Companion/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/contract"
 )
 
 const (

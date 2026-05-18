@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/RdHamilton/MTGA-Companion/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/contract"
 )
 
 // IsDeckEntry reports whether the log entry is a DeckUpsertDeckV2 response.

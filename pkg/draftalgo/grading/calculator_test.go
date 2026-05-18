@@ -3,8 +3,8 @@ package grading_test
 import (
 	"testing"
 
-	"github.com/RdHamilton/MTGA-Companion/pkg/draftalgo"
-	"github.com/RdHamilton/MTGA-Companion/pkg/draftalgo/grading"
+	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
+	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/grading"
 )
 
 type stubCards map[string]string

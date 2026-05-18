@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	contract "github.com/RdHamilton/MTGA-Companion/services/contract"
-	"github.com/ramonehamilton/mtga-bff/internal/api/sse"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/sse"
+	contract "github.com/RdHamilton/vault-mtg/services/contract"
 )
 
 // makeEvent returns a minimal DaemonEvent for use in tests.

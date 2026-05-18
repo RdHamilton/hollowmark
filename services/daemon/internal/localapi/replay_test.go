@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ramonehamilton/mtga-daemon/internal/localapi"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/localapi"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ package draftdata
 import (
 	"time"
 
-	"github.com/ramonehamilton/mtga-sync/internal/seventeenlands"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/seventeenlands"
 )
 
 // SetRatings holds the fetched card ratings for a single MTG set.

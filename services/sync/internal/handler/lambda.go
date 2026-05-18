@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ramonehamilton/mtga-sync/internal/datasets"
-	"github.com/ramonehamilton/mtga-sync/internal/draftdata"
-	"github.com/ramonehamilton/mtga-sync/internal/seventeenlands"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/datasets"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/draftdata"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/seventeenlands"
 )
 
 // defaultFormats is the canonical list of 17Lands draft formats synced per set.

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ramonehamilton/mtga-daemon/internal/draftstate"
-	"github.com/ramonehamilton/mtga-daemon/internal/localapi"
-	"github.com/ramonehamilton/mtga-daemon/internal/logreader"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/draftstate"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/localapi"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
 )
 
 // stubCards / stubRatings satisfy draftalgo.CardLookup / RatingsLookup.

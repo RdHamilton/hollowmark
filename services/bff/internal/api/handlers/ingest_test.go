@@ -12,11 +12,11 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	contract "github.com/RdHamilton/MTGA-Companion/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	contract "github.com/RdHamilton/vault-mtg/services/contract"
 	"github.com/posthog/posthog-go"
-	"github.com/ramonehamilton/mtga-bff/internal/api/handlers"
-	"github.com/ramonehamilton/mtga-bff/internal/api/middleware"
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
 )
 
 // mockPostHogClient records Enqueue calls for test assertions.

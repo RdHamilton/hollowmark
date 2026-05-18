@@ -1,11 +1,11 @@
-module github.com/ramonehamilton/mtga-bff
+module github.com/RdHamilton/vault-mtg/services/bff
 
 go 1.25.0
 
 toolchain go1.25.10
 
 require (
-	github.com/RdHamilton/MTGA-Companion/services/contract v0.1.0
+	github.com/RdHamilton/vault-mtg/services/contract v0.1.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.17
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.7
 	github.com/clerk/clerk-sdk-go/v2 v2.6.0
@@ -50,3 +50,8 @@ require (
 	golang.org/x/text v0.37.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// Phase-3 interim: github.com/RdHamilton/vault-mtg does not exist as a remote
+// repo until Phase 4 (repo rename). Remove after Phase 4 + module tagging.
+// Tracked: #2262
+replace github.com/RdHamilton/vault-mtg/services/contract => ../contract

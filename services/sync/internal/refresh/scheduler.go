@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ramonehamilton/mtga-sync/internal/datasets"
-	"github.com/ramonehamilton/mtga-sync/internal/draftdata"
-	"github.com/ramonehamilton/mtga-sync/internal/scryfall"
-	"github.com/ramonehamilton/mtga-sync/internal/seventeenlands"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/datasets"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/draftdata"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/scryfall"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/seventeenlands"
 )
 
 const defaultRefreshHour = 2
