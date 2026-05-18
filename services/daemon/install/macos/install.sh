@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — macOS installer for the MTGA Companion daemon
+# install.sh — macOS installer for the VaultMTG daemon
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/RdHamilton/MTGA-Companion/main/services/daemon/install/macos/install.sh | bash
@@ -8,7 +8,10 @@
 #   1. Detects the host architecture (arm64 or amd64).
 #   2. Downloads the correct release binary from GitHub Releases.
 #   3. Installs the binary to /usr/local/bin/.
-#   4. Writes a launchd plist to ~/Library/LaunchAgents/ and loads it.
+#   4. Detects and unloads the OLD com.mtga-companion.daemon launchd label if present
+#      (CRITICAL: prevents two daemon instances running simultaneously — ADR-022).
+#   5. Writes a launchd plist to ~/Library/LaunchAgents/ and loads it under the new
+#      com.vaultmtg.daemon label.
 
 set -euo pipefail
 
@@ -22,14 +25,22 @@ DRY_RUN="${DRY_RUN:-}"
 # Configuration — edit these for a specific release.
 # ---------------------------------------------------------------------------
 GITHUB_REPO="RdHamilton/MTGA-Companion"
-# RELEASE_TAG is the daemon release tag, e.g. "daemon/v0.2.0".
-# Override with:  RELEASE_TAG=daemon/v0.1.0 bash install.sh
+# RELEASE_TAG is the daemon release tag, e.g. "daemon/v0.3.2".
+# Override with:  RELEASE_TAG=daemon/v0.3.2 bash install.sh
 RELEASE_TAG="${RELEASE_TAG:-}"
 INSTALL_DIR="/usr/local/bin"
-BINARY_NAME="mtga-companion-daemon"
-PLIST_LABEL="com.mtga-companion.daemon"
+BINARY_NAME="vaultmtg-daemon"
+
+# ADR-022 Phase 2: new label.
+PLIST_LABEL="com.vaultmtg.daemon"
+# Legacy label — unloaded before registering the new one (prevents dual-daemon).
+PLIST_LABEL_LEGACY="com.mtga-companion.daemon"
+
 PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
-CONFIG_DIR="${HOME}/.mtga-companion"
+PLIST_PATH_LEGACY="${HOME}/Library/LaunchAgents/${PLIST_LABEL_LEGACY}.plist"
+
+# ADR-022 Phase 2: new config dir.
+CONFIG_DIR="${HOME}/.vaultmtg"
 CONFIG_FILE="${CONFIG_DIR}/daemon.json"
 
 # ---------------------------------------------------------------------------
@@ -73,7 +84,7 @@ for r in releases:
   fi
 fi
 
-echo "Installing MTGA Companion daemon ${RELEASE_TAG} (${ASSET_SUFFIX})..."
+echo "Installing VaultMTG daemon ${RELEASE_TAG} (${ASSET_SUFFIX})..."
 
 # ---------------------------------------------------------------------------
 # Build the download URL and fetch the binary.
@@ -105,7 +116,7 @@ echo "Binary installed: ${INSTALL_DIR}/${BINARY_NAME}"
 # Write the JSON config file.
 # Key names must match the json struct tags in
 # services/daemon/internal/config/config.go.
-# Default path matches main.go: ~/.mtga-companion/daemon.json
+# Default path matches main.go: ~/.vaultmtg/daemon.json
 #
 # jq is used to produce safe JSON — values are escaped properly even if they
 # contain quotes, backslashes, or newlines.  python3 is the fallback because
@@ -116,7 +127,7 @@ mkdir -p "${CONFIG_DIR}"
 if [[ ! -f "${CONFIG_FILE}" ]]; then
   # Prompt for values only on a fresh install.
   echo ""
-  printf "Enter BFF URL (e.g. https://api.yourdomain.com): "
+  printf "Enter BFF URL (e.g. https://api.vaultmtg.app/api/v1): "
   read -r BFF_URL
   printf "Enter daemon auth token (daemon JWT from first registration): "
   read -r DAEMON_AUTH_TOKEN
@@ -138,7 +149,44 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Write the launchd plist.
+# CRITICAL (ADR-022 Constraint 1): Detect and unload the old launchd label
+# BEFORE writing and loading the new one.  If both labels are loaded at the
+# same time two daemon processes will run simultaneously, causing duplicate
+# log ingestion and event duplication on the BFF.
+#
+# Steps:
+#   1. Check whether the legacy label is currently loaded via `launchctl list`.
+#   2. If loaded: bootout (modern, macOS 10.11+) or unload (fallback).
+#   3. Remove the legacy plist so it is not re-loaded at next login.
+#
+# All failures are non-fatal (|| true) — a fresh install has no legacy label.
+# ---------------------------------------------------------------------------
+echo "Checking for legacy launchd job ${PLIST_LABEL_LEGACY}..."
+LEGACY_LOADED=0
+if launchctl list "${PLIST_LABEL_LEGACY}" >/dev/null 2>&1; then
+  LEGACY_LOADED=1
+fi
+
+if [[ "${LEGACY_LOADED}" -eq 1 ]]; then
+  echo "Found legacy daemon label ${PLIST_LABEL_LEGACY} — stopping and unloading..."
+  if [[ -z "${DRY_RUN}" ]]; then
+    # Prefer bootout (macOS 10.11+) which atomically stops + unregisters the job.
+    launchctl bootout "gui/$(id -u)/${PLIST_LABEL_LEGACY}" 2>/dev/null || \
+      launchctl unload -w "${PLIST_PATH_LEGACY}" 2>/dev/null || true
+  else
+    echo "[DRY_RUN] would run: launchctl bootout gui/$(id -u)/${PLIST_LABEL_LEGACY}"
+  fi
+  echo "Legacy daemon stopped."
+fi
+
+# Remove legacy plist (idempotent — ignore if already gone).
+if [[ -f "${PLIST_PATH_LEGACY}" ]]; then
+  echo "Removing legacy plist: ${PLIST_PATH_LEGACY}"
+  rm -f "${PLIST_PATH_LEGACY}"
+fi
+
+# ---------------------------------------------------------------------------
+# Write the launchd plist under the new label.
 # RunAtLoad=true  — start the daemon when the user logs in.
 # KeepAlive=true  — relaunch the daemon if it exits unexpectedly.
 # ---------------------------------------------------------------------------
@@ -150,7 +198,7 @@ cat > "${PLIST_PATH}" <<PLIST
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Unique identifier for this launchd job. -->
+    <!-- Unique identifier for this launchd job (ADR-022 Phase 2). -->
     <key>Label</key>
     <string>${PLIST_LABEL}</string>
 
@@ -172,9 +220,9 @@ cat > "${PLIST_PATH}" <<PLIST
 
     <!-- Write stdout/stderr to the system log directory. -->
     <key>StandardOutPath</key>
-    <string>${HOME}/Library/Logs/mtga-companion-daemon.log</string>
+    <string>${HOME}/Library/Logs/vaultmtg-daemon.log</string>
     <key>StandardErrorPath</key>
-    <string>${HOME}/Library/Logs/mtga-companion-daemon.log</string>
+    <string>${HOME}/Library/Logs/vaultmtg-daemon.log</string>
 </dict>
 </plist>
 PLIST
@@ -192,10 +240,10 @@ else
 fi
 
 echo ""
-echo "MTGA Companion daemon installed and running."
+echo "VaultMTG daemon installed and running."
 echo "  Binary : ${INSTALL_DIR}/${BINARY_NAME}"
 echo "  Config : ${CONFIG_FILE}"
 echo "  plist  : ${PLIST_PATH}"
-echo "  Logs   : ${HOME}/Library/Logs/mtga-companion-daemon.log"
+echo "  Logs   : ${HOME}/Library/Logs/vaultmtg-daemon.log"
 echo ""
 echo "To change the BFF URL or rotate the auth token, edit: ${CONFIG_FILE}"

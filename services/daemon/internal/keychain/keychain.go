@@ -1,6 +1,10 @@
 // Package keychain provides CGO-free OS keychain access for daemon API key storage.
 //
-// Service name: com.mtga-companion.daemon
+// Service names (ADR-022 Phase 2):
+//
+//	ServiceNameNew    = "com.vaultmtg.daemon"     (production — all writes go here)
+//	ServiceNameLegacy = "com.mtga-companion.daemon" (read-only fallback for upgrade)
+//
 // Account key:  api-key
 //
 // On macOS, go-keyring uses the Keychain Services API via security(1) subprocess —
@@ -8,19 +12,34 @@
 // golang.org/x/sys/windows syscalls — also CGO-free.
 // Both targets cross-compile cleanly from a macOS/Linux CI runner.
 //
+// Upgrade migration (ADR-022 Constraint 1):
+// On startup, Get() first tries ServiceNameNew.  If the entry is absent it tries
+// ServiceNameLegacy; when found there, it copies the key forward to ServiceNameNew
+// (so subsequent reads hit the new name) and logs the migration at INFO.  The
+// legacy entry is RETAINED — never deleted — to allow safe downgrade. Deletion of
+// the legacy entry is deferred to Phase 6.
+//
 // See ADR-020 §Keychain Storage for the full design rationale.
 package keychain
 
 import (
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/zalando/go-keyring"
 )
 
 const (
-	// ServiceName is the OS keychain service identifier for the daemon.
-	ServiceName = "com.mtga-companion.daemon"
+	// ServiceNameNew is the current OS keychain service identifier for the daemon
+	// (ADR-022 Phase 2 brand rename).  All writes target this name.
+	ServiceNameNew = "com.vaultmtg.daemon"
+
+	// ServiceNameLegacy is the pre-rename OS keychain service identifier retained
+	// for read-only upgrade migration.  Do NOT write to this name in production code.
+	// This constant is used ONLY in the Get() fallback branch and in tests.
+	// Deletion of the legacy entry is deferred to Phase 6.
+	ServiceNameLegacy = "com.mtga-companion.daemon"
 
 	// AccountKey is the OS keychain account name under which the API key is stored.
 	AccountKey = "api-key"
@@ -30,31 +49,66 @@ const (
 var ErrNotFound = errors.New("keychain: api key not found")
 
 // Get retrieves the daemon API key from the OS keychain.
-// Returns ErrNotFound when no key has been stored yet.
+//
+// Migration path (ADR-022 Constraint 1):
+//  1. Try ServiceNameNew.  If found → return it.
+//  2. Try ServiceNameLegacy.  If found → copy key forward to ServiceNameNew,
+//     log the migration at INFO, and return the key.  The legacy entry is
+//     retained (NOT deleted) for downgrade safety.
+//  3. Neither entry present → return ErrNotFound (triggers normal PKCE re-auth).
+//
+// A corrupted / unreadable legacy entry is treated as absent and falls through
+// to ErrNotFound so the caller initiates re-auth rather than crashing.
 func Get() (string, error) {
-	val, err := keyring.Get(ServiceName, AccountKey)
-	if err != nil {
-		if isNotFound(err) {
+	// ── 1. Try new service name first ────────────────────────────────────────
+	val, err := keyring.Get(ServiceNameNew, AccountKey)
+	if err == nil {
+		return val, nil
+	}
+	if !isNotFound(err) {
+		return "", fmt.Errorf("keychain: get %q: %w", ServiceNameNew, err)
+	}
+
+	// ── 2. Fall back to legacy service name ──────────────────────────────────
+	legacyVal, legacyErr := keyring.Get(ServiceNameLegacy, AccountKey)
+	if legacyErr != nil {
+		if isNotFound(legacyErr) {
+			// Neither entry present — fresh install or wiped keychain.
 			return "", ErrNotFound
 		}
-		return "", fmt.Errorf("keychain: get: %w", err)
+		// Corrupted / unreadable legacy entry: log a warning and fall through
+		// to ErrNotFound so normal PKCE re-auth is triggered rather than crashing.
+		log.Printf("[keychain] warn: could not read legacy entry %q: %v — falling through to re-auth", ServiceNameLegacy, legacyErr)
+		return "", ErrNotFound
 	}
-	return val, nil
+
+	// ── 3. Copy forward to new service name ──────────────────────────────────
+	// The legacy entry is RETAINED (not deleted) for downgrade safety.
+	// Deletion of the legacy entry is deferred to Phase 6.
+	if copyErr := keyring.Set(ServiceNameNew, AccountKey, legacyVal); copyErr != nil {
+		log.Printf("[keychain] warn: could not copy legacy keychain entry to %q: %v — proceeding with legacy key", ServiceNameNew, copyErr)
+	} else {
+		log.Printf("[keychain] INFO: migrated keychain entry from %q to %q (legacy entry retained for downgrade safety)", ServiceNameLegacy, ServiceNameNew)
+	}
+
+	return legacyVal, nil
 }
 
-// Set stores the daemon API key in the OS keychain, creating or replacing any
-// existing entry for ServiceName/AccountKey.
+// Set stores the daemon API key in the OS keychain under ServiceNameNew,
+// creating or replacing any existing entry.
+// The legacy ServiceNameLegacy entry is never written by this function.
 func Set(apiKey string) error {
-	if err := keyring.Set(ServiceName, AccountKey, apiKey); err != nil {
+	if err := keyring.Set(ServiceNameNew, AccountKey, apiKey); err != nil {
 		return fmt.Errorf("keychain: set: %w", err)
 	}
 	return nil
 }
 
-// Delete removes the daemon API key from the OS keychain.
+// Delete removes the daemon API key from the OS keychain (ServiceNameNew only).
+// The legacy entry is NOT deleted — it is retained for downgrade safety.
 // Returns nil if no key was stored (idempotent).
 func Delete() error {
-	err := keyring.Delete(ServiceName, AccountKey)
+	err := keyring.Delete(ServiceNameNew, AccountKey)
 	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("keychain: delete: %w", err)
 	}

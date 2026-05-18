@@ -1,23 +1,31 @@
 #!/usr/bin/env bash
-# uninstall.sh — removes the MTGA Companion daemon from macOS.
+# uninstall.sh — removes the VaultMTG daemon from macOS.
 #
 # Usage:
 #   bash uninstall.sh
 #
-# Steps:
-#   1. Unloads and disables the launchd job.
-#   2. Removes the plist from ~/Library/LaunchAgents/.
-#   3. Removes the binary from /usr/local/bin/.
+# Steps (ADR-022 Phase 2):
+#   1. Unloads and disables the new launchd job (com.vaultmtg.daemon).
+#   2. Unloads and disables the legacy launchd job (com.mtga-companion.daemon)
+#      if still present — handles the upgrade-then-uninstall scenario.
+#   3. Removes both plists from ~/Library/LaunchAgents/.
+#   4. Removes the binary from /usr/local/bin/.
 
 set -euo pipefail
 
 INSTALL_DIR="/usr/local/bin"
 BINARY_NAME="vaultmtg-daemon"
-PLIST_LABEL="com.mtga-companion.daemon"
+
+# ADR-022 Phase 2: new label.
+PLIST_LABEL="com.vaultmtg.daemon"
+# Legacy label — also unloaded when present.
+PLIST_LABEL_LEGACY="com.mtga-companion.daemon"
+
 PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
+PLIST_PATH_LEGACY="${HOME}/Library/LaunchAgents/${PLIST_LABEL_LEGACY}.plist"
 
 # ---------------------------------------------------------------------------
-# Unload the launchd job.
+# Unload the new launchd job (com.vaultmtg.daemon).
 # -w removes the Disabled key from the launch database so the job does not
 # reload on next login even if the plist is present.
 # We use `|| true` because `launchctl unload` exits non-zero when the job
@@ -33,6 +41,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# CRITICAL (ADR-022 Constraint 1): Unload the legacy launchd job if present.
+# This handles the case where a user had the old daemon installed and never
+# ran the new installer — the legacy label may still be registered.
+# Failures are non-fatal (|| true) — a fresh install has no legacy label.
+# ---------------------------------------------------------------------------
+if [[ -f "${PLIST_PATH_LEGACY}" ]]; then
+  echo "Found legacy plist (${PLIST_PATH_LEGACY}) — unloading and removing..."
+  launchctl unload -w "${PLIST_PATH_LEGACY}" 2>/dev/null || true
+  rm -f "${PLIST_PATH_LEGACY}"
+  echo "Legacy launchd job removed."
+elif launchctl list "${PLIST_LABEL_LEGACY}" >/dev/null 2>&1; then
+  # Label is loaded but plist is gone — use label-based bootout.
+  echo "Found legacy launchd label ${PLIST_LABEL_LEGACY} (no plist) — booting out..."
+  launchctl bootout "gui/$(id -u)/${PLIST_LABEL_LEGACY}" 2>/dev/null || true
+else
+  echo "Legacy launchd label (${PLIST_LABEL_LEGACY}) not found, skipping."
+fi
+
+# ---------------------------------------------------------------------------
 # Remove the binary.
 # sudo is needed because /usr/local/bin is owned by root on stock macOS.
 # ---------------------------------------------------------------------------
@@ -45,7 +72,7 @@ else
 fi
 
 echo ""
-echo "MTGA Companion daemon uninstalled."
+echo "VaultMTG daemon uninstalled."
 echo "Log file (${HOME}/Library/Logs/vaultmtg-daemon.log) was NOT removed."
-echo "Config file (~/.mtga-companion/daemon.json) was NOT removed."
+echo "Config file (~/.vaultmtg/daemon.json) was NOT removed."
 echo "Remove those manually if desired."
