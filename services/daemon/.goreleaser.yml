@@ -206,6 +206,29 @@ archives:
     files:
       - none*
 
+  # ---------------------------------------------------------------------------
+  # ADR-022 Phase 2 dual-naming: legacy mtga-companion-daemon-* names.
+  # These copies ensure in-field daemons that check the legacy artifact name
+  # continue to receive updates through the transition window.
+  # Remove these two archive entries in Phase 6 (#1764).
+  # ---------------------------------------------------------------------------
+  - id: darwin-universal-legacy
+    ids:
+      - daemon-universal
+    formats:
+      - binary
+    name_template: "mtga-companion-daemon-darwin-universal"
+    allow_different_binary_count: true
+
+  - id: windows-amd64-legacy
+    ids:
+      - daemon
+    formats:
+      - binary
+    name_template: "mtga-companion-daemon-windows-amd64"
+    files:
+      - none*
+
 # ---------------------------------------------------------------------------
 # Checksums
 # ---------------------------------------------------------------------------
