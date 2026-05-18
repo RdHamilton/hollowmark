@@ -3,7 +3,7 @@ package config_test
 import (
 	"testing"
 
-	"github.com/ramonehamilton/mtga-bff/internal/config"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/config"
 )
 
 func TestLoad_Defaults(t *testing.T) {

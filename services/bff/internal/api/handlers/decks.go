@@ -34,11 +34,11 @@ import (
 	"strings"
 	"time"
 
+	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
 	"github.com/getsentry/sentry-go"
 	"github.com/go-chi/chi/v5"
 	"github.com/posthog/posthog-go"
-	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
 )
 
 // decksReader is the minimal repo surface the handler needs.

@@ -7,11 +7,11 @@ import (
 	"log"
 	"time"
 
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/draftdata"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/scryfall"
+	"github.com/RdHamilton/vault-mtg/services/sync/internal/seventeenlands"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/ramonehamilton/mtga-sync/internal/draftdata"
-	"github.com/ramonehamilton/mtga-sync/internal/scryfall"
-	"github.com/ramonehamilton/mtga-sync/internal/seventeenlands"
 )
 
 // PostgresStore implements Store using a pgxpool connection pool.

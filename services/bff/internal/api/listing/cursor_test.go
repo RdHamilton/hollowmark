@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ramonehamilton/mtga-bff/internal/api/listing"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/listing"
 )
 
 func TestCursor_RoundTrip_WithTime(t *testing.T) {

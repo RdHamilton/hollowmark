@@ -1,16 +1,19 @@
-module github.com/ramonehamilton/mtga-daemon
+module github.com/RdHamilton/vault-mtg/services/daemon
 
 go 1.25.0
 
 toolchain go1.25.10
 
 require (
-	github.com/RdHamilton/MTGA-Companion/services/contract v0.1.0
+	github.com/RdHamilton/vault-mtg/pkg/draftalgo v0.0.0-00010101000000-000000000000
+	github.com/RdHamilton/vault-mtg/services/contract v0.1.0
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/getlantern/systray v1.2.2
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.11.1
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/mod v0.36.0
+	golang.org/x/sync v0.20.0
 )
 
 require (
@@ -22,15 +25,21 @@ require (
 	github.com/getlantern/hex v0.0.0-20190417191902-c6586a6fe0b7 // indirect
 	github.com/getlantern/hidden v0.0.0-20190325191715-f02dbb02be55 // indirect
 	github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f // indirect
-	github.com/getlantern/systray v1.2.2 // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
+
+// Phase-3 interim: github.com/RdHamilton/vault-mtg does not exist as a remote
+// repo until Phase 4 (repo rename). Remove after Phase 4 + module tagging.
+// Tracked: #2262
+replace (
+	github.com/RdHamilton/vault-mtg/pkg/draftalgo => ../../pkg/draftalgo
+	github.com/RdHamilton/vault-mtg/services/contract => ../contract
 )

@@ -10,8 +10,8 @@ import (
 	"time"
 	"unicode"
 
-	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
+	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
 )
 
 // historyMatchCursorPageSize is the default page size for the cursor-paginated

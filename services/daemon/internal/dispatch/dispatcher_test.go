@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/MTGA-Companion/services/contract"
-	"github.com/ramonehamilton/mtga-daemon/internal/dispatch"
+	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/dispatch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

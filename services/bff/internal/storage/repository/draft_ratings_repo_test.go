@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
 )
 
 // openTestDB opens a real PostgreSQL connection using TEST_DATABASE_URL.

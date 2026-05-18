@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ramonehamilton/mtga-daemon/internal/registrar"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/registrar"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

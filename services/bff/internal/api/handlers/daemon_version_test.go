@@ -6,9 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	contract "github.com/RdHamilton/MTGA-Companion/services/contract"
-	"github.com/ramonehamilton/mtga-bff/internal/api/handlers"
-	"github.com/ramonehamilton/mtga-bff/internal/config"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/config"
+	contract "github.com/RdHamilton/vault-mtg/services/contract"
 )
 
 func newVersionConfig(version, releasedAt string) *config.Config {
@@ -59,7 +59,7 @@ func TestGetDaemonVersion_HappyPath(t *testing.T) {
 		t.Errorf("released_at: got %q, want %q", resp.ReleasedAt, "2026-05-01T12:00:00Z")
 	}
 
-	wantURL := "https://github.com/RdHamilton/MTGA-Companion/releases/tag/daemon/v0.3.0"
+	wantURL := "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon/v0.3.0"
 	if resp.DownloadURL != wantURL {
 		t.Errorf("download_url: got %q, want %q", resp.DownloadURL, wantURL)
 	}
@@ -119,7 +119,7 @@ func TestGetDaemonVersion_DefaultDownloadURL(t *testing.T) {
 		t.Fatalf("decode body: %v", err)
 	}
 
-	want := "https://github.com/RdHamilton/MTGA-Companion/releases/tag/daemon/v0.1.0"
+	want := "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon/v0.1.0"
 	if resp.DownloadURL != want {
 		t.Errorf("download_url: got %q, want %q", resp.DownloadURL, want)
 	}

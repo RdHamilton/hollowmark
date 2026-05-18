@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
+	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
 	"github.com/go-chi/chi/v5"
-	"github.com/ramonehamilton/mtga-bff/internal/api/handlers"
-	bffmiddleware "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
 )
 
 // ─── stubs ──────────────────────────────────────────────────────────────────

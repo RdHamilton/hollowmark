@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ramonehamilton/mtga-bff/internal/api/listing"
-	mw "github.com/ramonehamilton/mtga-bff/internal/api/middleware"
-	"github.com/ramonehamilton/mtga-bff/internal/storage/repository"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/listing"
+	mw "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
 )
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-module github.com/ramonehamilton/mtga-collection-helper
+module github.com/RdHamilton/vault-mtg/services/collection-agent-helper
 
 go 1.25.0
 

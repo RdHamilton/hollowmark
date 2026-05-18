@@ -3,8 +3,8 @@ package pickquality_test
 import (
 	"testing"
 
-	"github.com/RdHamilton/MTGA-Companion/pkg/draftalgo"
-	"github.com/RdHamilton/MTGA-Companion/pkg/draftalgo/pickquality"
+	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
+	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/pickquality"
 )
 
 // stubLookups satisfies CardLookup and RatingsLookup for the tests.

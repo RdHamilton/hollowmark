@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	contract "github.com/RdHamilton/MTGA-Companion/services/contract"
-	"github.com/ramonehamilton/mtga-bff/internal/config"
+	"github.com/RdHamilton/vault-mtg/services/bff/internal/config"
+	contract "github.com/RdHamilton/vault-mtg/services/contract"
 )
 
 // DaemonVersionHandler serves GET /api/v1/daemon/version.
@@ -26,7 +26,7 @@ func (h *DaemonVersionHandler) GetDaemonVersion(w http.ResponseWriter, r *http.R
 	resp := contract.DaemonVersionResponse{
 		Latest:      h.cfg.DaemonLatestVersion,
 		ReleasedAt:  h.cfg.DaemonReleasedAt,
-		DownloadURL: "https://github.com/RdHamilton/MTGA-Companion/releases/tag/daemon/v" + h.cfg.DaemonLatestVersion,
+		DownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon/v" + h.cfg.DaemonLatestVersion,
 		Changelog:   "",
 	}
 
