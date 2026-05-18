@@ -163,7 +163,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "Checking for legacy launchd job ${PLIST_LABEL_LEGACY}..."
 LEGACY_LOADED=0
-if launchctl list "${PLIST_LABEL_LEGACY}" >/dev/null 2>&1; then
+if [[ -z "${DRY_RUN}" ]] && launchctl list "${PLIST_LABEL_LEGACY}" >/dev/null 2>&1; then
   LEGACY_LOADED=1
 fi
 
