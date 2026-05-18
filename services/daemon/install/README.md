@@ -1,4 +1,4 @@
-# MTGA Companion Daemon — Installation Guide
+# VaultMTG Daemon — Installation Guide
 
 The VaultMTG daemon runs in the background while you play MTG Arena and syncs
 your match history, draft picks, and collection to your account in real time.
@@ -95,6 +95,151 @@ task so the daemon starts automatically when you log in.
 |------|------|
 | Daemon binary | `%LOCALAPPDATA%\MTGA-Companion\vaultmtg-daemon.exe` |
 | Config | `%APPDATA%\mtga-companion\daemon.json` |
+
+---
+
+## Linux — Manual Installation
+
+There is no packaged Linux installer. Linux users install the daemon manually
+and manage it via their preferred init system (systemd is documented below).
+
+### Step 1 — Download
+
+Download the `vaultmtg-daemon-linux-amd64` binary from the
+[latest release](https://github.com/RdHamilton/MTGA-Companion/releases/latest)
+and make it executable:
+
+```bash
+chmod +x vaultmtg-daemon-linux-amd64
+sudo mv vaultmtg-daemon-linux-amd64 /usr/local/bin/vaultmtg-daemon
+```
+
+### Step 2 — Create the config directory
+
+```bash
+mkdir -p ~/.vaultmtg
+```
+
+### Step 3 — Run the daemon (first launch)
+
+```bash
+vaultmtg-daemon
+```
+
+On first launch the daemon runs the PKCE browser-redirect flow: it opens your
+browser, you log in to your VaultMTG account, and the daemon receives the auth
+code and registers with the cloud API. After pairing, `daemon.json` is written
+to `~/.vaultmtg/daemon.json`.
+
+### Step 4 — Run as a systemd user service (auto-start)
+
+Create a systemd user unit file:
+
+```bash
+mkdir -p ~/.config/systemd/user
+```
+
+Create `~/.config/systemd/user/vaultmtg-daemon.service`:
+
+```ini
+[Unit]
+Description=VaultMTG Daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/vaultmtg-daemon
+Restart=on-failure
+RestartSec=5s
+Environment=VAULTMTG_DAEMON_CLOUD_API_URL=https://api.vaultmtg.app/api/v1
+# Legacy name also works: MTGA_DAEMON_CLOUD_API_URL (dual-read shim — see Upgrading section)
+
+[Install]
+WantedBy=default.target
+```
+
+Enable and start the unit:
+
+```bash
+systemctl --user enable vaultmtg-daemon
+systemctl --user start vaultmtg-daemon
+systemctl --user status vaultmtg-daemon
+```
+
+The daemon logs to the systemd journal:
+
+```bash
+journalctl --user -u vaultmtg-daemon -f
+```
+
+### Config path
+
+| Item | Path |
+|------|------|
+| Config | `~/.vaultmtg/daemon.json` |
+| Log archives | `~/.vaultmtg/archives/` |
+
+---
+
+## Linux — Upgrading from a Previous Release (Config Migration)
+
+Older daemon releases stored configuration in `~/.mtga-companion/` (or
+`~/.mtga-daemon/` on some early builds). Starting with the v0.3.2 release
+series (ADR-022 Phase 2), the daemon automatically migrates those directories
+to `~/.vaultmtg/` on first launch.
+
+**What happens automatically when you upgrade:**
+
+1. The new daemon binary starts.
+2. It detects `~/.mtga-companion/` or `~/.mtga-daemon/` (whichever exists).
+3. It copies all files to `~/.vaultmtg/` (copy-not-move — your old directory
+   is retained for downgrade safety).
+4. Subsequent launches are a no-op once `~/.vaultmtg/` is non-empty.
+
+You do not need to copy files manually.
+
+**If you manage the daemon via a custom systemd unit:**
+
+Check whether your unit or environment references any old paths or env var
+names. Update them to the new forms:
+
+| Old value | New value |
+|---|---|
+| `ExecStart=.../mtga-companion-daemon` | `ExecStart=.../vaultmtg-daemon` |
+| `Environment=MTGA_DAEMON_*=...` (legacy) | Preferred: `Environment=VAULTMTG_DAEMON_*=...` (see note below) |
+| Any path referencing `~/.mtga-companion` | `~/.vaultmtg` |
+
+> **Note on env vars:** The daemon now reads both the legacy `MTGA_DAEMON_*`
+> names and the new preferred `VAULTMTG_DAEMON_*` names. Legacy names continue
+> to work via a compatibility shim — if your existing unit sets
+> `MTGA_DAEMON_CLOUD_API_URL`, `MTGA_DAEMON_API_KEY`, or any other
+> `MTGA_DAEMON_*` variable, those values are still picked up by the new binary
+> without modification. The new `VAULTMTG_DAEMON_*` names are preferred; when
+> both are set, the `VAULTMTG_DAEMON_*` value takes precedence. New installs
+> should use `VAULTMTG_DAEMON_*` as shown in the systemd template above.
+
+After updating your unit file, reload and restart the service:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart vaultmtg-daemon
+```
+
+### Uninstall (Linux)
+
+```bash
+systemctl --user stop vaultmtg-daemon
+systemctl --user disable vaultmtg-daemon
+rm ~/.config/systemd/user/vaultmtg-daemon.service
+systemctl --user daemon-reload
+sudo rm /usr/local/bin/vaultmtg-daemon
+rm -rf ~/.vaultmtg
+```
+
+To also remove the old config directory if you want a clean slate:
+
+```bash
+rm -rf ~/.mtga-companion ~/.mtga-daemon
+```
 
 ---
 
