@@ -4,7 +4,7 @@ import { SettingsAccordion } from './SettingsAccordion';
 import type { SettingsAccordionItem } from './SettingsAccordion';
 
 describe('SettingsAccordion', () => {
-  const STORAGE_KEY = 'mtga-companion-settings-expanded';
+  const STORAGE_KEY = 'vaultmtg-settings-expanded';
 
   const testItems: SettingsAccordionItem[] = [
     { id: 'section1', label: 'Section 1', icon: '📌', content: <div>Content 1</div> },
