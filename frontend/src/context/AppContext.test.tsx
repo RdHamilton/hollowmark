@@ -43,7 +43,7 @@ function TestUpdater() {
 }
 
 describe('AppContext', () => {
-  const STORAGE_KEY = 'mtga-companion-filters';
+  const STORAGE_KEY = 'vaultmtg-filters';
 
   beforeEach(() => {
     // Clear localStorage before each test
