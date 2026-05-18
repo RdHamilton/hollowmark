@@ -38,7 +38,7 @@ func Check(ctx context.Context, baseURL string, currentVersion string) {
 		log.Printf("[updatecheck] failed to build request: %v", err)
 		return
 	}
-	req.Header.Set("User-Agent", fmt.Sprintf("mtga-daemon/%s", currentVersion))
+	req.Header.Set("User-Agent", fmt.Sprintf("vaultmtg-daemon/%s", currentVersion))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
