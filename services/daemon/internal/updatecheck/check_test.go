@@ -159,7 +159,7 @@ func TestCheck_UserAgentHeader(t *testing.T) {
 
 	updatecheck.Check(context.Background(), srv.URL, "1.2.0")
 
-	if gotUA != "mtga-daemon/1.2.0" {
-		t.Errorf("expected User-Agent 'mtga-daemon/1.2.0', got %q", gotUA)
+	if gotUA != "vaultmtg-daemon/1.2.0" {
+		t.Errorf("expected User-Agent 'vaultmtg-daemon/1.2.0', got %q", gotUA)
 	}
 }

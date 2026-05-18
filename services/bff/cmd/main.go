@@ -116,7 +116,7 @@ func main() {
 		log.Println("DATABASE_URL not set — skipping migrations (development mode only).")
 	}
 
-	fmt.Println("MTGA Companion BFF")
+	fmt.Println("VaultMTG BFF")
 	fmt.Println("==================")
 	fmt.Printf("port: %d\n\n", *port)
 
