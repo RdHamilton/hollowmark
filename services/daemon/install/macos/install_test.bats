@@ -179,7 +179,7 @@ EOF
   echo "output: ${output}"
   # The download URL must contain the versioned tag and correct asset suffix
   [[ "${output}" == *"daemon/v0.1.0"* ]]
-  [[ "${output}" == *"mtga-companion-daemon-darwin-arm64"* ]]
+  [[ "${output}" == *"vaultmtg-daemon-darwin-arm64"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -242,7 +242,7 @@ MKTEMP
   echo "output: ${output}"
   [ "${status}" -eq 0 ]
 
-  local config_file="${fake_home}/.mtga-companion/daemon.json"
+  local config_file="${fake_home}/.vaultmtg/daemon.json"
   [ -f "${config_file}" ]
 
   # The config must contain both required keys
@@ -274,7 +274,7 @@ EOF
   fake_home="$(mktemp -d)"
 
   # Pre-populate the config so the script should skip the prompt
-  local config_dir="${fake_home}/.mtga-companion"
+  local config_dir="${fake_home}/.vaultmtg"
   mkdir -p "${config_dir}"
   local config_file="${config_dir}/daemon.json"
   echo '{"cloud_api_url":"https://original.example.com","api_key":"original-token"}' > "${config_file}"

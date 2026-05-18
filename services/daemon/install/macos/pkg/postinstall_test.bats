@@ -94,7 +94,7 @@ _make_test_script() {
   local clerk_client="${6:-oauth_testclient}"
 
   local plist_dir="${test_dir}/LaunchAgents"
-  local config_dir="${test_dir}/.mtga-companion"
+  local config_dir="${test_dir}/.vaultmtg"
 
   sed \
     -e "s|__VAULTMTG_CLOUD_API_URL__|${cloud_url}|g" \
@@ -102,7 +102,7 @@ _make_test_script() {
     -e "s|__CLERK_PUBLISHABLE_KEY__|${clerk_key}|g" \
     -e "s|__CLERK_OAUTH_CLIENT_ID__|${clerk_client}|g" \
     -e "s|PLIST_DIR=\"\${REAL_HOME}/Library/LaunchAgents\"|PLIST_DIR=\"${plist_dir}\"|g" \
-    -e "s|CONFIG_DIR=\"\${REAL_HOME}/.mtga-companion\"|CONFIG_DIR=\"${config_dir}\"|g" \
+    -e "s|CONFIG_DIR=\"\${REAL_HOME}/.vaultmtg\"|CONFIG_DIR=\"${config_dir}\"|g" \
     "${POSTINSTALL_SCRIPT}" > "${dest}"
   chmod +x "${dest}"
 }
@@ -119,8 +119,8 @@ setup() {
   STUB_DIR="$(_make_stub_dir)"
   _make_test_script "${TMP_SCRIPT}" "${TEST_DIR}"
 
-  PLIST_PATH="${TEST_DIR}/LaunchAgents/com.mtga-companion.daemon.plist"
-  CONFIG_FILE="${TEST_DIR}/.mtga-companion/daemon.json"
+  PLIST_PATH="${TEST_DIR}/LaunchAgents/com.vaultmtg.daemon.plist"
+  CONFIG_FILE="${TEST_DIR}/.vaultmtg/daemon.json"
 }
 
 # ---------------------------------------------------------------------------
@@ -238,7 +238,7 @@ setup() {
 # ---------------------------------------------------------------------------
 @test "daemon.json: existing config is not overwritten on reinstall" {
   # Pre-create config with a different URL
-  mkdir -p "${TEST_DIR}/.mtga-companion"
+  mkdir -p "${TEST_DIR}/.vaultmtg"
   echo '{"cloud_api_url":"https://original.example.com","sync_enabled":true}' \
     > "${CONFIG_FILE}"
 

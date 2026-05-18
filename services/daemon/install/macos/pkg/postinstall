@@ -5,10 +5,14 @@
 #   1. Clears the macOS quarantine extended attribute on the daemon binary so
 #      Gatekeeper does not block the first run with an "unidentified developer"
 #      error.  (ADR-020, Wave 0 confirmed decision 2026-05-09)
-#   2. Writes a default LaunchAgent plist to ~/Library/LaunchAgents/ (per-user,
-#      not system-wide — no LaunchDaemon, no sudo for the agent itself).
-#   3. Loads the LaunchAgent with launchctl so the daemon starts immediately
-#      without requiring a logout/login cycle.
+#   2. CRITICAL (ADR-022 Constraint 1): Detects and bootout/unloads the OLD
+#      com.mtga-companion.daemon LaunchAgent if it is registered, BEFORE
+#      registering the new one.  Prevents two daemon processes from running
+#      simultaneously after an in-place upgrade.
+#   3. Writes a default LaunchAgent plist to ~/Library/LaunchAgents/ using the
+#      new label com.vaultmtg.daemon (per-user, not system-wide — no sudo).
+#   4. Loads the new LaunchAgent with launchctl bootstrap so the daemon starts
+#      immediately without requiring a logout/login cycle.
 #
 # The binary is installed by pkgbuild into /usr/local/bin/vaultmtg-daemon
 # (the package root maps to / at install time).
@@ -23,7 +27,10 @@ INSTALL_DIR="/usr/local/bin"
 BINARY_NAME="vaultmtg-daemon"
 BINARY_PATH="${INSTALL_DIR}/${BINARY_NAME}"
 
-PLIST_LABEL="com.mtga-companion.daemon"
+# ADR-022 Phase 2: new label (production).
+PLIST_LABEL="com.vaultmtg.daemon"
+# Legacy label — detected and unloaded before registering the new one.
+PLIST_LABEL_LEGACY="com.mtga-companion.daemon"
 
 # Resolve the real (non-root) user so all files under $HOME are created with
 # correct ownership. postinstall runs as root; $SUDO_USER names the invoking
@@ -34,8 +41,10 @@ REAL_HOME=$(eval echo "~${REAL_USER}")
 
 PLIST_DIR="${REAL_HOME}/Library/LaunchAgents"
 PLIST_PATH="${PLIST_DIR}/${PLIST_LABEL}.plist"
+PLIST_PATH_LEGACY="${PLIST_DIR}/${PLIST_LABEL_LEGACY}.plist"
 
-CONFIG_DIR="${REAL_HOME}/.mtga-companion"
+# ADR-022 Phase 2: new config dir (~/.vaultmtg).
+CONFIG_DIR="${REAL_HOME}/.vaultmtg"
 CONFIG_FILE="${CONFIG_DIR}/daemon.json"
 
 LOG_FILE="${REAL_HOME}/Library/Logs/vaultmtg-daemon.log"
@@ -97,7 +106,37 @@ fi
 install -d -m 755 -o "${REAL_USER}" "${PLIST_DIR}"
 
 # ---------------------------------------------------------------------------
-# 4. Write the LaunchAgent plist.
+# 4. CRITICAL (ADR-022 Constraint 1): Stop and unregister the OLD daemon label
+#    BEFORE writing and bootstrapping the new plist.
+#
+#    If the old label (com.mtga-companion.daemon) is still registered with
+#    launchd, both daemons would run simultaneously after this postinstall
+#    completes — causing duplicate log ingestion and BFF event duplication.
+#
+#    Steps:
+#      a. Try label-based bootout (modern, macOS 10.11+) as the real user.
+#      b. Fallback: file-based bootout using the legacy plist path.
+#      c. Remove the legacy plist so it is not re-loaded at next login.
+#    All steps use `|| true` — a fresh install has no legacy label registered.
+# ---------------------------------------------------------------------------
+echo "[postinstall] checking for legacy launchd label ${PLIST_LABEL_LEGACY}"
+if launchctl asuser "${REAL_UID}" launchctl list "${PLIST_LABEL_LEGACY}" >/dev/null 2>&1; then
+  echo "[postinstall] found legacy daemon — booting out ${PLIST_LABEL_LEGACY}"
+  launchctl asuser "${REAL_UID}" launchctl bootout "gui/${REAL_UID}/${PLIST_LABEL_LEGACY}" 2>/dev/null || \
+    launchctl asuser "${REAL_UID}" launchctl bootout "gui/${REAL_UID}" "${PLIST_PATH_LEGACY}" 2>/dev/null || true
+  echo "[postinstall] legacy daemon stopped"
+else
+  echo "[postinstall] no legacy daemon found — skipping (fresh install)"
+fi
+
+# Remove legacy plist (idempotent — ignore missing-file errors).
+if [[ -f "${PLIST_PATH_LEGACY}" ]]; then
+  echo "[postinstall] removing legacy plist: ${PLIST_PATH_LEGACY}"
+  rm -f "${PLIST_PATH_LEGACY}"
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Write the new LaunchAgent plist (com.vaultmtg.daemon).
 #    - RunAtLoad=true   start at login.
 #    - KeepAlive=true   restart if the daemon exits unexpectedly.
 #    - EnvironmentVariables injects the Clerk values the PKCE flow requires.
@@ -157,31 +196,22 @@ cat > "${PLIST_PATH}" <<PLIST
 PLIST
 
 # ---------------------------------------------------------------------------
-# 5. Load the LaunchAgent into the correct user gui domain.
+# 6. Load the new LaunchAgent into the correct user gui domain.
 #
 #    pkgbuild postinstall scripts run as root. LaunchAgents must be loaded
 #    into the user's gui domain (not the system domain). Use launchctl
 #    bootstrap/bootout with the gui/<uid> target, run as the actual user
 #    via launchctl asuser so the agent is registered correctly.
-#
-#    $SUDO_USER is set by sudo to the invoking user's name; if absent
-#    (direct root shell) fall back to the owner of HOME.
 # ---------------------------------------------------------------------------
-REAL_USER="${SUDO_USER:-$(stat -f '%Su' "${HOME}")}"
-REAL_UID=$(id -u "${REAL_USER}")
-
 echo "[postinstall] loading LaunchAgent into gui/${REAL_UID} (user: ${REAL_USER})"
 
-# ---------------------------------------------------------------------------
-# Stop any running daemon instance before installing the new one.
-# This prevents a reinstall from leaving the old process running alongside
-# the newly bootstrapped service (multi-instance bug).
-#
-# Try label-based bootout first (modern, macOS 10.11+), then fall back to the
-# file-path form for older systems. Use || true so the script never fails on a
-# fresh install where no prior service is registered.
-# ---------------------------------------------------------------------------
-echo "[postinstall] stopping any running daemon instance"
+# Re-enable the label before bootstrapping. If a previous uninstall called
+# "launchctl bootout", launchd marks the label as disabled and a subsequent
+# "launchctl bootstrap" fails with error 5 (I/O error). Enabling first
+# clears that disabled flag regardless of whether it was set.
+launchctl enable "gui/${REAL_UID}/${PLIST_LABEL}"
+
+# Stop any still-running daemon process (covers the same-label reinstall case).
 launchctl asuser "${REAL_UID}" launchctl bootout "gui/${REAL_UID}/${PLIST_LABEL}" 2>/dev/null || \
     launchctl asuser "${REAL_UID}" launchctl bootout "gui/${REAL_UID}" "${PLIST_PATH}" 2>/dev/null || true
 
@@ -191,12 +221,6 @@ pkill -x vaultmtg-daemon 2>/dev/null || true
 
 # Brief wait so the process has time to exit cleanly before bootstrap starts.
 sleep 1
-
-# Re-enable the label before bootstrapping. If a previous uninstall called
-# "launchctl bootout", launchd marks the label as disabled and a subsequent
-# "launchctl bootstrap" fails with error 5 (I/O error). Enabling first
-# clears that disabled flag regardless of whether it was set.
-launchctl enable "gui/${REAL_UID}/${PLIST_LABEL}"
 
 # Wrap bootstrap in a conditional so a transient launchd failure (e.g. when
 # the GUI session has not yet started in a script-driven install) does NOT
