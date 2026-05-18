@@ -2,8 +2,15 @@
 // The cloud API URL is never hardcoded — it must be supplied via config file or environment.
 //
 // Keychain sentinel: when Keychain is true the daemon API key lives in the OS keychain
-// (go-keyring, service "com.vaultmtg.daemon", account "api-key") rather than in
+// (go-keyring, service "com.mtga-companion.daemon", account "api-key") rather than in
 // this file.  The APIKey field must be absent/empty when Keychain is true.
+//
+// Keychain service-name note: the canonical new service name is "com.vaultmtg.daemon"
+// (ADR-022 Phase 3, #1761).  Until that migration lands, the live service name is
+// "com.mtga-companion.daemon"; "com.vaultmtg.daemon" is the read-fallback for the
+// migration path.  After #1761 merges the roles flip: "com.vaultmtg.daemon" becomes
+// primary and "com.mtga-companion.daemon" is the legacy read-fallback.
+//
 // See ADR-020 §daemon.json Canonical Schema for the full field specification.
 package config
 
@@ -35,9 +42,10 @@ type Config struct {
 	APIKey string `json:"api_key,omitempty"`
 
 	// Keychain indicates that the daemon API key is stored in the OS keychain
-	// (go-keyring service "com.mtga-companion.daemon", account "api-key") rather
-	// than in this config file.  Set to true after a successful PKCE registration.
+	// (go-keyring, account "api-key") rather than in this config file.
+	// Set to true after a successful PKCE registration.
 	// When true, the APIKey field is not written to disk.
+	// See the package-level comment for the current vs. canonical keychain service name.
 	Keychain bool `json:"keychain,omitempty"`
 
 	// UserID is the BFF user ID associated with this daemon install.

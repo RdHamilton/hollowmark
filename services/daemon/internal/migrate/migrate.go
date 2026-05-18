@@ -17,14 +17,15 @@ import (
 //
 // Behaviour:
 //   - No-op when oldDir does not exist — a fresh install needs no migration.
-//   - No-op when newDir already exists and is non-empty — migration already ran.
-//   - Copies files recursively; sub-directories are created as needed.
+//   - No-op when newDir is non-empty (even if only partially migrated) — the
+//     entire migration is skipped.  Remaining un-copied files will NOT be
+//     added.  If true resume-safe behaviour is ever needed, the non-empty guard
+//     must be replaced with per-file Stat checks (tracked separately).
+//   - Copies files recursively when newDir is absent or empty; sub-directories
+//     are created as needed.
 //   - Copy-not-move: oldDir is RETAINED after migration.  Users who downgrade
 //     the daemon binary continue to work with the old directory.  Deletion of
 //     oldDir is deferred to Phase 6 (gated on uptake telemetry — not now).
-//   - Idempotent: if a previous run was interrupted, calling MigrateConfigDir
-//     again skips files that already exist in newDir and copies only the
-//     remainder.  Files that exist in both are NOT overwritten (old copy wins).
 //   - Errors from individual file copies are logged and skipped so that a
 //     single unreadable file does not abort the whole migration.
 func MigrateConfigDir(oldDir, newDir string) error {
