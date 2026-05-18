@@ -5,11 +5,10 @@
 // (go-keyring, service "com.mtga-companion.daemon", account "api-key") rather than in
 // this file.  The APIKey field must be absent/empty when Keychain is true.
 //
-// Keychain service-name note: the canonical new service name is "com.vaultmtg.daemon"
-// (ADR-022 Phase 3, #1761).  Until that migration lands, the live service name is
-// "com.mtga-companion.daemon"; "com.vaultmtg.daemon" is the read-fallback for the
-// migration path.  After #1761 merges the roles flip: "com.vaultmtg.daemon" becomes
-// primary and "com.mtga-companion.daemon" is the legacy read-fallback.
+// Keychain service-name note (ADR-022 Phase 2, #1761 — merged): the live primary
+// service name is now "com.vaultmtg.daemon" (all writes target this name).
+// "com.mtga-companion.daemon" is the legacy read-only fallback retained for upgrade
+// migration.  Deletion of the legacy entry is deferred to Phase 6.
 //
 // See ADR-020 §daemon.json Canonical Schema for the full field specification.
 package config
