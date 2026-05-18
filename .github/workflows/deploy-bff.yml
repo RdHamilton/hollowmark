@@ -1,0 +1,440 @@
+# Reusable BFF deploy workflow.
+# Called by staging-deploy.yml (on every push to main) and release.yml (on app/v* tags).
+# This single job graph is the canonical deploy path for both environments — any
+# script bug, SSM regression, or contract mismatch surfaces in staging first.
+#
+# Job graph (all sequential within the deploy-bff job):
+#   build → ensure-bucket → upload-binary → upload-scripts →
+#   provision-env → stage-binary → migrate → restart → healthcheck
+#
+# Environment selection:
+#   - inputs.environment controls which GitHub environment (and therefore which
+#     OIDC role + secrets) the job runs under.
+#   - inputs.deploy-bucket is used by staging callers (bucket name is not sensitive).
+#   - secrets.DEPLOY_BUCKET is used by production callers (stored as a secret in
+#     the production GitHub environment). Inputs cannot reference secrets, so
+#     production resolves the bucket at runtime via $DEPLOY_BUCKET_SECRET.
+#
+# Script selection: staging and production use distinct EC2-side shell scripts
+# (e.g. provision-staging-env.sh vs provision-env.sh + provision-db-url.sh)
+# controlled by the environment input. Both script sets are uploaded to S3 on
+# every run so the on-instance scripts are always in sync with the repo.
+
+name: Deploy BFF (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target GitHub environment: staging or production'
+        required: true
+        type: string
+      # Staging callers set this to the literal bucket name.
+      # Production callers leave it blank and pass DEPLOY_BUCKET as a secret.
+      # (workflow inputs cannot reference secrets, so production must use the
+      #  secrets path instead.)
+      deploy-bucket:
+        description: 'S3 bucket name (staging); leave blank for production (uses DEPLOY_BUCKET secret)'
+        required: false
+        default: ''
+        type: string
+      s3-binary-key-suffix:
+        description: 'S3 key after the bucket root, e.g. staging/<sha>/mtga-bff-staging or releases/<sha>/mtga-bff'
+        required: true
+        type: string
+      binary-name:
+        description: 'Build output filename written under services/bff/ (e.g. mtga-bff or mtga-bff-staging)'
+        required: true
+        type: string
+      deploy-sha:
+        description: 'Git SHA of the commit being deployed'
+        required: true
+        type: string
+    secrets:
+      AWS_DEPLOY_ROLE_ARN:
+        required: true
+      EC2_INSTANCE_ID:
+        required: true
+      # Production bucket name is stored as a secret in the production environment.
+      # Staging callers omit this and pass the bucket via the deploy-bucket input.
+      DEPLOY_BUCKET:
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy-bff:
+    name: Deploy BFF to EC2 (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: bff-${{ inputs.environment }}-deploy
+      cancel-in-progress: false
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25'
+
+    - name: Build BFF for linux/amd64
+      env:
+        GONOSUMDB: github.com/RdHamilton/MTGA-Companion
+        GOPRIVATE: github.com/RdHamilton/MTGA-Companion
+      run: |
+        cd services/bff
+        GOOS=linux GOARCH=amd64 go build -o "${{ inputs.binary-name }}" ./cmd
+
+    - name: Configure AWS credentials (OIDC)
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+        aws-region: us-east-1
+
+    # Resolve the deploy bucket: staging callers pass it as an input;
+    # production callers pass it as the DEPLOY_BUCKET secret.
+    # The resolved value is written to $GITHUB_ENV so all subsequent steps
+    # can reference it as $RESOLVED_BUCKET without repeating the conditional.
+    - name: Resolve deploy bucket
+      run: |
+        if [ -n "${{ inputs.deploy-bucket }}" ]; then
+          echo "RESOLVED_BUCKET=${{ inputs.deploy-bucket }}" >> "$GITHUB_ENV"
+        else
+          echo "RESOLVED_BUCKET=${{ secrets.DEPLOY_BUCKET }}" >> "$GITHUB_ENV"
+        fi
+
+    # Staging bucket is created on first use (idempotent).
+    # Production bucket is pre-provisioned; the create-bucket call returns a
+    # BucketAlreadyOwnedByYou error which is suppressed by "|| true".
+    - name: Ensure deploy S3 bucket exists
+      run: |
+        aws s3api create-bucket \
+          --bucket "$RESOLVED_BUCKET" \
+          --region us-east-1 2>/dev/null || true
+        aws s3api put-bucket-versioning \
+          --bucket "$RESOLVED_BUCKET" \
+          --versioning-configuration Status=Enabled 2>/dev/null || true
+
+    - name: Upload binary to S3
+      run: |
+        aws s3 cp "services/bff/${{ inputs.binary-name }}" \
+          "s3://${RESOLVED_BUCKET}/${{ inputs.s3-binary-key-suffix }}"
+
+    # Upload all deploy and infra scripts plus migrations so EC2 can pull them.
+    # Both staging and production script sets are uploaded every run — this keeps
+    # the on-instance scripts in sync with the repo even if only one set changes.
+    - name: Upload deploy scripts and migrations to S3
+      run: |
+        aws s3 sync scripts/deploy/ \
+          "s3://${RESOLVED_BUCKET}/scripts/" \
+          --exclude "*" --include "*.sh"
+        aws s3 sync infra/scripts/ \
+          "s3://${RESOLVED_BUCKET}/infra-scripts/" \
+          --exclude "*" --include "*.sh"
+        aws s3 sync services/bff/internal/storage/migrations/postgres/ \
+          "s3://${RESOLVED_BUCKET}/migrations/postgres/" \
+          --delete
+        aws s3 sync infra/db/ \
+          "s3://${RESOLVED_BUCKET}/infra-db/" \
+          --exclude "*" --include "*.sql"
+
+    # Provision env on EC2.
+    # Staging: provision-staging-env.sh renders /etc/mtga-companion-staging/env from
+    #   the full /mtga-companion/staging/* + /vaultmtg/staging/* SSM hierarchy.
+    # Production: provision-env.sh + provision-db-url.sh + CLERK_SECRET_KEY in one
+    #   sequential shell command (preserves the original release.yml order).
+    # Credentials are read ON the EC2 instance under its IAM role — never on the runner.
+    - name: Provision env on EC2
+      env:
+        EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+      run: |
+        if [ "${{ inputs.environment }}" = "staging" ]; then
+          PROVISION_CMD="aws s3 cp s3://${RESOLVED_BUCKET}/scripts/provision-staging-env.sh /tmp/provision-staging-env.sh && chmod +x /tmp/provision-staging-env.sh && /tmp/provision-staging-env.sh"
+        else
+          PROVISION_CMD="aws s3 cp s3://${RESOLVED_BUCKET}/scripts/provision-env.sh /tmp/provision-env.sh && chmod +x /tmp/provision-env.sh && /tmp/provision-env.sh ALLOWED_ORIGINS /mtga-companion/production/ALLOWED_ORIGINS && aws s3 cp s3://${RESOLVED_BUCKET}/scripts/provision-db-url.sh /tmp/provision-db-url.sh && chmod +x /tmp/provision-db-url.sh && /tmp/provision-db-url.sh && /tmp/provision-env.sh CLERK_SECRET_KEY /mtga-companion/production/CLERK_SECRET_KEY --with-decryption"
+        fi
+
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids "${EC2_INSTANCE_ID}" \
+          --document-name "AWS-RunShellScript" \
+          --parameters "commands=[\"${PROVISION_CMD}\"]" \
+          --region us-east-1 \
+          --query "Command.CommandId" \
+          --output text)
+
+        echo "Provision env SSM Command ID: $COMMAND_ID"
+
+        SUCCEEDED=0
+        for i in $(seq 1 24); do
+          set +e
+          RAW=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${EC2_INSTANCE_ID}" \
+            --region us-east-1 \
+            --output json 2>&1)
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            if echo "$RAW" | grep -q "InvocationDoesNotExist"; then
+              echo "[$i/24] Status: Pending (invocation not yet registered)"
+            else
+              echo "[$i/24] API error (rc=$RC): $RAW"
+            fi
+          else
+            STATUS=$(echo "$RAW" | jq -r '.Status // "Unknown"')
+            echo "[$i/24] Status: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              echo "Env provisioned."
+              SUCCEEDED=1
+              break
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Provision failed: $STATUS"
+              echo "$RAW" | jq -r '.StandardErrorContent // ""'
+              exit 1
+            fi
+          fi
+          sleep 10
+        done
+        if [ "$SUCCEEDED" -ne 1 ]; then
+          echo "SSM command timed out waiting for env provision" >&2
+          exit 1
+        fi
+
+    # Stage binary on EC2.
+    # Staging uses stage-binary-staging.sh (downloads from staging/<sha>/mtga-bff-staging).
+    # Production uses stage-binary.sh (downloads from releases/<sha>/mtga-bff).
+    - name: Stage binary on EC2 via SSM
+      env:
+        DEPLOY_SHA: ${{ inputs.deploy-sha }}
+        EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+      run: |
+        if [ "${{ inputs.environment }}" = "staging" ]; then
+          STAGE_SCRIPT="stage-binary-staging.sh"
+        else
+          STAGE_SCRIPT="stage-binary.sh"
+        fi
+
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids "${EC2_INSTANCE_ID}" \
+          --document-name "AWS-RunShellScript" \
+          --parameters "commands=[\"export DEPLOY_BUCKET=${RESOLVED_BUCKET} && export DEPLOY_SHA=${DEPLOY_SHA} && aws s3 cp s3://${RESOLVED_BUCKET}/scripts/${STAGE_SCRIPT} /tmp/${STAGE_SCRIPT} && chmod +x /tmp/${STAGE_SCRIPT} && /tmp/${STAGE_SCRIPT}\"]" \
+          --region us-east-1 \
+          --query "Command.CommandId" \
+          --output text)
+
+        echo "Stage binary SSM Command ID: $COMMAND_ID"
+
+        SUCCEEDED=0
+        for i in $(seq 1 60); do
+          set +e
+          RAW=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${EC2_INSTANCE_ID}" \
+            --region us-east-1 \
+            --output json 2>&1)
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            if echo "$RAW" | grep -q "InvocationDoesNotExist"; then
+              echo "[$i/60] Status: Pending (invocation not yet registered)"
+            else
+              echo "[$i/60] API error (rc=$RC): $RAW"
+            fi
+          else
+            STATUS=$(echo "$RAW" | jq -r '.Status // "Unknown"')
+            echo "[$i/60] Status: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              echo "Binary staged."
+              SUCCEEDED=1
+              break
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Stage failed: $STATUS"
+              echo "$RAW" | jq -r '.StandardErrorContent // ""'
+              exit 1
+            fi
+          fi
+          sleep 10
+        done
+        if [ "$SUCCEEDED" -ne 1 ]; then
+          echo "SSM command timed out waiting for binary staging" >&2
+          exit 1
+        fi
+
+    # Run migrations.
+    # Staging uses run-staging-migrations.sh; production uses run-migrations.sh.
+    - name: Run database migrations via SSM
+      env:
+        EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+      run: |
+        if [ "${{ inputs.environment }}" = "staging" ]; then
+          MIGRATE_SCRIPT="run-staging-migrations.sh"
+        else
+          MIGRATE_SCRIPT="run-migrations.sh"
+        fi
+
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids "${EC2_INSTANCE_ID}" \
+          --document-name "AWS-RunShellScript" \
+          --parameters "commands=[\"export DEPLOY_BUCKET=${RESOLVED_BUCKET} && export AWS_REGION=us-east-1 && aws s3 cp s3://${RESOLVED_BUCKET}/infra-scripts/${MIGRATE_SCRIPT} /tmp/${MIGRATE_SCRIPT} && chmod +x /tmp/${MIGRATE_SCRIPT} && /tmp/${MIGRATE_SCRIPT}\"]" \
+          --region us-east-1 \
+          --query "Command.CommandId" \
+          --output text)
+
+        echo "Migrations SSM Command ID: $COMMAND_ID"
+
+        SUCCEEDED=0
+        for i in $(seq 1 18); do
+          set +e
+          RAW=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${EC2_INSTANCE_ID}" \
+            --region us-east-1 \
+            --output json 2>&1)
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            if echo "$RAW" | grep -q "InvocationDoesNotExist"; then
+              echo "[$i/18] Status: Pending (invocation not yet registered)"
+            else
+              echo "[$i/18] API error (rc=$RC): $RAW"
+            fi
+          else
+            STATUS=$(echo "$RAW" | jq -r '.Status // "Unknown"')
+            echo "[$i/18] Status: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              echo "Migrations complete."
+              SUCCEEDED=1
+              break
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Migrations failed: $STATUS"
+              echo "$RAW" | jq -r '.StandardErrorContent // ""'
+              exit 1
+            fi
+          fi
+          sleep 10
+        done
+        if [ "$SUCCEEDED" -ne 1 ]; then
+          echo "SSM command timed out waiting for migrations" >&2
+          exit 1
+        fi
+
+    # Restart service.
+    # Staging uses restart-bff-staging.sh; production uses restart-bff.sh.
+    - name: Restart BFF service via SSM
+      env:
+        EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+      run: |
+        if [ "${{ inputs.environment }}" = "staging" ]; then
+          RESTART_SCRIPT="restart-bff-staging.sh"
+        else
+          RESTART_SCRIPT="restart-bff.sh"
+        fi
+
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids "${EC2_INSTANCE_ID}" \
+          --document-name "AWS-RunShellScript" \
+          --parameters "commands=[\"aws s3 cp s3://${RESOLVED_BUCKET}/scripts/${RESTART_SCRIPT} /tmp/${RESTART_SCRIPT} && chmod +x /tmp/${RESTART_SCRIPT} && /tmp/${RESTART_SCRIPT}\"]" \
+          --region us-east-1 \
+          --query "Command.CommandId" \
+          --output text)
+
+        echo "Restart SSM Command ID: $COMMAND_ID"
+
+        SUCCEEDED=0
+        for i in $(seq 1 12); do
+          set +e
+          RAW=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${EC2_INSTANCE_ID}" \
+            --region us-east-1 \
+            --output json 2>&1)
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            if echo "$RAW" | grep -q "InvocationDoesNotExist"; then
+              echo "[$i/12] Status: Pending (invocation not yet registered)"
+            else
+              echo "[$i/12] API error (rc=$RC): $RAW"
+            fi
+          else
+            STATUS=$(echo "$RAW" | jq -r '.Status // "Unknown"')
+            echo "[$i/12] Status: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              echo "Service restarted."
+              SUCCEEDED=1
+              break
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Restart failed: $STATUS"
+              echo "$RAW" | jq -r '.StandardErrorContent // ""'
+              exit 1
+            fi
+          fi
+          sleep 10
+        done
+        if [ "$SUCCEEDED" -ne 1 ]; then
+          echo "SSM command timed out waiting for BFF restart" >&2
+          exit 1
+        fi
+
+    # Post-deploy health check.
+    # Staging uses healthcheck-bff-staging.sh; production uses healthcheck-bff.sh.
+    - name: Post-deploy health check
+      env:
+        EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+      run: |
+        if [ "${{ inputs.environment }}" = "staging" ]; then
+          HEALTH_SCRIPT="healthcheck-bff-staging.sh"
+        else
+          HEALTH_SCRIPT="healthcheck-bff.sh"
+        fi
+
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids "${EC2_INSTANCE_ID}" \
+          --document-name "AWS-RunShellScript" \
+          --parameters "commands=[\"aws s3 cp s3://${RESOLVED_BUCKET}/scripts/${HEALTH_SCRIPT} /tmp/${HEALTH_SCRIPT} && chmod +x /tmp/${HEALTH_SCRIPT} && /tmp/${HEALTH_SCRIPT}\"]" \
+          --region us-east-1 \
+          --query "Command.CommandId" \
+          --output text)
+
+        echo "Health check SSM Command ID: $COMMAND_ID"
+
+        SUCCEEDED=0
+        for i in $(seq 1 15); do
+          set +e
+          RAW=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${EC2_INSTANCE_ID}" \
+            --region us-east-1 \
+            --output json 2>&1)
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            if echo "$RAW" | grep -q "InvocationDoesNotExist"; then
+              echo "[$i/15] Status: Pending (invocation not yet registered)"
+            else
+              echo "[$i/15] API error (rc=$RC): $RAW"
+            fi
+          else
+            STATUS=$(echo "$RAW" | jq -r '.Status // "Unknown"')
+            echo "[$i/15] Status: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              echo "Health check passed."
+              SUCCEEDED=1
+              break
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Health check failed: $STATUS"
+              echo "$RAW" | jq -r '.StandardErrorContent // ""'
+              exit 1
+            fi
+          fi
+          sleep 10
+        done
+        if [ "$SUCCEEDED" -ne 1 ]; then
+          echo "SSM command timed out waiting for health check" >&2
+          exit 1
+        fi
