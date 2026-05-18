@@ -96,7 +96,7 @@ At the **end of each significant task** or **end of session**, ask yourself:
 
 ## Project Overview
 
-MTGA-Companion is a **service-based application** with two components:
+VaultMTG is a **service-based application** with two components:
 
 1. **Headless Daemon** (Go) - Background service that monitors MTGA logs, collects data, and stores in SQLite
 2. **REST API Server + React Frontend** - Go REST API with React SPA, communicates via REST endpoints and WebSocket for real-time updates
@@ -328,7 +328,7 @@ MTGA runs on both macOS and Windows. This application:
 
 ### Service-Based Architecture
 
-**CRITICAL: This is NOT a monolithic architecture.** MTGA-Companion uses a **service-oriented design** with clear separation of concerns.
+**CRITICAL: This is NOT a monolithic architecture.** VaultMTG uses a **service-oriented design** with clear separation of concerns.
 
 **Architecture Decision**: Separation of data collection (daemon) from data presentation (GUI)
 
