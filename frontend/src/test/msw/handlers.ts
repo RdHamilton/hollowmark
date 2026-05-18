@@ -481,7 +481,7 @@ export const handlers = [
         ],
         metadata: {
           exported_at: new Date().toISOString(),
-          exported_from: 'MTGA-Companion',
+          exported_from: 'VaultMTG',
           overall_grade: 'B+',
           overall_score: 78,
           predicted_win_rate: 0.55,

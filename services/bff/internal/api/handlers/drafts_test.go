@@ -324,6 +324,41 @@ func TestDraftsExport17Lands_HappyPath(t *testing.T) {
 	}
 }
 
+// TestDraftsExport17Lands_ExportedFromBrand verifies that the exported_from
+// metadata field in the 17Lands export payload carries the VaultMTG brand
+// string (AC2 — ADR-022 Phase 1 rename).
+func TestDraftsExport17Lands_ExportedFromBrand(t *testing.T) {
+	now := time.Now().UTC()
+	reader := &stubDraftsReader{
+		session: &repository.DraftSessionDetailRow{
+			ID: "s2", EventName: "PremierDraft", SetCode: "DSK",
+			DraftType: "PremierDraft", StartTime: now, Status: "completed",
+			CreatedAt: now, UpdatedAt: now,
+		},
+		picks: []repository.DraftPickRow{
+			{ID: 1, SessionID: "s2", PackNumber: 1, PickNumber: 1, CardID: "100", Timestamp: now},
+		},
+	}
+	h := handlers.NewDraftsHandler(reader, &draftsAccountLookup{accountID: 7, found: true})
+	req := authedDraftsRequest(t, http.MethodGet, "/api/v1/drafts/s2/export/17lands", nil, 168)
+	req = chiDraftsContext(req, "sessionId", "s2")
+	rr := httptest.NewRecorder()
+	h.Export17Lands(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	decodeDraftsEnvelope(t, rr.Body.Bytes(), &resp)
+	export, _ := resp["export"].(map[string]any)
+	metadata, _ := export["metadata"].(map[string]any)
+	if metadata == nil {
+		t.Fatal("metadata field missing from export")
+	}
+	if got := metadata["exported_from"]; got != "VaultMTG" {
+		t.Errorf("exported_from: want %q, got %q", "VaultMTG", got)
+	}
+}
+
 // ─── Community + Trends + Learning ─────────────────────────────────────────
 
 func TestDraftsCommunityComparison_HappyPath(t *testing.T) {
