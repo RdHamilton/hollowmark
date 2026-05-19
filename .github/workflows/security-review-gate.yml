@@ -1,0 +1,256 @@
+# security-review-gate.yml
+#
+# S-07 Infra Security Review Gate
+#
+# PURPOSE
+# -------
+# Blocks merge on any PR that touches IAM, trust policies, security groups, SSM,
+# Secrets Manager, KMS, OIDC, or security-sensitive workflow files until Sarah
+# (Security Engineer) has completed the effect-enumeration SOP and posted an
+# explicit VERDICT: APPROVED comment.
+#
+# Runbook: vault_mtg_docs/engineering/runbooks/infra-security-review-gate.md
+# Ticket:  RdHamilton/vault-mtg#2365
+#
+# GATE MECHANISM
+# --------------
+# The job runs on:
+#   - pull_request events (opened, synchronize, reopened, labeled, unlabeled) --
+#     sets initial failing state and re-evaluates when the PR diff changes.
+#   - issue_comment events (created) -- re-evaluates when a new comment is posted,
+#     picking up the VERDICT comment the moment Sarah posts it.
+#
+# The gate PASSES only when a PR comment matches ALL of:
+#   1. Body contains "## S-07 Security Review" (SOP header).
+#   2. Body contains a line that is exactly "VERDICT: APPROVED" (after stripping
+#      leading/trailing whitespace and carriage returns).
+#
+# The gate SKIPS (passes neutrally) when the PR does not match any S-07 trigger
+# glob, so it never blocks unrelated PRs.
+#
+# BYPASS RISK (single-account repo)
+# ----------------------------------
+# GitHub's required-reviewer controls are unavailable in a single-account repo.
+# The gate enforces PROCESS VISIBILITY: the verdict comment must carry the full
+# SOP header, making it obvious in the audit trail whether Sarah's
+# effect-enumeration procedure ran. Branch protection makes this status check
+# required; there is no PR-UI path that passes the gate without a matching
+# comment in the audit log.
+#
+# RELEASING THE GATE
+# ------------------
+# Sarah posts the verdict as a PR comment following the SOP runbook. The
+# issue_comment trigger re-runs this workflow immediately and picks up the
+# APPROVED comment. No separate workflow_dispatch step is required.
+
+name: Security Review Gate (S-07)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: [main]
+  issue_comment:
+    types: [created]
+
+# Queue (do not cancel) concurrent runs on the same PR -- any one may be the
+# run that finds the APPROVED verdict.
+concurrency:
+  group: security-review-gate-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  security-review-gate:
+    name: Security Review Gate
+    # For issue_comment events only run when the comment is on a pull request
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Resolve PR number
+        id: pr_info
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          else
+            PR_NUMBER="${{ github.event.issue.number }}"
+          fi
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether S-07 gate is required for this PR
+        id: gate_required
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr_info.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          # ------------------------------------------------------------------
+          # 1. Label check -- gate required if 'security' or 'infra' label present
+          # ------------------------------------------------------------------
+          LABELS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
+            --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+          echo "PR labels: ${LABELS}"
+
+          if echo "${LABELS}" | grep -qE '(^|,)(security|infra)(,|$)'; then
+            echo "Gate required: label match (security or infra label present)"
+            { echo "required=true"; echo "reason=label match"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # ------------------------------------------------------------------
+          # 2. Path glob check -- S-07 trigger paths for vault-mtg
+          #    Source: vault_mtg_docs/engineering/runbooks/infra-security-review-gate.md sec 1A
+          # ------------------------------------------------------------------
+          CHANGED_FILES=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" \
+            --jq '[.[].filename] | join("\n")' 2>/dev/null || echo "")
+
+          echo "Changed files:"
+          echo "${CHANGED_FILES}"
+
+          GATE_REQUIRED=false
+          TRIGGER_GLOBS=(
+            ".github/workflows/deploy-bff.yml"
+            ".github/workflows/deploy-spa.yml"
+            ".github/workflows/deploy-spa-staging.yml"
+            ".github/workflows/release.yml"
+            ".github/workflows/rollback.yml"
+            ".github/workflows/staging-deploy.yml"
+            "services/bff/cmd/"
+            "services/daemon/cmd/"
+            "scripts/deploy/"
+          )
+
+          for GLOB in "${TRIGGER_GLOBS[@]}"; do
+            if echo "${CHANGED_FILES}" | grep -qF "${GLOB}"; then
+              echo "Gate required: path match -> ${GLOB}"
+              GATE_REQUIRED=true
+              break
+            fi
+          done
+
+          # ------------------------------------------------------------------
+          # 3. Catch-all content check -- scan diff for security-sensitive keywords
+          # ------------------------------------------------------------------
+          if [ "${GATE_REQUIRED}" = "false" ]; then
+            DIFF=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
+              -H "Accept: application/vnd.github.v3.diff" 2>/dev/null || echo "")
+
+            CATCH_ALL_STRINGS=(
+              "iam:"
+              "secretsmanager:"
+              "AssumeRolePolicyDocument"
+              "WebIdentityToken"
+              "SecurityGroupIngress"
+              "SecurityGroupEgress"
+            )
+
+            for KEYWORD in "${CATCH_ALL_STRINGS[@]}"; do
+              if echo "${DIFF}" | grep -q "${KEYWORD}"; then
+                echo "Gate required: catch-all keyword match -> ${KEYWORD}"
+                GATE_REQUIRED=true
+                break
+              fi
+            done
+          fi
+
+          if [ "${GATE_REQUIRED}" = "true" ]; then
+            { echo "required=true"; echo "reason=path/content match"; } >> "$GITHUB_OUTPUT"
+          else
+            { echo "required=false"; echo "reason=no trigger match"; } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate not required for this PR
+        if: steps.gate_required.outputs.required == 'false'
+        run: |
+          echo "This PR does not match S-07 trigger criteria."
+          echo "Security review gate: NOT REQUIRED"
+          echo "Gate skipped (no IAM/security-sensitive paths, labels, or keywords detected)."
+
+      - name: Scan PR comments for security review verdict
+        if: steps.gate_required.outputs.required == 'true'
+        id: verdict_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr_info.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          echo "S-07 gate IS REQUIRED for PR #${PR_NUMBER}"
+          echo "Reason: ${{ steps.gate_required.outputs.reason }}"
+          echo ""
+          echo "Scanning PR comments for Sarah's security review verdict..."
+
+          # jq selects comments that:
+          #   1. Contain the S-07 SOP header string
+          #   2. Have a line that is exactly "VERDICT: APPROVED" (stripped of CR/spaces)
+          # Output format: "<comment_id> <author_login>"
+          # Newlines in bodies are safe -- jq handles JSON string escaping internally.
+          MATCH=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --paginate \
+            --jq '.[] |
+              select(
+                (.body | contains("## S-07 Security Review")) and
+                (.body | split("\n") |
+                  map(ltrimstr("\r") | ltrimstr(" ") | rtrimstr(" ")) |
+                  any(. == "VERDICT: APPROVED"))
+              ) |
+              "\(.id) \(.user.login)"' \
+            2>/dev/null | head -1 || echo "")
+
+          echo "Match result: ${MATCH}"
+
+          if [ -n "${MATCH}" ]; then
+            COMMENT_ID=$(echo "${MATCH}" | cut -d' ' -f1)
+            APPROVER=$(echo "${MATCH}" | cut -d' ' -f2)
+            {
+              echo "approved=true"
+              echo "approver=${APPROVER}"
+              echo "comment_id=${COMMENT_ID}"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate PASSED
+        if: steps.gate_required.outputs.required == 'true' && steps.verdict_check.outputs.approved == 'true'
+        run: |
+          echo "Security review gate: PASSED"
+          echo "S-07 effect-enumeration review complete."
+          echo "Reviewer: @${{ steps.verdict_check.outputs.approver }}"
+          echo "Comment ID: ${{ steps.verdict_check.outputs.comment_id }}"
+          echo "This PR is cleared for merge (security review requirement satisfied)."
+
+      - name: Gate BLOCKED
+        if: steps.gate_required.outputs.required == 'true' && steps.verdict_check.outputs.approved != 'true'
+        run: |
+          echo "==========================================================="
+          echo "  SECURITY REVIEW GATE: BLOCKED"
+          echo "==========================================================="
+          echo ""
+          echo "This PR matches S-07 infra security review criteria."
+          echo "Merge is blocked until Sarah posts the APPROVED verdict."
+          echo ""
+          echo "Required action:"
+          echo "  Sarah must run the S-07 effect-enumeration SOP and post a"
+          echo "  PR comment containing BOTH:"
+          echo ""
+          echo "    1. Header line:   ## S-07 Security Review"
+          echo "    2. Verdict line:  VERDICT: APPROVED"
+          echo ""
+          echo "  (or VERDICT: BLOCKED -- <reason> to explicitly block the PR)"
+          echo ""
+          echo "Runbook: vault_mtg_docs/engineering/runbooks/infra-security-review-gate.md"
+          echo "Ticket:  RdHamilton/vault-mtg#2365"
+          exit 1
