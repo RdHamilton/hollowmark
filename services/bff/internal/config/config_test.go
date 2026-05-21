@@ -292,7 +292,7 @@ func TestLoad_AllowedOrigins_DefaultWhenUnset(t *testing.T) {
 func TestLoad_AllowedOrigins_ParsesCommaSeparated(t *testing.T) {
 	t.Setenv("MTGA_ENV", "development")
 	t.Setenv("DATABASE_URL", "")
-	t.Setenv("ALLOWED_ORIGINS", "https://mtga-companion.vercel.app,https://*.vercel.app")
+	t.Setenv("ALLOWED_ORIGINS", "https://app.vaultmtg.app,https://*.vaultmtg.app")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -303,11 +303,11 @@ func TestLoad_AllowedOrigins_ParsesCommaSeparated(t *testing.T) {
 		t.Fatalf("expected 2 allowed origins, got %d: %v", len(cfg.AllowedOrigins), cfg.AllowedOrigins)
 	}
 
-	if cfg.AllowedOrigins[0] != "https://mtga-companion.vercel.app" {
+	if cfg.AllowedOrigins[0] != "https://app.vaultmtg.app" {
 		t.Errorf("unexpected first origin: %q", cfg.AllowedOrigins[0])
 	}
 
-	if cfg.AllowedOrigins[1] != "https://*.vercel.app" {
+	if cfg.AllowedOrigins[1] != "https://*.vaultmtg.app" {
 		t.Errorf("unexpected second origin: %q", cfg.AllowedOrigins[1])
 	}
 }
@@ -420,7 +420,7 @@ func TestLoad_SentryDSN_FromEnv(t *testing.T) {
 func TestLoad_AllowedOrigins_TrimsWhitespace(t *testing.T) {
 	t.Setenv("MTGA_ENV", "development")
 	t.Setenv("DATABASE_URL", "")
-	t.Setenv("ALLOWED_ORIGINS", " https://mtga-companion.vercel.app , https://*.vercel.app ")
+	t.Setenv("ALLOWED_ORIGINS", " https://app.vaultmtg.app , https://*.vaultmtg.app ")
 
 	cfg, err := config.Load()
 	if err != nil {
