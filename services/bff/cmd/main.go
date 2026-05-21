@@ -579,7 +579,7 @@ func composeClerkAuth(authMiddl, userResolver func(http.Handler) http.Handler) f
 func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
-	r.Use(chimiddleware.Logger)
+	r.Use(bffmiddleware.NewStructuredLogger(bffmiddleware.NewDefaultLogger()))
 	// SentryMiddl is installed before chi's Recoverer so that panics are
 	// captured by Sentry before being swallowed.  Repanic=true (set inside
 	// NewSentryMiddleware) ensures chi.Recoverer still writes the 500 response.
