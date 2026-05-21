@@ -69,5 +69,11 @@ frontend/coverage/
 # Playwright E2E testing
 frontend/test-results/
 frontend/playwright-report/
+frontend/playwright-report-*/
 frontend/.auth/
 apiserver
+
+# Local Go build outputs (binaries built next to package main.go)
+services/daemon/daemon
+services/collection-agent-helper/mtga-collection-helper
+services/collection-poc/mtga-collection-poc
