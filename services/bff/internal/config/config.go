@@ -47,7 +47,7 @@ type Config struct {
 	// accept on cross-origin requests from browser clients.
 	//
 	// Sourced from ALLOWED_ORIGINS as a comma-separated list
-	// (e.g. "https://mtga-companion.vercel.app,https://*.vercel.app").
+	// (e.g. "https://app.vaultmtg.app,https://*.vaultmtg.app").
 	// Defaults to localhost-only values when the variable is not set so that
 	// local development requires no environment configuration.
 	AllowedOrigins []string
