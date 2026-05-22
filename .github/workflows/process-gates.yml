@@ -166,7 +166,7 @@ jobs:
     name: Stale repo references (MTGA-Companion / mtga-companion-web)
     runs-on: ubuntu-latest
     timeout-minutes: 3
-    continue-on-error: true
+    continue-on-error: false
 
     steps:
       - name: Checkout code
