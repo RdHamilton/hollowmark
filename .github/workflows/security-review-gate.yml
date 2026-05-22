@@ -207,7 +207,7 @@ jobs:
           echo "Head SHA:             ${HEAD_SHA}"
           echo "Last push timestamp:  ${LAST_PUSH_TIMESTAMP}"
           echo ""
-          echo "Scanning PR comments for Sarah\'s security review verdict..."
+          echo "Scanning PR comments for Sarah's security review verdict..."
 
           # ------------------------------------------------------------------
           # 2. Find the most-recent matching APPROVED comment.
