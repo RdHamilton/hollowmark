@@ -1,4 +1,4 @@
-# ADR-0022: AWS Audit / Observability Floor for a Solo-Operated Account
+# ADR-0025: AWS Audit / Observability Floor for a Solo-Operated Account
 
 **Status**: Accepted
 **Date**: 2026-05-21

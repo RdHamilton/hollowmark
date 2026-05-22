@@ -25,7 +25,7 @@ This directory holds VaultMTG's ADRs. Numbering is zero-padded 4 digits. Status 
 | 0017 | BFF precomputed read contract (typed envelope) | Accepted |
 | 0018 | List endpoint pagination standard (cursor-based) | Accepted |
 | 0019 | Staging environment design | Accepted |
-| 0022 | AWS audit / observability floor for a solo-operated account | Accepted |
+| 0025 | AWS audit / observability floor for a solo-operated account | Accepted |
 
 ## Conventions
 
@@ -36,7 +36,7 @@ This directory holds VaultMTG's ADRs. Numbering is zero-padded 4 digits. Status 
 
 ## Adding a new ADR
 
-1. Take the next 4-digit ID (next available is **0023**).
+1. Take the next 4-digit ID (next available is **0026**).
 2. Copy an accepted ADR as a template (0018 is a clean recent one).
 3. Fill in front-matter and submit a PR with `Status: Proposed`.
 4. After review, flip `Status: Accepted` (or close the PR and write `Status: Rejected`).
