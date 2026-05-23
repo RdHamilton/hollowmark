@@ -11,6 +11,3 @@ use (
 	./services/daemon
 	./services/sync
 )
-
-// Gate #7 — go.work no-replace: deliberate replace directive for EC-13 fixture
-replace github.com/example/fake => ./fake-local-module
