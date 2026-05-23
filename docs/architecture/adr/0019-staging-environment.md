@@ -87,13 +87,14 @@ mirrors the prod CORS model.
 
 ### CI/CD trigger model
 
-Staging deploys are triggered on **every merge to `main`**, with a
-manual-dispatch fallback for re-deploying the same commit.
+Staging deploys are triggered on **every merge to `main`** and on a **nightly
+cron (06:00 UTC)**, with a manual-dispatch fallback for re-deploying any ref.
 
-- **BFF staging deploy**: a GitHub Actions workflow (`.github/workflows/staging-deploy.yml`) triggers on push to `main` for paths under `services/bff/**` and `services/bff/internal/storage/migrations/postgres/**`. It builds the binary, SCPs it to EC2, runs migrations against `vaultmtg_staging`, and restarts `bff-staging.service`.
+- **BFF staging deploy**: a GitHub Actions workflow (`.github/workflows/staging-deploy.yml`) triggers on (1) push to `main`, (2) `schedule: cron '0 6 * * *'`, and (3) `workflow_dispatch`. It delegates to the shared `deploy-bff.yml` reusable workflow with `environment: staging`. The path filter on `services/bff/**` was removed per the v0.3.0 post-mortem (action A1) because deploy scripts, infra scripts, and migrations can change without touching `services/bff/`; running on every merge keeps the full deploy path warm.
+- **Nightly cron (R-20)**: guarantees staging is exercised at least once per day during quiet periods. Catches drift in external dependencies (SSM params, AMI/OS patches, IAM role trust, S3 bucket policies) before a production release is cut.
 - **Frontend preview**: Vercel handles this automatically via its existing GitHub integration. Every PR open triggers a preview build that reads the Preview env vars (above).
 - **Manual re-deploy**: `workflow_dispatch` input on the staging-deploy workflow accepts a Git ref, useful for re-running staging against an older commit during incident triage.
-- **Production deploys** remain tag-driven (per ADR-008) and are unchanged. Promotion from staging to prod is "tag the same commit you validated on staging, then run the existing tag workflow."
+- **Production deploys** remain tag-driven (per ADR-008) and are unchanged. The `push: branches: [main]` and `schedule` triggers on `staging-deploy.yml` route exclusively to `environment: staging`; production is reached only via `release.yml` on `app/v*` tags. Promotion from staging to prod is "tag the same commit you validated on staging, then run the existing tag workflow."
 
 ### DNS, TLS, and nginx
 
