@@ -1,10 +1,19 @@
-# Staging BFF deploy — runs on every push to main.
+# Staging BFF deploy — runs on every push to main and on a nightly cadence.
 #
 # Path filter removed intentionally (post-mortem action A1): deploy scripts,
 # infra scripts, and migration files can change without touching services/bff/,
 # and those changes must be exercised in staging before they reach production.
 # Running on every merge ensures the full deploy path is always warm and that
 # no stage of the release pipeline first executes in production.
+#
+# Nightly schedule (R-20): guarantees staging is exercised at least once per day
+# even if no commits land on main. This keeps the deploy path warm during slow
+# periods and surfaces any drift in external dependencies (SSM params, AMI/OS
+# patches, IAM role trust, S3 bucket policies) before a production release is cut.
+# Cron is 06:00 UTC daily (~01:00/02:00 ET) to avoid overlap with business hours.
+#
+# Production deploys are NOT triggered by this workflow — release.yml fires only
+# on app/v* tags and routes to deploy-bff.yml with environment: production.
 #
 # All deploy logic is delegated to the shared deploy-bff.yml reusable workflow,
 # which is also called by release.yml for production. Staging always runs first;
@@ -15,6 +24,11 @@ name: Staging Deploy
 on:
   push:
     branches: [main]
+
+  # Nightly staging deploy (R-20). Runs at 06:00 UTC daily against the default
+  # branch (main) HEAD. github.sha resolves to the latest commit on main.
+  schedule:
+    - cron: '0 6 * * *'
 
   workflow_dispatch:
     inputs:
