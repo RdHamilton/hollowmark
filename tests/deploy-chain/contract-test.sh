@@ -180,6 +180,10 @@ for script in "${CONSUMER_SCRIPTS[@]}"; do
       ENV_KEY|ENV_VALUE|ENV_FILE|ENV_DIR|SERVICE|UNIT_FILE|SSM_PARAM_NAME|DECRYPT_FLAG) continue;;
       # Script-local working vars used by infra/scripts.
       RAW|STATUS|RC|SUCCEEDED|COMMAND_ID|VALUE|MIGRATIONS_DIR|MIGRATE_VERSION|MIGRATE_DB_URL|SECRET_ARN|SECRET_JSON|MASTER_USER|ENC_PASS|STAGING_PASSWORD|STAGING_DB_URL|PROFILE|REGION|TRUNCATE_ALL) continue;;
+      # DATABASE_URL is sourced from $BFF_ENV_FILE at runtime (written by
+      # provision-db-url.sh under the provisioner role); it is NOT a
+      # deploy-env.sh constant.  See PR #2542 / #2461 env-file pattern.
+      DATABASE_URL) continue;;
     esac
 
     # Allowed if defined in deploy-env.sh.
