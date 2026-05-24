@@ -36,6 +36,11 @@
     "react-router-dom": "^7.9.6",
     "recharts": "^3.4.1"
   },
+  "overrides": {
+    "jayson": {
+      "uuid": "^11.1.1"
+    }
+  },
   "devDependencies": {
     "@chromatic-com/playwright": "^0.13.4",
     "@eslint/js": "^9.39.1",
