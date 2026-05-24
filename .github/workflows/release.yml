@@ -23,16 +23,43 @@ on:
         default: 'false'
         type: string
 
+  # Manual prod deploy without cutting a new release tag.
+  # Use case: re-deploy the current prod SHA to refresh the on-instance env file
+  # after a deploy-script change has landed on main but no new app/v* tag is due
+  # (e.g. PR #2540 — provision-db-url.sh shape change). The GitHub Release
+  # creation step is skipped on this path; deploy-bff + deploy-spa still run
+  # so the SSM-driven env file gets re-rendered and the SPA bundle is refreshed.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref/SHA to deploy (branch, tag, or full SHA). Defaults to current main.'
+        required: false
+        default: 'main'
+        type: string
+      prerelease:
+        description: 'Treat as a pre-release (unused on workflow_dispatch — release step is skipped).'
+        required: false
+        default: false
+        type: boolean
+      skip_e2e:
+        description: 'Skip the E2E smoke gate (emergency hotfix bypass).'
+        required: false
+        default: false
+        type: boolean
+
 env:
   # For push: tags events, github.ref_name is the pushed tag (e.g. app/v0.3.1).
   # For workflow_call, the tag comes from the explicit input.
-  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+  # For workflow_dispatch, there is no tag — set a synthetic value (unused;
+  # the GitHub Release creation job is skipped on this trigger).
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || (github.event_name == 'workflow_call' && inputs.tag) || format('manual-{0}', github.sha) }}
   # Prerelease detection: treat tags containing "-rc", "-alpha", or "-beta" as pre-releases.
-  # For workflow_call the caller supplies this explicitly.
-  IS_PRERELEASE: ${{ github.event_name == 'push' && (contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta')) || inputs.prerelease || 'false' }}
-  # E2E skip is only meaningful for workflow_call (emergency hotfix flag).
-  # For push: tags events, E2E always runs.
-  SKIP_E2E: ${{ inputs.skip_e2e || 'false' }}
+  # For workflow_call the caller supplies this explicitly as a string.
+  # For workflow_dispatch the input is a boolean (unused — release step is skipped).
+  IS_PRERELEASE: ${{ github.event_name == 'push' && (contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta')) || (github.event_name == 'workflow_call' && inputs.prerelease == 'true') || (github.event_name == 'workflow_dispatch' && inputs.prerelease) || false }}
+  # E2E skip is meaningful for workflow_call (emergency hotfix flag) and
+  # workflow_dispatch (manual re-deploy bypass). For push: tags events, E2E always runs.
+  SKIP_E2E: ${{ (github.event_name == 'workflow_call' && inputs.skip_e2e == 'true') || (github.event_name == 'workflow_dispatch' && inputs.skip_e2e) || false }}
 
 permissions:
   contents: write
@@ -44,6 +71,31 @@ permissions:
 # ---------------------------------------------------------------------------
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Resolve the deploy SHA up front so every downstream job sees the same value.
+  # ---------------------------------------------------------------------------
+  # For push: tags and workflow_call, github.sha is already the correct commit
+  # (tag SHA or caller SHA). For workflow_dispatch, inputs.ref may point at a
+  # branch/tag/SHA distinct from the workflow source ref, so we resolve it here
+  # via a lightweight checkout + git rev-parse.
+  resolve-ref:
+    name: Resolve Deploy SHA
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Checkout target ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          fetch-depth: 1
+      - name: Resolve SHA
+        id: resolve
+        run: |
+          SHA=$(git rev-parse HEAD)
+          echo "Resolved deploy SHA: ${SHA}"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
   # ---------------------------------------------------------------------------
   # Pre-flight checks — must pass before any release gates run.
   # ---------------------------------------------------------------------------
@@ -153,7 +205,13 @@ jobs:
     name: E2E Smoke Gate
     needs: [staging-health-gate, secrets-inventory]
     uses: ./.github/workflows/e2e-smoke.yml
-    if: inputs.skip_e2e != 'true'
+    # Skip when the caller explicitly opts out:
+    #   workflow_call: inputs.skip_e2e is a string 'true'
+    #   workflow_dispatch: inputs.skip_e2e is a boolean true
+    #   push: tags: inputs.skip_e2e is unset → always runs
+    if: |
+      !((github.event_name == 'workflow_call' && inputs.skip_e2e == 'true') ||
+        (github.event_name == 'workflow_dispatch' && inputs.skip_e2e))
 
   # Run BFF integration tests after E2E smoke passes.
   # Blocks the release if any integration test fails.
@@ -165,9 +223,15 @@ jobs:
     secrets: inherit
 
   release:
-    needs: [e2e-smoke-gate, integration-gate]
-    # Run if smoke passed (or skipped) AND integration tests passed
-    if: always() && (needs.e2e-smoke-gate.result == 'success' || needs.e2e-smoke-gate.result == 'skipped') && needs.integration-gate.result == 'success'
+    needs: [resolve-ref, e2e-smoke-gate, integration-gate]
+    # Run if smoke passed (or skipped) AND integration tests passed.
+    # Skip entirely for workflow_dispatch — that path re-deploys an existing
+    # commit and must not create a duplicate GitHub Release for it.
+    if: |
+      always() &&
+      github.event_name != 'workflow_dispatch' &&
+      (needs.e2e-smoke-gate.result == 'success' || needs.e2e-smoke-gate.result == 'skipped') &&
+      needs.integration-gate.result == 'success'
     name: Create Release
     runs-on: ubuntu-latest
 
@@ -175,6 +239,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v6
       with:
+        ref: ${{ needs.resolve-ref.outputs.sha }}
         fetch-depth: 0
 
     - name: Set up Go
@@ -220,16 +285,25 @@ jobs:
   # Production deploy uses the exact same job graph as staging (run via staging-deploy.yml
   # on every push to main). Any defect in the deploy path surfaces in staging first.
   # DEPLOY_BUCKET is passed as a secret because workflow inputs cannot reference secrets.
+  #
+  # Trigger paths:
+  #   push: tags / workflow_call → release job creates the GH Release first, then deploy runs.
+  #   workflow_dispatch          → release job is skipped; deploy runs after integration-gate.
   deploy:
     name: Deploy BFF to EC2
-    needs: [release]
-    if: always() && needs.release.result == 'success'
+    needs: [resolve-ref, release, integration-gate]
+    if: |
+      always() &&
+      needs.resolve-ref.result == 'success' &&
+      needs.integration-gate.result == 'success' &&
+      (needs.release.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && needs.release.result == 'skipped'))
     uses: ./.github/workflows/deploy-bff.yml
     with:
       environment: production
-      s3-binary-key-suffix: releases/${{ github.sha }}/mtga-bff
+      s3-binary-key-suffix: releases/${{ needs.resolve-ref.outputs.sha }}/mtga-bff
       binary-name: mtga-bff
-      deploy-sha: ${{ github.sha }}
+      deploy-sha: ${{ needs.resolve-ref.outputs.sha }}
     secrets:
       AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
       EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
@@ -237,7 +311,14 @@ jobs:
 
   deploy-spa:
     name: Deploy SPA
-    needs: [release]
-    if: needs.release.result == 'success'
+    needs: [resolve-ref, release, integration-gate]
+    if: |
+      always() &&
+      needs.resolve-ref.result == 'success' &&
+      needs.integration-gate.result == 'success' &&
+      (needs.release.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && needs.release.result == 'skipped'))
     uses: ./.github/workflows/deploy-spa.yml
+    with:
+      ref: ${{ needs.resolve-ref.outputs.sha }}
     secrets: inherit
