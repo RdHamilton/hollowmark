@@ -6,6 +6,10 @@
 # Docker Postgres environment so that cross-script contract mismatches are caught
 # in CI, not in production.
 #
+# Phase 3 updated in #2223 corrective push: stub now handles the independent
+# master-credential model (SSM + STS assume-role + Secrets Manager + S3)
+# introduced by the ADR-024 run-migrations.sh deviation.
+#
 # What is exercised and how:
 #
 #   provision-env.sh / provision-db-url.sh
