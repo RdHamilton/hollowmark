@@ -81,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **API Route Validation** - Fixed mismatches between frontend and backend routes (#838)
 - **WebSocket Hub Shutdown** - Added graceful shutdown for WebSocket connections (#800)
 - **Staging BFF crash loop** - Removed the BFF's runtime Secrets Manager call from the staging startup path. The provisioner-side deploy script now fetches the RDS secret under its scoped role and writes a credential-laden `DATABASE_URL` inline, so the BFF no longer needs `secretsmanager:GetSecretValue` on the EC2 instance role and no longer crash-loops with AccessDenied. Runtime SM resolution is retained as an opt-in via `BFF_DB_RESOLVE_FROM_SM=true` (default OFF).
+- **Production BFF crash loop (preempted)** - Mirrored the staging fix above onto the production deploy path (`scripts/deploy/provision-db-url.sh`). The script now reads the production DB SSM parameters under the EC2 instance role, assumes `vaultmtg-staging-deploy-provisioner` (the only role in the account with `secretsmanager:GetSecretValue` on the shared RDS-managed secret), splices fresh credentials into `DATABASE_URL` inline, and writes neither `DB_SECRET_ARN` nor `BFF_DB_RESOLVE_FROM_SM`. Without this change the next production deploy of the post-#2539 BFF binary would have crash-looped identically to the original staging incident.
 
 ### Changed
 
