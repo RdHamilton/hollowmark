@@ -79,7 +79,7 @@ jobs:
       with:
         # Build from the exact SHA being deployed so the binary uploaded to
         # s3://<bucket>/<s3-binary-key-suffix> matches the SHA recorded in
-        # /vaultmtg/app/production/latest-bff-sha. Without this, a caller
+        # `/vaultmtg/app/production/latest-bff-sha`. Without this, a caller
         # passing a deploy-sha distinct from the workflow source ref (e.g.
         # release.yml on workflow_dispatch with inputs.ref) would upload a
         # binary built from the wrong commit.
