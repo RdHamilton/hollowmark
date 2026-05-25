@@ -43,15 +43,40 @@ permissions:
   id-token: write  # passed through to the reusable workflow via secrets: inherit path
 
 jobs:
+  # Resolve the deploy ref up front so every downstream job sees the same SHA.
+  # For push/schedule, github.sha is already the correct commit (main HEAD or
+  # the scheduled run's resolved SHA). For workflow_dispatch, inputs.ref may
+  # point at a branch/tag/SHA distinct from the workflow source ref, so we
+  # resolve it here via a lightweight checkout + git rev-parse. Mirrors the
+  # resolve-ref pattern in release.yml.
+  resolve-ref:
+    name: Resolve Deploy SHA
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Checkout target ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          fetch-depth: 1
+      - name: Resolve SHA
+        id: resolve
+        run: |
+          SHA=$(git rev-parse HEAD)
+          echo "Resolved deploy SHA: ${SHA}"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
   deploy-staging:
     name: Deploy BFF to Staging
+    needs: resolve-ref
     uses: ./.github/workflows/deploy-bff.yml
     with:
       environment: staging
       deploy-bucket: vaultmtg-deploy-artifacts-staging
-      s3-binary-key-suffix: staging/${{ github.sha }}/mtga-bff-staging
+      s3-binary-key-suffix: staging/${{ needs.resolve-ref.outputs.sha }}/mtga-bff-staging
       binary-name: mtga-bff-staging
-      deploy-sha: ${{ github.sha }}
+      deploy-sha: ${{ needs.resolve-ref.outputs.sha }}
     secrets:
       AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
       EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
