@@ -342,8 +342,8 @@ PROVISION_ENV="${SCRATCH}/provision-env-test.sh"
 cp "${REPO_ROOT}/scripts/deploy/provision-env.sh" "$PROVISION_ENV"
 chmod +x "$PROVISION_ENV"
 
-bash "$PROVISION_ENV" ALLOWED_ORIGINS /mtga-companion/production/ALLOWED_ORIGINS
-bash "$PROVISION_ENV" CLERK_SECRET_KEY /mtga-companion/production/CLERK_SECRET_KEY --with-decryption
+bash "$PROVISION_ENV" ALLOWED_ORIGINS /vaultmtg/app/production/ALLOWED_ORIGINS
+bash "$PROVISION_ENV" CLERK_SECRET_KEY /vaultmtg/app/production/CLERK_SECRET_KEY --with-decryption
 
 # Contract check: provision-db-url.sh must write DATABASE_URL and DB_SECRET_ARN.
 PROVISION_DB="${SCRATCH}/provision-db-url-test.sh"
