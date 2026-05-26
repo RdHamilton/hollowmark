@@ -321,6 +321,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
     # The trap still applies as a hygiene measure.
     TMP_JSON="/tmp/ssm-cmd-$$.json"
     trap 'rm -f "$TMP_JSON"' EXIT INT TERM HUP
+    install -m 600 /dev/null "$TMP_JSON"
     cat > "$TMP_JSON" <<ENDJSON
 {
   "DocumentName": "AWS-RunShellScript",
@@ -380,6 +381,7 @@ fi
 # interruption.  Do not remove any signal from the trap.
 TMP_JSON="/tmp/ssm-cmd-$$.json"
 trap 'rm -f "$TMP_JSON"' EXIT INT TERM HUP
+install -m 600 /dev/null "$TMP_JSON"
 
 cat > "$TMP_JSON" <<ENDJSON
 {
