@@ -1,0 +1,274 @@
+name: PR Local Verification Check
+
+# ---------------------------------------------------------------------------
+# Mechanical gate for the `## Local Verification` section of every PR body.
+#
+# WHY THIS EXISTS
+# ---------------
+# A PR's Local Verification section is supposed to be a real pasted terminal
+# transcript proving the change executes correctly. In practice, agents (and
+# humans in a hurry) sometimes paste *predicted* or *structural* output —
+# "this would print PASS" / "expected to succeed" — which a reviewer cannot
+# tell apart from a real transcript at a glance. Window B (2026-05-25) shipped
+# a regression because a structural-only "verification" was accepted.
+#
+# This gate parses the PR body and applies cheap, deterministic heuristics
+# that catch the most common fabrications without needing the reviewer to
+# read every PR carefully.
+#
+# WHAT IT CHECKS
+# --------------
+# 1. The PR body contains a `## Local Verification` section header.
+# 2. The section contains >= 1 fenced code block (``` ... ```).
+# 3. >= 1 fenced code block contains a shell-prompt indicator line:
+#       `$ ` | `> ` | `# ` | `[user@host]$ ` | `PS> ` | `>> `
+#    (A code block with zero prompt indicators is almost always prose.)
+# 4. The section contains >= 1 explicit success marker:
+#       PASS | OK | SUCCESS  (case-insensitive)
+# 5. If the PR diff touches any `*.sh` file (or anything under
+#    `scripts/deploy/`), the section MUST contain the literal `--dry-run`
+#    or `dry-run` — shell-script PRs must show the dry-run exercised the
+#    actual code path, not just `bash -n`.
+#
+# WHAT IT DOES NOT CHECK
+# ----------------------
+# - It cannot tell a real transcript from a fabricated transcript that
+#   *happens to look real*. That's still the human reviewer's job (see
+#   the `local-verification-check` skill).
+# - It does not check Go / frontend / CFN test commands by content.
+#   Those gates live in `ci.yml`, `process-gates.yml`, and the per-stack
+#   workflows; this gate only enforces the shape of the section.
+#
+# REQUIRED BRANCH PROTECTION
+# --------------------------
+# After this workflow first runs successfully, add the job
+# `Local Verification heuristic check` to the list of REQUIRED status
+# checks on the `main` branch (Settings → Branches → Branch protection
+# rules → main → Require status checks to pass). The orchestrator should
+# do this manually in the GitHub UI; this workflow file alone cannot
+# configure branch protection.
+#
+# TEST CASES (run mentally against the bash logic below)
+# ------------------------------------------------------
+# PASS cases:
+#   A) Body contains:
+#        ## Local Verification
+#        ```
+#        $ go test ./...
+#        ok  github.com/RdHamilton/vault-mtg/services/bff  0.834s
+#        PASS
+#        ```
+#      → 1 fence, prompt `$ `, marker `PASS` → PASS
+#
+#   B) Body contains:
+#        ## Local Verification
+#        ```
+#        $ shellcheck scripts/deploy/foo.sh
+#        $ scripts/deploy/foo.sh --dry-run
+#        [bootstrap] Assertion 1: PASS
+#        ```
+#      Diff touches `scripts/deploy/foo.sh` → fence + prompt + PASS + dry-run → PASS
+#
+#   C) Body contains:
+#        ## Local Verification
+#        ```
+#        [user@host]$ npm run build
+#        > frontend@0.0.0 build
+#        > tsc -b && vite build
+#        ✓ built in 4.32s
+#        SUCCESS
+#        ```
+#      → 1 fence, prompt `[user@host]$`, marker `SUCCESS` → PASS
+#
+# FAIL cases:
+#   D) No `## Local Verification` header at all → FAIL (missing section).
+#
+#   E) Section present but empty (no code fence) → FAIL (no transcript).
+#
+#   F) Section contains only prose:
+#        "I ran `go test` and it passed. Verified the bug is fixed."
+#      → FAIL (no fenced code block).
+#
+#   G) Code block contains no prompt indicator:
+#        ```
+#        the command would print:
+#        ok    bff    0.5s
+#        ```
+#      → FAIL (no `$ ` / `> ` / `#` line).
+#
+#   H) Code block has prompt but no PASS/OK/SUCCESS marker:
+#        ```
+#        $ go vet ./...
+#        $ go build ./...
+#        ```
+#      → FAIL (no success marker — could be predicted output).
+#
+#   I) Shell-script PR (touches `scripts/deploy/ec2-bootstrap.sh`) but the
+#      transcript shows only `bash -n` and `shellcheck` (no `--dry-run`):
+#        ```
+#        $ shellcheck scripts/deploy/ec2-bootstrap.sh
+#        $ bash -n scripts/deploy/ec2-bootstrap.sh
+#        PASS
+#        ```
+#      → FAIL (missing `--dry-run` / `dry-run` for a shell PR).
+# ---------------------------------------------------------------------------
+
+on:
+  pull_request:
+    types: [opened, synchronize, edited]
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  local-verification-check:
+    name: Local Verification heuristic check
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch PR body
+        id: prbody
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr view "$PR_NUMBER" --json body --jq .body > /tmp/pr_body.txt
+          echo "PR body bytes: $(wc -c < /tmp/pr_body.txt)"
+
+      - name: Detect shell-file changes
+        id: shellfiles
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # List files changed in the PR. If any `*.sh` file or anything under
+          # `scripts/deploy/` is touched, the PR is "shell-flavored" and must
+          # show a --dry-run transcript.
+          gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > /tmp/pr_files.txt
+          SHELL_TOUCHED=no
+          if grep -E '(\.sh$|^scripts/deploy/)' /tmp/pr_files.txt >/dev/null 2>&1; then
+            SHELL_TOUCHED=yes
+          fi
+          echo "shell_touched=$SHELL_TOUCHED" >> "$GITHUB_OUTPUT"
+          echo "Shell-flavored PR: $SHELL_TOUCHED"
+
+      - name: Parse Local Verification section
+        env:
+          SHELL_TOUCHED: ${{ steps.shellfiles.outputs.shell_touched }}
+        run: |
+          set -u
+          BODY_FILE=/tmp/pr_body.txt
+
+          fail() {
+            echo ""
+            echo "permissionDecision: BLOCKED"
+            echo "ERROR: Local Verification gate — $1"
+            echo ""
+            echo "Required structure (see PR template):"
+            echo ""
+            echo "  ## Local Verification"
+            echo "  \`\`\`"
+            echo "  \$ <command you actually ran>"
+            echo "  <actual terminal output>"
+            echo "  ... PASS"
+            echo "  \`\`\`"
+            echo ""
+            echo "Rules:"
+            echo "  - >=1 fenced code block in the section"
+            echo "  - >=1 shell-prompt line per block (\$, >, #, [user@host]\$)"
+            echo "  - >=1 PASS / OK / SUCCESS marker in the section"
+            if [ "${SHELL_TOUCHED}" = "yes" ]; then
+              echo "  - Shell-script PR: transcript must contain --dry-run"
+            fi
+            exit 1
+          }
+
+          # ---- 1. Section header present ----
+          if ! grep -qE '^## Local Verification' "$BODY_FILE"; then
+            fail "PR body is missing the '## Local Verification' section header."
+          fi
+
+          # ---- Extract section (between '## Local Verification' and next '## ') ----
+          # awk: print lines from the Local Verification header up to (but not
+          # including) the next top-level `## ` header. End-of-file also ends
+          # the section.
+          awk '
+            /^## Local Verification/ { inside=1; next }
+            inside && /^## / { inside=0 }
+            inside { print }
+          ' "$BODY_FILE" > /tmp/lv_section.txt
+
+          if [ ! -s /tmp/lv_section.txt ]; then
+            fail "Local Verification section is empty."
+          fi
+
+          echo "---- Local Verification section ----"
+          cat /tmp/lv_section.txt
+          echo "------------------------------------"
+
+          # ---- 2. >=1 fenced code block ----
+          # Count fence-opener lines (triple-backtick at line start). A valid
+          # section needs at least one opener AND one closer => fence count >=2.
+          FENCE_COUNT=$(grep -cE '^[[:space:]]*```' /tmp/lv_section.txt || true)
+          if [ "${FENCE_COUNT:-0}" -lt 2 ]; then
+            fail "No fenced code block found in Local Verification (need an opening and closing \`\`\`)."
+          fi
+
+          # ---- 3. >=1 prompt indicator inside a code block ----
+          # Extract content inside fenced code blocks only, then look for prompt lines.
+          awk '
+            /^[[:space:]]*```/ { fence = !fence; next }
+            fence { print }
+          ' /tmp/lv_section.txt > /tmp/lv_code.txt
+
+          if [ ! -s /tmp/lv_code.txt ]; then
+            fail "Fenced code block(s) present but empty."
+          fi
+
+          # Prompt regex:
+          #   ^\s*\$\s    bash/zsh prompt
+          #   ^\s*>\s     PowerShell or quoted prompt
+          #   ^\s*#\s     root prompt / comment-style (cheap signal)
+          #   ^\[.*\]\$   `[user@host]$` style
+          #   ^\s*PS>     PowerShell explicit
+          #   ^\s*>>\s    secondary prompt (continuation)
+          if ! grep -qE '(^[[:space:]]*\$ )|(^[[:space:]]*> )|(^[[:space:]]*# )|(^\[[^]]+\]\$)|(^[[:space:]]*PS> )|(^[[:space:]]*>> )' /tmp/lv_code.txt; then
+            fail "No shell-prompt indicator found inside any code block. A real transcript starts lines with \`\$ \`, \`> \`, \`# \`, or \`[user@host]\$ \`."
+          fi
+
+          # ---- 4. >=1 PASS/OK/SUCCESS marker (case-insensitive) ----
+          # Word-boundary match to avoid matching things like "passport" or
+          # "OKAY-NOTHING". Allow bare "ok" (go test format) too.
+          if ! grep -qiE '(\bPASS\b)|(\bOK\b)|(\bSUCCESS\b)' /tmp/lv_section.txt; then
+            fail "No PASS / OK / SUCCESS marker found in Local Verification section."
+          fi
+
+          # ---- 5. Shell-script PRs require --dry-run / dry-run ----
+          if [ "${SHELL_TOUCHED}" = "yes" ]; then
+            if ! grep -qE '(--dry-run|dry-run)' /tmp/lv_section.txt; then
+              fail "Shell-script PR (touches *.sh or scripts/deploy/): Local Verification must include a --dry-run transcript that exercised the actual code path."
+            fi
+          fi
+
+          echo ""
+          echo "permissionDecision: ALLOW"
+          echo "Local Verification heuristic check: PASS"
+          echo "  - Section header: present"
+          echo "  - Fenced code blocks: ${FENCE_COUNT} fence markers found"
+          echo "  - Shell-prompt indicator: present"
+          echo "  - Success marker: present"
+          if [ "${SHELL_TOUCHED}" = "yes" ]; then
+            echo "  - Shell-script dry-run: present"
+          fi
