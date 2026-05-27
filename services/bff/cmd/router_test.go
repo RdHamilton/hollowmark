@@ -480,3 +480,102 @@ func TestRouter_SSE_E2EUnguardedSSE_AllowsUnauthenticated(t *testing.T) {
 		t.Fatalf("GET /api/v1/events E2EUnguardedSSE=true: got 503 (auth blocking); want SSE handler response")
 	}
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// /api/v1/daemons (ADR-031 §3 + §4) — list + soft-revoke endpoints
+// ──────────────────────────────────────────────────────────────────────────────
+
+// stubDaemonsRepo satisfies both the list and revoke repository contracts
+// used by DaemonsListHandler and DaemonsRevokeHandler.
+type stubDaemonsRepo struct{}
+
+func (s *stubDaemonsRepo) ListByAccountID(_ context.Context, _ string) ([]repository.DaemonAPIKey, error) {
+	return []repository.DaemonAPIKey{}, nil
+}
+
+func (s *stubDaemonsRepo) RevokeByAccountIDAndDeviceID(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
+}
+
+func TestRouter_DaemonsList_Returns401_WithoutToken(t *testing.T) {
+	deps := depsWithClerk(t)
+	deps.DaemonsListHandler = handlers.NewDaemonsListHandler(&stubDaemonsRepo{})
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/daemons", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/v1/daemons no token: want 401, got %d", rr.Code)
+	}
+}
+
+func TestRouter_DaemonsList_ValidJWT_Returns200(t *testing.T) {
+	jwt := setupClerkBackend(t)
+
+	deps := depsWithClerk(t)
+	deps.DaemonsListHandler = handlers.NewDaemonsListHandler(&stubDaemonsRepo{})
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/daemons", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/daemons valid JWT: want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRouter_DaemonsRevoke_Returns401_WithoutToken(t *testing.T) {
+	deps := depsWithClerk(t)
+	deps.DaemonsRevokeHandler = handlers.NewDaemonsRevokeHandler(&stubDaemonsRepo{})
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/daemons/11111111-1111-1111-1111-111111111111", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("DELETE /api/v1/daemons/{device_id} no token: want 401, got %d", rr.Code)
+	}
+}
+
+func TestRouter_DaemonsRevoke_ValidJWT_Returns404_NonExistent(t *testing.T) {
+	jwt := setupClerkBackend(t)
+
+	deps := depsWithClerk(t)
+	deps.DaemonsRevokeHandler = handlers.NewDaemonsRevokeHandler(&stubDaemonsRepo{})
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	// Repo stub returns (false, nil) → handler returns 404 (cross-tenant /
+	// not-existent / already-revoked all collapse here).
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/daemons/11111111-1111-1111-1111-111111111111", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("DELETE /api/v1/daemons/{device_id} valid JWT non-existent: want 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRouter_DaemonsRevoke_RouteAbsent_WhenHandlerNil(t *testing.T) {
+	deps := depsWithClerk(t)
+	// DaemonsRevokeHandler intentionally left nil.
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/daemons/11111111-1111-1111-1111-111111111111", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound && rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("DELETE /api/v1/daemons with nil handler: want 404/405, got %d", rr.Code)
+	}
+}

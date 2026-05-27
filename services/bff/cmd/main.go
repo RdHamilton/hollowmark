@@ -205,6 +205,8 @@ func main() {
 		statsHandler          *handlers.StatsHandler
 		daemonHealthHandler   *handlers.DaemonHealthHandler
 		daemonRegisterHandler *handlers.DaemonRegisterHandler
+		daemonsListHandler    *handlers.DaemonsListHandler
+		daemonsRevokeHandler  *handlers.DaemonsRevokeHandler
 		matchesHandler        *handlers.MatchesHandler
 		collectionHandler     *handlers.CollectionHandler
 		questsHandler         *handlers.QuestsHandler
@@ -356,6 +358,12 @@ func main() {
 		// so the standard UserIDFromContext continues to work.
 		daemonAPIKeyAuthMiddl = bffmiddleware.DaemonAPIKeyAuth(daemonAPIKeyRepo, userRepo)
 
+		// ADR-031 §3 + §4: per-device list + soft-revoke endpoints. Both
+		// are Clerk-session-authenticated (NOT daemon-api-key); the SPA's
+		// Devices UI (#2632) is the primary consumer.
+		daemonsListHandler = handlers.NewDaemonsListHandler(daemonAPIKeyRepo)
+		daemonsRevokeHandler = handlers.NewDaemonsRevokeHandler(daemonAPIKeyRepo)
+
 		// StatsHandler provides deck performance, win-rate trend, and format
 		// distribution analytics endpoints (issue #1513).
 		statsRepo := repository.NewStatsRepository(sqlDB)
@@ -413,6 +421,8 @@ func main() {
 		StatsHandler:          statsHandler,
 		DaemonHealthHandler:   daemonHealthHandler,
 		DaemonRegisterHandler: daemonRegisterHandler,
+		DaemonsListHandler:    daemonsListHandler,
+		DaemonsRevokeHandler:  daemonsRevokeHandler,
 		MatchesHandler:        matchesHandler,
 		CollectionHandler:     collectionHandler,
 		QuestsHandler:         questsHandler,
@@ -486,6 +496,14 @@ type RouterDeps struct {
 	// a per-account API key for the daemon PKCE registration flow (ADR-020).
 	// Protected by RequireClerkAuth — the daemon sends its Clerk session JWT.
 	DaemonRegisterHandler *handlers.DaemonRegisterHandler
+	// DaemonsListHandler serves GET /api/v1/daemons — lists the caller's
+	// active daemon registrations. Protected by Clerk session auth per
+	// ADR-031 §4.
+	DaemonsListHandler *handlers.DaemonsListHandler
+	// DaemonsRevokeHandler serves DELETE /api/v1/daemons/{device_id} — soft-
+	// deletes (revokes) the caller's daemon registration. Protected by
+	// Clerk session auth per ADR-031 §3.
+	DaemonsRevokeHandler *handlers.DaemonsRevokeHandler
 	// MatchesHandler serves the Phase 2 /api/v1/matches/* surface that the
 	// SPA's daemonClient previously hit. Protected by DaemonAPIKeyAuth.
 	MatchesHandler *handlers.MatchesHandler
@@ -645,6 +663,30 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 			r.With(deps.ClerkOAuthMiddl).Post("/api/v1/daemon/register", deps.DaemonRegisterHandler.Register)
 		} else {
 			log.Println("WARN: POST /api/v1/daemon/register disabled — CLERK_FRONTEND_API not configured")
+		}
+	}
+
+	// ── /api/v1/daemons surface (ADR-031 §3 + §4) ────────────────────────────
+	// GET /api/v1/daemons              — list caller's active daemons.
+	// DELETE /api/v1/daemons/{device_id} — soft-revoke caller's daemon.
+	// Both are SPA-facing (consumed by the Devices UI #2632), so authn is
+	// the user's Clerk session — NOT the daemon API key. Cross-tenancy is
+	// SQL-enforced by the WHERE account_id = $caller clause inside the repo
+	// methods; the handler simply forwards the authenticated Clerk user_id.
+	if deps.DaemonsListHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Get("/api/v1/daemons", deps.DaemonsListHandler.List)
+		} else {
+			log.Println("WARN: GET /api/v1/daemons disabled — Clerk auth middleware not configured")
+		}
+	}
+	if deps.DaemonsRevokeHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Delete("/api/v1/daemons/{device_id}", deps.DaemonsRevokeHandler.Revoke)
+		} else {
+			log.Println("WARN: DELETE /api/v1/daemons/{device_id} disabled — Clerk auth middleware not configured")
 		}
 	}
 
