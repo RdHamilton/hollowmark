@@ -3,13 +3,17 @@ package handlers_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/posthog/posthog-go"
 
 	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
 	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
@@ -571,5 +575,73 @@ func TestDaemonRegister_DeviceIDEchoedOn200(t *testing.T) {
 	deviceID, _ := resp["device_id"].(string)
 	if deviceID != existingDeviceID {
 		t.Errorf("device_id in 200 response must equal repo row value %q, got %q", existingDeviceID, deviceID)
+	}
+}
+
+// wgPostHogClient wraps mockPostHogClient and signals a WaitGroup on each
+// Enqueue call so the test can deterministically wait for the goroutine that
+// fires the PostHog event without sleeping.
+type wgPostHogClient struct {
+	inner *mockPostHogClient
+	wg    *sync.WaitGroup
+}
+
+func (w *wgPostHogClient) Enqueue(msg posthog.Message) error {
+	defer w.wg.Done()
+	return w.inner.Enqueue(msg)
+}
+
+// testHashAccountID mirrors handlers.hashAccountID (SHA-256 hex[:16]) so the
+// test can compute the expected DistinctId without exporting the production
+// helper.
+func testHashAccountID(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return fmt.Sprintf("%x", sum)[:16]
+}
+
+// TestDaemonRegister_PostHogDistinctIDIsHashed verifies that the daemon_paired
+// PostHog event emitted on first pairing uses a hashed account_id as the
+// DistinctId, never the raw Clerk user_id (PII).
+//
+// The goroutine wrapping the Enqueue call is waited on deterministically via a
+// sync.WaitGroup — no time.Sleep per Ray's Q1 amendment.
+func TestDaemonRegister_PostHogDistinctIDIsHashed(t *testing.T) {
+	const clerkUserID = "user_test123"
+	wantDistinctID := testHashAccountID(clerkUserID)
+
+	inner := &mockPostHogClient{}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	ph := &wgPostHogClient{inner: inner, wg: &wg}
+
+	repo := &stubDaemonAPIKeyRepo{}
+	h := handlers.NewDaemonRegisterHandler(repo, nil).WithPostHogClient(ph)
+
+	req := newRegisterRequest(clerkUserID)
+	rr := httptest.NewRecorder()
+	h.Register(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Wait for the goroutine to call Enqueue before asserting.
+	wg.Wait()
+
+	if len(inner.calls) != 1 {
+		t.Fatalf("expected 1 PostHog Enqueue call, got %d", len(inner.calls))
+	}
+
+	capture, ok := inner.calls[0].(posthog.Capture)
+	if !ok {
+		t.Fatal("PostHog message is not a posthog.Capture")
+	}
+
+	// DistinctId must be the hashed value, not the raw Clerk user_id.
+	if capture.DistinctId == clerkUserID {
+		t.Errorf("DistinctId must be hashed, got raw Clerk user_id %q — PII leak", capture.DistinctId)
+	}
+	if capture.DistinctId != wantDistinctID {
+		t.Errorf("DistinctId=%q, want hashed value %q", capture.DistinctId, wantDistinctID)
 	}
 }
