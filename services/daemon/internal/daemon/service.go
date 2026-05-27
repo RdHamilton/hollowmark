@@ -26,6 +26,7 @@ import (
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/ratingsclient"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/registrar"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck"
+	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 )
 
@@ -562,6 +563,9 @@ func (s *Service) Run(ctx context.Context) error {
 				defer func() {
 					if r := recover(); r != nil {
 						log.Printf("[daemon] panic in performCollectionSync: %v", r)
+						// Capture for Sentry. Calls on a nil client are safe
+						// no-ops when sentry.Init was not called (#1832).
+						sentry.CurrentHub().Recover(r)
 					}
 				}()
 				s.performCollectionSync(ctx)
@@ -572,6 +576,7 @@ func (s *Service) Run(ctx context.Context) error {
 				defer func() {
 					if r := recover(); r != nil {
 						log.Printf("[daemon] panic in installCollectionHelper: %v", r)
+						sentry.CurrentHub().Recover(r)
 					}
 				}()
 				s.installCollectionHelper()
@@ -648,14 +653,39 @@ func (s *Service) snapshotAndResetDrift() (count uint32, hash string, types []st
 	return count, hash, types
 }
 
+// sentryDispatchDegradedThreshold is the consecutive-failure count at which
+// recordBFFFailure emits a Sentry warning event. Mirrors the BFF-side
+// dispatchDegradedThreshold (services/bff/internal/api/handlers/ingest.go) so
+// the two systems agree on what "degraded" means. Held as a separate constant
+// to avoid a daemon→bff package import.
+const sentryDispatchDegradedThreshold = uint32(3)
+
 // recordBFFFailure increments the consecutive-BFF-failure counter and records
 // the last status code. Called by the onBFFFailure callback wired into the
 // Dispatcher in New(). Safe to call concurrently; bffMu is held internally.
+//
+// On the transition into a multi-failure streak (count == sentryDispatchDegradedThreshold),
+// emit a Sentry message so degraded-BFF episodes surface in the crash
+// aggregator. We emit at the threshold rather than on every failure so a brief
+// network blip doesn't spam Sentry — only sustained degradation reaches the
+// alert surface. #1832.
 func (s *Service) recordBFFFailure(statusCode int) {
 	s.bffMu.Lock()
 	s.consecutiveBFFFailures++
+	count := s.consecutiveBFFFailures
 	s.lastBFFStatusCode = statusCode
 	s.bffMu.Unlock()
+
+	if count == sentryDispatchDegradedThreshold {
+		sentry.WithScope(func(scope *sentry.Scope) {
+			scope.SetTag("event", "daemon.dispatch_degraded")
+			scope.SetTag("bff_status_code", fmt.Sprintf("%d", statusCode))
+			scope.SetLevel(sentry.LevelWarning)
+			sentry.CaptureMessage(fmt.Sprintf(
+				"daemon.dispatch_degraded count=%d status=%d", count, statusCode,
+			))
+		})
+	}
 }
 
 // clearBFFFailureCounter resets the consecutive-failure counter and status code
@@ -710,6 +740,19 @@ func (s *Service) dispatchAuthFailed(ctx context.Context, reason string) {
 		p.BFFStatusCode = statusCode
 	}
 
+	// Capture the failure as a Sentry exception so beta-time auth regressions
+	// surface in the crash aggregator alongside any related panics. The
+	// PostHog event (dispatched below) covers user-impact analytics; Sentry
+	// covers exception-side root-cause investigation. #1832.
+	sentry.WithScope(func(scope *sentry.Scope) {
+		scope.SetTag("event", "daemon.auth_failed")
+		scope.SetTag("reason", reason)
+		if reason == "bff_rejected" {
+			scope.SetTag("bff_status_code", fmt.Sprintf("%d", statusCode))
+		}
+		sentry.CaptureMessage(fmt.Sprintf("daemon.auth_failed reason=%s", reason))
+	})
+
 	evt, err := dispatch.BuildEvent("daemon.auth_failed", s.cfg.AccountID, s.sessionID, p)
 	if err != nil {
 		log.Printf("[daemon] warn: build auth_failed event: %v", err)
@@ -738,6 +781,13 @@ func (s *Service) dispatchKeychainError(ctx context.Context, errorType string) {
 		Platform:      runtime.GOOS,
 		DaemonVersion: s.version,
 	}
+	// Capture for Sentry alongside the PostHog telemetry event. #1832.
+	sentry.WithScope(func(scope *sentry.Scope) {
+		scope.SetTag("event", "daemon.keychain_error")
+		scope.SetTag("error_type", errorType)
+		sentry.CaptureMessage(fmt.Sprintf("daemon.keychain_error type=%s", errorType))
+	})
+
 	evt, err := dispatch.BuildEvent("daemon.keychain_error", s.cfg.AccountID, s.sessionID, p)
 	if err != nil {
 		log.Printf("[daemon] warn: build keychain_error event: %v", err)
