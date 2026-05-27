@@ -42,39 +42,25 @@ func NewDaemonAPIKeyRepository(db daemonAPIKeyDB) *DaemonAPIKeyRepository {
 	return &DaemonAPIKeyRepository{db: db}
 }
 
-// UpsertKey inserts a new key for accountID, or returns the existing non-revoked key.
-// deviceID, platform, and daemonVer identify the daemon installation.
-// Returns (record, true, nil) when a new key was created.
-// Returns (record, false, nil) when the existing key was returned.
+// UpsertKey inserts a new daemon_api_keys row for the given (accountID, deviceID).
+// Under the multi-device schema (migration 000085) every register call mints a
+// new row — the single-device "return existing key" branch is gone. The handler
+// upsert semantics (collision handling on duplicate device_id, etc.) are
+// redesigned in #2631; this repo method only owns the INSERT.
+//
+// Returns (record, true, nil) on a successful insert. The bool return is
+// preserved to keep the handler signature stable until #2631 lands.
+// A duplicate (account_id, device_id) surfaces as the underlying pgx
+// unique-violation error — caller's responsibility to map to 409.
 func (r *DaemonAPIKeyRepository) UpsertKey(ctx context.Context, accountID, keyHash, keyPrefix, deviceID, platform, daemonVer string) (*DaemonAPIKey, bool, error) {
-	// Try to fetch existing non-revoked key first.
-	existing, err := r.GetActive(ctx, accountID)
-	if err != nil && err != ErrDaemonAPIKeyNotFound {
-		return nil, false, err
-	}
-	if existing != nil {
-		return existing, false, nil
-	}
-
-	// No active key — insert a new one.
 	const q = `
 		INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (account_id) DO NOTHING
 		RETURNING id, account_id, key_hash, key_prefix, device_id, platform, daemon_ver, created_at, last_used_at, revoked_at`
 
 	row := r.db.QueryRowContext(ctx, q, accountID, keyHash, keyPrefix, deviceID, platform, daemonVer)
 	k, err := scanDaemonAPIKey(row)
 	if err != nil {
-		// ON CONFLICT DO NOTHING means no row returned if a concurrent insert won.
-		// Retry the read.
-		if err == sql.ErrNoRows {
-			existing, err2 := r.GetActive(ctx, accountID)
-			if err2 != nil {
-				return nil, false, err2
-			}
-			return existing, false, nil
-		}
 		return nil, false, err
 	}
 
