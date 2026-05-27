@@ -87,6 +87,31 @@ jobs:
             echo "url=https://staging-api.vaultmtg.app/api/v1" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve build-time Sentry DSN
+        # Pick the Sentry DSN baked into the binary via `-X main.DefaultSentryDSN`.
+        # Pre-release tags ship the staging DSN; stable tags ship the production
+        # DSN; manual workflow_dispatch on a branch leaves the DSN empty so
+        # snapshot builds never report against a real Sentry project. #1832.
+        id: sentry_dsn
+        env:
+          SENTRY_DSN_DAEMON_PRODUCTION: ${{ secrets.SENTRY_DSN_DAEMON_PRODUCTION }}
+          SENTRY_DSN_DAEMON_STAGING: ${{ secrets.SENTRY_DSN_DAEMON_STAGING }}
+        run: |
+          REF="${{ github.ref_name }}"
+          if [[ "$REF" == *"-rc"* || "$REF" == *"-alpha"* || "$REF" == *"-beta"* || "$REF" == *"-pre"* ]]; then
+            DSN="$SENTRY_DSN_DAEMON_STAGING"
+          elif [[ "$REF" == daemon/v* ]]; then
+            DSN="$SENTRY_DSN_DAEMON_PRODUCTION"
+          else
+            DSN=""
+          fi
+          # Never echo the DSN — write it to a step output via masking. GitHub
+          # Actions automatically masks values registered with add-mask.
+          if [[ -n "$DSN" ]]; then
+            echo "::add-mask::$DSN"
+          fi
+          echo "dsn=$DSN" >> "$GITHUB_OUTPUT"
+
       - name: Resolve semver tag for GoReleaser
         # GoReleaser v2 requires GORELEASER_CURRENT_TAG to be a parseable semver
         # string -- the prefixed form `daemon/v0.3.2-rc1` fails the internal
@@ -136,6 +161,10 @@ jobs:
           # cloud_api_url baked into the binary via `-X main.DefaultCloudAPIURL=`
           # so `handleMissingConfig` never falls back to a hardcoded URL (#2560).
           DEFAULT_CLOUD_API_URL: ${{ steps.default_url.outputs.url }}
+          # Sentry DSN baked into the binary via `-X main.DefaultSentryDSN=`
+          # for daemon-side crash capture. Empty for snapshot builds — leaves
+          # Sentry disabled at runtime per sentryhook.Init contract. #1832.
+          DEFAULT_SENTRY_DSN: ${{ steps.sentry_dsn.outputs.dsn }}
 
       - name: Rename GitHub Release to daemon/v* tag (ADR-023)
         # GoReleaser publishes the release at the bare semver tag (e.g.
