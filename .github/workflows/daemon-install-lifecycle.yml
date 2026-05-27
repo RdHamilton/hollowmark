@@ -834,6 +834,11 @@ jobs:
             exit 1
           }
           Write-Host "PASS: VaultMTG-Daemon task removed (schtasks /Query exit=$rc)"
+          # GitHub Actions inspects $LASTEXITCODE on step exit; the schtasks
+          # /Query call above sets $LASTEXITCODE=1 (task not found), so we
+          # must reset it explicitly or the step will be marked failed
+          # despite the assertion passing.
+          exit 0
 
       # -----------------------------------------------------------------------
       - name: "[ASSERT] Daemon binary removed from %LOCALAPPDATA%\\VaultMTG"
