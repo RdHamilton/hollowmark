@@ -146,7 +146,11 @@ builds:
       # Local `goreleaser release --snapshot` uses whatever DEFAULT_CLOUD_API_URL
       # is in the env; if unset, goreleaser substitutes an empty string and the
       # binary falls back to the package-level localhost default.
-      - -s -w -X main.Version={{ .Env.PLAIN_VERSION }} -X main.DefaultCloudAPIURL={{ .Env.DEFAULT_CLOUD_API_URL }}
+      # main.DefaultSentryDSN is the build-time daemon Sentry DSN (#1832).
+      # Resolved by daemon-release.yml: production tags use the prod DSN, pre-
+      # release tags use the staging DSN, snapshot builds get an empty value
+      # which leaves Sentry disabled at runtime.
+      - -s -w -X main.Version={{ .Env.PLAIN_VERSION }} -X main.DefaultCloudAPIURL={{ .Env.DEFAULT_CLOUD_API_URL }} -X main.DefaultSentryDSN={{ .Env.DEFAULT_SENTRY_DSN }}
     mod_timestamp: "{{ .CommitTimestamp }}"
     # Windows NSIS installer -- compiled after the Windows amd64 binary is built.
     # makensis is available on ubuntu runners via apt; skipped in snapshot mode.

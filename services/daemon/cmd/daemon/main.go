@@ -29,6 +29,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -47,7 +48,10 @@ import (
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/keychain"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/migrate"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/pkce"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/sentryhook"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/tray"
+
+	"github.com/getsentry/sentry-go"
 )
 
 // Version is the build-time version string injected via -ldflags -X main.Version=<ver>.
@@ -64,6 +68,14 @@ var Version = "dev"
 // so a developer running the daemon directly from source talks to a local BFF,
 // not production. Issue #2560.
 var DefaultCloudAPIURL = "http://localhost:8080/api/v1"
+
+// DefaultSentryDSN is the build-time Sentry DSN, injected via
+// -ldflags -X main.DefaultSentryDSN=<dsn>. The release workflow picks the value
+// from secrets.SENTRY_DSN_DAEMON_PRODUCTION / SENTRY_DSN_DAEMON_STAGING based
+// on the tag (mirrors DefaultCloudAPIURL). Empty value disables Sentry — all
+// SDK calls become safe no-ops (used by `go run`, local `go build`, and any
+// snapshot build). The DSN itself is never logged. Issue #1832.
+var DefaultSentryDSN = ""
 
 func main() {
 	defaultCfgPath := defaultConfigPath()
@@ -97,6 +109,33 @@ func main() {
 
 	log.Printf("[mtga-daemon] version=%s default_cloud_api_url=%s", Version, DefaultCloudAPIURL)
 
+	// ── Step 1b: Sentry init (#1832) ───────────────────────────────────────────
+	// Boot before any goroutine starts so panics in setup steps are captured.
+	// When DefaultSentryDSN is empty (local build, snapshot, dev), Init returns
+	// sentryhook.ErrDisabled and SDK calls become no-ops — safe to leave the
+	// downstream code unconditional.
+	if err := sentryhook.Init(DefaultSentryDSN, Version, cfg.CloudAPIURL); err != nil {
+		if errors.Is(err, sentryhook.ErrDisabled) {
+			log.Printf("[mtga-daemon] Sentry disabled (no DSN baked in — local or snapshot build)")
+		} else {
+			log.Printf("[mtga-daemon] warn: sentry init failed: %v", err)
+		}
+	} else {
+		log.Printf("[mtga-daemon] Sentry initialised (release=%s)", Version)
+	}
+	// Flush on graceful exit so in-flight events do not drop. Mirrors the BFF
+	// pattern (services/bff/cmd/main.go). 2s timeout matches sentryhook.FlushTimeout.
+	defer sentryhook.Flush()
+	// Top-level panic safety net: any panic that escapes the goroutines below
+	// is captured and re-raised so the launchd / NSSM restart loop still kicks in.
+	defer func() {
+		if r := recover(); r != nil {
+			sentry.CurrentHub().Recover(r)
+			sentryhook.Flush()
+			panic(r)
+		}
+	}()
+
 	// ── Step 2: keychain migration (legacy plaintext api_key → OS keychain) ────
 	if err := migrateLegacyAPIKey(cfg); err != nil {
 		log.Printf("[mtga-daemon] warn: keychain migration failed: %v", err)
@@ -118,6 +157,12 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	// Attach the cached account_id as Sentry user context on every boot. On
+	// the first run this is a no-op (cfg.AccountID is empty until PKCE runs);
+	// runPKCEAuth also calls SetUser after registration. On subsequent runs
+	// this is the only call site that fires. Issue #1832.
+	sentryhook.SetUser(cfg.AccountID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -305,6 +350,8 @@ func runPKCEAuth(cfg *config.Config, cfgPath string) error {
 				return fmt.Errorf("write daemon.json: %w", err)
 			}
 
+			// Attach hashed account_id as Sentry user context (#1832).
+			sentryhook.SetUser(accountID)
 			log.Printf("[mtga-daemon] already-registered device — daemon.json refreshed, keychain untouched")
 			return nil
 		}
@@ -344,6 +391,8 @@ func runPKCEAuth(cfg *config.Config, cfgPath string) error {
 			return fmt.Errorf("re-register recovery: write daemon.json: %w", err)
 		}
 
+		// Attach hashed account_id as Sentry user context (#1832).
+		sentryhook.SetUser(newAccountID)
 		log.Printf("[mtga-daemon] recovery complete — new device_id=%s written to daemon.json", newDeviceID)
 		return nil
 	}
@@ -364,6 +413,13 @@ func runPKCEAuth(cfg *config.Config, cfgPath string) error {
 	if err := cfg.SaveTo(cfgPath); err != nil {
 		return fmt.Errorf("write daemon.json: %w", err)
 	}
+
+	// Attach the (hashed) account_id as Sentry user context so events from
+	// post-auth code paths are searchable per user without storing PII.
+	// Mirrors the BFF pattern (hashAccountID in posthog.go). The daemon does
+	// not see the raw Clerk user_id; account_id is the stable identifier the
+	// daemon does see. Issue #1832.
+	sentryhook.SetUser(accountID)
 
 	log.Printf("[mtga-daemon] first-run auth complete — daemon.json written, key in OS keychain")
 	return nil
