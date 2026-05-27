@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,13 @@ import (
 
 	"github.com/RdHamilton/vault-mtg/services/contract"
 )
+
+// ErrReauthRequired is returned by a Refresher when the token cannot be
+// refreshed automatically and user interaction is required (e.g. keychain
+// mode where re-authentication must be triggered via the tray icon). The
+// dispatcher treats this sentinel as a hard stop: it breaks the retry loop
+// immediately after the first attempt and propagates the error to the caller.
+var ErrReauthRequired = errors.New("reauth required: user interaction needed")
 
 const (
 	maxAttempts = 3
@@ -109,6 +117,10 @@ func (d *Dispatcher) Send(ctx context.Context, event contract.DaemonEvent) error
 		if statusCode == http.StatusUnauthorized && d.refresher != nil {
 			log.Printf("[dispatch] 401 received; attempting token refresh")
 			newToken, refreshErr := d.refresher.Refresh(ctx)
+			if errors.Is(refreshErr, ErrReauthRequired) {
+				log.Printf("[dispatch] reauth required; aborting retry loop")
+				return ErrReauthRequired
+			}
 			if refreshErr != nil {
 				log.Printf("[dispatch] token refresh failed: %v", refreshErr)
 			} else {
@@ -172,6 +184,14 @@ func (d *Dispatcher) SendOrBuffer(ctx context.Context, event contract.DaemonEven
 		if statusCode == http.StatusUnauthorized && d.refresher != nil {
 			log.Printf("[dispatch] 401 received; attempting token refresh")
 			newToken, refreshErr := d.refresher.Refresh(ctx)
+			if errors.Is(refreshErr, ErrReauthRequired) {
+				log.Printf("[dispatch] reauth required; aborting retry loop")
+				if d.buffer != nil {
+					d.buffer.Enqueue(body)
+					log.Printf("[dispatch] reauth required; buffered event seq=%d", event.Sequence)
+				}
+				return ErrReauthRequired
+			}
 			if refreshErr != nil {
 				log.Printf("[dispatch] token refresh failed: %v", refreshErr)
 			} else {

@@ -6,6 +6,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -132,10 +133,13 @@ func New(cfg *config.Config) *Service {
 			Token:  token,
 		}),
 	}
-	// Wire the legacy refresher only when NOT in keychain mode. With keychain
-	// the api_key does not expire, and the legacy /api/daemon/register endpoint
-	// is not served by the BFF — calling it on every 401 would just spam 404s.
-	if !cfg.Keychain {
+	// Wire the appropriate Refresher based on the auth mode:
+	// - Keychain mode: KeychainReauthRequired fires the tray hook and returns
+	//   ErrReauthRequired, which breaks the retry loop immediately.
+	// - Legacy mode: Refresh calls the registration endpoint to obtain a new JWT.
+	if cfg.Keychain {
+		d.WithRefresher(svc.keychainRefresherAdapter())
+	} else {
 		d.WithRefresher(svc)
 	}
 
@@ -190,6 +194,33 @@ func (s *Service) WithVersion(v string) {
 // the BFF returns 401 so a new JWT can be obtained before the next retry.
 func (s *Service) Refresh(ctx context.Context) (string, error) {
 	return s.register(ctx)
+}
+
+// KeychainReauthRequired is called when the BFF returns 401 in keychain mode.
+// It fires the tray hook (if wired) so the UI can prompt the user to
+// re-authenticate, then returns dispatch.ErrReauthRequired to signal the
+// dispatcher to break its retry loop immediately.
+func (s *Service) KeychainReauthRequired(reason string) error {
+	if s.trayHooks.SetReauthRequired != nil {
+		s.trayHooks.SetReauthRequired(reason)
+	}
+	return dispatch.ErrReauthRequired
+}
+
+// keychainRefresherAdapter wraps KeychainReauthRequired as a dispatch.Refresher.
+// The Refresh signature requires (ctx, token) but keychain reauth does not need
+// them — it unconditionally fires the tray hook and returns ErrReauthRequired.
+func (s *Service) keychainRefresherAdapter() dispatch.Refresher {
+	return refresherFunc(func(_ context.Context) (string, error) {
+		return "", s.KeychainReauthRequired("BFF returned 401")
+	})
+}
+
+// refresherFunc is a function type that adapts a plain func to dispatch.Refresher.
+type refresherFunc func(ctx context.Context) (string, error)
+
+func (f refresherFunc) Refresh(ctx context.Context) (string, error) {
+	return f(ctx)
 }
 
 // register calls the BFF registration endpoint and persists the resulting JWT.
@@ -607,7 +638,14 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 	dispatchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	return s.dispatcher.SendOrBuffer(dispatchCtx, evt)
+	if err := s.dispatcher.SendOrBuffer(dispatchCtx, evt); err != nil {
+		if errors.Is(err, dispatch.ErrReauthRequired) {
+			// Logged once by the dispatcher; suppress per-entry spam.
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // classifyEntry maps a log entry to a semantic event type string.
