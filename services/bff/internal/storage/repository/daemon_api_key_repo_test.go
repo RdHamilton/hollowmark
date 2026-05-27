@@ -206,3 +206,275 @@ func TestDaemonAPIKeyRepository_UpsertKey_DuplicateDeviceRejected(t *testing.T) 
 			strings.Contains(err.Error(), "duplicate key"),
 		"error must come from the composite UNIQUE constraint, got: %v", err)
 }
+
+// ─── #21 integration tests (ListByAccountID / RevokeByAccountIDAndDeviceID / GetByAccountAndDevice) ─
+
+// TestListByAccountID_OnlyActive verifies the ADR-031 §4 contract: the list
+// endpoint MUST exclude revoked rows, MUST scope to the caller's account_id,
+// and MUST order by paired_at DESC. Two active rows + one revoked row + one
+// other-account row are inserted; only the two active A rows are returned.
+func TestListByAccountID_OnlyActive(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	accountA := "user_list_active_A_" + t.Name()
+	accountB := "user_list_active_B_" + t.Name()
+	deviceX := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
+	deviceY := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02"
+	deviceZRevoked := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa03"
+	deviceB1 := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb01"
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM daemon_api_keys WHERE account_id IN ($1, $2)`, accountA, accountB)
+	})
+
+	// Insert two active rows for A with controlled paired_at ordering.
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver, paired_at)
+		 VALUES ($1, 'h1', 'p1', $2, 'darwin', '0.3.3', now() - interval '1 hour')`,
+		accountA, deviceX)
+	require.NoError(t, err)
+	_, err = db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver, paired_at)
+		 VALUES ($1, 'h2', 'p2', $2, 'windows', '0.3.3', now())`,
+		accountA, deviceY)
+	require.NoError(t, err)
+	// Insert one revoked row for A.
+	_, err = db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver, paired_at, revoked_at)
+		 VALUES ($1, 'h3', 'p3', $2, 'darwin', '0.3.3', now() - interval '2 hour', now())`,
+		accountA, deviceZRevoked)
+	require.NoError(t, err)
+	// Insert one row for B (must not appear in A's list).
+	_, err = db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver)
+		 VALUES ($1, 'h4', 'p4', $2, 'darwin', '0.3.3')`,
+		accountB, deviceB1)
+	require.NoError(t, err)
+
+	keys, err := repo.ListByAccountID(context.Background(), accountA)
+	require.NoError(t, err)
+	require.Len(t, keys, 2, "expected exactly two active rows for accountA (revoked excluded, accountB excluded)")
+
+	// ORDER BY paired_at DESC: deviceY (now) first, then deviceX (1 hour ago).
+	assert.Equal(t, deviceY, keys[0].DeviceID, "newest paired_at first")
+	assert.Equal(t, deviceX, keys[1].DeviceID, "oldest paired_at last")
+	assert.Equal(t, accountA, keys[0].AccountID)
+	for _, k := range keys {
+		assert.Nil(t, k.RevokedAt, "no revoked rows expected in the result")
+		assert.NotEqual(t, deviceZRevoked, k.DeviceID, "revoked row must not appear")
+		assert.NotEqual(t, deviceB1, k.DeviceID, "cross-tenant row must not appear")
+		assert.False(t, k.PairedAt.IsZero(), "paired_at must be populated")
+	}
+}
+
+// TestListByAccountID_EmptyState verifies the empty-list path returns
+// (nil/empty slice, nil error) for a user with no devices. AC1.
+func TestListByAccountID_EmptyState(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	accountID := "user_list_empty_" + t.Name()
+
+	keys, err := repo.ListByAccountID(context.Background(), accountID)
+	require.NoError(t, err, "empty list must not return an error")
+	assert.Empty(t, keys, "expected empty slice for user with no devices")
+}
+
+// TestRevokeByAccountIDAndDeviceID_HappyPath verifies the soft-delete primitive:
+// one active row → revoke → returns true and the row's revoked_at becomes NOT NULL.
+// Per ADR-031 §3.
+func TestRevokeByAccountIDAndDeviceID_HappyPath(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	accountID := "user_revoke_happy_" + t.Name()
+	deviceID := "cccccccc-cccc-cccc-cccc-cccccccccc01"
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM daemon_api_keys WHERE account_id = $1`, accountID)
+	})
+
+	_, _, err := repo.UpsertKey(context.Background(),
+		accountID, "hash_revoke", "sk_pref_rev1", deviceID, "darwin", "0.3.3")
+	require.NoError(t, err)
+
+	revoked, err := repo.RevokeByAccountIDAndDeviceID(context.Background(), accountID, deviceID)
+	require.NoError(t, err)
+	assert.True(t, revoked, "exactly one row must be affected")
+
+	var revokedAt *time.Time
+	err = db.QueryRowContext(context.Background(),
+		`SELECT revoked_at FROM daemon_api_keys WHERE account_id = $1 AND device_id = $2`,
+		accountID, deviceID).Scan(&revokedAt)
+	require.NoError(t, err)
+	require.NotNil(t, revokedAt, "revoked_at MUST be set after a successful revoke")
+}
+
+// TestRevokeByAccountIDAndDeviceID_CrossTenant is the load-bearing assertion
+// for ADR-031 §3 + AC4: User B's revoke against User A's device MUST return
+// false (no row affected) AND User A's row MUST remain non-revoked.
+func TestRevokeByAccountIDAndDeviceID_CrossTenant(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	accountA := "user_revoke_xt_A_" + t.Name()
+	accountB := "user_revoke_xt_B_" + t.Name()
+	deviceID := "dddddddd-dddd-dddd-dddd-dddddddddd01"
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM daemon_api_keys WHERE account_id IN ($1, $2)`, accountA, accountB)
+	})
+
+	_, _, err := repo.UpsertKey(context.Background(),
+		accountA, "hash_A", "sk_pref_A01", deviceID, "darwin", "0.3.3")
+	require.NoError(t, err)
+
+	revoked, err := repo.RevokeByAccountIDAndDeviceID(context.Background(), accountB, deviceID)
+	require.NoError(t, err, "cross-tenant revoke must be a no-op, not an error")
+	assert.False(t, revoked, "User B's revoke against User A's device MUST NOT affect any row")
+
+	var revokedAt *time.Time
+	err = db.QueryRowContext(context.Background(),
+		`SELECT revoked_at FROM daemon_api_keys WHERE account_id = $1 AND device_id = $2`,
+		accountA, deviceID).Scan(&revokedAt)
+	require.NoError(t, err)
+	assert.Nil(t, revokedAt, "User A's row revoked_at MUST remain NULL after cross-tenant attempt")
+}
+
+// TestRevokeByAccountIDAndDeviceID_AlreadyRevoked verifies the second revoke
+// returns false (no row matches because of the WHERE revoked_at IS NULL filter).
+// Per ADR-031 §3: 404 collapse.
+func TestRevokeByAccountIDAndDeviceID_AlreadyRevoked(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	accountID := "user_revoke_dup_" + t.Name()
+	deviceID := "eeeeeeee-eeee-eeee-eeee-eeeeeeeeee01"
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM daemon_api_keys WHERE account_id = $1`, accountID)
+	})
+
+	_, _, err := repo.UpsertKey(context.Background(),
+		accountID, "hash_dup", "sk_pref_dup1", deviceID, "darwin", "0.3.3")
+	require.NoError(t, err)
+
+	revoked, err := repo.RevokeByAccountIDAndDeviceID(context.Background(), accountID, deviceID)
+	require.NoError(t, err)
+	require.True(t, revoked)
+
+	revoked, err = repo.RevokeByAccountIDAndDeviceID(context.Background(), accountID, deviceID)
+	require.NoError(t, err)
+	assert.False(t, revoked, "second revoke must be a no-op (already revoked)")
+}
+
+// TestRevokeByAccountIDAndDeviceID_NonExistent verifies revoke against a
+// device_id that simply doesn't exist returns false (no row matched).
+func TestRevokeByAccountIDAndDeviceID_NonExistent(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	accountID := "user_revoke_nx_" + t.Name()
+	deviceID := "ffffffff-ffff-ffff-ffff-ffffffffff01"
+
+	revoked, err := repo.RevokeByAccountIDAndDeviceID(context.Background(), accountID, deviceID)
+	require.NoError(t, err)
+	assert.False(t, revoked, "revoke against non-existent device_id must be a no-op")
+}
+
+// TestListAllActive_ExcludesRevoked is the ADR-031 Fitness Function §1
+// regression test: a future refactor that drops the WHERE revoked_at IS NULL
+// filter from ListAllActive (used by DaemonAPIKeyAuth middleware) would
+// silently break revocation. This test catches that.
+func TestListAllActive_ExcludesRevoked(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	accountID := "user_list_all_active_" + t.Name()
+	deviceActive := "11111111-2222-3333-4444-555555555501"
+	deviceRevoked := "11111111-2222-3333-4444-555555555502"
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM daemon_api_keys WHERE account_id = $1`, accountID)
+	})
+
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver)
+		 VALUES ($1, 'h_act', 'p_act', $2, 'darwin', '0.3.3')`,
+		accountID, deviceActive)
+	require.NoError(t, err)
+	_, err = db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver, revoked_at)
+		 VALUES ($1, 'h_rev', 'p_rev', $2, 'darwin', '0.3.3', now())`,
+		accountID, deviceRevoked)
+	require.NoError(t, err)
+
+	all, err := repo.ListAllActive(context.Background())
+	require.NoError(t, err)
+
+	var sawActive, sawRevoked bool
+	for _, k := range all {
+		if k.DeviceID == deviceActive {
+			sawActive = true
+		}
+		if k.DeviceID == deviceRevoked {
+			sawRevoked = true
+		}
+	}
+	assert.True(t, sawActive, "ListAllActive must include the active row")
+	assert.False(t, sawRevoked, "ListAllActive MUST exclude revoked rows (ADR-031 Fitness Function §1)")
+}
+
+// TestGetByAccountAndDevice_IncludesRevoked verifies the lookup used by the
+// daemon_register revoked-row-resurrection guard returns a row regardless of
+// its revoked_at state — the register handler needs to detect a stale,
+// revoked device_id replay to mint a fresh row (ADR-031 §5 + ADR-028).
+func TestGetByAccountAndDevice_IncludesRevoked(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	accountID := "user_getbyad_" + t.Name()
+	deviceActive := "22222222-3333-4444-5555-666666666601"
+	deviceRevoked := "22222222-3333-4444-5555-666666666602"
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM daemon_api_keys WHERE account_id = $1`, accountID)
+	})
+
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver)
+		 VALUES ($1, 'h_act', 'p_act', $2, 'darwin', '0.3.3')`,
+		accountID, deviceActive)
+	require.NoError(t, err)
+	_, err = db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver, revoked_at)
+		 VALUES ($1, 'h_rev', 'p_rev', $2, 'darwin', '0.3.3', now())`,
+		accountID, deviceRevoked)
+	require.NoError(t, err)
+
+	// Active row: must return non-nil with revoked_at == nil.
+	got, err := repo.GetByAccountAndDevice(context.Background(), accountID, deviceActive)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, deviceActive, got.DeviceID)
+	assert.Nil(t, got.RevokedAt)
+
+	// Revoked row: must return non-nil with revoked_at != nil (so the
+	// register handler can detect replay).
+	got, err = repo.GetByAccountAndDevice(context.Background(), accountID, deviceRevoked)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, deviceRevoked, got.DeviceID)
+	require.NotNil(t, got.RevokedAt, "revoked row MUST surface revoked_at to the handler")
+
+	// Non-existent row: must return ErrDaemonAPIKeyNotFound.
+	_, err = repo.GetByAccountAndDevice(context.Background(), accountID, "99999999-9999-9999-9999-999999999999")
+	assert.ErrorIs(t, err, repository.ErrDaemonAPIKeyNotFound)
+}

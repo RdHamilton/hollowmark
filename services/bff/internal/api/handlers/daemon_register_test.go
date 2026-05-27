@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
 	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
 	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
@@ -19,9 +21,27 @@ import (
 type stubDaemonAPIKeyRepo struct {
 	existing *repository.DaemonAPIKey
 	err      error
+
+	// existingByDevice maps device_id → an existing row (possibly revoked).
+	// Used by GetByAccountAndDevice to simulate the revoked-row-resurrection
+	// guard's lookup path. When nil, every GetByAccountAndDevice call
+	// returns ErrDaemonAPIKeyNotFound.
+	existingByDevice map[string]*repository.DaemonAPIKey
+
+	// upsertCalls captures every UpsertKey invocation so tests can assert
+	// what device_id the handler ultimately submitted to the repo (the
+	// resurrection guard rewrites device_id="" so the ADR-028 first-pair
+	// path mints a new UUID).
+	upsertCalls []upsertCall
+}
+
+type upsertCall struct {
+	AccountID string
+	DeviceID  string
 }
 
 func (s *stubDaemonAPIKeyRepo) UpsertKey(_ context.Context, accountID, keyHash, keyPrefix, deviceID, platform, daemonVer string) (*repository.DaemonAPIKey, bool, error) {
+	s.upsertCalls = append(s.upsertCalls, upsertCall{AccountID: accountID, DeviceID: deviceID})
 	if s.err != nil {
 		return nil, false, s.err
 	}
@@ -39,6 +59,17 @@ func (s *stubDaemonAPIKeyRepo) UpsertKey(_ context.Context, accountID, keyHash, 
 		DaemonVer: daemonVer,
 		CreatedAt: now,
 	}, true, nil
+}
+
+func (s *stubDaemonAPIKeyRepo) GetByAccountAndDevice(_ context.Context, _, deviceID string) (*repository.DaemonAPIKey, error) {
+	if s.existingByDevice == nil {
+		return nil, repository.ErrDaemonAPIKeyNotFound
+	}
+	rec, ok := s.existingByDevice[deviceID]
+	if !ok {
+		return nil, repository.ErrDaemonAPIKeyNotFound
+	}
+	return rec, nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -274,5 +305,96 @@ func TestDaemonRegister_MissingDaemonVer_Returns400(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for missing daemon_ver, got %d", rr.Code)
+	}
+}
+
+// TestDaemonRegister_RevokedRowResurrectionGuard verifies the ADR-031 §5 +
+// ADR-028 invariant: a daemon replaying a stale device_id that maps to a
+// revoked row MUST NOT resurrect that row. The handler detects the revoked
+// row via GetByAccountAndDevice and clears reqBody.DeviceID="" so the
+// ADR-028 first-pair path mints a fresh server-issued UUID — the resulting
+// new row carries a new device_id, leaving the original revoked row intact.
+//
+// This is the load-bearing test that proves a revoked daemon cannot
+// resurrect itself by replaying its cached device_id.
+func TestDaemonRegister_RevokedRowResurrectionGuard(t *testing.T) {
+	staleDeviceID := "550e8400-e29b-41d4-a716-446655440099"
+	revokedAt := time.Now().UTC().Add(-1 * time.Hour)
+	repo := &stubDaemonAPIKeyRepo{
+		existingByDevice: map[string]*repository.DaemonAPIKey{
+			staleDeviceID: {
+				ID:        "uuid-old-revoked",
+				AccountID: "user_resurrect",
+				DeviceID:  staleDeviceID,
+				RevokedAt: &revokedAt,
+			},
+		},
+	}
+	h := handlers.NewDaemonRegisterHandler(repo, nil)
+
+	// Daemon replays the stale, revoked device_id.
+	req := newRegisterRequestWithBody("user_resurrect", map[string]string{
+		"device_id":  staleDeviceID,
+		"platform":   "darwin",
+		"daemon_ver": "0.3.3",
+	})
+	rr := httptest.NewRecorder()
+	h.Register(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201 (new row minted), got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// CRITICAL: the handler must have rewritten device_id to "" before
+	// calling UpsertKey, so the ADR-028 first-pair path mints a new UUID.
+	// If the handler passed the stale device_id through to UpsertKey, the
+	// resurrection guard is broken.
+	if len(repo.upsertCalls) != 1 {
+		t.Fatalf("expected exactly 1 UpsertKey call, got %d", len(repo.upsertCalls))
+	}
+	if repo.upsertCalls[0].DeviceID == staleDeviceID {
+		t.Errorf("resurrection guard FAILED — UpsertKey received the stale revoked device_id %q; should have been replaced by a freshly-minted UUID", staleDeviceID)
+	}
+	// The replacement device_id MUST be a valid UUID (so the DB's NOT NULL
+	// UUID column accepts it). Empty string would also fail this assertion,
+	// guarding against a future refactor that drops the inline mint.
+	if _, err := uuid.Parse(repo.upsertCalls[0].DeviceID); err != nil {
+		t.Errorf("resurrection guard MUST mint a valid UUID; got %q (err: %v)", repo.upsertCalls[0].DeviceID, err)
+	}
+}
+
+// TestDaemonRegister_ActiveRowReplay_PassesThroughDeviceID verifies the
+// guard is narrow: an ACTIVE (non-revoked) existing row for the same
+// (account, device) submission must NOT trigger the rewrite — the
+// UNIQUE(account_id, device_id) constraint will trip and surface as the
+// duplicate-key error that #2631 owns mapping to 409. The guard only fires
+// on revoked rows.
+func TestDaemonRegister_ActiveRowReplay_PassesThroughDeviceID(t *testing.T) {
+	activeDeviceID := "550e8400-e29b-41d4-a716-446655440100"
+	repo := &stubDaemonAPIKeyRepo{
+		existingByDevice: map[string]*repository.DaemonAPIKey{
+			activeDeviceID: {
+				ID:        "uuid-active",
+				AccountID: "user_active",
+				DeviceID:  activeDeviceID,
+				RevokedAt: nil,
+			},
+		},
+	}
+	h := handlers.NewDaemonRegisterHandler(repo, nil)
+
+	req := newRegisterRequestWithBody("user_active", map[string]string{
+		"device_id":  activeDeviceID,
+		"platform":   "darwin",
+		"daemon_ver": "0.3.3",
+	})
+	rr := httptest.NewRecorder()
+	h.Register(rr, req)
+
+	if len(repo.upsertCalls) != 1 {
+		t.Fatalf("expected exactly 1 UpsertKey call, got %d", len(repo.upsertCalls))
+	}
+	if repo.upsertCalls[0].DeviceID != activeDeviceID {
+		t.Errorf("active row replay MUST pass device_id through unchanged; got %q", repo.upsertCalls[0].DeviceID)
 	}
 }
