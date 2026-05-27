@@ -257,7 +257,7 @@ func (h *DaemonRegisterHandler) Register(w http.ResponseWriter, r *http.Request)
 	if created {
 		go func(acct, keyID, platform, daemonVer string) {
 			if err := h.postHog.Enqueue(posthog.Capture{
-				DistinctId: acct,
+				DistinctId: hashAccountID(acct),
 				Event:      "daemon_paired",
 				Properties: posthog.NewProperties().
 					Set("key_id", keyID).
