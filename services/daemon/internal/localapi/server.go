@@ -158,6 +158,11 @@ func (s *Server) Start() error {
 	// trigger a clean uninstall without forcing the user into a Terminal.
 	mux.HandleFunc("/api/v1/system/uninstall", s.handleSystemUninstall)
 
+	// #1832 — support diagnostics bundle. Returns daemon version, OS, uptime,
+	// and the last N lines of the daemon log file (secrets scrubbed) so the
+	// SPA's "Copy diagnostics" button can produce a paste-ready support bundle.
+	mux.HandleFunc("/api/v1/system/diagnostics", s.handleSystemDiagnostics)
+
 	// Phase 2 PR #17b — live draft state. Endpoints answer from the
 	// daemon's in-memory draftstate.Store (populated by the log entry
 	// consumer in services/daemon/internal/daemon). Retire the BFF
