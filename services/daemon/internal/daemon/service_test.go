@@ -1778,3 +1778,62 @@ func TestReactiveReauth_NotExposedViaHealth(t *testing.T) {
 	assert.NotContains(t, string(data), "reauth_in_progress",
 		"reauthInProgress must never appear in the /health JSON response")
 }
+
+// TestReactiveReauth_GoroutineUsesLongLivedContext verifies that the goroutine
+// launched by keychainRefresherAdapter passes context.Background() (no deadline)
+// into reauthFunc rather than the short-lived 5-second dispatch context.
+//
+// This is the regression test for Sarah S-07 P1 (#2135): the dispatch context
+// has a 5-second timeout, which fires before any user can complete browser-based
+// PKCE auth (10–30s). The fix is to use context.Background() inside the goroutine
+// so the PKCE flow is not artificially cancelled.
+func TestReactiveReauth_GoroutineUsesLongLivedContext(t *testing.T) {
+	// BFF always returns 401 to trigger the refresher.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		CloudAPIURL: srv.URL,
+		IngestPath:  "/v1/ingest/events",
+		AccountID:   "acc-ctx-lifetime",
+		Keychain:    true,
+	}
+	svc := New(cfg)
+
+	// ctxDeadlineSet records whether the context passed to reauthFunc had a deadline.
+	// If the fix is correct, context.Background() is used and HasDeadline is false.
+	var ctxHasDeadline atomic.Bool
+	reauthStarted := make(chan struct{})
+
+	svc.WithReauthFunc(func(ctx context.Context) error {
+		_, hasDeadline := ctx.Deadline()
+		ctxHasDeadline.Store(hasDeadline)
+		close(reauthStarted)
+		return nil
+	})
+
+	svc.trayHooks = TrayHooks{
+		SetReauthRequired: func(string) {},
+	}
+
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON:   map[string]interface{}{"draftPack": []interface{}{"card1"}},
+	}
+
+	err := svc.handleEntry(context.Background(), entry)
+	assert.NoError(t, err, "handleEntry must return nil")
+
+	// Wait for the goroutine to start and record the context's deadline state.
+	select {
+	case <-reauthStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("reauthFunc goroutine did not start within 500ms")
+	}
+
+	assert.False(t, ctxHasDeadline.Load(),
+		"reauthFunc must receive context.Background() (no deadline); "+
+			"a dispatch-ctx deadline would fire in 5s and kill PKCE before the user can act")
+}

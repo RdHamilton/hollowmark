@@ -360,6 +360,15 @@ func (s *Service) keychainRefresherAdapter() dispatch.Refresher {
 		// Run the PKCE flow in a goroutine so the dispatcher's Refresh call
 		// returns promptly. ErrReauthRequired breaks the current retry loop;
 		// the next inbound event will retry with the fresh token if PKCE succeeds.
+		//
+		// context.Background() is intentional here: ctx is the dispatcher's
+		// 5-second dispatch timeout, which fires long before a user can complete
+		// browser-based PKCE auth (typically 10–30s of real interaction). Using
+		// ctx would cause guaranteed context.DeadlineExceeded, set ErrReauthFailed
+		// permanently, and leave the daemon stuck in keychain_error forever.
+		// The PKCE flow manages its own internal deadline; reauthInProgress
+		// prevents concurrent goroutines so there is no goroutine-leak risk.
+		// (Sarah S-07 P1 fix — #2135)
 		go func() {
 			defer s.reauthInProgress.Store(false)
 
@@ -371,7 +380,7 @@ func (s *Service) keychainRefresherAdapter() dispatch.Refresher {
 
 			log.Printf("[daemon] reauth: starting in-process PKCE re-auth (BFF returned 401)")
 
-			if err := s.reauthFunc(ctx); err != nil {
+			if err := s.reauthFunc(context.Background()); err != nil {
 				log.Printf("[daemon] reauth: PKCE re-auth failed: %v", err)
 				// Set sentinel so computeAuthStatus routes to "keychain_error"
 				// at the next heartbeat tick. Do NOT clear the keychain (Ray Q5).
