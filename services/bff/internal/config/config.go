@@ -129,6 +129,26 @@ type Config struct {
 	// development. The value must NEVER be logged or included in any error
 	// response body.
 	BFFAdminToken string
+
+	// MailchimpAPIKey is the Mailchimp Marketing API key (format: <key>-<dc>)
+	// used by the waitlist handler to subscribe new emails.
+	//
+	// Sourced from MAILCHIMP_API_KEY (set by ec2-bootstrap.sh from SSM
+	// /vaultmtg/prod/mailchimp-api-key — Ray will provision via ticket #122).
+	//
+	// When empty, the waitlist handler still persists DB rows but skips the
+	// Mailchimp API call. The value must NEVER be logged or included in any
+	// error response body.
+	MailchimpAPIKey string
+
+	// MailchimpListID is the Mailchimp audience list ID to subscribe members to.
+	//
+	// Sourced from MAILCHIMP_LIST_ID (set by ec2-bootstrap.sh from SSM
+	// /vaultmtg/prod/mailchimp-list-id — Ray will provision via ticket #122).
+	//
+	// When empty, the Mailchimp client is not constructed (same effect as an
+	// empty MailchimpAPIKey).
+	MailchimpListID string
 }
 
 // Load reads configuration from environment variables, applies defaults, and
@@ -190,6 +210,8 @@ func Load() (*Config, error) {
 		PostHogAPIKey:                       strings.TrimSpace(os.Getenv("POSTHOG_API_KEY")),
 		GitCommit:                           strings.TrimSpace(os.Getenv("GIT_COMMIT")),
 		BFFAdminToken:                       strings.TrimSpace(os.Getenv("BFF_ADMIN_TOKEN")),
+		MailchimpAPIKey:                     strings.TrimSpace(os.Getenv("MAILCHIMP_API_KEY")),
+		MailchimpListID:                     strings.TrimSpace(os.Getenv("MAILCHIMP_LIST_ID")),
 	}
 
 	if raw := os.Getenv("DRAFT_RATINGS_STALENESS_THRESHOLD_HOURS"); raw != "" {
