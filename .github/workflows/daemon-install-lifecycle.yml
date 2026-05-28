@@ -863,3 +863,161 @@ jobs:
           }
           $size = (Get-Item $uninstaller).Length
           Write-Host "PASS: Uninstall.exe present at $uninstaller ($size bytes)"
+
+      # =======================================================================
+      # GROUP A — stub BFF + daemon_event assertion (#41)
+      # =======================================================================
+
+      # -----------------------------------------------------------------------
+      - name: "[ASSERT] daemon_event arrives at stub BFF (#41)"
+      # -----------------------------------------------------------------------
+        # Runs TestWindowsNSISDaemonEvent from lifecycle_test.go.
+        #
+        # Design (approved by Ray, plan comment #4568964628):
+        #   - Go integration test (//go:build integration && windows) spins up an
+        #     httptest.Server on a random port as a stub BFF.
+        #   - Kills any running vaultmtg-daemon.exe (idempotent), then overwrites
+        #     %APPDATA%\vaultmtg\daemon.json with a test config:
+        #       cloud_api_url = stub BFF URL
+        #       daemon_jwt    = fake far-future JWT (same bypass as TestDaemonBinarySmoke)
+        #       keychain      = false, sync_enabled = false, account_id = lifecycle-test-001
+        #   - Starts the NSIS-installed binary directly via exec.Command.
+        #   - Polls /health until 200 (up to 30s).
+        #   - Appends a synthetic draft.pack log line → immediate dispatch.
+        #   - Asserts a contract.DaemonEvent{Type:"draft.pack", AccountID:"lifecycle-test-001"}
+        #     arrives at POST /ingest/events within 30s.
+        #
+        # Auth strategy: daemon_jwt bypass — no Clerk SDK, no PKCE, no real token.
+        # CLERK_* vars are zeroed so PKCE can never fire even on a code-path change.
+        working-directory: services/daemon
+        env:
+          GONOSUMDB: github.com/RdHamilton/vault-mtg
+          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          MTGA_DAEMON_HEADLESS: "1"
+          CLERK_PUBLISHABLE_KEY: ""
+          CLERK_FRONTEND_API: ""
+          CLERK_OAUTH_CLIENT_ID: ""
+          DAEMON_BINARY_PATH: ${{ github.workspace }}\services\daemon\bin\vaultmtg-daemon-windows-amd64.exe
+        shell: bash
+        run: go test -v -tags "integration windows" -run TestWindowsNSISDaemonEvent -timeout 5m ./install/windows/nsis/...
+
+      # =======================================================================
+      # GROUP B — uninstall execution + cleanup assertions (#41)
+      # =======================================================================
+
+      # -----------------------------------------------------------------------
+      - name: "[LIFECYCLE] UNINSTALL — run Uninstall.exe in silent mode (#41)"
+      # -----------------------------------------------------------------------
+        # Execute the NSIS uninstaller silently.  The uninstaller section in
+        # installer.nsi does:
+        #   1. schtasks /End /TN "VaultMTG-Daemon"
+        #   2. schtasks /Delete /TN "VaultMTG-Daemon" /F
+        #   3. Delete $INSTDIR\vaultmtg-daemon.exe
+        #   4. Delete $INSTDIR\Uninstall.exe
+        #   5. RMDir $INSTDIR  (no /r — only removes empty dir)
+        # It intentionally leaves %APPDATA%\vaultmtg\daemon.json intact.
+        shell: pwsh
+        run: |
+          $uninstaller = Join-Path $Env:LOCALAPPDATA "VaultMTG\Uninstall.exe"
+          Write-Host "Running: $uninstaller /S"
+          $proc = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru -NoNewWindow
+          Write-Host "Uninstaller exit code: $($proc.ExitCode)"
+          if ($proc.ExitCode -ne 0) {
+            Write-Error "FAIL: Uninstall.exe exited with code $($proc.ExitCode)"
+            exit 1
+          }
+          Write-Host "PASS: Uninstall.exe completed with exit code 0"
+
+      # -----------------------------------------------------------------------
+      - name: "[ASSERT] Daemon binary removed after uninstall (#41)"
+      # -----------------------------------------------------------------------
+        shell: pwsh
+        run: |
+          $binaryPath = Join-Path $Env:LOCALAPPDATA "VaultMTG\vaultmtg-daemon.exe"
+          Write-Host "Checking that daemon binary is gone: $binaryPath"
+          if (Test-Path $binaryPath) {
+            Write-Error "FAIL: daemon binary still present at $binaryPath after uninstall"
+            exit 1
+          }
+          Write-Host "PASS: daemon binary correctly removed"
+
+      # -----------------------------------------------------------------------
+      - name: "[ASSERT] Uninstall.exe removed after uninstall (#41)"
+      # -----------------------------------------------------------------------
+        shell: pwsh
+        run: |
+          $uninstaller = Join-Path $Env:LOCALAPPDATA "VaultMTG\Uninstall.exe"
+          Write-Host "Checking that Uninstall.exe is gone: $uninstaller"
+          if (Test-Path $uninstaller) {
+            Write-Error "FAIL: Uninstall.exe still present at $uninstaller after uninstall"
+            exit 1
+          }
+          Write-Host "PASS: Uninstall.exe correctly removed"
+
+      # -----------------------------------------------------------------------
+      - name: "[ASSERT] Install directory removed after uninstall (#41)"
+      # -----------------------------------------------------------------------
+        # RMDir (no /r) in the .nsi uninstaller removes the directory only when
+        # it is empty.  Because the two Delete steps run first, $INSTDIR should
+        # be empty and RMDir should succeed.  If any unexpected file remains,
+        # the directory will survive — this step catches that regression.
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $Env:LOCALAPPDATA "VaultMTG"
+          Write-Host "Checking that install directory is gone: $installDir"
+          if (Test-Path $installDir) {
+            Write-Host "--- unexpected files remaining in $installDir ---"
+            Get-ChildItem -Recurse $installDir | Format-Table -AutoSize
+            Write-Error "FAIL: install directory still present at $installDir — uninstaller left unexpected files"
+            exit 1
+          }
+          Write-Host "PASS: install directory correctly removed"
+
+      # -----------------------------------------------------------------------
+      - name: "[ASSERT] Scheduled task unregistered after uninstall (#41)"
+      # -----------------------------------------------------------------------
+        shell: pwsh
+        run: |
+          Write-Host "Checking that VaultMTG-Daemon scheduled task is gone"
+          & schtasks /Query /TN "VaultMTG-Daemon" 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error "FAIL: VaultMTG-Daemon scheduled task still registered after uninstall"
+            exit 1
+          }
+          Write-Host "PASS: VaultMTG-Daemon scheduled task correctly unregistered (schtasks /Query returned non-zero)"
+
+      # -----------------------------------------------------------------------
+      - name: "[ASSERT] Config directory retained after uninstall (ADR-011-C) (#41)"
+      # -----------------------------------------------------------------------
+        # Per ADR-011-C and installer.nsi: the uninstaller deliberately leaves
+        # %APPDATA%\vaultmtg\daemon.json intact so users retain their config
+        # on re-install.  This assertion is a regression guard — if a future
+        # change accidentally removes the config dir, this step catches it.
+        shell: pwsh
+        run: |
+          $configDir = Join-Path $Env:APPDATA "vaultmtg"
+          Write-Host "Checking that config directory is RETAINED: $configDir"
+          if (-not (Test-Path $configDir)) {
+            Write-Error "FAIL: config directory $configDir was removed by the uninstaller — ADR-011-C re-install contract violated"
+            exit 1
+          }
+          Write-Host "PASS: config directory retained at $configDir (ADR-011-C re-install contract satisfied)"
+
+      # -----------------------------------------------------------------------
+      - name: "[ASSERT] No registry keys written by installer (ADR-011-C) (#41)"
+      # -----------------------------------------------------------------------
+        # Per ADR-011-C: the installer uses RequestExecutionLevel user +
+        # Task Scheduler (no registry integration).  installer.nsi has zero
+        # WriteRegStr / WriteRegDWORD directives — this is a documenting assertion
+        # that proves no registry state was written and guards against a future
+        # installer change that silently adds registry entries.
+        shell: pwsh
+        run: |
+          Write-Host "Checking that HKCU:\Software\VaultMTG does NOT exist"
+          if (Test-Path "HKCU:\Software\VaultMTG") {
+            Write-Host "--- registry keys found ---"
+            Get-ItemProperty "HKCU:\Software\VaultMTG" | Format-List
+            Write-Error "FAIL: HKCU:\Software\VaultMTG exists — installer wrote unexpected registry keys (ADR-011-C violation)"
+            exit 1
+          }
+          Write-Host "PASS: no registry keys written by installer (ADR-011-C zero-registry design confirmed)"
