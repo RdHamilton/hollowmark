@@ -235,6 +235,7 @@ func main() {
 		draftsHandler           *handlers.DraftsHandler
 		mlHandler               *handlers.MLHandler
 		settingsHandler         *handlers.SettingsHandler
+		waitlistHandler         *handlers.WaitlistHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -399,6 +400,24 @@ func main() {
 			WithRankProgression(statsRepo).
 			WithResultBreakdown(statsRepo)
 
+		// WaitlistHandler (Phase 1, ticket #121) — public POST /api/v1/waitlist.
+		// Persists the email to the waitlist table and makes a best-effort
+		// Mailchimp signup. No Clerk auth required. Rate limited per-IP at 5 req/h.
+		// SSM parameters provisioned by Ray via ticket #122.
+		waitlistRepo := repository.NewWaitlistRepository(sqlDB)
+		var mailchimpClient handlers.MailchimpClient
+		if cfg.MailchimpAPIKey != "" && cfg.MailchimpListID != "" {
+			mc, mcErr := handlers.NewMailchimpHTTPClient(cfg.MailchimpAPIKey, cfg.MailchimpListID)
+			if mcErr != nil {
+				log.Printf("WARN: mailchimp client init failed: %v — waitlist will persist DB rows only", mcErr)
+			} else {
+				mailchimpClient = mc
+			}
+		} else {
+			log.Println("MAILCHIMP_API_KEY or MAILCHIMP_LIST_ID not set — Mailchimp disabled for waitlist.")
+		}
+		waitlistHandler = handlers.NewWaitlistHandler(waitlistRepo, mailchimpClient)
+
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
 		// userRepo was created above for daemonRegisterHandler/daemonAPIKeyAuthMiddl.
 		clerkUserResolver = bffmiddleware.ClerkUserResolver(userRepo)
@@ -472,6 +491,7 @@ func main() {
 		DraftsHandler:           draftsHandler,
 		MLHandler:               mlHandler,
 		SettingsHandler:         settingsHandler,
+		WaitlistHandler:         waitlistHandler,
 		HealthzHandler:          healthzHandler,
 		ClerkAuthMiddl:          clerkAuthMiddl,
 		ClerkAuthSSEMiddl:       clerkAuthSSEMiddl,
@@ -601,6 +621,9 @@ type RouterDeps struct {
 	// surface. Account-scoped JSONB key/value store; backs the SPA's
 	// AppSettings + per-key getters/setters. Protected by DaemonAPIKeyAuth.
 	SettingsHandler *handlers.SettingsHandler
+	// WaitlistHandler serves POST /api/v1/waitlist (Phase 1, ticket #121).
+	// Public endpoint — no Clerk auth required. Rate limited per-IP.
+	WaitlistHandler *handlers.WaitlistHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -693,6 +716,13 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// GET /api/v1/daemon/version — latest daemon version (no auth required).
 	daemonVersionHandler := handlers.NewDaemonVersionHandler(cfg)
 	r.Get("/api/v1/daemon/version", daemonVersionHandler.GetDaemonVersion)
+
+	// POST /api/v1/waitlist — Phase 1 waitlist signup (ticket #121).
+	// Intentionally public (no Clerk auth). Rate limited at 5 req/h per IP.
+	// 201 Created on new email; 200 OK on duplicate. Body: {"ok":true} both.
+	if deps.WaitlistHandler != nil {
+		r.Post("/api/v1/waitlist", deps.WaitlistHandler.Join)
+	}
 
 	// POST /api/v1/daemon/register — daemon PKCE registration (Clerk OAuth token required).
 	// The daemon calls this immediately after completing the PKCE browser flow,
