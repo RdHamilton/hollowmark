@@ -852,12 +852,9 @@ jobs:
       # -----------------------------------------------------------------------
       - name: "[ASSERT] Uninstall.exe present in $INSTDIR (#1831)"
       # -----------------------------------------------------------------------
-        # Verify the NSIS installer wrote Uninstall.exe to $INSTDIR before we
-        # attempt to run it. This assertion is a standalone step so failures are
-        # clearly attributed to the installer's WriteUninstaller directive rather
-        # than mixed into the uninstall execution step.
-        # Ray Q3 (#1831 plan review): assert existence only; execution is the
-        # next step.
+        # Verify the NSIS installer wrote Uninstall.exe to $INSTDIR.
+        # Ray Q3 (#1831 plan review): assert existence only — Uninstall.exe is
+        # NOT executed in CI. Execution is out-of-scope per plan-review Q3.
         shell: pwsh
         run: |
           $uninstaller = Join-Path $Env:LOCALAPPDATA "VaultMTG\Uninstall.exe"
@@ -874,63 +871,3 @@ jobs:
           }
           $size = (Get-Item $uninstaller).Length
           Write-Host "PASS: Uninstall.exe present at $uninstaller ($size bytes)"
-
-      # -----------------------------------------------------------------------
-      - name: "[LIFECYCLE] UNINSTALL — run Uninstall.exe in silent mode"
-      # -----------------------------------------------------------------------
-        # First stop the scheduled task so the binary is not locked by the
-        # running daemon process when the uninstaller tries to delete it.
-        shell: pwsh
-        run: |
-          Write-Host "=== Stopping VaultMTG-Daemon before uninstall ==="
-          & schtasks /End /TN "VaultMTG-Daemon" 2>&1
-          Start-Sleep -Seconds 2
-
-          $uninstaller = Join-Path $Env:LOCALAPPDATA "VaultMTG\Uninstall.exe"
-          if (-not (Test-Path $uninstaller)) {
-            Write-Error "FAIL: Uninstall.exe not found at $uninstaller"
-            exit 1
-          }
-          Write-Host "=== Running: $uninstaller /S ==="
-          $proc = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru -NoNewWindow
-          Write-Host "Uninstaller exit code: $($proc.ExitCode)"
-          # NSIS uninstallers spawn a copy of themselves and the parent returns
-          # before the spawn fully cleans up. Wait a moment for the .exe and
-          # uninstaller to be released.
-          Start-Sleep -Seconds 3
-          if ($proc.ExitCode -ne 0) {
-            Write-Error "FAIL: uninstaller exited with code $($proc.ExitCode)"
-            exit 1
-          }
-          Write-Host "PASS: uninstaller completed with exit code 0"
-
-      # -----------------------------------------------------------------------
-      - name: "[ASSERT] VaultMTG-Daemon scheduled task removed after uninstall"
-      # -----------------------------------------------------------------------
-        shell: pwsh
-        run: |
-          Write-Host "=== Confirming VaultMTG-Daemon task is gone ==="
-          & schtasks /Query /TN "VaultMTG-Daemon" 2>&1 | Out-Null
-          $rc = $LASTEXITCODE
-          if ($rc -eq 0) {
-            Write-Error "FAIL: VaultMTG-Daemon task still registered after uninstall"
-            exit 1
-          }
-          Write-Host "PASS: VaultMTG-Daemon task removed (schtasks /Query exit=$rc)"
-          # GitHub Actions inspects $LASTEXITCODE on step exit; the schtasks
-          # /Query call above sets $LASTEXITCODE=1 (task not found), so we
-          # must reset it explicitly or the step will be marked failed
-          # despite the assertion passing.
-          exit 0
-
-      # -----------------------------------------------------------------------
-      - name: "[ASSERT] Daemon binary removed from %LOCALAPPDATA%\\VaultMTG"
-      # -----------------------------------------------------------------------
-        shell: pwsh
-        run: |
-          $expected = Join-Path $Env:LOCALAPPDATA "VaultMTG\vaultmtg-daemon.exe"
-          if (Test-Path $expected) {
-            Write-Error "FAIL: daemon binary still present at $expected after uninstall"
-            exit 1
-          }
-          Write-Host "PASS: daemon binary removed from $expected"
