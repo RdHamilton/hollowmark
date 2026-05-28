@@ -417,6 +417,9 @@ func main() {
 			log.Println("MAILCHIMP_API_KEY or MAILCHIMP_LIST_ID not set — Mailchimp disabled for waitlist.")
 		}
 		waitlistHandler = handlers.NewWaitlistHandler(waitlistRepo, mailchimpClient)
+		if postHogClient != nil {
+			waitlistHandler = waitlistHandler.WithPostHogClient(postHogClient)
+		}
 
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
 		// userRepo was created above for daemonRegisterHandler/daemonAPIKeyAuthMiddl.

@@ -5,11 +5,14 @@ import (
 	"database/sql"
 )
 
-// WaitlistEntry is the in-memory representation of a waitlist row.
+// WaitlistEntry is the in-memory representation of a waitlist_entries row.
 type WaitlistEntry struct {
 	ID              string
 	Email           string
 	MailchimpStatus string
+	UTMSource       *string
+	UTMMedium       *string
+	UTMCampaign     *string
 	Referrer        *string
 }
 
@@ -19,7 +22,7 @@ type waitlistDB interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// WaitlistRepository handles persistence for the waitlist table.
+// WaitlistRepository handles persistence for the waitlist_entries table.
 type WaitlistRepository struct {
 	db waitlistDB
 }
@@ -29,19 +32,24 @@ func NewWaitlistRepository(db waitlistDB) *WaitlistRepository {
 	return &WaitlistRepository{db: db}
 }
 
-// InsertIfNew inserts a new waitlist row for email and referrer using
-// ON CONFLICT DO NOTHING RETURNING id. Returns (id, true, nil) when a new
+// InsertIfNew inserts a new waitlist_entries row for email and attribution fields
+// using ON CONFLICT DO NOTHING RETURNING id. Returns (id, true, nil) when a new
 // row was created, or ("", false, nil) when the email already existed.
 // The initial mailchimp_status is 'failed' per the table DEFAULT; the happy
 // path calls UpdateMailchimpStatus afterwards.
-func (r *WaitlistRepository) InsertIfNew(ctx context.Context, email string, referrer *string) (id string, created bool, err error) {
+func (r *WaitlistRepository) InsertIfNew(
+	ctx context.Context,
+	email string,
+	utmSource, utmMedium, utmCampaign *string,
+	referrer *string,
+) (id string, created bool, err error) {
 	const q = `
-		INSERT INTO waitlist (email, referrer)
-		VALUES ($1, $2)
+		INSERT INTO waitlist_entries (email, utm_source, utm_medium, utm_campaign, referrer)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (email) DO NOTHING
 		RETURNING id`
 
-	row := r.db.QueryRowContext(ctx, q, email, referrer)
+	row := r.db.QueryRowContext(ctx, q, email, utmSource, utmMedium, utmCampaign, referrer)
 	if err := row.Scan(&id); err == sql.ErrNoRows {
 		return "", false, nil
 	} else if err != nil {
@@ -54,7 +62,7 @@ func (r *WaitlistRepository) InsertIfNew(ctx context.Context, email string, refe
 // with the given id. status is expected to be "subscribed" or "failed".
 func (r *WaitlistRepository) UpdateMailchimpStatus(ctx context.Context, id, status string) error {
 	const q = `
-		UPDATE waitlist
+		UPDATE waitlist_entries
 		SET    mailchimp_status = $2, updated_at = now()
 		WHERE  id = $1`
 

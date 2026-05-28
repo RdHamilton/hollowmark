@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
+	posthog "github.com/posthog/posthog-go"
 )
 
 // ─── stub repo ────────────────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ func newStubWaitlistRepoErr(err error) *stubWaitlistRepo {
 	}
 }
 
-func (s *stubWaitlistRepo) InsertIfNew(_ context.Context, _ string, _ *string) (string, bool, error) {
+func (s *stubWaitlistRepo) InsertIfNew(_ context.Context, _ string, _, _, _ *string, _ *string) (string, bool, error) {
 	return s.insertID, s.insertCreated, s.insertErr
 }
 
@@ -93,10 +94,60 @@ func (s *stubMailchimpClient) AddMember(_ context.Context, email string) error {
 	return s.err
 }
 
+// ─── stub PostHog client ──────────────────────────────────────────────────────
+
+type stubPostHogClient struct {
+	mu       sync.Mutex
+	captures []posthog.Capture
+	done     chan struct{}
+}
+
+func newStubPostHogClient() *stubPostHogClient {
+	return &stubPostHogClient{
+		done: make(chan struct{}, 1),
+	}
+}
+
+func (s *stubPostHogClient) Enqueue(msg posthog.Message) error {
+	if c, ok := msg.(posthog.Capture); ok {
+		s.mu.Lock()
+		s.captures = append(s.captures, c)
+		s.mu.Unlock()
+		select {
+		case s.done <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+func (s *stubPostHogClient) getCaptures() []posthog.Capture {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]posthog.Capture, len(s.captures))
+	copy(out, s.captures)
+	return out
+}
+
 // ─── request helper ───────────────────────────────────────────────────────────
 
 func newWaitlistRequest(email, referrer string) *http.Request {
 	body := map[string]string{"email": email, "referrer": referrer}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "1.2.3.4:12345"
+	return req
+}
+
+func newWaitlistRequestWithUTM(email, utmSource, utmMedium, utmCampaign, referrer string) *http.Request {
+	body := map[string]string{
+		"email":        email,
+		"utm_source":   utmSource,
+		"utm_medium":   utmMedium,
+		"utm_campaign": utmCampaign,
+		"referrer":     referrer,
+	}
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
@@ -268,6 +319,91 @@ func TestWaitlist_ResponseBody_OK(t *testing.T) {
 	h.Join(rr, newWaitlistRequest("eve@example.com", ""))
 
 	assertWaitlistOKBody(t, rr)
+}
+
+// ─── PostHog tests ────────────────────────────────────────────────────────────
+
+// TestWaitlist_PostHog_FiredOnNewEmail verifies that funnel_waitlist_signup_completed
+// is enqueued exactly once on the new-email path, with correct distinct_id and
+// UTM properties.
+func TestWaitlist_PostHog_FiredOnNewEmail(t *testing.T) {
+	repo := newStubWaitlistRepo("uuid-ph-new", true)
+	ph := newStubPostHogClient()
+	h := handlers.NewWaitlistHandler(repo, nil).WithPostHogClient(ph)
+
+	req := newWaitlistRequestWithUTM("ph@example.com", "twitter", "social", "beta-launch", "https://t.co/abc")
+	rr := httptest.NewRecorder()
+	h.Join(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Wait for the PostHog goroutine to complete.
+	<-ph.done
+
+	caps := ph.getCaptures()
+	if len(caps) != 1 {
+		t.Fatalf("expected 1 PostHog capture on new email, got %d", len(caps))
+	}
+	c := caps[0]
+
+	if c.Event != "funnel_waitlist_signup_completed" {
+		t.Errorf("event name: want %q, got %q", "funnel_waitlist_signup_completed", c.Event)
+	}
+
+	// distinct_id must be the SHA-256 hash of the email (first 16 hex chars),
+	// matching hashAccountID("ph@example.com").
+	if c.DistinctId == "" {
+		t.Error("distinct_id must not be empty")
+	}
+	if c.DistinctId == "ph@example.com" {
+		t.Error("distinct_id must not be raw email — must be hashed")
+	}
+
+	assertProp := func(key, want string) {
+		t.Helper()
+		got, _ := c.Properties[key].(string)
+		if got != want {
+			t.Errorf("property %q: want %q, got %q", key, want, got)
+		}
+	}
+	assertProp("utm_source", "twitter")
+	assertProp("utm_medium", "social")
+	assertProp("utm_campaign", "beta-launch")
+	assertProp("referrer", "https://t.co/abc")
+}
+
+// TestWaitlist_PostHog_NotFiredOnConflict verifies that funnel_waitlist_signup_completed
+// is NOT enqueued when the email already exists (conflict / idempotent 200 path).
+func TestWaitlist_PostHog_NotFiredOnConflict(t *testing.T) {
+	repo := newStubWaitlistRepo("", false) // conflict: created=false
+	ph := newStubPostHogClient()
+	h := handlers.NewWaitlistHandler(repo, nil).WithPostHogClient(ph)
+
+	req := newWaitlistRequest("dup@example.com", "")
+	rr := httptest.NewRecorder()
+	h.Join(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for conflict path, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Give any inadvertent goroutine a moment to fire (it must not).
+	// We deliberately do NOT block on ph.done here because no event should fire.
+	// A 10ms yield is enough for the goroutine scheduler.
+	select {
+	case <-ph.done:
+		// A capture was enqueued — this is the failure case.
+		t.Error("PostHog Enqueue must NOT be called on the conflict/idempotent 200 path")
+	default:
+		// Nothing enqueued — correct.
+	}
+
+	caps := ph.getCaptures()
+	if len(caps) != 0 {
+		t.Errorf("expected 0 PostHog captures on conflict path, got %d", len(caps))
+	}
 }
 
 // ─── assertion helpers ────────────────────────────────────────────────────────

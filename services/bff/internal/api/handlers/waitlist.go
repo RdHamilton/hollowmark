@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	posthog "github.com/posthog/posthog-go"
 )
 
 // RC4 note: hashAccountID (posthog.go) uses SHA-256 for PostHog PII hashing.
@@ -62,7 +64,7 @@ func (e *waitlistRateEntry) allow() bool {
 
 // waitlistRepo is the subset of WaitlistRepository used by WaitlistHandler.
 type waitlistRepo interface {
-	InsertIfNew(ctx context.Context, email string, referrer *string) (id string, created bool, err error)
+	InsertIfNew(ctx context.Context, email string, utmSource, utmMedium, utmCampaign *string, referrer *string) (id string, created bool, err error)
 	UpdateMailchimpStatus(ctx context.Context, id, status string) error
 }
 
@@ -81,9 +83,13 @@ type MailchimpClient interface {
 // Mailchimp signup is best-effort and non-fatal: a Mailchimp 5xx results in the
 // DB row retaining mailchimp_status='failed' and the handler still returning
 // 201. A future reconciler (separate ticket) picks up failed rows.
+//
+// PostHog: fires funnel_waitlist_signup_completed on the new-email path only.
+// Goroutine-dispatched so PostHog latency does not block the HTTP response.
 type WaitlistHandler struct {
 	repo      waitlistRepo
 	mailchimp MailchimpClient
+	postHog   PostHogClient
 	rateMu    sync.Mutex
 	rateByIP  map[string]*waitlistRateEntry
 }
@@ -94,14 +100,24 @@ func NewWaitlistHandler(repo waitlistRepo, mc MailchimpClient) *WaitlistHandler 
 	return &WaitlistHandler{
 		repo:      repo,
 		mailchimp: mc,
+		postHog:   noopPostHogClient{},
 		rateByIP:  make(map[string]*waitlistRateEntry),
 	}
 }
 
+// WithPostHogClient wires a PostHog client for analytics events.
+func (h *WaitlistHandler) WithPostHogClient(ph PostHogClient) *WaitlistHandler {
+	h.postHog = ph
+	return h
+}
+
 // waitlistRequest is the JSON body for POST /api/v1/waitlist.
 type waitlistRequest struct {
-	Email    string `json:"email"`
-	Referrer string `json:"referrer"`
+	Email       string `json:"email"`
+	UTMSource   string `json:"utm_source"`
+	UTMMedium   string `json:"utm_medium"`
+	UTMCampaign string `json:"utm_campaign"`
+	Referrer    string `json:"referrer"`
 }
 
 // waitlistResponse is the JSON body returned by POST /api/v1/waitlist.
@@ -131,14 +147,22 @@ func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var referrer *string
-	if v := strings.TrimSpace(req.Referrer); v != "" {
-		referrer = &v
+	nullableStr := func(s string) *string {
+		v := strings.TrimSpace(s)
+		if v == "" {
+			return nil
+		}
+		return &v
 	}
+
+	utmSource := nullableStr(req.UTMSource)
+	utmMedium := nullableStr(req.UTMMedium)
+	utmCampaign := nullableStr(req.UTMCampaign)
+	referrer := nullableStr(req.Referrer)
 
 	// Insert or no-op. ON CONFLICT DO NOTHING RETURNING id gives us the
 	// idempotency signal: no row returned → email already existed.
-	id, created, err := h.repo.InsertIfNew(r.Context(), email, referrer)
+	id, created, err := h.repo.InsertIfNew(r.Context(), email, utmSource, utmMedium, utmCampaign, referrer)
 	if err != nil {
 		log.Printf("[waitlist] InsertIfNew email=%s: %v", email, err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
@@ -167,6 +191,25 @@ func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
 				}
 			}(id, email)
 		}
+
+		// Fire PostHog funnel_waitlist_signup_completed on the new-email path only.
+		// Goroutine-dispatched: PostHog latency must not block the HTTP response.
+		// distinct_id: SHA-256 hash of email — reuses hashAccountID for PII safety.
+		go func(addr string, src, medium, campaign, ref *string) {
+			props := posthog.NewProperties().
+				Set("utm_source", strOrEmpty(src)).
+				Set("utm_medium", strOrEmpty(medium)).
+				Set("utm_campaign", strOrEmpty(campaign)).
+				Set("referrer", strOrEmpty(ref))
+
+			if err := h.postHog.Enqueue(posthog.Capture{
+				DistinctId: hashAccountID(addr),
+				Event:      "funnel_waitlist_signup_completed",
+				Properties: props,
+			}); err != nil {
+				log.Printf("[waitlist] posthog enqueue: %v", err)
+			}
+		}(email, utmSource, utmMedium, utmCampaign, referrer)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -174,6 +217,14 @@ func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(waitlistResponse{OK: true}); err != nil {
 		log.Printf("[waitlist] encode: %v", err)
 	}
+}
+
+// strOrEmpty returns the dereferenced string or "" when p is nil.
+func strOrEmpty(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // rateAllow checks and records a rate-limit call for ip.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rsa"
@@ -660,5 +661,60 @@ func TestRouter_AdminFleetHealth_RouteAbsent_WhenHandlerNil(t *testing.T) {
 
 	if rr.Code != http.StatusNotFound && rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /api/v1/admin/daemons/fleet-health nil handler: want 404/405, got %d", rr.Code)
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/waitlist — public endpoint smoke tests (ticket #121)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// stubWaitlistRepo satisfies the waitlistRepo interface used by WaitlistHandler.
+// InsertIfNew always returns a new row (created=true) so the handler returns 201.
+type stubWaitlistRouterRepo struct{}
+
+func (s *stubWaitlistRouterRepo) InsertIfNew(_ context.Context, _ string, _, _, _ *string, _ *string) (string, bool, error) {
+	return "uuid-router-test", true, nil
+}
+
+func (s *stubWaitlistRouterRepo) UpdateMailchimpStatus(_ context.Context, _, _ string) error {
+	return nil
+}
+
+// TestRouter_Waitlist_IsPublic verifies POST /api/v1/waitlist is reachable
+// without any authentication token and routes to WaitlistHandler.Join.
+func TestRouter_Waitlist_IsPublic(t *testing.T) {
+	deps := depsNoAuth(t)
+	deps.WaitlistHandler = handlers.NewWaitlistHandler(&stubWaitlistRouterRepo{}, nil)
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	body := bytes.NewBufferString(`{"email":"smoke@example.com"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	// 201 Created — handler was reached and InsertIfNew returned created=true.
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/waitlist: want 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestRouter_Waitlist_RouteAbsent_WhenHandlerNil verifies that when no
+// WaitlistHandler is configured, chi returns 404 — no panic.
+func TestRouter_Waitlist_RouteAbsent_WhenHandlerNil(t *testing.T) {
+	deps := depsNoAuth(t)
+	// WaitlistHandler intentionally left nil.
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	body := bytes.NewBufferString(`{"email":"smoke@example.com"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound && rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/v1/waitlist nil handler: want 404/405, got %d", rr.Code)
 	}
 }
