@@ -44,6 +44,7 @@ SHARE_DIR="/usr/local/share/vaultmtg"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_ROOT="$(mktemp -d)/pkg-root"
 DMG_STAGING="$(mktemp -d)/dmg-staging"
+mkdir -p "${DMG_STAGING}"
 
 echo "[build-pkg] building .pkg version ${VERSION}"
 # Always emit PKG_ROOT so callers can inspect the layout without parsing mktemp output.

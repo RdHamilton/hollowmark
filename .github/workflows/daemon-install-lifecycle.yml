@@ -416,13 +416,15 @@ jobs:
       # -----------------------------------------------------------------------
       - name: "[LIFECYCLE] UNINSTALL — run uninstall.sh"
       # -----------------------------------------------------------------------
-        # Stub sudo to pass-through (shift; "$@") so sudo rm -f /usr/local/bin/vaultmtg-daemon
+        # Stub sudo to exec "$@" so sudo rm -f /usr/local/bin/vaultmtg-daemon
         # becomes rm -f /usr/local/bin/vaultmtg-daemon, which succeeds because the
         # GitHub runner installed the file there with passwordless sudo.
         # Note: Bob's #48 owns uninstall.sh + uninstall_test.bats — do not edit those files.
         run: |
           STUB_DIR=$(mktemp -d)
-          printf '#!/usr/bin/env bash\nshift; "$@"\n' > "$STUB_DIR/sudo"
+          # exec "$@" passes all args (including `rm`) through as-is.
+          # shift; "$@" was wrong: it dropped `rm`, leaving `-f` as $1 → exit 127.
+          printf '#!/usr/bin/env bash\nexec "$@"\n' > "$STUB_DIR/sudo"
           chmod +x "$STUB_DIR/sudo"
           PATH="$STUB_DIR:$PATH" bash services/daemon/install/macos/uninstall.sh
           echo "PASS: uninstall.sh completed"
@@ -524,6 +526,7 @@ jobs:
           FAKE_INSTALL_DIR: ${{ runner.temp }}\fake-install
           BFF_URL: "https://api.example.com"
           DAEMON_AUTH_TOKEN: "fake-ci-token"
+          SKIP_HEALTH_CHECK: "1"
         run: |
           Write-Host "=== FRESH INSTALL (stub binary) ==="
           $fakeDir = $Env:FAKE_INSTALL_DIR
@@ -600,6 +603,7 @@ jobs:
         env:
           BFF_URL: "https://api.example.com"
           DAEMON_AUTH_TOKEN: "fake-ci-token"
+          SKIP_HEALTH_CHECK: "1"
         run: |
           Write-Host "=== REINSTALL ==="
           $taskName = Get-Content (Join-Path $Env:TEMP "ci_task_name.txt")
@@ -972,6 +976,14 @@ jobs:
         # user) and registers a per-user Scheduled Task `VaultMTG-Daemon`.
         # The installer also calls `schtasks /Run` so the daemon starts
         # immediately without waiting for a logoff/logon.
+        # SKIP_HEALTH_CHECK=1: the daemon binary was built with a fake api_key
+        # that cannot authenticate, so /health never returns account_id.  Without
+        # this guard the embedded health-check .ps1 exits 1, causing the installer
+        # to call Abort — which in /S mode returns a non-zero exit code and fails
+        # this step.  The guard is safe: it is only effective when the env var is
+        # explicitly set, which production installs never do.
+        env:
+          SKIP_HEALTH_CHECK: "1"
         shell: pwsh
         run: |
           Write-Host "=== FRESH INSTALL (silent mode) ==="
@@ -1201,6 +1213,7 @@ jobs:
             exit 1
           }
           Write-Host "PASS: VaultMTG-Daemon scheduled task correctly unregistered (schtasks /Query returned non-zero)"
+          exit 0
 
       # -----------------------------------------------------------------------
       - name: "[ASSERT] Config directory retained after uninstall (ADR-011-C) (#41)"
