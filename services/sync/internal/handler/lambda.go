@@ -235,9 +235,9 @@ func (h *SyncHandler) Handle(ctx context.Context, _ any) error {
 }
 
 // syncCards fetches the Scryfall default-cards bulk file and writes all
-// Arena-tagged cards to both the cards and set_cards tables. It is
-// intentionally non-fatal: any failure is logged and the caller continues
-// with the 17Lands ratings sync regardless.
+// Arena-tagged cards into set_cards (the sole write target — the retired
+// cards table was dropped in migration 000025). It is intentionally non-fatal:
+// any failure is logged and the caller continues with the 17Lands ratings sync.
 //
 // When h.cardFetcher is nil the step is skipped silently (e.g. in tests
 // constructed with NewWithFormats / NewWithOptions(cardFetcher=nil)).
@@ -254,17 +254,12 @@ func (h *SyncHandler) syncCards(ctx context.Context) {
 
 	log.Printf("[sync] syncCards: fetched %d Arena cards from Scryfall bulk-data", len(cards))
 
-	if err := h.store.UpsertCards(ctx, cards); err != nil {
-		log.Printf("[sync] syncCards: UpsertCards: %v", err)
-		return
-	}
-
 	if err := h.store.UpsertSetCards(ctx, cards); err != nil {
 		log.Printf("[sync] syncCards: UpsertSetCards: %v", err)
 		return
 	}
 
-	log.Printf("[sync] syncCards: upserted %d cards into cards + set_cards", len(cards))
+	log.Printf("[sync] syncCards: upserted %d cards into set_cards", len(cards))
 }
 
 // syncSet fetches and upserts ratings for all formats of a single set. It never

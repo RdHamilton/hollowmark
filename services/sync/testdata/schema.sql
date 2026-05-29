@@ -1,46 +1,18 @@
 -- Minimal schema for sync service integration tests.
 -- Contains only the tables touched by postgres_store_integration_test.go.
 -- Keep in sync with the canonical BFF migrations:
---   000006_create_card_metadata_tables (cards)
---   000054_initial_schema (sets, set_cards, draft_card_ratings, draft_color_ratings)
+--   000014_create_draft_tables (set_cards — cards was retired in 000025)
+--   000029_add_standard_legality (legalities column on set_cards)
+--   000038_add_card_prices (price columns on set_cards)
+--   000054_initial_schema (sets, draft_card_ratings, draft_color_ratings)
 --   000062_add_is_draft_active (is_draft_active column on sets)
 --   000065_add_sync_hashes (sync_hashes)
 --   000088_add_sets_seventeenlands_code (seventeenlands_code column on sets)
 
--- Cards: global card metadata from Scryfall (migration 000006)
--- id is TEXT (Scryfall UUID) — no sequence.
-CREATE TABLE IF NOT EXISTS cards (
-    id               TEXT PRIMARY KEY,
-    arena_id         INTEGER UNIQUE,
-    name             TEXT NOT NULL,
-    mana_cost        TEXT,
-    cmc              REAL,
-    type_line        TEXT,
-    oracle_text      TEXT,
-    colors           TEXT,
-    color_identity   TEXT,
-    rarity           TEXT,
-    set_code         TEXT,
-    collector_number TEXT,
-    power            TEXT,
-    toughness        TEXT,
-    loyalty          TEXT,
-    image_uris       TEXT,
-    layout           TEXT,
-    card_faces       TEXT,
-    legalities       TEXT,
-    released_at      TEXT,
-    cached_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_updated     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_cards_arena_id    ON cards(arena_id);
-CREATE INDEX IF NOT EXISTS idx_cards_name        ON cards(name);
-CREATE INDEX IF NOT EXISTS idx_cards_set         ON cards(set_code);
-CREATE INDEX IF NOT EXISTS idx_cards_last_updated ON cards(last_updated);
-
--- Set cards: per-set card cache from Scryfall (migration 000054)
--- arena_id is TEXT here (differs from cards.arena_id which is INTEGER).
+-- Set cards: per-set card cache from Scryfall (migration 000014).
+-- This is the canonical card-metadata table. The cards table was retired in
+-- migration 000025 and must not be referenced.
+-- arena_id is TEXT (differs from draft_card_ratings.arena_id which is INTEGER).
 CREATE TABLE IF NOT EXISTS set_cards (
     id               BIGSERIAL PRIMARY KEY,
     set_code         TEXT NOT NULL,
@@ -56,7 +28,15 @@ CREATE TABLE IF NOT EXISTS set_cards (
     power            TEXT,
     toughness        TEXT,
     image_url        TEXT,
+    image_url_small  TEXT,
+    image_url_art    TEXT,
     legalities       TEXT,
+    price_usd        REAL DEFAULT NULL,
+    price_usd_foil   REAL DEFAULT NULL,
+    price_eur        REAL DEFAULT NULL,
+    price_eur_foil   REAL DEFAULT NULL,
+    price_tix        REAL DEFAULT NULL,
+    prices_updated_at TIMESTAMPTZ DEFAULT NULL,
     fetched_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(set_code, arena_id)
 );

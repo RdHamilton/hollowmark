@@ -38,12 +38,10 @@ type Store interface {
 	GetHash(ctx context.Context, key string) (string, error)
 	// SetHash stores a hash for the given key, replacing any existing value.
 	SetHash(ctx context.Context, key string, hash string) error
-	// UpsertCards upserts card metadata into the cards table keyed on arena_id.
-	// All Arena-tagged cards (non-null arena_id) are written regardless of
-	// draft-active status (Q5 decision).
-	UpsertCards(ctx context.Context, cards []scryfall.ScryfallCard) error
 	// UpsertSetCards upserts per-set card entries into set_cards keyed on
 	// (set_code, arena_id). arena_id is stored as TEXT in set_cards so a
-	// ::TEXT cast is required when writing from the INTEGER cards.arena_id.
+	// ::TEXT cast is required when writing from the integer ArenaID field.
+	// This is the sole Scryfall card write path — the retired cards table
+	// (dropped in migration 000025) is not written.
 	UpsertSetCards(ctx context.Context, cards []scryfall.ScryfallCard) error
 }

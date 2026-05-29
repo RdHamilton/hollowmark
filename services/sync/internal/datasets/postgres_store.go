@@ -210,127 +210,14 @@ func (s *PostgresStore) UpsertColorRatings(ctx context.Context, setCode, draftFo
 	return nil
 }
 
-// UpsertCards upserts Scryfall card metadata into the cards table keyed on
-// arena_id. All Arena-tagged cards (non-null arena_id) are written inside a
-// single transaction using ON CONFLICT (arena_id) DO UPDATE — no WHERE guard
-// (always-upsert for v1 per Q2 decision).
-//
-// cards.id is TEXT (Scryfall UUID), not a sequence — no SEQUENCE grant needed.
-// The per-row tx.Exec loop matches the UpsertRatings pattern.
-func (s *PostgresStore) UpsertCards(ctx context.Context, cards []scryfall.ScryfallCard) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() {
-		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-			log.Printf("[sync] UpsertCards: rollback error: %v", err)
-		}
-	}()
-
-	const q = `
-		INSERT INTO cards (
-			id, arena_id, name, mana_cost, cmc, type_line, oracle_text,
-			colors, color_identity, rarity, set_code, collector_number,
-			power, toughness, loyalty, image_uris, layout, card_faces,
-			legalities, released_at, last_updated
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18,
-			$19, $20, NOW()
-		)
-		ON CONFLICT (arena_id) DO UPDATE SET
-			id               = EXCLUDED.id,
-			name             = EXCLUDED.name,
-			mana_cost        = EXCLUDED.mana_cost,
-			cmc              = EXCLUDED.cmc,
-			type_line        = EXCLUDED.type_line,
-			oracle_text      = EXCLUDED.oracle_text,
-			colors           = EXCLUDED.colors,
-			color_identity   = EXCLUDED.color_identity,
-			rarity           = EXCLUDED.rarity,
-			set_code         = EXCLUDED.set_code,
-			collector_number = EXCLUDED.collector_number,
-			power            = EXCLUDED.power,
-			toughness        = EXCLUDED.toughness,
-			loyalty          = EXCLUDED.loyalty,
-			image_uris       = EXCLUDED.image_uris,
-			layout           = EXCLUDED.layout,
-			card_faces       = EXCLUDED.card_faces,
-			legalities       = EXCLUDED.legalities,
-			released_at      = EXCLUDED.released_at,
-			last_updated     = NOW()
-	`
-
-	inserted := 0
-	for i := range cards {
-		c := &cards[i]
-		if c.ArenaID == nil {
-			continue
-		}
-
-		colorsJSON, err := json.Marshal(c.Colors)
-		if err != nil {
-			return fmt.Errorf("marshal colors for card %q: %w", c.Name, err)
-		}
-		colorIdentityJSON, err := json.Marshal(c.ColorIdentity)
-		if err != nil {
-			return fmt.Errorf("marshal color_identity for card %q: %w", c.Name, err)
-		}
-		imageURIsJSON, err := json.Marshal(c.ImageURIs)
-		if err != nil {
-			return fmt.Errorf("marshal image_uris for card %q: %w", c.Name, err)
-		}
-		cardFacesJSON, err := json.Marshal(c.CardFaces)
-		if err != nil {
-			return fmt.Errorf("marshal card_faces for card %q: %w", c.Name, err)
-		}
-		legalitiesJSON, err := json.Marshal(c.Legalities)
-		if err != nil {
-			return fmt.Errorf("marshal legalities for card %q: %w", c.Name, err)
-		}
-
-		if _, err := tx.Exec(
-			ctx, q,
-			c.ScryfallID,
-			c.ArenaID,
-			c.Name,
-			c.ManaCost,
-			c.CMC,
-			c.TypeLine,
-			c.OracleText,
-			string(colorsJSON),
-			string(colorIdentityJSON),
-			c.Rarity,
-			c.SetCode,
-			c.CollectorNumber,
-			c.Power,
-			c.Toughness,
-			c.Loyalty,
-			string(imageURIsJSON),
-			c.Layout,
-			string(cardFacesJSON),
-			string(legalitiesJSON),
-			c.ReleasedAt,
-		); err != nil {
-			return fmt.Errorf("upsert card %q (arena_id=%d): %w", c.Name, *c.ArenaID, err)
-		}
-		inserted++
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit: %w", err)
-	}
-
-	log.Printf("[sync] UpsertCards: upserted %d cards", inserted)
-	return nil
-}
-
 // UpsertSetCards upserts per-set card entries into the set_cards table keyed on
 // (set_code, arena_id). arena_id in set_cards is TEXT, so the integer ArenaID
 // from ScryfallCard is cast via fmt.Sprintf. The upsert updates all mutable
 // fields on conflict — no WHERE guard (always-upsert for v1).
+// image_url_small and image_url_art are written from the "small" and "art_crop"
+// keys in the ImageURIs map using the same extractImageURLKey helper as image_url.
+// Price columns (price_usd, price_eur, etc.) have no Scryfall source and are
+// left null — they are populated by the separate price-sync path.
 func (s *PostgresStore) UpsertSetCards(ctx context.Context, cards []scryfall.ScryfallCard) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -345,27 +232,29 @@ func (s *PostgresStore) UpsertSetCards(ctx context.Context, cards []scryfall.Scr
 	const q = `
 		INSERT INTO set_cards (
 			set_code, arena_id, scryfall_id, name, mana_cost, cmc, types,
-			colors, rarity, text, power, toughness, image_url, legalities,
-			fetched_at
+			colors, rarity, text, power, toughness, image_url, image_url_small,
+			image_url_art, legalities, fetched_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11, $12, $13, $14,
-			NOW()
+			$15, $16, NOW()
 		)
 		ON CONFLICT (set_code, arena_id) DO UPDATE SET
-			scryfall_id = EXCLUDED.scryfall_id,
-			name        = EXCLUDED.name,
-			mana_cost   = EXCLUDED.mana_cost,
-			cmc         = EXCLUDED.cmc,
-			types       = EXCLUDED.types,
-			colors      = EXCLUDED.colors,
-			rarity      = EXCLUDED.rarity,
-			text        = EXCLUDED.text,
-			power       = EXCLUDED.power,
-			toughness   = EXCLUDED.toughness,
-			image_url   = EXCLUDED.image_url,
-			legalities  = EXCLUDED.legalities,
-			fetched_at  = NOW()
+			scryfall_id     = EXCLUDED.scryfall_id,
+			name            = EXCLUDED.name,
+			mana_cost       = EXCLUDED.mana_cost,
+			cmc             = EXCLUDED.cmc,
+			types           = EXCLUDED.types,
+			colors          = EXCLUDED.colors,
+			rarity          = EXCLUDED.rarity,
+			text            = EXCLUDED.text,
+			power           = EXCLUDED.power,
+			toughness       = EXCLUDED.toughness,
+			image_url       = EXCLUDED.image_url,
+			image_url_small = EXCLUDED.image_url_small,
+			image_url_art   = EXCLUDED.image_url_art,
+			legalities      = EXCLUDED.legalities,
+			fetched_at      = NOW()
 	`
 
 	inserted := 0
@@ -387,8 +276,10 @@ func (s *PostgresStore) UpsertSetCards(ctx context.Context, cards []scryfall.Scr
 			return fmt.Errorf("marshal legalities for set_card %q: %w", c.Name, err)
 		}
 
-		// image_url: extract the normal-size URL from ImageURIs if present.
+		// Extract image URLs from the ImageURIs map using the shared helper.
 		imageURL := extractImageURL(c.ImageURIs)
+		imageURLSmall := extractImageURLKey(c.ImageURIs, "small")
+		imageURLArt := extractImageURLKey(c.ImageURIs, "art_crop")
 
 		if _, err := tx.Exec(
 			ctx, q,
@@ -405,6 +296,8 @@ func (s *PostgresStore) UpsertSetCards(ctx context.Context, cards []scryfall.Scr
 			c.Power,
 			c.Toughness,
 			imageURL,
+			imageURLSmall,
+			imageURLArt,
 			string(legalitiesJSON),
 		); err != nil {
 			return fmt.Errorf("upsert set_card %q (set=%s arena_id=%s): %w", c.Name, c.SetCode, arenaIDText, err)
@@ -424,6 +317,13 @@ func (s *PostgresStore) UpsertSetCards(ctx context.Context, cards []scryfall.Scr
 // ImageURIs is decoded as any (interface{}) from JSON, so a type assertion
 // is used to avoid a secondary parse. Returns empty string if absent.
 func extractImageURL(imageURIs any) string {
+	return extractImageURLKey(imageURIs, "normal")
+}
+
+// extractImageURLKey pulls the named key's URL out of the ImageURIs field.
+// ImageURIs is decoded as any (interface{}) from JSON. Returns empty string
+// when the field is absent, not a map, or the key is missing.
+func extractImageURLKey(imageURIs any, key string) string {
 	if imageURIs == nil {
 		return ""
 	}
@@ -431,7 +331,7 @@ func extractImageURL(imageURIs any) string {
 	if !ok {
 		return ""
 	}
-	if v, ok := m["normal"]; ok {
+	if v, ok := m[key]; ok {
 		if s, ok := v.(string); ok {
 			return s
 		}
