@@ -246,87 +246,10 @@ func TestPostgresStore_UpsertRatings_ZeroFetchedAt_Integration(t *testing.T) {
 
 func intPtrTest(v int) *int { return &v }
 
-// TestPostgresStore_UpsertCards_Integration verifies that UpsertCards writes
-// Arena-tagged cards to the cards table and that a second call upserts (not
-// appends) the rows (ON CONFLICT (arena_id) DO UPDATE semantics).
-func TestPostgresStore_UpsertCards_Integration(t *testing.T) {
-	dbURL := os.Getenv("TEST_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("TEST_DATABASE_URL not set; skipping integration test")
-	}
-
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dbURL)
-	require.NoError(t, err)
-	defer pool.Close()
-
-	store := datasets.NewPostgresStore(pool)
-
-	cards := []scryfall.ScryfallCard{
-		{
-			ScryfallID: "test-scryfall-id-001",
-			ArenaID:    intPtrTest(999001),
-			Name:       "Integration Test Card A",
-			SetCode:    "tst",
-			Rarity:     "common",
-			Colors:     []string{"W"},
-		},
-		{
-			ScryfallID: "test-scryfall-id-002",
-			ArenaID:    intPtrTest(999002),
-			Name:       "Integration Test Card B",
-			SetCode:    "tst",
-			Rarity:     "rare",
-			Colors:     []string{"U", "B"},
-		},
-	}
-
-	require.NoError(t, store.UpsertCards(ctx, cards))
-
-	// Verify both rows were written.
-	for _, c := range cards {
-		var name, rarity string
-		var arenaID int
-		err := pool.QueryRow(
-			ctx,
-			`SELECT arena_id, name, rarity FROM cards WHERE arena_id = $1`,
-			c.ArenaID,
-		).Scan(&arenaID, &name, &rarity)
-		require.NoError(t, err, "card with arena_id=%d must exist", *c.ArenaID)
-		assert.Equal(t, *c.ArenaID, arenaID)
-		assert.Equal(t, c.Name, name)
-		assert.Equal(t, c.Rarity, rarity)
-	}
-
-	// Verify ON CONFLICT upsert: update the name and re-upsert.
-	updated := []scryfall.ScryfallCard{
-		{
-			ScryfallID: "test-scryfall-id-001",
-			ArenaID:    intPtrTest(999001),
-			Name:       "Integration Test Card A (Updated)",
-			SetCode:    "tst",
-			Rarity:     "common",
-			Colors:     []string{"W"},
-		},
-	}
-	require.NoError(t, store.UpsertCards(ctx, updated))
-
-	var updatedName string
-	err = pool.QueryRow(
-		ctx,
-		`SELECT name FROM cards WHERE arena_id = 999001`,
-	).Scan(&updatedName)
-	require.NoError(t, err)
-	assert.Equal(t, "Integration Test Card A (Updated)", updatedName,
-		"second UpsertCards call must update existing row via ON CONFLICT DO UPDATE")
-
-	// Cleanup
-	_, _ = pool.Exec(ctx, `DELETE FROM cards WHERE arena_id IN (999001, 999002)`)
-}
-
 // TestPostgresStore_UpsertSetCards_Integration verifies that UpsertSetCards writes
-// per-set card entries to set_cards with arena_id stored as TEXT, and that a second
-// call upserts (not appends) the rows (ON CONFLICT (set_code, arena_id) DO UPDATE).
+// per-set card entries to set_cards with arena_id stored as TEXT, that a second
+// call upserts (not appends) the rows, and that image_url_small and image_url_art
+// are written correctly from the ImageURIs map.
 func TestPostgresStore_UpsertSetCards_Integration(t *testing.T) {
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
@@ -348,6 +271,11 @@ func TestPostgresStore_UpsertSetCards_Integration(t *testing.T) {
 			SetCode:    "tst",
 			Rarity:     "uncommon",
 			Colors:     []string{"R"},
+			ImageURIs: map[string]any{
+				"normal":   "https://cards.scryfall.io/normal/front/sc-001.jpg",
+				"small":    "https://cards.scryfall.io/small/front/sc-001.jpg",
+				"art_crop": "https://cards.scryfall.io/art_crop/front/sc-001.jpg",
+			},
 		},
 		{
 			ScryfallID: "sc-002",
@@ -356,6 +284,7 @@ func TestPostgresStore_UpsertSetCards_Integration(t *testing.T) {
 			SetCode:    "tst",
 			Rarity:     "mythic",
 			Colors:     []string{"G"},
+			// No ImageURIs — image columns must be empty string.
 		},
 	}
 
@@ -376,6 +305,28 @@ func TestPostgresStore_UpsertSetCards_Integration(t *testing.T) {
 		assert.Equal(t, c.Name, name)
 	}
 
+	// Verify image_url_small and image_url_art were written for the first card.
+	var imageURLSmall, imageURLArt string
+	err = pool.QueryRow(
+		ctx,
+		`SELECT COALESCE(image_url_small, ''), COALESCE(image_url_art, '') FROM set_cards WHERE set_code = 'tst' AND arena_id = '888001'`,
+	).Scan(&imageURLSmall, &imageURLArt)
+	require.NoError(t, err)
+	assert.Equal(t, "https://cards.scryfall.io/small/front/sc-001.jpg", imageURLSmall,
+		"image_url_small must be written from ImageURIs[\"small\"]")
+	assert.Equal(t, "https://cards.scryfall.io/art_crop/front/sc-001.jpg", imageURLArt,
+		"image_url_art must be written from ImageURIs[\"art_crop\"]")
+
+	// Verify that the second card (no ImageURIs) stored empty/null image cols.
+	var imageURLSmall2, imageURLArt2 string
+	err = pool.QueryRow(
+		ctx,
+		`SELECT COALESCE(image_url_small, ''), COALESCE(image_url_art, '') FROM set_cards WHERE set_code = 'tst' AND arena_id = '888002'`,
+	).Scan(&imageURLSmall2, &imageURLArt2)
+	require.NoError(t, err)
+	assert.Empty(t, imageURLSmall2, "image_url_small must be empty when ImageURIs is nil")
+	assert.Empty(t, imageURLArt2, "image_url_art must be empty when ImageURIs is nil")
+
 	// Verify ON CONFLICT upsert: update name and re-upsert.
 	updated := []scryfall.ScryfallCard{
 		{
@@ -385,18 +336,25 @@ func TestPostgresStore_UpsertSetCards_Integration(t *testing.T) {
 			SetCode:    "tst",
 			Rarity:     "uncommon",
 			Colors:     []string{"R"},
+			ImageURIs: map[string]any{
+				"normal":   "https://cards.scryfall.io/normal/front/sc-001-v2.jpg",
+				"small":    "https://cards.scryfall.io/small/front/sc-001-v2.jpg",
+				"art_crop": "https://cards.scryfall.io/art_crop/front/sc-001-v2.jpg",
+			},
 		},
 	}
 	require.NoError(t, store.UpsertSetCards(ctx, updated))
 
-	var updatedName string
+	var updatedName, updatedSmall string
 	err = pool.QueryRow(
 		ctx,
-		`SELECT name FROM set_cards WHERE set_code = 'tst' AND arena_id = '888001'`,
-	).Scan(&updatedName)
+		`SELECT name, COALESCE(image_url_small, '') FROM set_cards WHERE set_code = 'tst' AND arena_id = '888001'`,
+	).Scan(&updatedName, &updatedSmall)
 	require.NoError(t, err)
 	assert.Equal(t, "Set Card Alpha Updated", updatedName,
 		"second UpsertSetCards call must update existing row via ON CONFLICT DO UPDATE")
+	assert.Equal(t, "https://cards.scryfall.io/small/front/sc-001-v2.jpg", updatedSmall,
+		"image_url_small must be updated on second upsert")
 
 	// Cleanup
 	_, _ = pool.Exec(ctx, `DELETE FROM set_cards WHERE set_code = 'tst' AND arena_id IN ('888001', '888002')`)

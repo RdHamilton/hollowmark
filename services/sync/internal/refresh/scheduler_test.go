@@ -89,10 +89,6 @@ func (s *stubStore) SetHash(_ context.Context, _ string, _ string) error {
 	return nil
 }
 
-func (s *stubStore) UpsertCards(_ context.Context, _ []scryfall.ScryfallCard) error {
-	return nil
-}
-
 func (s *stubStore) UpsertSetCards(_ context.Context, _ []scryfall.ScryfallCard) error {
 	return nil
 }

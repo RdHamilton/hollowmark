@@ -107,10 +107,6 @@ func (s *stubStore) SetHash(_ context.Context, key, hash string) error {
 	return s.setHashErr
 }
 
-func (s *stubStore) UpsertCards(_ context.Context, _ []scryfall.ScryfallCard) error {
-	return nil
-}
-
 func (s *stubStore) UpsertSetCards(_ context.Context, _ []scryfall.ScryfallCard) error {
 	return nil
 }
@@ -1066,18 +1062,11 @@ func (f *stubCardFetcher) FetchBulkDefaultCards(_ context.Context) ([]scryfall.S
 	return f.cards, f.err
 }
 
-// trackingStore wraps stubStore to record UpsertCards and UpsertSetCards calls.
+// trackingStore wraps stubStore to record UpsertSetCards calls.
 type trackingStore struct {
 	stubStore
-	upsertCardsCalls    [][]scryfall.ScryfallCard
 	upsertSetCardsCalls [][]scryfall.ScryfallCard
-	upsertCardsErr      error
 	upsertSetCardsErr   error
-}
-
-func (s *trackingStore) UpsertCards(_ context.Context, cards []scryfall.ScryfallCard) error {
-	s.upsertCardsCalls = append(s.upsertCardsCalls, cards)
-	return s.upsertCardsErr
 }
 
 func (s *trackingStore) UpsertSetCards(_ context.Context, cards []scryfall.ScryfallCard) error {
@@ -1087,9 +1076,10 @@ func (s *trackingStore) UpsertSetCards(_ context.Context, cards []scryfall.Scryf
 
 func intPtr(v int) *int { return &v }
 
-// TestHandle_SyncCards_CallsBothUpserts verifies that when a CardFetcher is provided,
-// Handle calls UpsertCards and UpsertSetCards with the fetched cards.
-func TestHandle_SyncCards_CallsBothUpserts(t *testing.T) {
+// TestHandle_SyncCards_CallsUpsertSetCards verifies that when a CardFetcher is
+// provided, Handle calls UpsertSetCards with the fetched cards. UpsertSetCards
+// is the sole write target — the retired cards table is not written.
+func TestHandle_SyncCards_CallsUpsertSetCards(t *testing.T) {
 	arenaCards := []scryfall.ScryfallCard{
 		{ScryfallID: "aaa", ArenaID: intPtr(10001), Name: "Lightning Bolt", SetCode: "fdn"},
 		{ScryfallID: "bbb", ArenaID: intPtr(10002), Name: "Counterspell", SetCode: "fdn"},
@@ -1103,25 +1093,20 @@ func TestHandle_SyncCards_CallsBothUpserts(t *testing.T) {
 	}
 	fetcher := &stubFetcher{cards: []seventeenlands.CardRating{{MtgaID: 1, Name: "Lightning Bolt", ALSA: 1.5}}}
 
-	// Use New to inject the cardFetcher; override to a single format for determinism.
-	h := handler.New(fetcher, cardFetcher, store, nil)
-	// Reuse the formats-locked constructor by rebuilding with explicit formats via New:
-	// New reads SYNC_FORMATS env — pin to PremierDraft so call counts are predictable.
+	// Pin to PremierDraft so call counts are predictable.
 	t.Setenv("SYNC_FORMATS", "PremierDraft")
-	h = handler.New(fetcher, cardFetcher, store, nil)
+	h := handler.New(fetcher, cardFetcher, store, nil)
 
 	err := h.Handle(context.Background(), nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, cardFetcher.called, "FetchBulkDefaultCards must be called once")
-	require.Len(t, store.upsertCardsCalls, 1, "UpsertCards must be called once")
 	require.Len(t, store.upsertSetCardsCalls, 1, "UpsertSetCards must be called once")
-	assert.Len(t, store.upsertCardsCalls[0], 2)
 	assert.Len(t, store.upsertSetCardsCalls[0], 2)
 }
 
 // TestHandle_SyncCards_NilCardFetcher_SkipsSyncCards verifies that when cardFetcher is nil,
-// Handle does not call UpsertCards or UpsertSetCards.
+// Handle does not call UpsertSetCards.
 func TestHandle_SyncCards_NilCardFetcher_SkipsSyncCards(t *testing.T) {
 	store := &trackingStore{
 		stubStore: stubStore{
@@ -1135,7 +1120,6 @@ func TestHandle_SyncCards_NilCardFetcher_SkipsSyncCards(t *testing.T) {
 	err := h.Handle(context.Background(), nil)
 
 	require.NoError(t, err)
-	assert.Empty(t, store.upsertCardsCalls, "UpsertCards must not be called when cardFetcher is nil")
 	assert.Empty(t, store.upsertSetCardsCalls, "UpsertSetCards must not be called when cardFetcher is nil")
 }
 
@@ -1157,29 +1141,33 @@ func TestHandle_SyncCards_FetchError_NonFatal(t *testing.T) {
 
 	// CardFetcher error must be non-fatal.
 	require.NoError(t, err)
-	// UpsertCards must not have been called.
-	assert.Empty(t, store.upsertCardsCalls)
+	// UpsertSetCards must not have been called.
+	assert.Empty(t, store.upsertSetCardsCalls)
 	// The 17Lands ratings sync must still have proceeded.
 	assert.Equal(t, 1, fetcher.called, "ratings sync must still run despite card fetch error (1 format pinned via env)")
 }
 
-// TestHandle_SyncCards_UpsertCardsError_NonFatal verifies that an UpsertCards error
-// is non-fatal — Handle still returns nil.
-func TestHandle_SyncCards_UpsertCardsError_NonFatal(t *testing.T) {
+// TestHandle_SyncCards_UpsertSetCardsError_NonFatal verifies that an UpsertSetCards
+// error is non-fatal — Handle still returns nil and the 17Lands sync proceeds.
+func TestHandle_SyncCards_UpsertSetCardsError_NonFatal(t *testing.T) {
+	t.Setenv("SYNC_FORMATS", "PremierDraft")
+
 	arenaCards := []scryfall.ScryfallCard{
 		{ScryfallID: "aaa", ArenaID: intPtr(10001), Name: "Lightning Bolt", SetCode: "fdn"},
 	}
 	cardFetcher := &stubCardFetcher{cards: arenaCards}
 	store := &trackingStore{
-		stubStore:      stubStore{dbSets: []datasets.SyncSet{{Code: "FDN", ExpansionCode: "FDN"}}},
-		upsertCardsErr: errors.New("db write failed"),
+		stubStore:         stubStore{dbSets: []datasets.SyncSet{{Code: "FDN", ExpansionCode: "FDN"}}},
+		upsertSetCardsErr: errors.New("db write failed"),
 	}
 	fetcher := &stubFetcher{cards: []seventeenlands.CardRating{{MtgaID: 1, Name: "Plains", ALSA: 9.0}}}
 
 	h := handler.New(fetcher, cardFetcher, store, nil)
 	err := h.Handle(context.Background(), nil)
 
-	require.NoError(t, err, "UpsertCards error must be non-fatal")
-	// UpsertSetCards must not have been called (early return after UpsertCards error).
-	assert.Empty(t, store.upsertSetCardsCalls)
+	require.NoError(t, err, "UpsertSetCards error must be non-fatal")
+	// UpsertSetCards was called (and failed) — verify it was attempted.
+	require.Len(t, store.upsertSetCardsCalls, 1)
+	// The 17Lands ratings sync must still have proceeded.
+	assert.Equal(t, 1, fetcher.called, "ratings sync must still run despite UpsertSetCards error")
 }

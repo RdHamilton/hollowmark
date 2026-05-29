@@ -72,10 +72,6 @@ func (m *mockStore) SetHash(_ context.Context, key string, hash string) error {
 	return nil
 }
 
-func (m *mockStore) UpsertCards(_ context.Context, _ []scryfall.ScryfallCard) error {
-	return nil
-}
-
 func (m *mockStore) UpsertSetCards(_ context.Context, _ []scryfall.ScryfallCard) error {
 	return nil
 }
