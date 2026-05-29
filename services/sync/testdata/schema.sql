@@ -1,10 +1,69 @@
 -- Minimal schema for sync service integration tests.
 -- Contains only the tables touched by postgres_store_integration_test.go.
 -- Keep in sync with the canonical BFF migrations:
---   000054_initial_schema (sets, draft_card_ratings, draft_color_ratings)
+--   000006_create_card_metadata_tables (cards)
+--   000054_initial_schema (sets, set_cards, draft_card_ratings, draft_color_ratings)
 --   000062_add_is_draft_active (is_draft_active column on sets)
 --   000065_add_sync_hashes (sync_hashes)
 --   000088_add_sets_seventeenlands_code (seventeenlands_code column on sets)
+
+-- Cards: global card metadata from Scryfall (migration 000006)
+-- id is TEXT (Scryfall UUID) — no sequence.
+CREATE TABLE IF NOT EXISTS cards (
+    id               TEXT PRIMARY KEY,
+    arena_id         INTEGER UNIQUE,
+    name             TEXT NOT NULL,
+    mana_cost        TEXT,
+    cmc              REAL,
+    type_line        TEXT,
+    oracle_text      TEXT,
+    colors           TEXT,
+    color_identity   TEXT,
+    rarity           TEXT,
+    set_code         TEXT,
+    collector_number TEXT,
+    power            TEXT,
+    toughness        TEXT,
+    loyalty          TEXT,
+    image_uris       TEXT,
+    layout           TEXT,
+    card_faces       TEXT,
+    legalities       TEXT,
+    released_at      TEXT,
+    cached_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_updated     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cards_arena_id    ON cards(arena_id);
+CREATE INDEX IF NOT EXISTS idx_cards_name        ON cards(name);
+CREATE INDEX IF NOT EXISTS idx_cards_set         ON cards(set_code);
+CREATE INDEX IF NOT EXISTS idx_cards_last_updated ON cards(last_updated);
+
+-- Set cards: per-set card cache from Scryfall (migration 000054)
+-- arena_id is TEXT here (differs from cards.arena_id which is INTEGER).
+CREATE TABLE IF NOT EXISTS set_cards (
+    id               BIGSERIAL PRIMARY KEY,
+    set_code         TEXT NOT NULL,
+    arena_id         TEXT NOT NULL,
+    scryfall_id      TEXT NOT NULL,
+    name             TEXT NOT NULL,
+    mana_cost        TEXT,
+    cmc              INTEGER,
+    types            TEXT,
+    colors           TEXT,
+    rarity           TEXT,
+    text             TEXT,
+    power            TEXT,
+    toughness        TEXT,
+    image_url        TEXT,
+    legalities       TEXT,
+    fetched_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(set_code, arena_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_set_cards_arena_id   ON set_cards(arena_id);
+CREATE INDEX IF NOT EXISTS idx_set_cards_set_code   ON set_cards(set_code);
+CREATE INDEX IF NOT EXISTS idx_set_cards_name       ON set_cards(name);
 
 -- Sets: card set metadata from Scryfall
 CREATE TABLE IF NOT EXISTS sets (
