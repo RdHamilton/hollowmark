@@ -312,6 +312,9 @@ _make_fake_home() {
   # Script must call out the preserved log path so the user knows to clean it manually.
   [[ "${output}" == *"Log file"* ]]
   [[ "${output}" == *"NOT removed"* ]]
+  # Pin the exact filename (#2144): message must reference vaultmtg-daemon.log,
+  # not the pre-rebrand name mtga-companion-daemon.log.
+  [[ "${output}" == *"vaultmtg-daemon.log"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -342,6 +345,9 @@ _make_fake_home() {
   # Script must call out the preserved config path.
   [[ "${output}" == *"Config file"* ]]
   [[ "${output}" == *"NOT removed"* ]]
+  # Pin the exact config path (#2145): message must reference ~/.vaultmtg/daemon.json,
+  # not the pre-rebrand path ~/.config/mtga-companion/daemon.yaml.
+  [[ "${output}" == *"~/.vaultmtg/daemon.json"* ]]
 }
 
 # ---------------------------------------------------------------------------
