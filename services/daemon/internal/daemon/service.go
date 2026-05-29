@@ -24,6 +24,7 @@ import (
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/keychain"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/localapi"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/pkce"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/ratingsclient"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/registrar"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck"
@@ -48,6 +49,14 @@ var heartbeatInterval = 30 * time.Second
 // socket to keep the tray state in sync (e.g. if the user installs or stops
 // the helper outside of the Grant Access flow).
 var helperCheckInterval = 30 * time.Second
+
+// mtgaDetectInterval is how often idleUntilMTGADetected polls for Player.log
+// when MTGA is not installed. Exposed as a var so tests can override it.
+var mtgaDetectInterval = 5 * time.Minute
+
+// defaultLogPathFn is the function used to detect the MTGA log path.
+// Exposed as a var so tests can override it without touching the real filesystem.
+var defaultLogPathFn = logreader.DefaultLogPath
 
 // Service is the top-level daemon service.
 type Service struct {
@@ -600,6 +609,40 @@ func (s *Service) runUpdateCheck(ctx context.Context) {
 	updatecheck.Check(ctx, s.cfg.CloudAPIURL, s.version)
 }
 
+// idleUntilMTGADetected blocks until defaultLogPathFn succeeds or ctx is cancelled.
+// It sets the tray to StatusWaitingForArena on entry and restores it on exit.
+// Returns nil when MTGA is detected, context.Canceled when the context is cancelled.
+// This prevents the daemon from exiting (and launchd/NSSM from respawning in a tight
+// loop) when MTGA Arena is not yet installed on the user's machine (#2568).
+func (s *Service) idleUntilMTGADetected(ctx context.Context) error {
+	log.Printf("[daemon] MTGA not detected — entering idle mode (polling every %s)", mtgaDetectInterval)
+
+	if s.trayHooks.SetWaitingForArena != nil {
+		s.trayHooks.SetWaitingForArena(true)
+	}
+	defer func() {
+		if s.trayHooks.SetWaitingForArena != nil {
+			s.trayHooks.SetWaitingForArena(false)
+		}
+	}()
+
+	ticker := time.NewTicker(mtgaDetectInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if _, err := defaultLogPathFn(); err == nil {
+				log.Printf("[daemon] MTGA detected — resuming normal startup")
+				return nil
+			}
+			log.Printf("[daemon] MTGA still not detected — continuing idle poll")
+		}
+	}
+}
+
 // Run starts the daemon, blocks until ctx is cancelled.
 func (s *Service) Run(ctx context.Context) error {
 	// Phase 0: if the keychain was unavailable at startup, retry before
@@ -626,9 +669,22 @@ func (s *Service) Run(ctx context.Context) error {
 
 	logPath := s.cfg.LogPath
 	if logPath == "" {
-		detected, err := logreader.DefaultLogPath()
+		detected, err := defaultLogPathFn()
 		if err != nil {
-			return fmt.Errorf("detect log path: %w", err)
+			// MTGA not installed: idle until Player.log appears rather than
+			// exiting. Exiting causes launchd/NSSM to respawn within
+			// ThrottleInterval producing an infinite restart loop (#2568).
+			if idleErr := s.idleUntilMTGADetected(ctx); idleErr != nil {
+				if errors.Is(idleErr, context.Canceled) {
+					return nil
+				}
+				return idleErr
+			}
+			// Re-attempt detection after idle loop returns (MTGA now present).
+			detected, err = defaultLogPathFn()
+			if err != nil {
+				return fmt.Errorf("detect log path after idle: %w", err)
+			}
 		}
 		logPath = detected
 		log.Printf("[daemon] auto-detected log path: %s", logPath)
@@ -938,7 +994,10 @@ func (s *Service) clearBFFFailureCounter() {
 }
 
 // authFailedPayload is the JSON body of a daemon.auth_failed dispatch event.
-// reason is one of: "bff_rejected", "pkce_timeout", "pkce_cancelled".
+// reason is one of: "bff_rejected", "pkce_timeout", "pkce_cancelled",
+// "pkce_token_exchange_failed". The latter is emitted when the Clerk token
+// endpoint rejects the authorization code (e.g. HTTP 4xx "invalid_grant") and
+// was added in #2172 as the third code in the cb4a4c15 [#88] taxonomy.
 // BFFStatusCode is populated only when reason is "bff_rejected"; it carries the
 // raw HTTP status (401, 403, etc.) for operator routing on the dashboard.
 type authFailedPayload struct {
@@ -963,8 +1022,9 @@ type keychainErrorPayload struct {
 // keychain mode and the BFF returned 401 for the telemetry event). A no-refresher
 // dispatcher will retry up to 3 times and buffer on exhaustion — correct
 // behaviour for a telemetry event that the BFF may briefly be unable to accept.
-// reason must be one of: "bff_rejected", "pkce_timeout", "pkce_cancelled".
-// For "bff_rejected", lastBFFStatusCode is read under the lock and included as
+// reason must be one of: "bff_rejected", "pkce_timeout", "pkce_cancelled",
+// "pkce_token_exchange_failed" (added #2172). For "bff_rejected", lastBFFStatusCode
+// is read under the lock and included as
 // bff_status_code. This is best-effort — errors are logged and swallowed.
 func (s *Service) dispatchAuthFailed(ctx context.Context, reason string) {
 	s.bffMu.Lock()
@@ -1012,17 +1072,24 @@ func (s *Service) dispatchAuthFailed(ctx context.Context, reason string) {
 }
 
 // classifyPKCEError maps a PKCE error to the appropriate daemon.auth_failed
-// reason code. context.Canceled (bare or wrapped) means the user dismissed the
-// browser window → "pkce_cancelled". All other errors — wall-clock timeout,
-// port-bind failure, token-exchange failure — map to "pkce_timeout".
+// reason code. Precedence (highest first):
 //
-// This is correct because pkce.waitForCode returns bare context.Canceled for
-// user-cancel and a non-wrapping formatted string for wall-clock expiry; both
-// callers (runPKCEAuth, runInProcessReauth) wrap with fmt.Errorf("pkce flow: %w"),
-// so errors.Is traverses the chain for cancel and is false for timeout.
+//  1. context.Canceled (bare or wrapped) — user dismissed the browser window
+//     → "pkce_cancelled".
+//  2. pkce.ErrTokenExchange (wrapped via %w in pkce.Run) — Clerk token endpoint
+//     rejected the authorization code (e.g. HTTP 4xx "invalid_grant") →
+//     "pkce_token_exchange_failed". Detected via errors.Is; never strings.Contains.
+//  3. All other errors — wall-clock timeout, port-bind failure, etc. →
+//     "pkce_timeout" (safe default).
+//
+// Commit cb4a4c15 [#88] established the two-code taxonomy (pkce_cancelled,
+// pkce_timeout). This function extends it with pkce_token_exchange_failed (#2172).
 func classifyPKCEError(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "pkce_cancelled"
+	}
+	if errors.Is(err, pkce.ErrTokenExchange) {
+		return "pkce_token_exchange_failed"
 	}
 	return "pkce_timeout"
 }
