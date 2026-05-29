@@ -10,22 +10,6 @@ import (
 	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
 )
 
-// insertTestStandardConfig inserts (or replaces) the singleton standard_config row
-// and restores the original via t.Cleanup.
-func insertTestStandardConfig(t *testing.T, db *sql.DB, nextRotation string) {
-	t.Helper()
-	_, err := db.ExecContext(
-		context.Background(),
-		`INSERT INTO standard_config (id, next_rotation_date, rotation_enabled)
-		 VALUES (1, $1, TRUE)
-		 ON CONFLICT (id) DO UPDATE SET next_rotation_date = EXCLUDED.next_rotation_date`,
-		nextRotation,
-	)
-	if err != nil {
-		t.Fatalf("insertTestStandardConfig: %v", err)
-	}
-}
-
 // insertTestSetCardWithLegalities inserts a set_cards row with a legalities JSON
 // blob. arena_id is TEXT in set_cards (migration 000014).
 func insertTestSetCardWithLegalities(t *testing.T, db *sql.DB, setCode, arenaIDText, name, legalities string) {
@@ -154,6 +138,42 @@ func TestStandardRepository_CardByArenaID_LegalitiesFallback(t *testing.T) {
 	}
 	if got.Legalities != "{}" {
 		t.Errorf("Legalities COALESCE: got %q, want %q", got.Legalities, "{}")
+	}
+}
+
+// TestStandardRepository_CardByArenaID_MultiSetDeterministic verifies that when
+// the same arena_id appears in two different sets (a reprint), CardByArenaID
+// returns a deterministic result: the row with the lowest id (earliest ingested).
+// This guards against the non-determinism that LIMIT 1 without ORDER BY produces.
+func TestStandardRepository_CardByArenaID_MultiSetDeterministic(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewStandardRepository(db)
+
+	const arenaID = 88005
+	const firstSet = "SRTSA"
+	const secondSet = "SRTSB"
+	const cardName = "Multi-Set Card"
+	const legalities1 = `{"standard":"legal"}`
+	const legalities2 = `{"standard":"not_legal"}`
+
+	// Insert the same arena_id in two different sets. The first insert gets a
+	// lower id, so DISTINCT ON (arena_id) ORDER BY arena_id, id must return it.
+	insertTestSet(t, db, firstSet, "Standard Repo Test Set A")
+	insertTestSet(t, db, secondSet, "Standard Repo Test Set B")
+	insertTestSetCardWithLegalities(t, db, firstSet, "88005", cardName, legalities1)
+	insertTestSetCardWithLegalities(t, db, secondSet, "88005", cardName, legalities2)
+
+	got, err := repo.CardByArenaID(context.Background(), arenaID)
+	if err != nil {
+		t.Fatalf("CardByArenaID: %v", err)
+	}
+
+	// Must always return the row from firstSet (lower id) — legalities1.
+	if got.SetCode != firstSet {
+		t.Errorf("SetCode: got %q, want %q (lowest-id row must win)", got.SetCode, firstSet)
+	}
+	if got.Legalities != legalities1 {
+		t.Errorf("Legalities: got %q, want %q (non-deterministic result — ORDER BY missing?)", got.Legalities, legalities1)
 	}
 }
 

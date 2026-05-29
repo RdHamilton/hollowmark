@@ -88,12 +88,17 @@ type CardLegalityRow struct {
 // sql.ErrNoRows when not found.
 //
 // set_cards.arena_id is TEXT (migration 000014); cast to INTEGER for comparison.
-// DISTINCT ON guards against the same arena_id appearing in multiple sets.
+// DISTINCT ON (arena_id) ORDER BY arena_id, id selects the lowest-id (earliest
+// ingested) row when the same arena_id appears in multiple sets, matching the
+// dedup pattern used by DeckCardsForValidation and the queries in #2733.
 func (r *StandardRepository) CardByArenaID(ctx context.Context, arenaID int) (CardLegalityRow, error) {
-	const q = `SELECT arena_id::INTEGER, name, COALESCE(set_code, ''), COALESCE(legalities, '{}')
-	           FROM set_cards
-	           WHERE arena_id::INTEGER = $1
-	           LIMIT 1`
+	const q = `SELECT c.arena_id::INTEGER, c.name, COALESCE(c.set_code, ''), COALESCE(c.legalities, '{}')
+	           FROM (
+	               SELECT DISTINCT ON (arena_id) arena_id, name, set_code, legalities
+	               FROM set_cards
+	               ORDER BY arena_id, id
+	           ) c
+	           WHERE c.arena_id::INTEGER = $1`
 	var c CardLegalityRow
 	if err := r.db.QueryRowContext(ctx, q, arenaID).Scan(&c.ArenaID, &c.Name, &c.SetCode, &c.Legalities); err != nil {
 		return CardLegalityRow{}, err
