@@ -131,6 +131,10 @@ Section "Install" SecInstall
   ; Note: $$ is the NSIS escape for a literal dollar sign — necessary so NSIS does
   ; not attempt to interpolate the PowerShell variable names written into the .ps1.
   FileOpen  $1 "$TEMP\vaultmtg-health-check.ps1" w
+  ; SKIP_HEALTH_CHECK=1 lets CI steps that use a stub binary (which never
+  ; answers /health) bypass the health check without hanging.  The env var is
+  ; only set in CI workflow steps — production installs never set it.
+  FileWrite $1 'if ($$env:SKIP_HEALTH_CHECK -eq "1") { Write-Host "SKIP: health check bypassed (SKIP_HEALTH_CHECK=1)"; exit 0 }$\n'
   FileWrite $1 '$$maxAttempts = 5$\n'
   FileWrite $1 '$$delay = 3$\n'
   FileWrite $1 '$$healthy = $$false$\n'
@@ -153,6 +157,10 @@ Section "Install" SecInstall
   Delete "$TEMP\vaultmtg-health-check.ps1"
   IntCmp $0 0 HealthOK HealthFail HealthFail
   HealthFail:
+    ; IfSilent skips the modal dialog when the installer runs with /S (CI silent
+    ; mode).  A modal MessageBox blocks indefinitely in non-interactive runners
+    ; even when /S is active — use Abort-only in silent mode to avoid hangs.
+    IfSilent +2
     MessageBox MB_OK|MB_ICONSTOP "VaultMTG daemon did not start correctly.$\n$\nThe daemon may have failed to start or has not yet authenticated.$\nCheck $APPDATA\vaultmtg\ for log files and try reinstalling."
     Abort "Daemon health check failed — installation incomplete."
   HealthOK:
