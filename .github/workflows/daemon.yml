@@ -188,3 +188,39 @@ jobs:
           bats services/daemon/install/macos/install_test.bats
           bats services/daemon/install/macos/uninstall_test.bats
           bats services/daemon/install/macos/pkg/postinstall_test.bats
+
+  # ---------------------------------------------------------------------------
+  # Gate — all daemon checks must pass before merge (#40)
+  # ---------------------------------------------------------------------------
+  # Why this exists:
+  #   A single required status check at the branch protection level needs a stable
+  #   job name to key off.  This gate job depends on every daemon CI job in this
+  #   workflow; set "Daemon CI / Gate" as the required check in branch protection.
+  #
+  #   Cross-workflow gate: the macOS install lifecycle (install-lifecycle-macos)
+  #   runs in daemon-install-lifecycle.yml on a separate macos-latest runner.
+  #   GitHub Actions does not support cross-workflow `needs:` dependencies, so
+  #   that job is wired as a second required branch-protection status check:
+  #   "Daemon Install Lifecycle / macOS — Install Lifecycle (fresh install / reinstall / uninstall)"
+  #   Both status checks must be green before any daemon PR can merge. (#40 AC6)
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    needs: [test, integration-smoke, macos-install-test]
+    if: always()
+    steps:
+      - name: Check all daemon jobs passed
+        run: |
+          if [[ "${{ needs.test.result }}" != "success" ]]; then
+            echo "FAIL: 'test' job did not succeed (result: ${{ needs.test.result }})"
+            exit 1
+          fi
+          if [[ "${{ needs.integration-smoke.result }}" != "success" ]]; then
+            echo "FAIL: 'integration-smoke' job did not succeed (result: ${{ needs.integration-smoke.result }})"
+            exit 1
+          fi
+          if [[ "${{ needs.macos-install-test.result }}" != "success" ]]; then
+            echo "FAIL: 'macos-install-test' job did not succeed (result: ${{ needs.macos-install-test.result }})"
+            exit 1
+          fi
+          echo "PASS: all daemon CI jobs succeeded"
