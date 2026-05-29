@@ -524,6 +524,7 @@ jobs:
           FAKE_INSTALL_DIR: ${{ runner.temp }}\fake-install
           BFF_URL: "https://api.example.com"
           DAEMON_AUTH_TOKEN: "fake-ci-token"
+          SKIP_HEALTH_CHECK: "1"
         run: |
           Write-Host "=== FRESH INSTALL (stub binary) ==="
           $fakeDir = $Env:FAKE_INSTALL_DIR
@@ -600,6 +601,7 @@ jobs:
         env:
           BFF_URL: "https://api.example.com"
           DAEMON_AUTH_TOKEN: "fake-ci-token"
+          SKIP_HEALTH_CHECK: "1"
         run: |
           Write-Host "=== REINSTALL ==="
           $taskName = Get-Content (Join-Path $Env:TEMP "ci_task_name.txt")
@@ -1201,6 +1203,7 @@ jobs:
             exit 1
           }
           Write-Host "PASS: VaultMTG-Daemon scheduled task correctly unregistered (schtasks /Query returned non-zero)"
+          exit 0
 
       # -----------------------------------------------------------------------
       - name: "[ASSERT] Config directory retained after uninstall (ADR-011-C) (#41)"

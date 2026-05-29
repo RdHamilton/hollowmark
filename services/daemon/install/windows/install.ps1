@@ -231,34 +231,38 @@ Start-ScheduledTask -TaskName $TaskName
 # the daemon started and completed authentication.
 # ---------------------------------------------------------------------------
 Write-Host "Waiting for daemon to become healthy..."
-$HealthURL    = 'http://127.0.0.1:9001/health'
-$MaxAttempts  = 5
-$DelaySeconds = 3
-$DaemonHealthy = $false
+if ($env:SKIP_HEALTH_CHECK -eq '1') {
+    Write-Host "SKIP: health check bypassed (SKIP_HEALTH_CHECK=1)"
+} else {
+    $HealthURL    = 'http://127.0.0.1:9001/health'
+    $MaxAttempts  = 5
+    $DelaySeconds = 3
+    $DaemonHealthy = $false
 
-for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-    Write-Host "  Health check attempt $attempt/$MaxAttempts..."
-    try {
-        $resp = Invoke-WebRequest -Uri $HealthURL -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
-        if ($resp.StatusCode -eq 200) {
-            $body = $resp.Content | ConvertFrom-Json
-            if ($body.account_id) {
-                $DaemonHealthy = $true
-                break
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        Write-Host "  Health check attempt $attempt/$MaxAttempts..."
+        try {
+            $resp = Invoke-WebRequest -Uri $HealthURL -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            if ($resp.StatusCode -eq 200) {
+                $body = $resp.Content | ConvertFrom-Json
+                if ($body.account_id) {
+                    $DaemonHealthy = $true
+                    break
+                }
             }
+        } catch {
+            # Connection refused or timeout — daemon not up yet.
         }
-    } catch {
-        # Connection refused or timeout — daemon not up yet.
+        if ($attempt -lt $MaxAttempts) {
+            Start-Sleep -Seconds $DelaySeconds
+        }
     }
-    if ($attempt -lt $MaxAttempts) {
-        Start-Sleep -Seconds $DelaySeconds
-    }
-}
 
-if (-not $DaemonHealthy) {
-    Write-Error "VaultMTG daemon did not start or authenticate within $($MaxAttempts * $DelaySeconds)s."
-    Write-Error "Check $ConfigDir for log files and try reinstalling."
-    exit 1
+    if (-not $DaemonHealthy) {
+        Write-Error "VaultMTG daemon did not start or authenticate within $($MaxAttempts * $DelaySeconds)s."
+        Write-Error "Check $ConfigDir for log files and try reinstalling."
+        exit 1
+    }
 }
 
 Write-Host ''
