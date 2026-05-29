@@ -180,7 +180,7 @@ test.describe('Feature: beta_invite_only flag — flag ON (both buttons visible)
 // path when neither PostHog nor the test override is present.
 // ---------------------------------------------------------------------------
 
-test.describe('Feature: beta_invoke_only flag — PostHog absent (key not configured)', () => {
+test.describe('Feature: beta_invite_only flag — PostHog absent (key not configured)', () => {
   test.beforeEach(async ({ page }) => {
     // Abort /decide to simulate PostHog unavailable. useFeatureFlag stays in its
     // null/loading state → AuthBar optimistically shows sign-up (signUpEnabled !== false).
