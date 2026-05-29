@@ -1,0 +1,311 @@
+name: Board Status Automation
+
+# ---------------------------------------------------------------------------
+# Automatically transitions board #40 (v0.3.4) Status based on PR lifecycle.
+#
+# TARGET BEHAVIOR
+# ---------------
+# PR opened / ready-for-review → linked board items set to "PR Review"
+# PR merged                    → linked board items set to "Done"
+#
+# "In Progress" is OUT OF SCOPE — set at dispatch by the orchestrator/engineer.
+#
+# CROSS-REPO SUPPORT
+# ------------------
+# Board #40 aggregates issues from both RdHamilton/vault-mtg AND
+# RdHamilton/vault-mtg-tickets. The GitHub GraphQL closingIssuesReferences
+# field resolves linked issues regardless of repo, then projectItems returns
+# the item ID on board #40 directly — no per-repo fan-out needed.
+#
+# LINKING CONVENTION
+# ------------------
+# Issues are linked via the PR body using GitHub closing keywords:
+#   closes #NNN                              (vault-mtg same-repo)
+#   closes RdHamilton/vault-mtg-tickets#NNN  (cross-repo)
+# Both forms are resolved by closingIssuesReferences.
+#
+# TOKEN REQUIREMENT (S-20 FLAG — see below)
+# -----------------------------------------
+# GITHUB_TOKEN cannot write to ProjectV2 — it has no `project` scope.
+# This workflow requires GH_PROJECT_PAT (a classic PAT with `project` scope,
+# or a fine-grained PAT with "Projects: Read and write").
+# If GH_PROJECT_PAT is absent the step warns and exits 0 (does not fail CI).
+#
+# S-20 FLAG: GH_PROJECT_PAT is a NEW credential. Provisioning it requires
+# Ramone's explicit approval before it is stored as a repo secret.
+#
+# BOARD / FIELD CONSTANTS (board #40 as of 2026-05-29)
+# -----------------------------------------------------
+# Project ID:      PVT_kwHOABsZ684BZI6K
+# Status field ID: PVTSSF_lAHOABsZ684BZI6KzhUJvXw
+# Status options:
+#   PR Review: 29cbdce5
+#   Done:      e645b7f6
+#
+# S-07 REVIEW STATUS
+# ------------------
+# This file is NOT in the S-07 §1A trigger path list. It does not touch
+# IAM, trust policies, security groups, SSM, Secrets Manager, KMS, OIDC,
+# or the specific listed deploy/release workflow names.
+# No Sarah security review gate is required.
+#
+# TICKET
+# ------
+# Cleanup Wave item 1 — board status automation (Ray, 2026-05-29)
+# ---------------------------------------------------------------------------
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+    branches: [main]
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+
+concurrency:
+  group: board-status-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  PROJECT_ID: "PVT_kwHOABsZ684BZI6K"
+  STATUS_FIELD_ID: "PVTSSF_lAHOABsZ684BZI6KzhUJvXw"
+  STATUS_PR_REVIEW: "29cbdce5"
+  STATUS_DONE: "e645b7f6"
+
+jobs:
+
+  # -------------------------------------------------------------------------
+  # Job: set-pr-review
+  # Runs when a PR is opened or marked ready-for-review (non-draft).
+  # Sets Status = "PR Review" on every board-#40 item linked to this PR.
+  # -------------------------------------------------------------------------
+  set-pr-review:
+    name: Set board status to PR Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: |
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'opened' || github.event.action == 'ready_for_review') &&
+      github.event.pull_request.draft == false
+
+    steps:
+      - name: Move linked board items to PR Review
+        env:
+          GH_TOKEN: ${{ secrets.GH_PROJECT_PAT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "WARNING: GH_PROJECT_PAT secret is not set."
+            echo "ProjectV2 mutations require a PAT with 'project' scope."
+            echo "Skipping board status update — no failure raised."
+            exit 0
+          fi
+
+          echo "PR #${PR_NUMBER} opened/ready — fetching linked closing issues..."
+
+          RESPONSE=$(gh api graphql \
+            -f query='query($owner: String!, $repo: String!, $pr: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $pr) {
+                  closingIssuesReferences(first: 25) {
+                    nodes {
+                      number
+                      repository { name owner { login } }
+                      projectItems(first: 10) {
+                        nodes {
+                          id
+                          project { id number }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }' \
+            -f owner="${REPO_OWNER}" \
+            -f repo="${REPO_NAME}" \
+            -F pr="${PR_NUMBER}" 2>&1)
+
+          echo "GraphQL response received."
+
+          ITEM_IDS=$(echo "${RESPONSE}" | python3 -c "
+          import json, sys
+          raw = sys.stdin.read()
+          data = json.loads(raw)
+          pr_node = data['data']['repository']['pullRequest']
+          if not pr_node:
+              sys.exit(0)
+          for issue in pr_node['closingIssuesReferences']['nodes']:
+              for item in issue['projectItems']['nodes']:
+                  if item['project']['number'] == 40:
+                      print(item['id'])
+          ")
+
+          if [ -z "${ITEM_IDS}" ]; then
+            echo "No board #40 items found linked to PR #${PR_NUMBER} — nothing to update."
+            exit 0
+          fi
+
+          echo "Board #40 items linked to PR #${PR_NUMBER}:"
+          echo "${ITEM_IDS}"
+
+          UPDATED=0
+          FAILED=0
+          while IFS= read -r ITEM_ID; do
+            [ -z "${ITEM_ID}" ] && continue
+            echo "  Setting ${ITEM_ID} to PR Review..."
+            RESULT=$(gh api graphql \
+              -f query='mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId
+                  itemId: $itemId
+                  fieldId: $fieldId
+                  value: { singleSelectOptionId: $optionId }
+                }) {
+                  projectV2Item { id }
+                }
+              }' \
+              -f projectId="${PROJECT_ID}" \
+              -f itemId="${ITEM_ID}" \
+              -f fieldId="${STATUS_FIELD_ID}" \
+              -f optionId="${STATUS_PR_REVIEW}" 2>&1)
+
+            if echo "${RESULT}" | python3 -c \
+                "import json,sys; d=json.load(sys.stdin); print(d['data']['updateProjectV2ItemFieldValue']['projectV2Item']['id'])" \
+                2>/dev/null | grep -q "PVTI_"; then
+              echo "    OK: ${ITEM_ID} -> PR Review"
+              UPDATED=$((UPDATED + 1))
+            else
+              echo "    FAILED for ${ITEM_ID}: ${RESULT}"
+              FAILED=$((FAILED + 1))
+            fi
+          done <<< "${ITEM_IDS}"
+
+          echo ""
+          echo "Result: ${UPDATED} updated, ${FAILED} failed."
+          [ "${FAILED}" -eq 0 ] || exit 1
+
+  # -------------------------------------------------------------------------
+  # Job: set-done
+  # Runs when a PR is merged (pull_request_target closed + merged == true).
+  # pull_request_target runs in the base-branch context, giving access to
+  # secrets even for PRs from feature branches.
+  # Sets Status = "Done" on every board-#40 item linked to this PR.
+  # -------------------------------------------------------------------------
+  set-done:
+    name: Set board status to Done
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: |
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true
+
+    steps:
+      - name: Move linked board items to Done
+        env:
+          GH_TOKEN: ${{ secrets.GH_PROJECT_PAT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "WARNING: GH_PROJECT_PAT secret is not set."
+            echo "ProjectV2 mutations require a PAT with 'project' scope."
+            echo "Skipping board status update — no failure raised."
+            exit 0
+          fi
+
+          echo "PR #${PR_NUMBER} merged — fetching linked closing issues..."
+
+          RESPONSE=$(gh api graphql \
+            -f query='query($owner: String!, $repo: String!, $pr: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $pr) {
+                  closingIssuesReferences(first: 25) {
+                    nodes {
+                      number
+                      repository { name owner { login } }
+                      projectItems(first: 10) {
+                        nodes {
+                          id
+                          project { id number }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }' \
+            -f owner="${REPO_OWNER}" \
+            -f repo="${REPO_NAME}" \
+            -F pr="${PR_NUMBER}" 2>&1)
+
+          echo "GraphQL response received."
+
+          ITEM_IDS=$(echo "${RESPONSE}" | python3 -c "
+          import json, sys
+          raw = sys.stdin.read()
+          data = json.loads(raw)
+          pr_node = data['data']['repository']['pullRequest']
+          if not pr_node:
+              sys.exit(0)
+          for issue in pr_node['closingIssuesReferences']['nodes']:
+              for item in issue['projectItems']['nodes']:
+                  if item['project']['number'] == 40:
+                      print(item['id'])
+          ")
+
+          if [ -z "${ITEM_IDS}" ]; then
+            echo "No board #40 items found linked to PR #${PR_NUMBER} — nothing to update."
+            exit 0
+          fi
+
+          echo "Board #40 items linked to PR #${PR_NUMBER}:"
+          echo "${ITEM_IDS}"
+
+          UPDATED=0
+          FAILED=0
+          while IFS= read -r ITEM_ID; do
+            [ -z "${ITEM_ID}" ] && continue
+            echo "  Setting ${ITEM_ID} to Done..."
+            RESULT=$(gh api graphql \
+              -f query='mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId
+                  itemId: $itemId
+                  fieldId: $fieldId
+                  value: { singleSelectOptionId: $optionId }
+                }) {
+                  projectV2Item { id }
+                }
+              }' \
+              -f projectId="${PROJECT_ID}" \
+              -f itemId="${ITEM_ID}" \
+              -f fieldId="${STATUS_FIELD_ID}" \
+              -f optionId="${STATUS_DONE}" 2>&1)
+
+            if echo "${RESULT}" | python3 -c \
+                "import json,sys; d=json.load(sys.stdin); print(d['data']['updateProjectV2ItemFieldValue']['projectV2Item']['id'])" \
+                2>/dev/null | grep -q "PVTI_"; then
+              echo "    OK: ${ITEM_ID} -> Done"
+              UPDATED=$((UPDATED + 1))
+            else
+              echo "    FAILED for ${ITEM_ID}: ${RESULT}"
+              FAILED=$((FAILED + 1))
+            fi
+          done <<< "${ITEM_IDS}"
+
+          echo ""
+          echo "Result: ${UPDATED} updated, ${FAILED} failed."
+          [ "${FAILED}" -eq 0 ] || exit 1
