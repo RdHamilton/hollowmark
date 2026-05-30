@@ -114,7 +114,7 @@ func TestErrDaemonAPIKeyNotFound(t *testing.T) {
 	assert.EqualError(t, repository.ErrDaemonAPIKeyNotFound, "daemon api key not found")
 }
 
-// ─── integration tests (require TEST_DATABASE_URL + migration 000085 applied) ─
+// ─── integration tests (require DATABASE_URL + migration 000085 applied) ─────
 
 // TestDaemonAPIKeyRepository_UpsertKey_InsertsRow exercises the post-#2654
 // schema: UpsertKey must succeed against the composite-UNIQUE table without an

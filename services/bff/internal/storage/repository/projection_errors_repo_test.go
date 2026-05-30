@@ -8,7 +8,7 @@ import (
 )
 
 // TestProjectionErrorsRepository_Insert writes a dead-letter row and verifies
-// it is retrievable from the database (integration, requires TEST_DATABASE_URL).
+// it is retrievable from the database (integration, requires DATABASE_URL).
 func TestProjectionErrorsRepository_Insert(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewProjectionErrorsRepository(db)
@@ -78,7 +78,7 @@ func TestProjectionErrorsRepository_Insert_NonJSONPayload(t *testing.T) {
 
 // TestProjectionErrorsRepository_CountProjectionErrors verifies that
 // CountProjectionErrors returns a non-negative count and increases by one
-// after an Insert (integration, requires TEST_DATABASE_URL).
+// after an Insert (integration, requires DATABASE_URL).
 func TestProjectionErrorsRepository_CountProjectionErrors(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewProjectionErrorsRepository(db)

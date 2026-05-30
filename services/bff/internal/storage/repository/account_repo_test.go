@@ -28,7 +28,7 @@ func TestAccountRepository_Interface(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Integration tests (require TEST_DATABASE_URL + migration 000082 applied)
+// Integration tests (require DATABASE_URL + migration 000082 applied)
 // ---------------------------------------------------------------------------
 
 // seedUser inserts a minimal users row and returns its id.  Cleaned up by
