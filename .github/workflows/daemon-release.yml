@@ -717,6 +717,7 @@ jobs:
       - name: Create .pkg installer
         env:
           INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           # rc/alpha/beta/pre tags ship the staging build, which must point at the
           # Clerk Staging instance.  Stable tags ship the production build,
           # which points at the Clerk Production instance.  The split mirrors the
@@ -759,6 +760,83 @@ jobs:
             grep -n '__[A-Z_]*__' "$SCRIPTS_DIR/postinstall" >&2
             exit 1
           fi
+
+          # ------------------------------------------------------------------
+          # Build and sign the VaultMTG.app launcher bundle (ADR-036 I-8, #278).
+          # The .app is a thin shell-script launcher placed in /Applications.
+          # It must be codesigned with Developer ID Application (SIGNING_IDENTITY)
+          # before pkgbuild embeds it in the .pkg, so the bundle passes Gatekeeper
+          # when the installer places it on the user's system.
+          # ------------------------------------------------------------------
+          APP_BUNDLE="pkg-root/Applications/VaultMTG.app"
+          APP_MACOS="${APP_BUNDLE}/Contents/MacOS"
+          mkdir -p "${APP_MACOS}"
+
+          # Info.plist
+          cat > "${APP_BUNDLE}/Contents/Info.plist" << 'INFOPLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>vaultmtg-launcher</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.vaultmtg.launcher</string>
+  <key>CFBundleName</key>
+  <string>VaultMTG</string>
+  <key>CFBundleDisplayName</key>
+  <string>VaultMTG</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleSignature</key>
+  <string>????</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+INFOPLIST
+
+          # Launcher shell script (CFBundleExecutable)
+          cat > "${APP_MACOS}/vaultmtg-launcher" << 'LAUNCHER'
+#!/usr/bin/env bash
+# VaultMTG.app launcher — re-enables and re-bootstraps the VaultMTG daemon.
+# This script is the CFBundleExecutable for /Applications/VaultMTG.app.
+# It is NOT the daemon process itself; it exits as soon as launchctl returns.
+
+set -euo pipefail
+
+PLIST_LABEL="com.vaultmtg.daemon"
+UID_VAL="$(id -u)"
+PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
+TARGET="gui/${UID_VAL}/${PLIST_LABEL}"
+USER_DOMAIN="gui/${UID_VAL}"
+
+# Step 1: clear any disabled flag from a prior `launchctl bootout`.
+launchctl enable "${TARGET}" 2>/dev/null || true
+
+# Step 2: bootstrap the LaunchAgent so launchd starts the daemon.
+launchctl bootstrap "${USER_DOMAIN}" "${PLIST_PATH}" 2>/dev/null || true
+LAUNCHER
+          chmod 755 "${APP_MACOS}/vaultmtg-launcher"
+
+          # Sign the .app bundle with Developer ID Application before pkgbuild
+          # embeds it. pkgbuild wraps the already-signed bundle; the outer .pkg
+          # receives the Developer ID Installer signature separately.
+          codesign \
+            --force \
+            --deep \
+            --options runtime \
+            --sign "$SIGNING_IDENTITY" \
+            --timestamp \
+            "${APP_BUNDLE}"
+          codesign --verify --verbose "${APP_BUNDLE}"
+          echo "PASS: VaultMTG.app signed."
 
           pkgbuild \
             --root pkg-root \
