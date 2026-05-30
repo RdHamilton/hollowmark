@@ -21,7 +21,7 @@ func TestUserRepository_Interface(t *testing.T) {
 
 // TestUserRepository_UpsertByClerkUserID_CreatesRow verifies that upserting a
 // brand-new Clerk user ID inserts a row and returns it.
-// Requires TEST_DATABASE_URL — skipped otherwise.
+// Requires DATABASE_URL — skipped otherwise.
 func TestUserRepository_UpsertByClerkUserID_CreatesRow(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewUserRepository(db)

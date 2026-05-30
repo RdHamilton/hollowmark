@@ -14,7 +14,7 @@ import (
 // query returns a valid snapshot with all-zero counts when daemon_api_keys is
 // empty (or contains no matching rows for this test's seed prefix).
 //
-// Requires TEST_DATABASE_URL and migration 000085 applied.
+// Requires DATABASE_URL and migration 000085 applied.
 func TestFleetHealthSnapshot_ReturnsZeroesOnEmptyTable(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewDaemonAPIKeyRepository(db)
@@ -36,7 +36,7 @@ func TestFleetHealthSnapshot_ReturnsZeroesOnEmptyTable(t *testing.T) {
 // TestFleetHealthSnapshot_CountsSeededRows seeds two active keys and one
 // revoked key, then verifies the snapshot counts are correct.
 //
-// Requires TEST_DATABASE_URL and migration 000085 applied.
+// Requires DATABASE_URL and migration 000085 applied.
 func TestFleetHealthSnapshot_CountsSeededRows(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewDaemonAPIKeyRepository(db)
