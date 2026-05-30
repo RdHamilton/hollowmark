@@ -163,6 +163,31 @@ jobs:
           GOPRIVATE: github.com/RdHamilton/vault-mtg
         run: go build ./cmd/daemon
 
+      - name: Binary-contract check (CGO/Cocoa/systray) — PR gate
+        # What this catches: CGO_ENABLED flipped to 0 or build tag misrouting → stub ships — see ADR-041 G1/P0-2
+        working-directory: services/daemon
+        env:
+          CGO_ENABLED: "1"
+          GONOSUMDB: github.com/RdHamilton/vault-mtg
+          GOPRIVATE: github.com/RdHamilton/vault-mtg
+        run: |
+          # What this catches: CGO_ENABLED flipped to 0 or !cgo stub ships — see ADR-041 G1/P0-2
+          BINARY=./vaultmtg-daemon-pr-check
+          go build -o "$BINARY" ./cmd/daemon
+          echo "=== otool -L ==="
+          otool -L "$BINARY"
+          if ! otool -L "$BINARY" | grep -q "Cocoa\|AppKit"; then
+            echo "ERROR: binary not linked against Cocoa/AppKit — CGO regression." >&2
+            exit 1
+          fi
+          echo "PASS: Cocoa/AppKit linkage confirmed."
+          echo "=== systray symbols ==="
+          if ! nm "$BINARY" | grep -qi "systray"; then
+            echo "ERROR: systray symbols missing — real tray.go not compiled in." >&2
+            exit 1
+          fi
+          echo "PASS: systray symbols found."
+
       - name: Run integration smoke test
         working-directory: services/daemon
         env:
@@ -176,18 +201,13 @@ jobs:
       # of the !cgo stub. Catches regressions where CGO_ENABLED=0 silently selects
       # the no-op stub and ships a tray-less binary (see ADR-041 G2, ticket #220).
       #
-      # Seam for #221: the binary built two steps above (go build ./cmd/daemon)
-      # is the artifact the otool+nm binary-contract check (#221) will inspect.
-      # #221 adds a step here that runs otool -L and nm on that binary — no
-      # changes to this tray test step are needed when #221 lands.
-      #
-      # RULE-INFRA-01: starts continue-on-error: true; flip to false (remove) once
-      # this job is confirmed green on the first PR run.
+      # Binary-contract check (#221) added above: otool -L and nm run against a
+      # fresh CGO=1 build, hard-failing on missing Cocoa/AppKit linkage or absent
+      # systray symbols.
       # ---------------------------------------------------------------------------
       - name: Run tray CGO test (real cgo tray.go)
         # What this catches: tray_test.go exercising the !cgo stub — see ADR-041 G2
         working-directory: services/daemon
-        continue-on-error: true
         env:
           GONOSUMDB: github.com/RdHamilton/vault-mtg
           GOPRIVATE: github.com/RdHamilton/vault-mtg
