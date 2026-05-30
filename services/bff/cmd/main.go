@@ -757,7 +757,20 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 		if deps.ClerkOAuthMiddl != nil {
 			r.With(deps.ClerkOAuthMiddl).Post("/api/v1/daemon/register", deps.DaemonRegisterHandler.Register)
 		} else {
-			log.Println("WARN: POST /api/v1/daemon/register disabled — CLERK_FRONTEND_API not configured")
+			// CLERK_FRONTEND_API is not configured — mount the route fail-closed
+			// (503) so the daemon receives a meaningful error instead of a generic
+			// 404 that is indistinguishable from a routing mismatch.  A 404 causes
+			// the daemon to log "auth error: BFF registration: BFF returned 404:
+			// 404 page not found" with no indication that the route itself is
+			// missing.  503 makes the misconfiguration immediately actionable.
+			// Root cause of 2026-05-30 prod incident: CLERK_FRONTEND_API was not
+			// provisioned to the env file by deploy-bff.yml / ec2-bootstrap.sh.
+			log.Println("WARN: POST /api/v1/daemon/register degraded — CLERK_FRONTEND_API not configured; endpoint returns 503")
+			r.Post("/api/v1/daemon/register", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"error":"service unavailable: daemon registration not configured"}`))
+			})
 		}
 	}
 

@@ -718,3 +718,89 @@ func TestRouter_Waitlist_RouteAbsent_WhenHandlerNil(t *testing.T) {
 		t.Fatalf("POST /api/v1/waitlist nil handler: want 404/405, got %d", rr.Code)
 	}
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// POST /api/v1/daemon/register — daemon PKCE registration route
+//
+// These tests guard against the 2026-05-30 prod incident where
+// CLERK_FRONTEND_API was not provisioned to the BFF env file, causing
+// ClerkOAuthMiddl to be nil and the route to be silently dropped from the
+// router.  The daemon (cloud_api_url=https://api.vaultmtg.app/api/v1)
+// constructs the URL as bffBaseURL+"/daemon/register" which resolves to
+// /api/v1/daemon/register — the correct path — but received 404 because the
+// route was not mounted.
+// ──────────────────────────────────────────────────────────────────────────────
+
+// stubDaemonRegisterRepo satisfies daemonAPIKeyUpsertRepo for routing tests.
+// It is never actually called — the middleware rejects all requests before the
+// handler runs.
+type stubDaemonRegisterRepo struct{}
+
+func (s *stubDaemonRegisterRepo) UpsertKey(_ context.Context, _, _, _, _, _, _ string) (*repository.DaemonAPIKey, bool, error) {
+	return nil, false, nil
+}
+
+func (s *stubDaemonRegisterRepo) GetByAccountAndDevice(_ context.Context, _, _ string) (*repository.DaemonAPIKey, error) {
+	return nil, repository.ErrDaemonAPIKeyNotFound
+}
+
+// noopOAuthMiddl is a stand-in ClerkOAuthMiddl for routing tests.  It always
+// returns 401 so we can verify the route IS mounted without a real Clerk backend.
+func noopOAuthMiddl(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	})
+}
+
+// TestRouter_DaemonRegister_Returns401_WhenOAuthMiddlPresent verifies that
+// POST /api/v1/daemon/register is mounted and protected by ClerkOAuthMiddl.
+// With no token the middleware returns 401 — confirming the route exists and
+// auth is enforced.  A 404 here would indicate the route was not mounted
+// (the 2026-05-30 prod incident symptom).
+func TestRouter_DaemonRegister_Returns401_WhenOAuthMiddlPresent(t *testing.T) {
+	deps := depsNoAuth(t)
+	deps.ClerkOAuthMiddl = noopOAuthMiddl
+	deps.DaemonRegisterHandler = handlers.NewDaemonRegisterHandler(&stubDaemonRegisterRepo{}, nil)
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	body := bytes.NewBufferString(`{"device_id":"","platform":"darwin","daemon_ver":"0.3.4"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/daemon/register", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code == http.StatusNotFound {
+		t.Fatal("POST /api/v1/daemon/register: got 404 — route is not mounted (CLERK_FRONTEND_API misconfiguration)")
+	}
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("POST /api/v1/daemon/register with no token: want 401, got %d", rr.Code)
+	}
+}
+
+// TestRouter_DaemonRegister_Returns503_WhenOAuthMiddlNil verifies the
+// fail-closed behaviour introduced to fix the 2026-05-30 prod incident.
+// When CLERK_FRONTEND_API is not configured (ClerkOAuthMiddl==nil), the route
+// must still be mounted and return 503 — not silently 404.
+func TestRouter_DaemonRegister_Returns503_WhenOAuthMiddlNil(t *testing.T) {
+	deps := depsNoAuth(t)
+	// ClerkOAuthMiddl intentionally nil — simulates missing CLERK_FRONTEND_API.
+	deps.DaemonRegisterHandler = handlers.NewDaemonRegisterHandler(&stubDaemonRegisterRepo{}, nil)
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	body := bytes.NewBufferString(`{"device_id":"","platform":"darwin","daemon_ver":"0.3.4"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/daemon/register", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code == http.StatusNotFound {
+		t.Fatal("POST /api/v1/daemon/register with nil ClerkOAuthMiddl: got 404 — route must be mounted fail-closed as 503")
+	}
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("POST /api/v1/daemon/register with nil ClerkOAuthMiddl: want 503, got %d", rr.Code)
+	}
+}
