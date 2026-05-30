@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -623,4 +624,573 @@ func TestProjectionIntegration(t *testing.T) {
 			t.Errorf("Limit: want %d, got %d", exp.Limit, got.Limit)
 		}
 	})
+}
+
+// ─── Layer 3b: BFF sync integration smoke (ADR-042 §Layer3b, closes #185) ───
+
+// TestSyncIntegration is the entry point for the Layer 3b BFF sync
+// integration smoke suite. It verifies the full pipeline:
+//
+//	stub Scryfall HTTP server → two-hop card fetch → inlined UpsertSetCards
+//	→ set_cards non-empty (AC4) → /cards/sets/{setCode}/cards matches
+//	api-expected corpus fixture (AC5).
+//
+// mtgzone_archetypes is seeded directly rather than via the Scryfall sync
+// path because the Scryfall Lambda does NOT write to that table — it is
+// owned by the MTGGoldfish / MTGTop8 scrape pipeline. The seed verifies
+// that the BFF /meta/archetypes handler reads whatever is in the table.
+//
+// The services/sync/internal/datasets package cannot be imported from
+// services/bff (Go's internal package rule applies across module
+// boundaries even inside a go.work workspace). The UpsertSetCards SQL
+// is therefore inlined in upsertSetCardsInlined below.
+//
+// Anti-flake invariants mirror Layer 3a: no time.Now() / uuid.New() in
+// test bodies; unique client_id per subtest; t.Cleanup on all rows.
+func TestSyncIntegration(t *testing.T) {
+	corpus := corpusDir(t)
+
+	// ── read fixtures ──────────────────────────────────────────────────────
+	setCardsFixture := mustReadCorpus(t, corpus, "api-expected", "set-cards-response.json")
+	metaFixture := mustReadCorpus(t, corpus, "api-expected", "meta-archetypes-response.json")
+
+	// Decode the api-expected set-cards fixture: { "cards": [...] }
+	var expSetCards struct {
+		Cards []struct {
+			ArenaID int    `json:"arena_id"`
+			Name    string `json:"name"`
+			SetCode string `json:"set_code"`
+			Rarity  string `json:"rarity"`
+		} `json:"cards"`
+	}
+	if err := json.Unmarshal(setCardsFixture, &expSetCards); err != nil {
+		t.Fatalf("[Layer3b] decode set-cards-response.json: %v", err)
+	}
+	if len(expSetCards.Cards) == 0 {
+		t.Fatal("[Layer3b] set-cards-response.json carries no cards — fixture may be empty or malformed")
+	}
+
+	// Decode the api-expected meta fixture: { "archetypes": [...] }
+	var expMeta struct {
+		Archetypes []struct {
+			Name   string `json:"name"`
+			Format string `json:"format"`
+		} `json:"archetypes"`
+	}
+	if err := json.Unmarshal(metaFixture, &expMeta); err != nil {
+		t.Fatalf("[Layer3b] decode meta-archetypes-response.json: %v", err)
+	}
+	if len(expMeta.Archetypes) == 0 {
+		t.Fatal("[Layer3b] meta-archetypes-response.json carries no archetypes — fixture may be empty or malformed")
+	}
+
+	// Set code and format are driven by the corpus fixtures.
+	setCode := expSetCards.Cards[0].SetCode
+	metaFormat := expMeta.Archetypes[0].Format
+
+	// ── Scryfall two-hop stub ──────────────────────────────────────────────
+	//
+	// Scryfall's bulk-data flow is a two-hop redirect:
+	//   Hop 1: GET /bulk-data/default-cards
+	//          → JSON { "download_uri": "<server>/bulk-cards" }
+	//   Hop 2: GET <download_uri>
+	//          → JSON array of card objects
+	//
+	// The stub is shared across all subtests; each subtest uses its own DB
+	// connection opened via openIntegrationDB so rows are isolated.
+	bulkCards := make([]map[string]any, 0, len(expSetCards.Cards))
+	for _, c := range expSetCards.Cards {
+		arenaID := c.ArenaID
+		bulkCards = append(bulkCards, map[string]any{
+			"id":               fmt.Sprintf("scryfall-fake-%d", arenaID),
+			"arena_id":         arenaID,
+			"name":             c.Name,
+			"set":              c.SetCode,
+			"rarity":           c.Rarity,
+			"mana_cost":        "",
+			"cmc":              0,
+			"type_line":        "Creature",
+			"oracle_text":      "",
+			"colors":           []string{},
+			"color_identity":   []string{},
+			"collector_number": strconv.Itoa(arenaID),
+			"power":            "",
+			"toughness":        "",
+			"loyalty":          "",
+			"layout":           "normal",
+			"released_at":      "2024-11-15",
+			"image_uris":       nil,
+			"card_faces":       nil,
+			"legalities":       map[string]string{},
+		})
+	}
+
+	bulkJSON, err := json.Marshal(bulkCards)
+	if err != nil {
+		t.Fatalf("[Layer3b] marshal bulkCards: %v", err)
+	}
+
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/bulk-data/default-cards":
+			// Hop 1: return metadata pointing to the bulk download
+			// path on this same stub server.
+			meta := map[string]any{
+				"object":       "bulk_data",
+				"download_uri": "http://" + r.Host + "/bulk-cards",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if encErr := json.NewEncoder(w).Encode(meta); encErr != nil {
+				t.Logf("[Layer3b] stub /bulk-data/default-cards encode: %v", encErr)
+			}
+		case "/bulk-cards":
+			// Hop 2: raw JSON array of card objects.
+			w.Header().Set("Content-Type", "application/json")
+			if _, writeErr := w.Write(bulkJSON); writeErr != nil {
+				t.Logf("[Layer3b] stub /bulk-cards write: %v", writeErr)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(stub.Close)
+
+	// ── subtest: SetCardsNonEmpty (AC4) ────────────────────────────────────
+	t.Run("SetCardsNonEmpty", func(t *testing.T) {
+		db := openIntegrationDB(t)
+
+		cards, fetchErr := fetchBulkCardsFromStub(t, stub.URL)
+		if fetchErr != nil {
+			t.Fatalf("[Layer3b/SetCardsNonEmpty] fetchBulkCardsFromStub: %v", fetchErr)
+		}
+		upsertSetCardsInlined(t, db, cards)
+
+		var count int
+		if err := db.QueryRowContext(
+			context.Background(),
+			`SELECT COUNT(*) FROM set_cards WHERE lower(set_code) = lower($1)`,
+			setCode,
+		).Scan(&count); err != nil {
+			t.Fatalf("[Layer3b/SetCardsNonEmpty] COUNT set_cards: %v", err)
+		}
+		if count == 0 {
+			t.Errorf("[Layer3b/SetCardsNonEmpty] set_cards COUNT for set=%s: want >0 (AC4)", setCode)
+		}
+	})
+
+	// ── subtest: ArchetypesNonEmpty (AC4) ──────────────────────────────────
+	t.Run("ArchetypesNonEmpty", func(t *testing.T) {
+		db := openIntegrationDB(t)
+
+		// Scryfall sync does NOT populate mtgzone_archetypes — see the
+		// function-level comment above for the full rationale.
+		seedMtgzoneArchetypes(t, db, expMeta.Archetypes[0].Name, metaFormat)
+
+		var count int
+		if err := db.QueryRowContext(
+			context.Background(),
+			`SELECT COUNT(*) FROM mtgzone_archetypes WHERE lower(format) = lower($1)`,
+			metaFormat,
+		).Scan(&count); err != nil {
+			t.Fatalf("[Layer3b/ArchetypesNonEmpty] COUNT mtgzone_archetypes: %v", err)
+		}
+		if count == 0 {
+			t.Errorf("[Layer3b/ArchetypesNonEmpty] mtgzone_archetypes COUNT for format=%s: want >0 (AC4)", metaFormat)
+		}
+	})
+
+	// ── subtest: SetCardsAPIResponse (AC5) ─────────────────────────────────
+	//
+	// Fetches cards via stub, upserts to set_cards, then hits the real
+	// CardsHandler.SetCards and validates the response against
+	// api-expected/set-cards-response.json.
+	t.Run("SetCardsAPIResponse", func(t *testing.T) {
+		db := openIntegrationDB(t)
+
+		cards, fetchErr := fetchBulkCardsFromStub(t, stub.URL)
+		if fetchErr != nil {
+			t.Fatalf("[Layer3b/SetCardsAPIResponse] fetchBulkCardsFromStub: %v", fetchErr)
+		}
+		upsertSetCardsInlined(t, db, cards)
+
+		userID := seedUser(t, db, "test-l3b-cards-api")
+
+		cardsRepo := repository.NewCardsRepository(db)
+		accountRepo := repository.NewAccountRepository(db)
+		h := handlers.NewCardsHandler(cardsRepo, accountRepo)
+
+		r := chi.NewRouter()
+		r.Get("/api/v1/cards/sets/{setCode}/cards", func(w http.ResponseWriter, req *http.Request) {
+			req = req.WithContext(bffmiddleware.WithUserID(req.Context(), userID))
+			h.SetCards(w, req)
+		})
+
+		ts := httptest.NewServer(r)
+		t.Cleanup(ts.Close)
+
+		resp, err := http.Get(ts.URL + "/api/v1/cards/sets/" + setCode + "/cards")
+		if err != nil {
+			t.Fatalf("[Layer3b/SetCardsAPIResponse] GET /cards/sets/.../cards: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("[Layer3b/SetCardsAPIResponse] status: want 200, got %d", resp.StatusCode)
+		}
+
+		// CardsHandler wraps the slice in {"data": [...]}.
+		var envelope struct {
+			Data []struct {
+				ArenaID string `json:"ArenaID"`
+				Name    string `json:"Name"`
+				SetCode string `json:"SetCode"`
+				Rarity  string `json:"Rarity"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+			t.Fatalf("[Layer3b/SetCardsAPIResponse] decode response: %v", err)
+		}
+
+		if len(envelope.Data) != len(expSetCards.Cards) {
+			t.Fatalf("[Layer3b/SetCardsAPIResponse] card count: want %d (AC5), got %d",
+				len(expSetCards.Cards), len(envelope.Data))
+		}
+
+		// Order-independent comparison: build name→{arenaID,rarity} map.
+		gotByName := make(map[string]struct {
+			ArenaID string
+			Rarity  string
+		}, len(envelope.Data))
+		for _, c := range envelope.Data {
+			gotByName[c.Name] = struct {
+				ArenaID string
+				Rarity  string
+			}{ArenaID: c.ArenaID, Rarity: c.Rarity}
+		}
+		for _, exp := range expSetCards.Cards {
+			got, ok := gotByName[exp.Name]
+			if !ok {
+				t.Errorf("[Layer3b/SetCardsAPIResponse] missing card %q in response (AC5)", exp.Name)
+				continue
+			}
+			wantArenaID := strconv.Itoa(exp.ArenaID)
+			if got.ArenaID != wantArenaID {
+				t.Errorf("[Layer3b/SetCardsAPIResponse] %q ArenaID: want %s, got %s (AC5)",
+					exp.Name, wantArenaID, got.ArenaID)
+			}
+			if got.Rarity != exp.Rarity {
+				t.Errorf("[Layer3b/SetCardsAPIResponse] %q Rarity: want %s, got %s (AC5)",
+					exp.Name, exp.Rarity, got.Rarity)
+			}
+		}
+	})
+
+	// ── subtest: MetaArchetypesAPIResponse (AC5) ───────────────────────────
+	//
+	// Seeds mtgzone_archetypes directly, then hits MetaHandler.Archetypes
+	// and validates against api-expected/meta-archetypes-response.json.
+	t.Run("MetaArchetypesAPIResponse", func(t *testing.T) {
+		db := openIntegrationDB(t)
+
+		// Scryfall sync does NOT populate mtgzone_archetypes — see the
+		// function-level comment above for the full rationale.
+		seedMtgzoneArchetypes(t, db, expMeta.Archetypes[0].Name, metaFormat)
+
+		userID := seedUser(t, db, "test-l3b-meta-api")
+
+		metaRepo := repository.NewMetaRepository(db)
+		h := handlers.NewMetaHandler(metaRepo)
+
+		r := chi.NewRouter()
+		r.Get("/api/v1/meta/archetypes", func(w http.ResponseWriter, req *http.Request) {
+			req = req.WithContext(bffmiddleware.WithUserID(req.Context(), userID))
+			h.Archetypes(w, req)
+		})
+
+		ts := httptest.NewServer(r)
+		t.Cleanup(ts.Close)
+
+		resp, err := http.Get(ts.URL + "/api/v1/meta/archetypes?format=" + metaFormat)
+		if err != nil {
+			t.Fatalf("[Layer3b/MetaArchetypesAPIResponse] GET /meta/archetypes: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("[Layer3b/MetaArchetypesAPIResponse] status: want 200, got %d", resp.StatusCode)
+		}
+
+		// MetaHandler wraps in {"data": [...]}.
+		var envelope struct {
+			Data []struct {
+				Name string `json:"name"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+			t.Fatalf("[Layer3b/MetaArchetypesAPIResponse] decode response: %v", err)
+		}
+
+		if len(envelope.Data) == 0 {
+			t.Fatalf("[Layer3b/MetaArchetypesAPIResponse] archetypes: want >0 (AC5), got 0")
+		}
+
+		expName := expMeta.Archetypes[0].Name
+		found := false
+		for _, a := range envelope.Data {
+			if a.Name == expName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("[Layer3b/MetaArchetypesAPIResponse] archetype %q not found in response (AC5)", expName)
+		}
+	})
+}
+
+// ─── Layer 3b helpers ────────────────────────────────────────────────────────
+
+// scryfallCardStub is a minimal card representation used by
+// fetchBulkCardsFromStub and upsertSetCardsInlined. It mirrors only the
+// fields that the inlined UpsertSetCards SQL actually writes.
+type scryfallCardStub struct {
+	ArenaID    *int
+	ScryfallID string
+	Name       string
+	SetCode    string
+	ManaCost   string
+	CMC        int
+	TypeLine   string
+	Colors     []string
+	Rarity     string
+	OracleText string
+	Power      string
+	Toughness  string
+}
+
+// fetchBulkCardsFromStub performs the two-hop Scryfall bulk-data HTTP fetch
+// against the provided stub server URL. This replicates the HTTP-level
+// behaviour of scryfall.Client.FetchBulkDefaultCards using only stdlib
+// HTTP so that services/sync/internal stays out of the import graph.
+//
+// Two-hop flow:
+//
+//	Hop 1: GET <baseURL>/bulk-data/default-cards → { "download_uri": "<url>" }
+//	Hop 2: GET <download_uri>                    → JSON array of card objects
+func fetchBulkCardsFromStub(t *testing.T, baseURL string) ([]scryfallCardStub, error) {
+	t.Helper()
+
+	// Hop 1.
+	metaResp, err := http.Get(baseURL + "/bulk-data/default-cards")
+	if err != nil {
+		return nil, fmt.Errorf("hop1 GET /bulk-data/default-cards: %w", err)
+	}
+	defer metaResp.Body.Close()
+
+	if metaResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("hop1 status %d", metaResp.StatusCode)
+	}
+
+	var meta struct {
+		DownloadURI string `json:"download_uri"`
+	}
+	if err := json.NewDecoder(metaResp.Body).Decode(&meta); err != nil {
+		return nil, fmt.Errorf("hop1 decode: %w", err)
+	}
+	if meta.DownloadURI == "" {
+		return nil, fmt.Errorf("hop1 response missing download_uri")
+	}
+
+	// Hop 2.
+	dlResp, err := http.Get(meta.DownloadURI)
+	if err != nil {
+		return nil, fmt.Errorf("hop2 GET %s: %w", meta.DownloadURI, err)
+	}
+	defer dlResp.Body.Close()
+
+	if dlResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("hop2 status %d", dlResp.StatusCode)
+	}
+
+	// Decode as generic maps to avoid depending on services/sync types.
+	var raw []map[string]any
+	if err := json.NewDecoder(dlResp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("hop2 decode cards array: %w", err)
+	}
+
+	cards := make([]scryfallCardStub, 0, len(raw))
+	for _, m := range raw {
+		c := scryfallCardStub{
+			ScryfallID: stringField(m, "id"),
+			Name:       stringField(m, "name"),
+			SetCode:    stringField(m, "set"),
+			ManaCost:   stringField(m, "mana_cost"),
+			TypeLine:   stringField(m, "type_line"),
+			OracleText: stringField(m, "oracle_text"),
+			Rarity:     stringField(m, "rarity"),
+			Power:      stringField(m, "power"),
+			Toughness:  stringField(m, "toughness"),
+		}
+		if v, ok := m["cmc"]; ok {
+			if f, ok := v.(float64); ok {
+				c.CMC = int(f)
+			}
+		}
+		if v, ok := m["arena_id"]; ok {
+			if f, ok := v.(float64); ok {
+				id := int(f)
+				c.ArenaID = &id
+			}
+		}
+		if v, ok := m["colors"]; ok {
+			if arr, ok := v.([]any); ok {
+				for _, s := range arr {
+					if str, ok := s.(string); ok {
+						c.Colors = append(c.Colors, str)
+					}
+				}
+			}
+		}
+		// Skip paper-only cards (no arena_id), matching the sync service.
+		if c.ArenaID != nil {
+			cards = append(cards, c)
+		}
+	}
+
+	return cards, nil
+}
+
+// stringField extracts a string value from a map[string]any, returning ""
+// when the key is absent or not a string.
+func stringField(m map[string]any, key string) string {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
+// upsertSetCardsInlined writes scryfallCardStub rows into set_cards using
+// the same ON CONFLICT (set_code, arena_id) logic as
+// services/sync/internal/datasets.PostgresStore.UpsertSetCards.
+//
+// This function is inlined because services/sync/internal/datasets is an
+// internal package: Go's visibility rule prevents cross-module import even
+// inside a go.work workspace. The SQL is a faithful reproduction of the
+// production UpsertSetCards query, exercising the actual schema.
+//
+// t.Cleanup removes all inserted rows for the touched set codes.
+func upsertSetCardsInlined(t *testing.T, db *sql.DB, cards []scryfallCardStub) {
+	t.Helper()
+
+	const q = `
+		INSERT INTO set_cards (
+			set_code, arena_id, scryfall_id, name, mana_cost, cmc, types,
+			colors, rarity, text, power, toughness, image_url, image_url_small,
+			image_url_art, legalities, fetched_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11, $12, $13, $14,
+			$15, $16, NOW()
+		)
+		ON CONFLICT (set_code, arena_id) DO UPDATE SET
+			scryfall_id     = EXCLUDED.scryfall_id,
+			name            = EXCLUDED.name,
+			mana_cost       = EXCLUDED.mana_cost,
+			cmc             = EXCLUDED.cmc,
+			types           = EXCLUDED.types,
+			colors          = EXCLUDED.colors,
+			rarity          = EXCLUDED.rarity,
+			text            = EXCLUDED.text,
+			power           = EXCLUDED.power,
+			toughness       = EXCLUDED.toughness,
+			image_url       = EXCLUDED.image_url,
+			image_url_small = EXCLUDED.image_url_small,
+			image_url_art   = EXCLUDED.image_url_art,
+			legalities      = EXCLUDED.legalities,
+			fetched_at      = NOW()
+	`
+
+	touchedSetCodes := map[string]struct{}{}
+	for i := range cards {
+		c := &cards[i]
+		if c.ArenaID == nil {
+			continue
+		}
+
+		arenaIDText := strconv.Itoa(*c.ArenaID)
+		colorsJSON, err := json.Marshal(c.Colors)
+		if err != nil {
+			t.Fatalf("upsertSetCardsInlined: marshal colors for %q: %v", c.Name, err)
+		}
+
+		if _, err := db.ExecContext(
+			context.Background(), q,
+			c.SetCode,
+			arenaIDText,
+			c.ScryfallID,
+			c.Name,
+			c.ManaCost,
+			c.CMC,
+			c.TypeLine,
+			string(colorsJSON),
+			c.Rarity,
+			c.OracleText,
+			c.Power,
+			c.Toughness,
+			"",   // image_url
+			"",   // image_url_small
+			"",   // image_url_art
+			`{}`, // legalities (empty JSON object)
+		); err != nil {
+			t.Fatalf("upsertSetCardsInlined: upsert %q (set=%s arena_id=%s): %v",
+				c.Name, c.SetCode, arenaIDText, err)
+		}
+		touchedSetCodes[c.SetCode] = struct{}{}
+	}
+
+	t.Cleanup(func() {
+		for sc := range touchedSetCodes {
+			_, _ = db.ExecContext(
+				context.Background(),
+				`DELETE FROM set_cards WHERE lower(set_code) = lower($1)`,
+				sc,
+			)
+		}
+	})
+}
+
+// seedMtgzoneArchetypes inserts one mtgzone_archetypes row for (name, format)
+// and registers a t.Cleanup to remove it. Returns the new row id.
+//
+// Scryfall sync does NOT write to mtgzone_archetypes — that table is owned
+// by the MTGGoldfish / MTGTop8 scrape pipeline. Seeding it directly here
+// verifies that the /meta endpoint reads whatever is in the table,
+// independent of which pipeline wrote it.
+func seedMtgzoneArchetypes(t *testing.T, db *sql.DB, name, format string) int64 {
+	t.Helper()
+
+	var id int64
+	err := db.QueryRowContext(
+		context.Background(),
+		`INSERT INTO mtgzone_archetypes (name, format, last_updated)
+		 VALUES ($1, $2, NOW())
+		 ON CONFLICT (name, format) DO UPDATE SET last_updated = NOW()
+		 RETURNING id`,
+		name, format,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("seedMtgzoneArchetypes name=%q format=%q: %v", name, format, err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(
+			context.Background(),
+			`DELETE FROM mtgzone_archetypes WHERE id = $1`,
+			id,
+		)
+	})
+
+	return id
 }
