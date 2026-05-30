@@ -386,6 +386,7 @@ jobs:
           lipo -info /tmp/vaultmtg-daemon
 
       - name: Verify CGO linkage (Cocoa + systray symbols)
+        # What this catches: CGO_ENABLED flipped to 0 or build tag misrouting → stub ships — see ADR-041 G1/P0-2
         # Fail fast if the binary is not Cocoa-linked — this guards against a
         # future regression where CGO_ENABLED is accidentally set back to 0.
         run: |
@@ -400,7 +401,11 @@ jobs:
           echo "PASS: Cocoa/AppKit linkage confirmed."
           echo ""
           echo "=== Checking for systray symbols ==="
-          nm /tmp/vaultmtg-daemon | grep -i "systray\|registerSystray\|systray_on" || true
+          if ! nm /tmp/vaultmtg-daemon | grep -qi "systray"; then
+            echo "ERROR: systray symbols missing from release binary — real tray.go not compiled in." >&2
+            exit 1
+          fi
+          echo "PASS: systray symbols found."
 
       - name: Upload darwin universal binary for sign-macos
         # Artifact name matches what sign-macos expects: the container is
