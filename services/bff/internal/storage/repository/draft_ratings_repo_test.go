@@ -12,14 +12,14 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// openTestDB opens a real PostgreSQL connection using TEST_DATABASE_URL.
+// openTestDB opens a real PostgreSQL connection using DATABASE_URL.
 // The test is skipped when that variable is not set.
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
-	dsn := os.Getenv("TEST_DATABASE_URL")
+	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		t.Skip("TEST_DATABASE_URL not set — skipping integration test")
+		t.Skip("DATABASE_URL not set — skipping integration test")
 	}
 
 	db, err := sql.Open("pgx", dsn)
