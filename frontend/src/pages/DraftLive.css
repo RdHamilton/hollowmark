@@ -29,14 +29,14 @@
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
-  color: var(--color-text-secondary, #9ca3af);
+  color: var(--color-text-secondary);
   font-size: 0.875rem;
 }
 
 .draft-live-set {
   font-weight: 600;
-  color: var(--color-accent, #60a5fa);
-  background: var(--color-surface-elevated, #1f2937);
+  color: var(--color-accent);
+  background: var(--color-surface-elevated);
   padding: 0.2rem 0.5rem;
   border-radius: 4px;
   font-size: 0.8rem;
@@ -44,11 +44,11 @@
 }
 
 .draft-live-format {
-  color: var(--color-text-muted, #6b7280);
+  color: var(--color-text-muted);
 }
 
 .draft-live-progress {
-  color: var(--color-text-muted, #6b7280);
+  color: var(--color-text-muted);
 }
 
 /* Stream status indicator */
@@ -61,23 +61,23 @@
 }
 
 .stream-status--open {
-  background: #d1fae5;
-  color: #065f46;
+  background: var(--vault-success-dim);
+  color: var(--success);
 }
 
 .stream-status--connecting {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--vault-warning-dim);
+  color: var(--warning);
 }
 
 .stream-status--error {
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--vault-danger-dim);
+  color: var(--danger);
 }
 
 .stream-status--closed {
-  background: #f3f4f6;
-  color: #6b7280;
+  background: var(--bg-overlay);
+  color: var(--fg-muted);
 }
 
 /* Body layout */
@@ -110,20 +110,20 @@
 
 .draft-live-waiting,
 .draft-live-ratings-error {
-  color: var(--color-text-muted, #6b7280);
+  color: var(--color-text-muted);
   font-size: 0.875rem;
   padding: 1rem 0;
 }
 
 .draft-live-ratings-error {
-  color: #ef4444;
+  color: var(--danger);
 }
 
 /* Card tiles */
 .draft-live-card {
   position: relative;
-  background: var(--color-surface, #111827);
-  border: 1px solid var(--color-border, #374151);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 0.75rem;
   display: flex;
@@ -133,27 +133,27 @@
 }
 
 .draft-live-card--top {
-  border-color: #f59e0b;
+  border-color: var(--warning);
   box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
-  background: var(--color-surface-elevated, #1f2937);
+  background: var(--color-surface-elevated);
 }
 
 .draft-live-card-name {
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--color-text, #f9fafb);
+  color: var(--color-text);
   line-height: 1.3;
 }
 
 .draft-live-gihwr {
   font-size: 0.75rem;
-  color: var(--color-text-muted, #6b7280);
+  color: var(--color-text-muted);
 }
 
 .draft-live-top-badge {
   font-size: 0.7rem;
   font-weight: 700;
-  color: #f59e0b;
+  color: var(--warning);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -169,45 +169,45 @@
 }
 
 .grade-a {
-  background: #d1fae5;
-  color: #065f46;
+  background: var(--vault-success-dim);
+  color: var(--success);
 }
 
 .grade-b {
-  background: #dbeafe;
-  color: #1e40af;
+  background: var(--vault-info-dim);
+  color: var(--accent-press);
 }
 
 .grade-c {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--vault-warning-dim);
+  color: var(--warning);
 }
 
 .grade-d {
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--vault-danger-dim);
+  color: var(--danger);
 }
 
 .grade-f {
-  background: #fee2e2;
-  color: #7f1d1d;
+  background: var(--vault-danger-dim);
+  color: var(--danger);
 }
 
 .grade-unknown {
-  background: #f3f4f6;
-  color: #6b7280;
+  background: var(--bg-overlay);
+  color: var(--fg-muted);
 }
 
 /* Pick history */
 .draft-live-history-section {
-  background: var(--color-surface, #111827);
-  border: 1px solid var(--color-border, #374151);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 1rem;
 }
 
 .draft-live-no-picks {
-  color: var(--color-text-muted, #6b7280);
+  color: var(--color-text-muted);
   font-size: 0.875rem;
   margin: 0;
 }
@@ -227,12 +227,12 @@
   gap: 0.5rem;
   padding: 0.4rem 0.5rem;
   border-radius: 4px;
-  background: var(--color-surface-elevated, #1f2937);
+  background: var(--color-surface-elevated);
 }
 
 .draft-live-history-name {
   font-size: 0.8rem;
-  color: var(--color-text, #f9fafb);
+  color: var(--color-text);
   flex: 1;
   min-width: 0;
   overflow: hidden;

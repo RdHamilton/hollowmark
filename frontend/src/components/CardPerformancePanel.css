@@ -1,6 +1,6 @@
 .card-performance-panel {
-  background: #1e1e1e;
-  border: 2px solid #333;
+  background: var(--bg-raised);
+  border: 2px solid var(--border);
   border-radius: 12px;
   max-width: 900px;
   width: 100%;
@@ -15,19 +15,19 @@
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem;
-  border-bottom: 2px solid #333;
+  border-bottom: 2px solid var(--border);
 }
 
 .panel-header h2 {
   margin: 0;
   font-size: 1.25rem;
-  color: #fff;
+  color: var(--fg);
 }
 
 .panel-header .close-button {
   background: none;
   border: none;
-  color: #aaa;
+  color: var(--fg-secondary);
   font-size: 2rem;
   cursor: pointer;
   padding: 0;
@@ -40,7 +40,7 @@
 }
 
 .panel-header .close-button:hover {
-  color: #fff;
+  color: var(--fg);
 }
 
 /* Summary Stats */
@@ -48,8 +48,8 @@
   display: flex;
   gap: 1.5rem;
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid #333;
-  background: #252525;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
 }
 
 .summary-stat {
@@ -61,12 +61,12 @@
 .summary-stat .stat-value {
   font-size: 1.5rem;
   font-weight: 600;
-  color: #4a9eff;
+  color: var(--accent);
 }
 
 .summary-stat .stat-label {
   font-size: 0.75rem;
-  color: #888;
+  color: var(--fg-secondary);
   text-transform: uppercase;
 }
 
@@ -75,29 +75,29 @@
   display: flex;
   gap: 0.5rem;
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border);
 }
 
 .tab-button {
   padding: 0.5rem 1rem;
-  background: #2a2a2a;
-  border: 1px solid #444;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #aaa;
+  color: var(--fg-secondary);
   font-size: 0.875rem;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .tab-button:hover {
-  background: #333;
-  color: #fff;
+  background: var(--border);
+  color: var(--fg);
 }
 
 .tab-button.active {
-  background: #4a9eff;
-  border-color: #4a9eff;
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--fg);
 }
 
 /* Content */
@@ -123,8 +123,8 @@
 .loading-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid #333;
-  border-top-color: #4a9eff;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -137,17 +137,17 @@
 
 .loading-state p,
 .empty-state p {
-  color: #aaa;
+  color: var(--fg-secondary);
   margin: 0;
 }
 
 .empty-state .hint {
   font-size: 0.875rem;
-  color: #666;
+  color: var(--fg-muted);
 }
 
 .error-state p {
-  color: #f44336;
+  color: var(--danger);
 }
 
 /* Performance Table */
@@ -165,12 +165,12 @@
 .performance-table td {
   padding: 0.75rem;
   text-align: left;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border);
 }
 
 .performance-table th {
-  background: #252525;
-  color: #888;
+  background: var(--bg-raised);
+  color: var(--fg-secondary);
   font-weight: 600;
   text-transform: uppercase;
   font-size: 0.75rem;
@@ -184,16 +184,16 @@
 }
 
 .performance-table th.sortable:hover {
-  color: #4a9eff;
+  color: var(--accent);
 }
 
 .performance-table tr:hover td {
-  background: #252525;
+  background: var(--bg-raised);
 }
 
 .performance-table .card-name {
   font-weight: 500;
-  color: #fff;
+  color: var(--fg);
 }
 
 .impact-bar {
@@ -201,7 +201,7 @@
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
   font-size: 0.75rem;
-  color: #fff;
+  color: var(--fg);
   min-width: 50px;
   text-align: center;
 }
@@ -212,7 +212,7 @@
   border-radius: 4px;
   font-size: 0.75rem;
   font-weight: 600;
-  color: #fff;
+  color: var(--fg);
   text-transform: capitalize;
 }
 
@@ -226,17 +226,17 @@
 
 .confidence-badge.high {
   background: rgba(76, 175, 80, 0.2);
-  color: #4caf50;
+  color: var(--success);
 }
 
 .confidence-badge.medium {
   background: rgba(255, 193, 7, 0.2);
-  color: #ffc107;
+  color: var(--warning);
 }
 
 .confidence-badge.low {
   background: rgba(244, 67, 54, 0.2);
-  color: #f44336;
+  color: var(--danger);
 }
 
 /* Recommendations */
@@ -250,7 +250,7 @@
   display: flex;
   gap: 2rem;
   padding: 1rem;
-  background: #252525;
+  background: var(--bg-raised);
   border-radius: 8px;
 }
 
@@ -261,24 +261,24 @@
 
 .rec-stat-label {
   font-size: 0.75rem;
-  color: #888;
+  color: var(--fg-secondary);
 }
 
 .rec-stat-value {
   font-size: 1.25rem;
   font-weight: 600;
-  color: #fff;
+  color: var(--fg);
 }
 
 .rec-section h3 {
   margin: 0 0 0.75rem 0;
   font-size: 1rem;
-  color: #aaa;
+  color: var(--fg-secondary);
 }
 
 .recommendation-card {
-  background: #252525;
-  border: 1px solid #333;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 1rem;
   margin-bottom: 0.75rem;
@@ -299,17 +299,17 @@
   align-items: center;
   justify-content: center;
   font-weight: 600;
-  color: #fff;
+  color: var(--fg);
   font-size: 0.875rem;
 }
 
 .rec-card-name {
   font-weight: 600;
-  color: #fff;
+  color: var(--fg);
 }
 
 .swap-arrow {
-  color: #888;
+  color: var(--fg-secondary);
 }
 
 .rec-confidence {
@@ -322,22 +322,22 @@
 
 .rec-confidence.high {
   background: rgba(76, 175, 80, 0.2);
-  color: #4caf50;
+  color: var(--success);
 }
 
 .rec-confidence.medium {
   background: rgba(255, 193, 7, 0.2);
-  color: #ffc107;
+  color: var(--warning);
 }
 
 .rec-confidence.low {
   background: rgba(244, 67, 54, 0.2);
-  color: #f44336;
+  color: var(--danger);
 }
 
 .rec-reason {
   font-size: 0.875rem;
-  color: #aaa;
+  color: var(--fg-secondary);
   margin-bottom: 0.75rem;
 }
 
@@ -352,7 +352,7 @@
 }
 
 .rec-games {
-  color: #666;
+  color: var(--fg-muted);
 }
 
 /* Responsive */

@@ -255,19 +255,19 @@
 }
 
 .deck-history-modal .diff-section.added h5 {
-  color: var(--win-color, #4caf50);
+  color: var(--win-color);
 }
 
 .deck-history-modal .diff-section.added li {
-  color: var(--win-color, #4caf50);
+  color: var(--win-color);
 }
 
 .deck-history-modal .diff-section.removed h5 {
-  color: var(--loss-color, #f44336);
+  color: var(--loss-color);
 }
 
 .deck-history-modal .diff-section.removed li {
-  color: var(--loss-color, #f44336);
+  color: var(--loss-color);
 }
 
 .deck-history-modal .diff-section.changed h5 {
@@ -296,10 +296,10 @@
 /* Error */
 .deck-history-modal .error-message {
   background: rgba(244, 67, 54, 0.1);
-  border: 1px solid var(--loss-color, #f44336);
+  border: 1px solid var(--loss-color);
   border-radius: 6px;
   padding: 16px;
-  color: var(--loss-color, #f44336);
+  color: var(--loss-color);
 }
 
 /* Footer buttons */

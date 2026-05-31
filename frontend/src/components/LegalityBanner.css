@@ -57,15 +57,15 @@
 }
 
 .legality-banner--info .legality-banner__icon {
-  color: #6ab0ff;
+  color: var(--accent-hover);
 }
 
 .legality-banner--warning .legality-banner__icon {
-  color: #ffd700;
+  color: var(--warning);
 }
 
 .legality-banner--critical .legality-banner__icon {
-  color: #ff6b6b;
+  color: var(--danger);
 }
 
 .legality-banner__content {
@@ -77,13 +77,13 @@
   margin: 0;
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-primary, #fff);
+  color: var(--text-primary);
 }
 
 .legality-banner__subtitle {
   margin: 2px 0 0;
   font-size: 12px;
-  color: var(--text-secondary, #a0a0a0);
+  color: var(--text-secondary);
 }
 
 .legality-banner__subtitle span + span::before {
@@ -103,7 +103,7 @@
   border-radius: 4px;
   padding: 6px 12px;
   font-size: 12px;
-  color: var(--text-primary, #fff);
+  color: var(--text-primary);
   cursor: pointer;
   transition: background 0.2s;
 }
@@ -132,7 +132,7 @@
   margin: 0 0 8px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-secondary, #a0a0a0);
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -156,32 +156,32 @@
 
 .legality-banner__card--banned {
   background: rgba(255, 107, 107, 0.15);
-  border-left: 3px solid #ff6b6b;
+  border-left: 3px solid var(--danger);
 }
 
 .legality-banner__card--not-legal {
   background: rgba(255, 215, 0, 0.1);
-  border-left: 3px solid #ffd700;
+  border-left: 3px solid var(--warning);
 }
 
 .legality-banner__card--copies {
   background: rgba(255, 165, 0, 0.1);
-  border-left: 3px solid #ffa500;
+  border-left: 3px solid var(--warning);
 }
 
 .legality-banner__card--size {
   background: rgba(255, 165, 0, 0.1);
-  border-left: 3px solid #ffa500;
+  border-left: 3px solid var(--warning);
 }
 
 .legality-banner__card--warning {
   background: rgba(106, 176, 255, 0.1);
-  border-left: 3px solid #6ab0ff;
+  border-left: 3px solid var(--accent-hover);
 }
 
 .legality-banner__card-name {
   font-weight: 500;
-  color: var(--text-primary, #fff);
+  color: var(--text-primary);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -195,14 +195,14 @@
   text-transform: uppercase;
   padding: 2px 6px;
   border-radius: 3px;
-  background: #ff6b6b;
-  color: #fff;
+  background: var(--danger);
+  color: var(--fg);
   flex-shrink: 0;
 }
 
 .legality-banner__card-details {
   font-size: 11px;
-  color: var(--text-secondary, #a0a0a0);
+  color: var(--text-secondary);
   flex-shrink: 0;
 }
 
@@ -240,12 +240,12 @@
 .legality-banner--compact .legality-banner__text {
   flex: 1;
   font-size: 13px;
-  color: var(--text-primary, #fff);
+  color: var(--text-primary);
 }
 
 .legality-banner--compact .legality-banner__link {
   font-size: 12px;
-  color: var(--accent-color, #6ab0ff);
+  color: var(--accent-color);
   background: none;
   border: none;
   cursor: pointer;

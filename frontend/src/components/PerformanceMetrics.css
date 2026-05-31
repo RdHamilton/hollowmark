@@ -1,9 +1,9 @@
 /* Performance Metrics Container */
 .performance-metrics {
-  background-color: #1e1e1e;
+  background-color: var(--bg-raised);
   border-radius: 6px;
   margin-bottom: 16px;
-  border: 1px solid #3d3d3d;
+  border: 1px solid var(--border);
 }
 
 /* Header (Collapsible) */
@@ -18,19 +18,19 @@
 }
 
 .metrics-header:hover {
-  background-color: #2d2d2d;
+  background-color: var(--bg-overlay);
 }
 
 .metrics-title {
   font-size: 1rem;
   font-weight: 600;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
 }
 
 .btn-reset-metrics {
-  background-color: #3d3d3d;
-  color: #ffffff;
-  border: 1px solid #4d4d4d;
+  background-color: var(--border);
+  color: var(--fg);
+  border: 1px solid var(--border);
   padding: 4px 12px;
   border-radius: 4px;
   cursor: pointer;
@@ -39,21 +39,21 @@
 }
 
 .btn-reset-metrics:hover {
-  background-color: #4d4d4d;
-  border-color: #4a9eff;
+  background-color: var(--border);
+  border-color: var(--accent);
 }
 
 /* Content */
 .metrics-content {
   padding: 16px;
-  border-top: 1px solid #3d3d3d;
+  border-top: 1px solid var(--border);
 }
 
 .metrics-loading,
 .metrics-empty {
   padding: 20px;
   text-align: center;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-size: 0.9rem;
 }
 
@@ -69,9 +69,9 @@
 .metrics-section h4 {
   margin: 0 0 12px 0;
   font-size: 1rem;
-  color: #4a9eff;
+  color: var(--accent);
   font-weight: 600;
-  border-bottom: 1px solid #3d3d3d;
+  border-bottom: 1px solid var(--border);
   padding-bottom: 6px;
 }
 
@@ -87,20 +87,20 @@
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
-  background-color: #2d2d2d;
+  background-color: var(--bg-overlay);
   border-radius: 4px;
-  border-left: 3px solid #4a9eff;
+  border-left: 3px solid var(--accent);
 }
 
 .metric-label {
   font-size: 0.9rem;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
 }
 
 .metric-value {
   font-size: 1rem;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--fg);
 }
 
 .metric-value.error-value {
@@ -123,19 +123,19 @@
   justify-content: space-between;
   align-items: center;
   padding: 6px 12px;
-  background-color: #2d2d2d;
+  background-color: var(--bg-overlay);
   border-radius: 4px;
 }
 
 .latency-label {
   font-size: 0.9rem;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
 }
 
 .latency-value {
   font-size: 0.95rem;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--fg);
   font-family: 'Courier New', monospace;
 }
 

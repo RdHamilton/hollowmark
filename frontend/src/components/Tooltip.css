@@ -7,8 +7,8 @@
   position: absolute;
   z-index: 9999;
   padding: 8px 12px;
-  background-color: #1a1a1a;
-  color: #ffffff;
+  background-color: var(--bg-raised);
+  color: var(--fg);
   font-size: 13px;
   line-height: 1.4;
   border-radius: 4px;
@@ -43,7 +43,7 @@
   transform: translateX(-50%);
   border-width: 6px 6px 0 6px;
   border-style: solid;
-  border-color: #1a1a1a transparent transparent transparent;
+  border-color: var(--bg-raised) transparent transparent transparent;
 }
 
 /* Position: Bottom */
@@ -60,7 +60,7 @@
   transform: translateX(-50%);
   border-width: 0 6px 6px 6px;
   border-style: solid;
-  border-color: transparent transparent #1a1a1a transparent;
+  border-color: transparent transparent var(--bg-raised) transparent;
 }
 
 /* Position: Left */
@@ -77,7 +77,7 @@
   transform: translateY(-50%);
   border-width: 6px 0 6px 6px;
   border-style: solid;
-  border-color: transparent transparent transparent #1a1a1a;
+  border-color: transparent transparent transparent var(--bg-raised);
 }
 
 /* Position: Right */
@@ -94,7 +94,7 @@
   transform: translateY(-50%);
   border-width: 6px 6px 6px 0;
   border-style: solid;
-  border-color: transparent #1a1a1a transparent transparent;
+  border-color: transparent var(--bg-raised) transparent transparent;
 }
 
 /* Multiline tooltips */

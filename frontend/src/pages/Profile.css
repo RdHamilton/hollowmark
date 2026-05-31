@@ -14,8 +14,8 @@
 
 .profile-back-button {
   background: none;
-  border: 1px solid #444;
-  color: #ccc;
+  border: 1px solid var(--border);
+  color: var(--fg-secondary);
   border-radius: 6px;
   padding: 6px 14px;
   font-size: 14px;
@@ -24,13 +24,13 @@
 }
 
 .profile-back-button:hover {
-  background: #2a2a2a;
-  color: #f0f0f0;
+  background: var(--bg-raised);
+  color: var(--fg);
 }
 
 .profile-loading,
 .profile-unauthenticated {
-  color: #aaa;
+  color: var(--fg-secondary);
   font-size: 15px;
   padding: 24px 0;
 }
@@ -43,8 +43,8 @@
 }
 
 .profile-section {
-  background: #1a1a1a;
-  border: 1px solid #333;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 24px;
 }
@@ -52,7 +52,7 @@
 .profile-section-title {
   font-size: 14px;
   font-weight: 600;
-  color: #aaa;
+  color: var(--fg-secondary);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin: 0 0 16px;
@@ -70,7 +70,7 @@
   height: 80px;
   border-radius: 50%;
   object-fit: cover;
-  border: 2px solid #444;
+  border: 2px solid var(--border);
   flex-shrink: 0;
 }
 
@@ -78,13 +78,13 @@
   width: 80px;
   height: 80px;
   border-radius: 50%;
-  background: #2e5aaa;
+  background: var(--accent-press);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 32px;
   font-weight: 700;
-  color: #fff;
+  color: var(--fg);
   flex-shrink: 0;
 }
 
@@ -109,7 +109,7 @@
 .profile-name-value {
   font-size: 18px;
   font-weight: 600;
-  color: #f0f0f0;
+  color: var(--fg);
 }
 
 .profile-edit-button {
@@ -134,16 +134,16 @@
   flex-direction: column;
   gap: 6px;
   font-size: 13px;
-  color: #aaa;
+  color: var(--fg-secondary);
   flex: 1;
   min-width: 160px;
 }
 
 .profile-field-input {
-  background: #111;
-  border: 1px solid #444;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #f0f0f0;
+  color: var(--fg);
   font-size: 15px;
   padding: 8px 12px;
   outline: none;
@@ -151,7 +151,7 @@
 }
 
 .profile-field-input:focus {
-  border-color: #6060c0;
+  border-color: var(--vault-indigo);
 }
 
 .profile-name-actions {
@@ -168,24 +168,24 @@
 
 .profile-email-value {
   font-size: 16px;
-  color: #f0f0f0;
+  color: var(--fg);
 }
 
 .profile-email-note {
   font-size: 12px;
-  color: #666;
+  color: var(--fg-muted);
   margin: 0;
 }
 
 /* Feedback messages */
 .profile-error {
   margin-top: 8px;
-  color: #e06060;
+  color: var(--danger);
   font-size: 13px;
 }
 
 .profile-success {
   margin-top: 8px;
-  color: #60c060;
+  color: var(--success);
   font-size: 13px;
 }

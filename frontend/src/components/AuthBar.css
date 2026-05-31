@@ -27,20 +27,20 @@
 
 .auth-btn-signin {
   background-color: transparent;
-  color: #aaaaaa;
-  border: 1px solid #555555;
+  color: var(--fg-secondary);
+  border: 1px solid var(--fg-muted);
 }
 
 .auth-btn-signin:hover {
-  color: #ffffff;
-  border-color: #aaaaaa;
+  color: var(--fg);
+  border-color: var(--fg-secondary);
 }
 
 .auth-btn-signup {
-  background-color: #4a9eff;
-  color: #ffffff;
+  background-color: var(--accent);
+  color: var(--fg);
 }
 
 .auth-btn-signup:hover {
-  background-color: #3a8eef;
+  background-color: var(--accent-press);
 }

@@ -24,7 +24,7 @@
 
 /* Modal Content */
 .modal-content {
-  background-color: #2d2d2d;
+  background-color: var(--bg-overlay);
   border-radius: 8px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
   max-width: 600px;
@@ -52,12 +52,12 @@
   align-items: center;
   justify-content: space-between;
   padding: 20px 24px;
-  border-bottom: 1px solid #3d3d3d;
+  border-bottom: 1px solid var(--border);
 }
 
 .modal-header h2 {
   margin: 0;
-  color: #ffffff;
+  color: var(--fg);
   font-size: 24px;
   font-weight: 600;
 }
@@ -81,7 +81,7 @@
 
 .modal-close:hover {
   background-color: rgba(255, 255, 255, 0.1);
-  color: #ffffff;
+  color: var(--fg);
 }
 
 /* Modal Body */
@@ -94,7 +94,7 @@
 /* Modal Footer */
 .modal-footer {
   padding: 16px 24px;
-  border-top: 1px solid #3d3d3d;
+  border-top: 1px solid var(--border);
   display: flex;
   justify-content: flex-end;
   gap: 12px;
@@ -129,7 +129,7 @@
   text-align: center;
   font-size: 28px;
   font-weight: 700;
-  color: #ffffff;
+  color: var(--fg);
   margin: 0 0 4px 0;
 }
 
@@ -141,7 +141,7 @@
 }
 
 .about-dialog h4 {
-  color: #4a9eff;
+  color: var(--accent);
   font-size: 16px;
   font-weight: 600;
   margin: 0 0 12px 0;
@@ -171,7 +171,7 @@
 }
 
 .about-dialog .credit-list strong {
-  color: #ffffff;
+  color: var(--fg);
 }
 
 .about-dialog .about-links {
@@ -187,8 +187,8 @@
 .about-dialog .link-button {
   display: inline-block;
   padding: 10px 16px;
-  background-color: #3d3d3d;
-  color: #4a9eff;
+  background-color: var(--border);
+  color: var(--accent);
   text-decoration: none;
   border-radius: 4px;
   font-size: 14px;
@@ -198,8 +198,8 @@
 }
 
 .about-dialog .link-button:hover {
-  background-color: #4a9eff;
-  color: #ffffff;
+  background-color: var(--accent);
+  color: var(--fg);
   transform: translateX(4px);
 }
 
@@ -230,12 +230,12 @@
 }
 
 .btn-primary {
-  background-color: #4a9eff;
-  color: #ffffff;
+  background-color: var(--accent);
+  color: var(--fg);
 }
 
 .btn-primary:hover {
-  background-color: #3a8eef;
+  background-color: var(--accent-press);
   transform: translateY(-1px);
   box-shadow: 0 2px 8px rgba(74, 158, 255, 0.3);
 }

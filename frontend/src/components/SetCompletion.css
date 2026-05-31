@@ -29,7 +29,7 @@
   margin: 0;
   font-size: 1.25rem;
   font-weight: 600;
-  color: #fff;
+  color: var(--fg);
 }
 
 .header-controls {
@@ -54,18 +54,18 @@
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 4px;
-  color: #fff;
+  color: var(--fg);
   font-size: 0.875rem;
   cursor: pointer;
 }
 
 .sort-controls select:focus {
   outline: none;
-  border-color: #4a9eff;
+  border-color: var(--accent);
 }
 
 .sort-controls select option {
-  background: #1a1a2e;
+  background: var(--bg-raised);
 }
 
 .set-completion-header .close-button {
@@ -81,7 +81,7 @@
 
 .set-completion-header .close-button:hover {
   background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  color: var(--fg);
 }
 
 .set-completion-list {
@@ -142,7 +142,7 @@
 .set-name {
   font-size: 0.875rem;
   font-weight: 500;
-  color: #fff;
+  color: var(--fg);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -176,7 +176,7 @@
 
 .progress-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #4a9eff, #3d8ce8);
+  background: linear-gradient(90deg, var(--accent), var(--accent-press));
   border-radius: 4px;
   transition: width 0.3s ease;
 }

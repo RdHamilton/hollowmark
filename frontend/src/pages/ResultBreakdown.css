@@ -11,15 +11,15 @@
 }
 
 .metric-section {
-  background-color: #2d2d2d;
+  background-color: var(--bg-overlay);
   border-radius: 8px;
   padding: 20px;
-  border: 1px solid #3d3d3d;
+  border: 1px solid var(--border);
 }
 
 .section-title {
   margin: 0 0 16px 0;
-  color: #ffffff;
+  color: var(--fg);
   font-size: 18px;
   font-weight: 600;
 }
@@ -31,26 +31,26 @@
 }
 
 .metric-card {
-  background-color: #1d1d1d;
+  background-color: var(--bg-raised);
   border-radius: 6px;
   padding: 16px;
-  border: 1px solid #3d3d3d;
+  border: 1px solid var(--border);
   transition: all 0.2s;
 }
 
 .metric-card:hover {
-  border-color: #4a9eff;
+  border-color: var(--accent);
   box-shadow: 0 2px 8px rgba(74, 158, 255, 0.1);
 }
 
 .metric-card.highlight {
-  border-color: #4a9eff;
-  background-color: #1a2332;
+  border-color: var(--accent);
+  background-color: var(--bg-overlay);
 }
 
 .metric-label {
   font-size: 12px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   text-transform: uppercase;
   font-weight: 600;
   margin-bottom: 8px;
@@ -58,7 +58,7 @@
 
 .metric-value {
   font-size: 24px;
-  color: #ffffff;
+  color: var(--fg);
   font-weight: 600;
   margin-bottom: 4px;
 }
@@ -80,11 +80,11 @@
 }
 
 .metric-value.good {
-  color: #4a9eff;
+  color: var(--accent);
 }
 
 .metric-value.average {
-  color: #ffaa00;
+  color: var(--warning);
 }
 
 .metric-value.below-average {
@@ -93,7 +93,7 @@
 
 .metric-sublabel {
   font-size: 12px;
-  color: #888888;
+  color: var(--fg-secondary);
 }
 
 .analysis-grid {
@@ -103,16 +103,16 @@
 }
 
 .analysis-card {
-  background-color: #1d1d1d;
+  background-color: var(--bg-raised);
   border-radius: 6px;
   padding: 16px;
-  border: 1px solid #3d3d3d;
+  border: 1px solid var(--border);
   text-align: center;
 }
 
 .analysis-label {
   font-size: 12px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   text-transform: uppercase;
   font-weight: 600;
   margin-bottom: 8px;
@@ -120,7 +120,7 @@
 
 .analysis-value {
   font-size: 28px;
-  color: #ffffff;
+  color: var(--fg);
   font-weight: 600;
 }
 
@@ -160,7 +160,7 @@
 .breakdown-label {
   font-size: 14px;
   font-weight: 600;
-  color: #1d1d1d;
+  color: var(--bg-raised);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
@@ -175,7 +175,7 @@
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  color: #ffffff;
+  color: var(--fg);
 }
 
 .stat-dot {
@@ -212,11 +212,11 @@
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--fg);
 }
 
 .breakdown-empty-subtext {
   margin: 0;
   font-size: 13px;
-  color: #888888;
+  color: var(--fg-secondary);
 }

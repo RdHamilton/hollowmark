@@ -8,20 +8,20 @@
 }
 
 .daemon-health-connected {
-  background-color: #22c55e; /* green-500 */
+  background-color: var(--success); /* green-500 */
 }
 
 .daemon-health-disconnected {
-  background-color: #ef4444; /* red-500 */
+  background-color: var(--danger); /* red-500 */
 }
 
 .daemon-health-reconnecting {
-  background-color: #eab308; /* yellow-500 */
+  background-color: var(--warning); /* yellow-500 */
 }
 
 .daemon-health-loading,
 .daemon-health-error {
-  background-color: #6b7280; /* gray-500 */
+  background-color: var(--fg-muted); /* gray-500 */
 }
 
 .daemon-health-clickable {
@@ -29,6 +29,6 @@
 }
 
 .daemon-health-clickable:focus {
-  outline: 2px solid #8b5cf6;
+  outline: 2px solid var(--vault-indigo);
   outline-offset: 2px;
 }
