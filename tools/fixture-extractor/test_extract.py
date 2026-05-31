@@ -244,5 +244,114 @@ class TestCollectionDetection(unittest.TestCase):
         self.assertNotIn("collection-updated.log", result)
 
 
+# ---------------------------------------------------------------------------
+# Catalog mode (#262)
+# ---------------------------------------------------------------------------
+
+# Premier draft pick request — picked grpId lives in a STRINGIFIED request
+# envelope (double-parse required).
+_API_DRAFT_PICK_LINE = (
+    '[UnityCrossThreadLogger]==> EventPlayerDraftMakePick '
+    '{"id":"e1acfb90-a0c3-4230-9527-e64d7a0abc5e",'
+    '"request":"{\\"DraftId\\":\\"62a14a91-bb89-470a-a7c0-6ad8d7ddf227\\",'
+    '\\"GrpIds\\":[102704],\\"Pack\\":0,\\"Pick\\":0}"}'
+)
+
+# Premier draft pack — bare-prefix Draft.Notify message.
+_DRAFT_NOTIFY_LINE = (
+    '[UnityCrossThreadLogger]Draft.Notify '
+    '{"draftId":"62a14a91-bb89-470a-a7c0-6ad8d7ddf227","SelfPick":1,'
+    '"SelfPack":1,"PackCards":"102614,102609,102691"}'
+)
+
+# Auth wrapped in the {transactionId, requestId, timestamp, <event>} envelope.
+# clientId is a 26-char base32 account token == reservedPlayers[].userId.
+_ENVELOPE_AUTH_LINE = (
+    '{"transactionId":"aaaaaaaa-0000-4000-8000-000000000001",'
+    '"requestId":3,"timestamp":"2026-05-31T07:21:00Z",'
+    '"authenticateResponse":{"clientId":"KHG3YQDSS5ERNLKNFBFV2DCHJI",'
+    '"sessionId":"bbbbbbbb-0000-4000-8000-000000000002",'
+    '"screenName":"Jhixiaus"}}'
+)
+
+_GRE_LINE = (
+    '{"greToClientEvent":{"greToClientMessages":[{"type":'
+    '"GREMessageType_GameStateMessage"}]}}'
+)
+
+
+def _run_catalog(lines, sanitize=True):
+    import io
+    src = io.StringIO("\n".join(lines) + "\n")
+    with tempfile.TemporaryDirectory() as tmp:
+        out = pathlib.Path(tmp)
+        rows = extract.catalog(src, out, sanitize)
+        samples = {}
+        for r in rows:
+            if r["sample_file"]:
+                samples[r["event"]] = (out / r["sample_file"]).read_text(encoding="utf-8")
+        return rows, samples
+
+
+class TestCatalogAxes(unittest.TestCase):
+    def test_api_request_axis(self):
+        rows, _ = _run_catalog([_API_DRAFT_PICK_LINE])
+        ev = {(r["axis"], r["event"]) for r in rows}
+        self.assertIn(("api-request", "EventPlayerDraftMakePick"), ev)
+
+    def test_prefix_message_axis(self):
+        rows, _ = _run_catalog([_DRAFT_NOTIFY_LINE])
+        ev = {(r["axis"], r["event"]) for r in rows}
+        self.assertIn(("prefix-message", "Draft.Notify"), ev)
+
+    def test_envelope_unwraps_to_business_key(self):
+        # The {transactionId,...,authenticateResponse} envelope must catalog
+        # under the business key, not "transactionId".
+        rows, _ = _run_catalog([_ENVELOPE_AUTH_LINE])
+        events = {r["event"] for r in rows}
+        self.assertIn("authenticateResponse", events)
+        self.assertNotIn("transactionId", events)
+
+    def test_gre_axis(self):
+        rows, _ = _run_catalog([_GRE_LINE])
+        ev = {(r["axis"], r["event"]) for r in rows}
+        self.assertIn(("gre-message", "GameStateMessage"), ev)
+
+    def test_counts_accumulate(self):
+        rows, _ = _run_catalog([_DRAFT_NOTIFY_LINE, _DRAFT_NOTIFY_LINE])
+        row = next(r for r in rows if r["event"] == "Draft.Notify")
+        self.assertEqual(row["count"], 2)
+
+
+class TestCatalogSanitisation(unittest.TestCase):
+    def test_stringified_envelope_double_parse_no_raw_uuid(self):
+        # The DraftId nested inside the stringified request must be unwrapped
+        # AND sanitised (Ray's required change #3).
+        _, samples = _run_catalog([_API_DRAFT_PICK_LINE])
+        text = samples["EventPlayerDraftMakePick"]
+        self.assertNotIn("62a14a91", text, "nested DraftId must be sanitised")
+        # GrpIds (card ids) retained as non-PII.
+        self.assertIn("102704", text)
+        # Unwrapped, not a string blob.
+        obj = json.loads(text.strip())
+        self.assertIsInstance(obj["request"], dict)
+
+    def test_account_token_sanitised_and_stable(self):
+        _, samples = _run_catalog([_ENVELOPE_AUTH_LINE])
+        text = samples["authenticateResponse"]
+        self.assertNotIn("KHG3YQDSS5ERNLKNFBFV2DCHJI", text,
+                         "26-char base32 clientId must be sanitised")
+        self.assertNotIn("Jhixiaus", text, "bare player handle must be sanitised")
+
+    def test_bare_player_handle_sanitised(self):
+        # A player handle with no #NNNNN suffix must still be replaced (the
+        # screen-name regex alone would miss it).
+        line = '{"playerName":"OBGYNKanobi","teamId":1}'
+        _, samples = _run_catalog([line])
+        # business key is playerName
+        for text in samples.values():
+            self.assertNotIn("OBGYNKanobi", text)
+
+
 if __name__ == "__main__":
     unittest.main()
