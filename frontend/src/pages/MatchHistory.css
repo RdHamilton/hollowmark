@@ -7,7 +7,7 @@
   flex: 1;
   overflow-y: auto;
   margin-top: 16px;
-  border: 1px solid #3d3d3d;
+  border: 1px solid var(--border);
   border-radius: 4px;
 }
 
@@ -21,7 +21,7 @@
 
 .match-count {
   margin-bottom: 12px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-size: 14px;
 }
 
@@ -35,12 +35,12 @@
 }
 
 .result-badge.win {
-  background-color: #2d5f2d;
+  background-color: var(--success);
   color: #7dff7d;
 }
 
 .result-badge.loss {
-  background-color: #5f2d2d;
+  background-color: var(--danger);
   color: #ff7d7d;
 }
 
@@ -63,17 +63,17 @@ tr.result-loss {
 
 .pagination-btn {
   padding: 8px 16px;
-  background-color: #2d2d2d;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-overlay);
+  border: 1px solid var(--border);
   border-radius: 4px;
-  color: #ffffff;
+  color: var(--fg);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .pagination-btn:hover:not(:disabled) {
-  background-color: #3d3d3d;
-  border-color: #4a9eff;
+  background-color: var(--border);
+  border-color: var(--accent);
 }
 
 .pagination-btn:disabled {
@@ -83,7 +83,7 @@ tr.result-loss {
 
 .pagination-info {
   padding: 0 15px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-size: 14px;
 }
 
@@ -93,7 +93,7 @@ th[style*="cursor: pointer"] {
 }
 
 th[style*="cursor: pointer"]:hover {
-  background-color: #3d3d3d;
+  background-color: var(--border);
 }
 
 /* Clickable rows */
@@ -103,20 +103,20 @@ th[style*="cursor: pointer"]:hover {
 }
 
 .clickable-row:hover {
-  background-color: #3d3d3d;
+  background-color: var(--border);
 }
 
 /* Record Summary in Filter Row */
 .record-summary {
   margin-left: auto;
   padding-left: 16px;
-  border-left: 1px solid #3d3d3d;
+  border-left: 1px solid var(--border);
 }
 
 .record-value {
   font-size: 16px;
   font-weight: 600;
-  color: #4a9eff;
+  color: var(--accent);
   padding: 8px 12px;
   background: rgba(74, 158, 255, 0.1);
   border-radius: 4px;
@@ -148,7 +148,7 @@ th[style*="cursor: pointer"]:hover {
 /* Compare Button */
 .compare-btn {
   padding: 8px 16px;
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  background: linear-gradient(135deg, var(--vault-indigo) 0%, var(--vault-indigo-dark) 100%);
   border: none;
   border-radius: 6px;
   color: white;
@@ -160,7 +160,7 @@ th[style*="cursor: pointer"]:hover {
 }
 
 .compare-btn:hover {
-  background: linear-gradient(135deg, #7c7ff2 0%, #5e58e8 100%);
+  background: linear-gradient(135deg, var(--vault-indigo) 0%, var(--vault-indigo-dark) 100%);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
 }
@@ -170,7 +170,7 @@ th[style*="cursor: pointer"]:hover {
 }
 
 .compare-btn:focus-visible {
-  outline: 2px solid #a5b4fc;
+  outline: 2px solid var(--vault-indigo-light);
   outline-offset: 2px;
 }
 
@@ -190,7 +190,7 @@ th[style*="cursor: pointer"]:hover {
 }
 
 .comparison-panel-container {
-  background: var(--surface-color, #1e1e1e);
+  background: var(--surface-color);
   border-radius: 12px;
   max-width: 900px;
   max-height: 90vh;

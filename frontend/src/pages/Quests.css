@@ -20,7 +20,7 @@
 .section-title {
   font-size: 20px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--fg);
   margin: 0 0 16px 0;
 }
 
@@ -33,8 +33,8 @@
 }
 
 .stat-card {
-  background-color: #2d2d2d;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-overlay);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 16px;
   text-align: center;
@@ -42,7 +42,7 @@
 
 .stat-label {
   font-size: 12px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 8px;
@@ -51,7 +51,7 @@
 .stat-value {
   font-size: 24px;
   font-weight: 700;
-  color: #ffffff;
+  color: var(--fg);
 }
 
 /* Wins Grid */
@@ -63,8 +63,8 @@
 
 /* Daily/Weekly Wins Section */
 .daily-wins-card {
-  background-color: #2d2d2d;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-overlay);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 20px;
   margin-bottom: 16px;
@@ -72,7 +72,7 @@
 }
 
 .daily-wins-card:hover {
-  border-color: #4fc3f7;
+  border-color: var(--info);
   box-shadow: 0 2px 8px rgba(79, 195, 247, 0.2);
 }
 
@@ -86,18 +86,18 @@
 .daily-wins-title {
   font-size: 16px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--fg);
 }
 
 .daily-wins-progress {
   font-size: 18px;
   font-weight: 700;
-  color: #4fc3f7;
+  color: var(--info);
 }
 
 .daily-wins-bar {
-  background-color: #1a1a1a;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 4px;
   height: 24px;
   overflow: hidden;
@@ -105,22 +105,22 @@
 }
 
 .daily-wins-fill {
-  background: linear-gradient(90deg, #4fc3f7 0%, #29b6f6 100%);
+  background: linear-gradient(90deg, var(--info) 0%, var(--info) 100%);
   height: 100%;
   transition: width 0.3s ease, background 0.3s ease;
 }
 
 /* Daily wins color thresholds */
 .daily-wins-fill.low {
-  background: linear-gradient(90deg, #f44336 0%, #d32f2f 100%); /* Red: < 5 wins */
+  background: linear-gradient(90deg, var(--danger) 0%, var(--danger) 100%); /* Red: < 5 wins */
 }
 
 .daily-wins-fill.medium {
-  background: linear-gradient(90deg, #ffc107 0%, #ffa000 100%); /* Yellow: 5-14 wins */
+  background: linear-gradient(90deg, var(--warning) 0%, var(--warning) 100%); /* Yellow: 5-14 wins */
 }
 
 .daily-wins-fill.high {
-  background: linear-gradient(90deg, #4caf50 0%, #388e3c 100%); /* Green: 15 wins */
+  background: linear-gradient(90deg, var(--success) 0%, var(--success) 100%); /* Green: 15 wins */
 }
 
 .daily-wins-fill.weekly {
@@ -135,11 +135,11 @@
 }
 
 .daily-wins-percent {
-  color: #aaaaaa;
+  color: var(--fg-secondary);
 }
 
 .daily-wins-reward {
-  color: #ffd700;
+  color: var(--warning);
   font-weight: 500;
 }
 
@@ -151,15 +151,15 @@
 }
 
 .quest-card {
-  background-color: #2d2d2d;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-overlay);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 16px;
   transition: all 0.2s;
 }
 
 .quest-card:hover {
-  border-color: #4a9eff;
+  border-color: var(--accent);
   box-shadow: 0 2px 8px rgba(74, 158, 255, 0.2);
 }
 
@@ -173,14 +173,14 @@
 .quest-type {
   font-size: 14px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--fg);
 }
 
 .reroll-badge {
   display: inline-block;
   padding: 4px 8px;
-  background-color: #3d5a3d;
-  border: 1px solid #5a8a5a;
+  background-color: var(--success);
+  border: 1px solid var(--success);
   border-radius: 4px;
   font-size: 10px;
   font-weight: 600;
@@ -196,7 +196,7 @@
 .quest-progress-text {
   font-size: 16px;
   font-weight: 600;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   margin-bottom: 8px;
   text-align: center;
 }
@@ -204,8 +204,8 @@
 .quest-progress-bar {
   width: 100%;
   height: 24px;
-  background-color: #1d1d1d;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 4px;
   overflow: hidden;
   margin-bottom: 6px;
@@ -213,30 +213,30 @@
 
 .quest-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #4a9eff 0%, #7dcfff 100%);
+  background: linear-gradient(90deg, var(--accent) 0%, #7dcfff 100%);
   transition: width 0.3s ease;
 }
 
 .quest-progress-percent {
   font-size: 12px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   text-align: right;
 }
 
 .quest-card-footer {
-  border-top: 1px solid #3d3d3d;
+  border-top: 1px solid var(--border);
   padding-top: 12px;
 }
 
 .quest-assigned {
   font-size: 12px;
-  color: #888888;
+  color: var(--fg-secondary);
 }
 
 /* Quest History Table */
 .quest-history-table-container {
   overflow-x: auto;
-  border: 1px solid #3d3d3d;
+  border: 1px solid var(--border);
   border-radius: 4px;
 }
 
@@ -258,15 +258,15 @@
 .mini-progress-bar {
   width: 100px;
   height: 6px;
-  background-color: #1d1d1d;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 3px;
   overflow: hidden;
 }
 
 .mini-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #4a9eff 0%, #7dcfff 100%);
+  background: linear-gradient(90deg, var(--accent) 0%, #7dcfff 100%);
   transition: width 0.3s ease;
 }
 
@@ -280,7 +280,7 @@
 }
 
 .status-badge.completed {
-  background-color: #2d5f2d;
+  background-color: var(--success);
   color: #7dff7d;
 }
 
@@ -290,8 +290,8 @@
 }
 
 .status-badge.rerolled {
-  background-color: #3d3d3d;
-  color: #888888;
+  background-color: var(--border);
+  color: var(--fg-secondary);
 }
 
 tr.quest-completed {
@@ -303,21 +303,21 @@ tr.quest-incomplete {
 }
 
 tr.quest-rerolled {
-  border-left: 3px solid #666666;
+  border-left: 3px solid var(--fg-muted);
   opacity: 0.7;
 }
 
 tr.quest-rerolled td {
-  color: #888888;
+  color: var(--fg-secondary);
 }
 
 /* Filter input */
 .filter-input {
   padding: 8px 12px;
-  background: #2a2a2a;
-  border: 1px solid #3d3d3d;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 4px;
-  color: #ffffff;
+  color: var(--fg);
   font-size: 14px;
   min-width: 150px;
   transition: border-color 0.2s;
@@ -325,11 +325,11 @@ tr.quest-rerolled td {
 
 .filter-input:focus {
   outline: none;
-  border-color: #4a9eff;
+  border-color: var(--accent);
 }
 
 .filter-input::placeholder {
-  color: #888888;
+  color: var(--fg-secondary);
 }
 
 /* Responsive adjustments */
@@ -358,17 +358,17 @@ tr.quest-rerolled td {
 
 .pagination-btn {
   padding: 8px 16px;
-  background-color: #2d2d2d;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-overlay);
+  border: 1px solid var(--border);
   border-radius: 4px;
-  color: #ffffff;
+  color: var(--fg);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .pagination-btn:hover:not(:disabled) {
-  background-color: #3d3d3d;
-  border-color: #4a9eff;
+  background-color: var(--border);
+  border-color: var(--accent);
 }
 
 .pagination-btn:disabled {
@@ -378,6 +378,6 @@ tr.quest-rerolled td {
 
 .pagination-info {
   padding: 0 15px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-size: 14px;
 }

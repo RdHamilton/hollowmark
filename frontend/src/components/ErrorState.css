@@ -20,13 +20,13 @@
 .error-state-title {
   font-size: 20px;
   font-weight: 600;
-  color: #ef4444;
+  color: var(--danger);
   margin: 0 0 12px 0;
 }
 
 .error-state-details {
   font-size: 14px;
-  color: #fca5a5;
+  color: var(--danger);
   margin: 0 0 8px 0;
   max-width: 600px;
   font-family: monospace;
@@ -37,7 +37,7 @@
 
 .error-state-help {
   font-size: 14px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   margin: 16px 0 0 0;
   max-width: 600px;
   line-height: 1.5;

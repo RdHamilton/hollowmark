@@ -4,7 +4,7 @@
 
 .user-profile-loading,
 .user-profile-unauthenticated {
-  color: #aaa;
+  color: var(--fg-secondary);
   font-size: 14px;
   padding: 8px 0;
 }
@@ -20,7 +20,7 @@
   height: 56px;
   border-radius: 50%;
   object-fit: cover;
-  border: 2px solid #444;
+  border: 2px solid var(--border);
   flex-shrink: 0;
 }
 
@@ -33,22 +33,22 @@
 .user-profile-name {
   font-size: 16px;
   font-weight: 600;
-  color: #f0f0f0;
+  color: var(--fg);
 }
 
 .user-profile-email {
   font-size: 13px;
-  color: #aaa;
+  color: var(--fg-secondary);
 }
 
 .user-profile-link {
   font-size: 13px;
-  color: #7a7ae8;
+  color: var(--vault-indigo);
   text-decoration: none;
   margin-top: 4px;
 }
 
 .user-profile-link:hover {
   text-decoration: underline;
-  color: #9a9af0;
+  color: var(--vault-indigo-light);
 }

@@ -20,8 +20,8 @@
 .loading-spinner {
   width: 60px;
   height: 60px;
-  border: 4px solid #333;
-  border-top-color: #4a9eff;
+  border: 4px solid var(--border);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -38,17 +38,17 @@
 
 .retry-button {
   padding: 0.75rem 1.5rem;
-  background: #4a9eff;
+  background: var(--accent);
   border: none;
   border-radius: 6px;
-  color: #fff;
+  color: var(--fg);
   font-size: 1rem;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .retry-button:hover {
-  background: #3a8edf;
+  background: var(--accent-press);
   transform: translateY(-2px);
 }
 
@@ -63,15 +63,15 @@
 .decks-header h1 {
   margin: 0;
   font-size: 2rem;
-  color: #fff;
+  color: var(--fg);
 }
 
 .create-deck-button {
   padding: 0.75rem 1.5rem;
-  background: #4a9eff;
+  background: var(--accent);
   border: none;
   border-radius: 6px;
-  color: #fff;
+  color: var(--fg);
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
@@ -79,7 +79,7 @@
 }
 
 .create-deck-button:hover {
-  background: #3a8edf;
+  background: var(--accent-press);
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(74, 158, 255, 0.3);
 }
@@ -101,21 +101,21 @@
 
 .empty-state h2 {
   margin: 0;
-  color: #fff;
+  color: var(--fg);
 }
 
 .empty-state p {
   margin: 0;
-  color: #aaa;
+  color: var(--fg-secondary);
   font-size: 1.125rem;
 }
 
 .create-deck-button-large {
   padding: 1rem 2rem;
-  background: #4a9eff;
+  background: var(--accent);
   border: none;
   border-radius: 8px;
-  color: #fff;
+  color: var(--fg);
   font-size: 1.125rem;
   font-weight: 600;
   cursor: pointer;
@@ -123,7 +123,7 @@
 }
 
 .create-deck-button-large:hover {
-  background: #3a8edf;
+  background: var(--accent-press);
   transform: translateY(-2px);
   box-shadow: 0 6px 16px rgba(74, 158, 255, 0.4);
 }
@@ -136,8 +136,8 @@
 }
 
 .deck-card {
-  background: #1e1e1e;
-  border: 2px solid #333;
+  background: var(--bg-raised);
+  border: 2px solid var(--border);
   border-radius: 8px;
   padding: 1.5rem;
   cursor: pointer;
@@ -148,7 +148,7 @@
 }
 
 .deck-card:hover {
-  border-color: #4a9eff;
+  border-color: var(--accent);
   transform: translateY(-4px);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
 }
@@ -163,7 +163,7 @@
 .deck-card-header h3 {
   margin: 0;
   font-size: 1.25rem;
-  color: #fff;
+  color: var(--fg);
   flex: 1;
   word-break: break-word;
 }
@@ -177,13 +177,13 @@
 }
 
 .source-badge.draft {
-  background: #ff9800;
-  color: #fff;
+  background: var(--warning);
+  color: var(--fg);
 }
 
 .source-badge.import {
   background: #9c27b0;
-  color: #fff;
+  color: var(--fg);
 }
 
 .deck-badges {
@@ -198,9 +198,9 @@
   font-size: 0.75rem;
   font-weight: 600;
   white-space: nowrap;
-  background: #2d4a6f;
-  color: #8bb8e8;
-  border: 1px solid #3d6a9f;
+  background: var(--vault-sapphire-dim);
+  color: var(--accent-hover);
+  border: 1px solid var(--vault-sapphire-dark);
 }
 
 .deck-card-body {
@@ -215,14 +215,14 @@
 
 .deck-format {
   font-size: 0.875rem;
-  color: #4a9eff;
+  color: var(--accent);
   font-weight: 600;
   text-transform: uppercase;
 }
 
 .deck-date {
   font-size: 0.75rem;
-  color: #888;
+  color: var(--fg-secondary);
 }
 
 /* Deck Stats Row */
@@ -232,12 +232,12 @@
   gap: 0.5rem;
   margin-top: 0.75rem;
   padding-top: 0.75rem;
-  border-top: 1px solid #333;
+  border-top: 1px solid var(--border);
 }
 
 .deck-win-rate {
   font-size: 0.8rem;
-  color: #aaa;
+  color: var(--fg-secondary);
 }
 
 .deck-streak {
@@ -249,17 +249,17 @@
 
 .deck-streak.win-streak {
   background: rgba(76, 175, 80, 0.2);
-  color: #4caf50;
+  color: var(--success);
 }
 
 .deck-streak.loss-streak {
   background: rgba(244, 67, 54, 0.2);
-  color: #f44336;
+  color: var(--danger);
 }
 
 .deck-duration {
   font-size: 0.75rem;
-  color: #888;
+  color: var(--fg-secondary);
 }
 
 .deck-card-footer {
@@ -270,52 +270,52 @@
 .edit-button {
   flex: 1;
   padding: 0.5rem 1rem;
-  background: #2a2a2a;
-  border: 1px solid #444;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #fff;
+  color: var(--fg);
   font-size: 0.875rem;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .edit-button:hover {
-  background: #333;
-  border-color: #4a9eff;
+  background: var(--border);
+  border-color: var(--accent);
 }
 
 .export-button {
   flex: 1;
   padding: 0.5rem 1rem;
-  background: #2a2a2a;
-  border: 1px solid #444;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #4a9eff;
+  color: var(--accent);
   font-size: 0.875rem;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .export-button:hover {
-  background: #1f2d3d;
-  border-color: #4a9eff;
+  background: var(--bg-overlay);
+  border-color: var(--accent);
 }
 
 .delete-button {
   flex: 1;
   padding: 0.5rem 1rem;
-  background: #2a2a2a;
-  border: 1px solid #444;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #ff5252;
+  color: var(--danger);
   font-size: 0.875rem;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .delete-button:hover {
-  background: #3d1f1f;
-  border-color: #ff5252;
+  background: var(--danger);
+  border-color: var(--danger);
 }
 
 /* Modal */
@@ -333,8 +333,8 @@
 }
 
 .modal-content {
-  background: #1e1e1e;
-  border: 2px solid #333;
+  background: var(--bg-raised);
+  border: 2px solid var(--border);
   border-radius: 12px;
   width: 90%;
   max-width: 500px;
@@ -350,19 +350,19 @@
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem;
-  border-bottom: 2px solid #333;
+  border-bottom: 2px solid var(--border);
 }
 
 .modal-header h2 {
   margin: 0;
   font-size: 1.5rem;
-  color: #fff;
+  color: var(--fg);
 }
 
 .close-button {
   background: none;
   border: none;
-  color: #aaa;
+  color: var(--fg-secondary);
   font-size: 2rem;
   cursor: pointer;
   padding: 0;
@@ -375,7 +375,7 @@
 }
 
 .close-button:hover {
-  color: #fff;
+  color: var(--fg);
 }
 
 .modal-body {
@@ -394,7 +394,7 @@
 }
 
 .form-group label {
-  color: #aaa;
+  color: var(--fg-secondary);
   font-size: 0.875rem;
   font-weight: 600;
 }
@@ -402,50 +402,50 @@
 .form-group input,
 .form-group select {
   padding: 0.75rem;
-  background: #2a2a2a;
-  border: 1px solid #444;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #fff;
+  color: var(--fg);
   font-size: 1rem;
 }
 
 .form-group input:focus,
 .form-group select:focus {
   outline: none;
-  border-color: #4a9eff;
+  border-color: var(--accent);
 }
 
 .modal-footer {
   display: flex;
   gap: 1rem;
   padding: 1.5rem;
-  border-top: 2px solid #333;
+  border-top: 2px solid var(--border);
 }
 
 .cancel-button {
   flex: 1;
   padding: 0.75rem 1.5rem;
-  background: #2a2a2a;
-  border: 1px solid #444;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #fff;
+  color: var(--fg);
   font-size: 1rem;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .cancel-button:hover {
-  background: #333;
-  border-color: #555;
+  background: var(--border);
+  border-color: var(--fg-muted);
 }
 
 .create-button {
   flex: 1;
   padding: 0.75rem 1.5rem;
-  background: #4a9eff;
+  background: var(--accent);
   border: none;
   border-radius: 6px;
-  color: #fff;
+  color: var(--fg);
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
@@ -453,17 +453,17 @@
 }
 
 .create-button:hover {
-  background: #3a8edf;
+  background: var(--accent-press);
   transform: translateY(-2px);
 }
 
 .delete-button-confirm {
   flex: 1;
   padding: 0.75rem 1.5rem;
-  background: #ff5252;
+  background: var(--danger);
   border: none;
   border-radius: 6px;
-  color: #fff;
+  color: var(--fg);
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
@@ -471,7 +471,7 @@
 }
 
 .delete-button-confirm:hover {
-  background: #d32f2f;
+  background: var(--danger);
   transform: translateY(-2px);
 }
 
@@ -481,14 +481,14 @@
 
 .delete-modal .modal-body p {
   margin: 0;
-  color: #fff;
+  color: var(--fg);
   font-size: 1rem;
   line-height: 1.6;
 }
 
 .delete-modal .modal-body p.warning-text {
   margin-top: 0.75rem;
-  color: #ff5252;
+  color: var(--danger);
   font-size: 0.875rem;
   font-style: italic;
 }
@@ -496,13 +496,13 @@
 /* Export Modal */
 .export-modal .modal-body p {
   margin: 0;
-  color: #fff;
+  color: var(--fg);
   font-size: 1rem;
 }
 
 .export-hint {
   font-size: 0.875rem;
-  color: #888;
+  color: var(--fg-secondary);
   font-style: italic;
 }
 
@@ -512,17 +512,17 @@
 
 .copy-button {
   padding: 0.75rem 1.5rem;
-  background: #2a2a2a;
-  border: 1px solid #4a9eff;
+  background: var(--bg-raised);
+  border: 1px solid var(--accent);
   border-radius: 6px;
-  color: #4a9eff;
+  color: var(--accent);
   font-size: 1rem;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .copy-button:hover:not(:disabled) {
-  background: #1f2d3d;
+  background: var(--bg-overlay);
 }
 
 .copy-button:disabled {
@@ -532,10 +532,10 @@
 
 .export-button-confirm {
   padding: 0.75rem 1.5rem;
-  background: #4a9eff;
+  background: var(--accent);
   border: none;
   border-radius: 6px;
-  color: #fff;
+  color: var(--fg);
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
@@ -543,7 +543,7 @@
 }
 
 .export-button-confirm:hover:not(:disabled) {
-  background: #3a8edf;
+  background: var(--accent-press);
   transform: translateY(-2px);
 }
 
@@ -563,7 +563,7 @@
   align-items: center;
   justify-content: space-between;
   background: rgba(255, 193, 7, 0.15);
-  border: 1px solid #ffc107;
+  border: 1px solid var(--warning);
   border-radius: 8px;
   padding: 1rem 1.25rem;
   margin-bottom: 1.5rem;
@@ -577,13 +577,13 @@
 }
 
 .export-warning-icon {
-  color: #ffc107;
+  color: var(--warning);
   font-size: 1.5rem;
   flex-shrink: 0;
 }
 
 .export-warning-text {
-  color: #e6e6e6;
+  color: var(--fg);
   font-size: 0.9rem;
   line-height: 1.4;
 }
@@ -591,7 +591,7 @@
 .export-warning-dismiss {
   background: transparent;
   border: none;
-  color: #888;
+  color: var(--fg-secondary);
   font-size: 1.5rem;
   cursor: pointer;
   padding: 0.25rem;
@@ -601,7 +601,7 @@
 }
 
 .export-warning-dismiss:hover {
-  color: #fff;
+  color: var(--fg);
 }
 
 /* Responsive */

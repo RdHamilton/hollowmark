@@ -12,13 +12,13 @@
 .daemon-download-title {
   font-size: 32px;
   font-weight: 700;
-  color: #ffffff;
+  color: var(--fg);
   margin: 0 0 16px 0;
 }
 
 .daemon-download-subtitle {
   font-size: 16px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   max-width: 560px;
   margin: 0 auto;
   line-height: 1.6;
@@ -54,7 +54,7 @@
 .daemon-download-button--primary {
   background-color: #7b2fff;
   border: 2px solid #7b2fff;
-  color: #ffffff;
+  color: var(--fg);
 }
 
 .daemon-download-button--primary:hover {
@@ -63,14 +63,14 @@
 }
 
 .daemon-download-button--secondary {
-  background-color: #2d2d2d;
-  border: 2px solid #444444;
-  color: #cccccc;
+  background-color: var(--bg-overlay);
+  border: 2px solid var(--border);
+  color: var(--fg-secondary);
 }
 
 .daemon-download-button--secondary:hover {
   border-color: #7b2fff;
-  color: #ffffff;
+  color: var(--fg);
 }
 
 .daemon-download-button-label {
@@ -106,7 +106,7 @@
   height: 96px;
   min-width: 200px;
   border-radius: 8px;
-  background: linear-gradient(90deg, #2d2d2d 25%, #3a3a3a 50%, #2d2d2d 75%);
+  background: linear-gradient(90deg, var(--bg-overlay) 25%, var(--border) 50%, var(--bg-overlay) 75%);
   background-size: 200% 100%;
   animation: daemon-skeleton-shimmer 1.4s ease-in-out infinite;
 }
@@ -124,15 +124,15 @@
 .daemon-download-coming-soon {
   margin-bottom: 56px;
   padding: 32px;
-  background-color: #2d2d2d;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-overlay);
+  border: 1px solid var(--border);
   border-radius: 12px;
   text-align: center;
 }
 
 .daemon-download-coming-soon-message {
   font-size: 16px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   margin: 0;
   line-height: 1.6;
 }
@@ -149,8 +149,8 @@
 
 /* Getting started steps */
 .daemon-getting-started {
-  background-color: #2d2d2d;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-overlay);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 36px;
 }
@@ -158,7 +158,7 @@
 .daemon-getting-started-title {
   font-size: 22px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--fg);
   margin: 0 0 28px 0;
 }
 
@@ -183,7 +183,7 @@
   height: 36px;
   border-radius: 50%;
   background-color: #7b2fff;
-  color: #ffffff;
+  color: var(--fg);
   font-size: 15px;
   font-weight: 700;
   display: flex;
@@ -199,13 +199,13 @@
 .step-title {
   font-size: 16px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--fg);
   margin: 0 0 6px 0;
 }
 
 .step-description {
   font-size: 14px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   margin: 0;
   line-height: 1.5;
 }
