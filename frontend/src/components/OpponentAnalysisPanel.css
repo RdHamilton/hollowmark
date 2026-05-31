@@ -1,6 +1,6 @@
 /* Opponent Analysis Panel */
 .opponent-analysis-panel {
-  background-color: #1e1e1e;
+  background-color: var(--bg-raised);
   border-radius: 6px;
   margin-top: 24px;
   overflow: hidden;
@@ -12,7 +12,7 @@
   align-items: center;
   padding: 16px;
   cursor: pointer;
-  background-color: #252525;
+  background-color: var(--bg-raised);
   transition: background-color 0.2s;
   width: 100%;
   border: none;
@@ -21,17 +21,17 @@
 }
 
 .opponent-analysis-panel .panel-header:hover {
-  background-color: #2d2d2d;
+  background-color: var(--bg-overlay);
 }
 
 .opponent-analysis-panel .panel-header h3 {
   margin: 0;
-  color: #ffffff;
+  color: var(--fg);
   font-size: 1.1rem;
 }
 
 .opponent-analysis-panel .expand-icon {
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-size: 0.8rem;
   transition: transform 0.2s;
   transform: rotate(0deg);
@@ -47,7 +47,7 @@
 
 /* Profile Summary */
 .opponent-analysis-panel .profile-summary {
-  background-color: #252525;
+  background-color: var(--bg-raised);
   border-radius: 4px;
   padding: 12px;
   margin-bottom: 16px;
@@ -58,7 +58,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 6px 0;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border);
 }
 
 .opponent-analysis-panel .profile-row:last-child {
@@ -66,12 +66,12 @@
 }
 
 .opponent-analysis-panel .profile-label {
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-size: 0.9rem;
 }
 
 .opponent-analysis-panel .profile-value {
-  color: #ffffff;
+  color: var(--fg);
   font-weight: 500;
 }
 
@@ -94,33 +94,33 @@
 
 .opponent-analysis-panel .mana-white {
   background-color: #f8f6d8;
-  color: #333;
+  color: var(--border);
 }
 
 .opponent-analysis-panel .mana-blue {
   background-color: #0e68ab;
-  color: #fff;
+  color: var(--fg);
 }
 
 .opponent-analysis-panel .mana-black {
   background-color: #150b00;
-  color: #aaa;
-  border: 1px solid #444;
+  color: var(--fg-secondary);
+  border: 1px solid var(--border);
 }
 
 .opponent-analysis-panel .mana-red {
-  background-color: #d3202a;
-  color: #fff;
+  background-color: var(--danger);
+  color: var(--fg);
 }
 
 .opponent-analysis-panel .mana-green {
   background-color: #00733e;
-  color: #fff;
+  color: var(--fg);
 }
 
 .opponent-analysis-panel .mana-colorless {
-  background-color: #888;
-  color: #fff;
+  background-color: var(--fg-secondary);
+  color: var(--fg);
 }
 
 /* Confidence */
@@ -130,15 +130,15 @@
 }
 
 .opponent-analysis-panel .confidence-value.text-green-400 {
-  color: #4ade80;
+  color: var(--success);
 }
 
 .opponent-analysis-panel .confidence-value.text-yellow-400 {
-  color: #facc15;
+  color: var(--warning);
 }
 
 .opponent-analysis-panel .confidence-value.text-gray-400 {
-  color: #9ca3af;
+  color: var(--fg-secondary);
 }
 
 /* Tabs */
@@ -146,14 +146,14 @@
   display: flex;
   gap: 8px;
   margin-bottom: 16px;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border);
   padding-bottom: 8px;
 }
 
 .opponent-analysis-panel .tab-btn {
   background: none;
   border: none;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   padding: 8px 16px;
   cursor: pointer;
   font-size: 0.9rem;
@@ -162,13 +162,13 @@
 }
 
 .opponent-analysis-panel .tab-btn:hover {
-  color: #ffffff;
-  background-color: #333;
+  color: var(--fg);
+  background-color: var(--border);
 }
 
 .opponent-analysis-panel .tab-btn.active {
-  color: #ffffff;
-  background-color: #444;
+  color: var(--fg);
+  background-color: var(--border);
 }
 
 /* Cards List */
@@ -179,22 +179,22 @@
 }
 
 .opponent-analysis-panel .card-item {
-  background-color: #252525;
+  background-color: var(--bg-raised);
   border-radius: 4px;
   padding: 10px 12px;
-  border-left: 3px solid #444;
+  border-left: 3px solid var(--border);
 }
 
 .opponent-analysis-panel .card-item.signature {
-  border-left-color: #fbbf24;
+  border-left-color: var(--warning);
 }
 
 .opponent-analysis-panel .card-item.seen {
-  border-left-color: #4ade80;
+  border-left-color: var(--success);
 }
 
 .opponent-analysis-panel .card-item.unseen {
-  border-left-color: #f97316;
+  border-left-color: var(--warning);
 }
 
 .opponent-analysis-panel .card-main {
@@ -205,20 +205,20 @@
 }
 
 .opponent-analysis-panel .card-name {
-  color: #ffffff;
+  color: var(--fg);
   font-weight: 500;
 }
 
 .opponent-analysis-panel .signature-badge {
   background-color: rgba(251, 191, 36, 0.2);
-  color: #fbbf24;
+  color: var(--warning);
   padding: 2px 8px;
   border-radius: 3px;
   font-size: 0.75rem;
 }
 
 .opponent-analysis-panel .inclusion-rate {
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-size: 0.85rem;
 }
 
@@ -227,19 +227,19 @@
   flex-wrap: wrap;
   gap: 8px;
   font-size: 0.8rem;
-  color: #888;
+  color: var(--fg-secondary);
 }
 
 .opponent-analysis-panel .card-zone,
 .opponent-analysis-panel .card-turn,
 .opponent-analysis-panel .card-category {
-  background-color: #333;
+  background-color: var(--border);
   padding: 2px 6px;
   border-radius: 3px;
 }
 
 .opponent-analysis-panel .play-around {
-  color: #f97316;
+  color: var(--warning);
   font-style: italic;
 }
 
@@ -253,7 +253,7 @@
 }
 
 .opponent-analysis-panel .expected-section h4 {
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-size: 0.9rem;
   margin-bottom: 8px;
 }
@@ -266,22 +266,22 @@
 }
 
 .opponent-analysis-panel .insight-item {
-  background-color: #252525;
+  background-color: var(--bg-raised);
   border-radius: 4px;
   padding: 12px;
-  border-left: 3px solid #444;
+  border-left: 3px solid var(--border);
 }
 
 .opponent-analysis-panel .insight-item.priority-high {
-  border-left-color: #ef4444;
+  border-left-color: var(--danger);
 }
 
 .opponent-analysis-panel .insight-item.priority-medium {
-  border-left-color: #f59e0b;
+  border-left-color: var(--warning);
 }
 
 .opponent-analysis-panel .insight-item.priority-low {
-  border-left-color: #3b82f6;
+  border-left-color: var(--info);
 }
 
 .opponent-analysis-panel .insight-header {
@@ -292,7 +292,7 @@
 }
 
 .opponent-analysis-panel .insight-type {
-  color: #ffffff;
+  color: var(--fg);
   font-weight: 600;
   text-transform: capitalize;
 }
@@ -306,21 +306,21 @@
 
 .opponent-analysis-panel .priority-badge.text-red-400 {
   background-color: rgba(239, 68, 68, 0.2);
-  color: #ef4444;
+  color: var(--danger);
 }
 
 .opponent-analysis-panel .priority-badge.text-yellow-400 {
   background-color: rgba(245, 158, 11, 0.2);
-  color: #f59e0b;
+  color: var(--warning);
 }
 
 .opponent-analysis-panel .priority-badge.text-blue-400 {
   background-color: rgba(59, 130, 246, 0.2);
-  color: #3b82f6;
+  color: var(--info);
 }
 
 .opponent-analysis-panel .insight-description {
-  color: #cccccc;
+  color: var(--fg-secondary);
   margin: 0;
   font-size: 0.9rem;
   line-height: 1.4;
@@ -329,15 +329,15 @@
 /* Empty State */
 .opponent-analysis-panel .empty-state {
   text-align: center;
-  color: #888;
+  color: var(--fg-secondary);
   padding: 24px;
-  background-color: #252525;
+  background-color: var(--bg-raised);
   border-radius: 4px;
 }
 
 /* Error State */
 .opponent-analysis-panel .error-message {
-  color: #ef4444;
+  color: var(--danger);
   text-align: center;
   padding: 16px;
   background-color: rgba(239, 68, 68, 0.1);

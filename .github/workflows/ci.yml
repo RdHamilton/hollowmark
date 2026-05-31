@@ -232,6 +232,15 @@ jobs:
         cd frontend
         npx tsc --noEmit
 
+    # stylelint color-no-hex is WARN-FIRST (#309 Pass B / Ray ruling #3): it reports
+    # raw-hex usage as warnings but must not fail CI while in-flight branches still
+    # carry hex. Follow-up #340 flips it to hard-fail (drop `|| true`) once clean.
+    # The executable enforcement today is the noRawHex.test.ts vitest guard below.
+    - name: Stylelint (raw-hex warn-first)
+      run: |
+        cd frontend
+        npm run lint:css || true
+
     - name: Run component tests
       run: |
         cd frontend

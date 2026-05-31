@@ -17,13 +17,13 @@
 /* Specific colour overrides per environment */
 .env-badge--preview,
 .env-badge--staging {
-  background-color: #1a3a4a;
-  color: #4ab8d4;
-  border-color: #2a5a6a;
+  background-color: var(--bg-overlay);
+  color: var(--info);
+  border-color: var(--vault-border);
 }
 
 .env-badge--development {
   background-color: #2a1a4a;
-  color: #9b7fd4;
+  color: var(--vault-indigo-light);
   border-color: #4a2a6a;
 }

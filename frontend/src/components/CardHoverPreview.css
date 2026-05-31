@@ -16,8 +16,8 @@
 }
 
 .card-hover-preview .preview-card {
-  background: #1e1e1e;
-  border: 2px solid #4a9eff;
+  background: var(--bg-raised);
+  border: 2px solid var(--accent);
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
@@ -37,14 +37,14 @@
 .card-hover-preview .preview-name {
   margin: 0 0 0.25rem 0;
   font-size: 1rem;
-  color: #fff;
+  color: var(--fg);
   font-weight: 600;
 }
 
 .card-hover-preview .preview-type {
   margin: 0 0 0.5rem 0;
   font-size: 0.8rem;
-  color: #aaa;
+  color: var(--fg-secondary);
 }
 
 .card-hover-preview .preview-stats {
@@ -55,18 +55,18 @@
 }
 
 .card-hover-preview .preview-mana {
-  color: #4a9eff;
+  color: var(--accent);
 }
 
 .card-hover-preview .preview-pt {
-  color: #4caf50;
+  color: var(--success);
   font-weight: 600;
 }
 
 .card-hover-preview .preview-text {
   margin: 0 0 0.5rem 0;
   font-size: 0.8rem;
-  color: #ccc;
+  color: var(--fg-secondary);
   line-height: 1.4;
   white-space: pre-wrap;
 }
@@ -79,18 +79,18 @@
 }
 
 .card-hover-preview .preview-score {
-  color: #4caf50;
+  color: var(--success);
   font-weight: 600;
 }
 
 .card-hover-preview .preview-confidence {
-  color: #6b7fd4;
+  color: var(--vault-indigo);
 }
 
 .card-hover-preview .preview-reasoning {
   margin: 0 0 0.5rem 0;
   font-size: 0.75rem;
-  color: #aaa;
+  color: var(--fg-secondary);
   line-height: 1.4;
   font-style: italic;
 }
@@ -98,6 +98,6 @@
 .card-hover-preview .preview-set {
   margin: 0;
   font-size: 0.75rem;
-  color: #888;
+  color: var(--fg-secondary);
   text-transform: capitalize;
 }

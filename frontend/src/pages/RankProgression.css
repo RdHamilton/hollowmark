@@ -9,12 +9,12 @@
 
 .note-text {
   font-size: 13px;
-  color: #888888;
+  color: var(--fg-secondary);
   font-style: italic;
 }
 
 .progression-summary {
-  background-color: #2d2d2d;
+  background-color: var(--bg-overlay);
   border-radius: 8px;
   padding: 20px;
   margin-bottom: 24px;
@@ -22,7 +22,7 @@
 
 .summary-title {
   margin: 0 0 16px 0;
-  color: #ffffff;
+  color: var(--fg);
   font-size: 18px;
   font-weight: 600;
 }
@@ -41,14 +41,14 @@
 
 .summary-label {
   font-size: 12px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   text-transform: uppercase;
   font-weight: 600;
 }
 
 .summary-value {
   font-size: 18px;
-  color: #ffffff;
+  color: var(--fg);
   font-weight: 600;
 }
 
@@ -61,11 +61,11 @@
 }
 
 .trend-stable {
-  color: #aaaaaa !important;
+  color: var(--fg-secondary) !important;
 }
 
 .timeline-section {
-  background-color: #2d2d2d;
+  background-color: var(--bg-overlay);
   border-radius: 8px;
   padding: 20px;
   margin-top: 24px;
@@ -73,7 +73,7 @@
 
 .timeline-title {
   margin: 0 0 16px 0;
-  color: #ffffff;
+  color: var(--fg);
   font-size: 18px;
   font-weight: 600;
 }
@@ -87,10 +87,10 @@
 }
 
 .timeline-item {
-  background-color: #1d1d1d;
+  background-color: var(--bg-raised);
   border-radius: 6px;
   padding: 12px 16px;
-  border: 1px solid #3d3d3d;
+  border: 1px solid var(--border);
   display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 16px;
@@ -99,23 +99,23 @@
 }
 
 .timeline-item:hover {
-  border-color: #4a9eff;
+  border-color: var(--accent);
   box-shadow: 0 2px 8px rgba(74, 158, 255, 0.1);
 }
 
 .timeline-item.changed {
   border-color: #7dff7d;
-  background-color: #1a2f1a;
+  background-color: var(--success);
 }
 
 .timeline-date {
   font-size: 14px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
 }
 
 .timeline-rank {
   font-size: 14px;
-  color: #4a9eff;
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -126,6 +126,6 @@
 
 .timeline-steps {
   font-size: 14px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-weight: 500;
 }

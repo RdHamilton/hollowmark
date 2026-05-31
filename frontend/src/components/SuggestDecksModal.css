@@ -14,7 +14,7 @@
 
 /* Modal container */
 .suggest-decks-modal {
-  background: var(--bg-primary, #1a1a2e);
+  background: var(--bg-primary);
   border-radius: 12px;
   width: 90%;
   max-width: 800px;
@@ -22,7 +22,7 @@
   display: flex;
   flex-direction: column;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-  border: 1px solid var(--border-color, #333);
+  border: 1px solid var(--border-color);
 }
 
 /* Header */
@@ -31,19 +31,19 @@
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--border-color, #333);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .suggest-decks-header h2 {
   margin: 0;
   font-size: 1.5rem;
-  color: var(--text-primary, #fff);
+  color: var(--text-primary);
 }
 
 .close-button {
   background: none;
   border: none;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
   font-size: 1.5rem;
   cursor: pointer;
   padding: 4px 8px;
@@ -53,7 +53,7 @@
 
 .close-button:hover {
   background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary, #fff);
+  color: var(--text-primary);
 }
 
 /* Content area */
@@ -70,14 +70,14 @@
   align-items: center;
   justify-content: center;
   padding: 40px;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
 }
 
 .suggest-decks-loading .loading-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid var(--border-color, #333);
-  border-top-color: var(--accent-color, #6366f1);
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent-color);
   border-radius: 50%;
   animation: spin 1s linear infinite;
   margin-bottom: 16px;
@@ -93,13 +93,13 @@
 .suggest-decks-error {
   text-align: center;
   padding: 40px;
-  color: var(--error-color, #ef4444);
+  color: var(--error-color);
 }
 
 .suggest-decks-error button {
   margin-top: 16px;
   padding: 8px 16px;
-  background: var(--accent-color, #6366f1);
+  background: var(--accent-color);
   color: white;
   border: none;
   border-radius: 6px;
@@ -116,19 +116,19 @@
 
 .suggest-decks-summary p {
   margin: 0;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
 }
 
 .suggest-decks-summary .best-combo {
   margin-top: 8px;
-  color: var(--success-color, #22c55e);
+  color: var(--success-color);
 }
 
 /* Empty state */
 .suggest-decks-empty {
   text-align: center;
   padding: 40px;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
 }
 
 /* Suggestions list */
@@ -141,18 +141,18 @@
 /* Individual suggestion card */
 .deck-suggestion-card {
   background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--border-color, #333);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   overflow: hidden;
   transition: all 0.2s;
 }
 
 .deck-suggestion-card:hover {
-  border-color: var(--accent-color, #6366f1);
+  border-color: var(--accent-color);
 }
 
 .deck-suggestion-card.expanded {
-  border-color: var(--accent-color, #6366f1);
+  border-color: var(--accent-color);
 }
 
 /* Suggestion header (collapsed view) */
@@ -166,7 +166,7 @@
 
 .suggestion-rank {
   font-weight: bold;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
   width: 30px;
 }
 
@@ -186,21 +186,21 @@
   font-size: 0.8rem;
 }
 
-.mana-w { background: #f9faf4; color: #333; }
-.mana-u { background: #0e68ab; color: #fff; }
-.mana-b { background: #150b00; color: #fff; border: 1px solid #444; }
-.mana-r { background: #d3202a; color: #fff; }
-.mana-g { background: #00733e; color: #fff; }
+.mana-w { background: #f9faf4; color: var(--border); }
+.mana-u { background: #0e68ab; color: var(--fg); }
+.mana-b { background: #150b00; color: var(--fg); border: 1px solid var(--border); }
+.mana-r { background: var(--danger); color: var(--fg); }
+.mana-g { background: #00733e; color: var(--fg); }
 
 .suggestion-name {
   flex: 1;
   font-weight: 600;
-  color: var(--text-primary, #fff);
+  color: var(--text-primary);
 }
 
 .suggestion-score {
   font-weight: bold;
-  color: var(--accent-color, #6366f1);
+  color: var(--accent-color);
   padding: 4px 8px;
   background: rgba(99, 102, 241, 0.1);
   border-radius: 4px;
@@ -215,14 +215,14 @@
 }
 
 .suggestion-expand-icon {
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
   font-size: 0.8rem;
 }
 
 /* Expanded details */
 .suggestion-details {
   padding: 0 16px 16px;
-  border-top: 1px solid var(--border-color, #333);
+  border-top: 1px solid var(--border-color);
 }
 
 /* Stats row */
@@ -241,12 +241,12 @@
 .stat-value {
   font-size: 1.25rem;
   font-weight: bold;
-  color: var(--text-primary, #fff);
+  color: var(--text-primary);
 }
 
 .stat-label {
   font-size: 0.75rem;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
 }
 
 /* Mana curve */
@@ -257,7 +257,7 @@
 .curve-title {
   font-size: 0.875rem;
   font-weight: 600;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
   margin-bottom: 8px;
 }
 
@@ -278,7 +278,7 @@
   bottom: 0;
   left: 0;
   right: 0;
-  background: var(--accent-color, #6366f1);
+  background: var(--accent-color);
   border-radius: 3px 3px 0 0;
   display: flex;
   align-items: flex-end;
@@ -299,7 +299,7 @@
   right: 0;
   text-align: center;
   font-size: 0.65rem;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
 }
 
 /* Synergies */
@@ -310,7 +310,7 @@
 .synergies-title {
   font-size: 0.875rem;
   font-weight: 600;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
   margin-bottom: 8px;
 }
 
@@ -323,7 +323,7 @@
 .synergy-tag {
   padding: 4px 8px;
   background: rgba(99, 102, 241, 0.15);
-  color: var(--accent-color, #6366f1);
+  color: var(--accent-color);
   border-radius: 4px;
   font-size: 0.8rem;
 }
@@ -345,10 +345,10 @@
 .section-title {
   font-size: 0.875rem;
   font-weight: 600;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
   margin-bottom: 8px;
   padding-bottom: 8px;
-  border-bottom: 1px solid var(--border-color, #333);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .card-list {
@@ -368,11 +368,11 @@
 }
 
 .card-name {
-  color: var(--text-primary, #fff);
+  color: var(--text-primary);
 }
 
 .card-mana {
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
   font-size: 0.75rem;
 }
 
@@ -381,7 +381,7 @@
   display: flex;
   gap: 12px;
   padding-top: 16px;
-  border-top: 1px solid var(--border-color, #333);
+  border-top: 1px solid var(--border-color);
   margin-top: 12px;
 }
 
@@ -401,18 +401,18 @@
 }
 
 .use-deck-btn {
-  background: var(--accent-color, #6366f1);
+  background: var(--accent-color);
   color: white;
 }
 
 .use-deck-btn:hover:not(:disabled) {
-  background: #5558e3;
+  background: var(--vault-indigo-dark);
 }
 
 .export-btn {
   background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary, #fff);
-  border: 1px solid var(--border-color, #333);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
 }
 
 .export-btn:hover:not(:disabled) {

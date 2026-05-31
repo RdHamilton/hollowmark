@@ -15,8 +15,8 @@
   text-transform: uppercase;
   padding: 2px 4px;
   border-radius: 2px;
-  background-color: var(--bg-tertiary, #333);
-  color: var(--text-secondary, #888);
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
 }
 
 .set-symbol-loading {
@@ -44,19 +44,19 @@
 /* Text-based rarity colors for fallback */
 .set-symbol-text.set-symbol-common {
   filter: none;
-  color: #888;
-  background-color: #333;
+  color: var(--fg-secondary);
+  background-color: var(--border);
 }
 
 .set-symbol-text.set-symbol-uncommon {
   filter: none;
-  color: #c0c0c0;
-  background-color: #2a3a2a;
+  color: var(--fg-secondary);
+  background-color: var(--success);
 }
 
 .set-symbol-text.set-symbol-rare {
   filter: none;
-  color: #ffd700;
+  color: var(--warning);
   background-color: #3a3520;
 }
 

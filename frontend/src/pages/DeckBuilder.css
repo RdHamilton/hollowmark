@@ -2,8 +2,8 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #121212;
-  color: #fff;
+  background: var(--bg);
+  color: var(--fg);
 }
 
 /* Loading and Error States */
@@ -20,8 +20,8 @@
 .loading-spinner {
   width: 60px;
   height: 60px;
-  border: 4px solid #333;
-  border-top-color: #4a9eff;
+  border: 4px solid var(--border);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -43,7 +43,7 @@
 
 .error-state p {
   margin: 0;
-  color: #aaa;
+  color: var(--fg-secondary);
   font-size: 1.125rem;
 }
 
@@ -53,8 +53,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 1rem 1.5rem;
-  background: #1e1e1e;
-  border-bottom: 2px solid #333;
+  background: var(--bg-raised);
+  border-bottom: 2px solid var(--border);
   min-height: 60px;
   flex-shrink: 0;
 }
@@ -67,10 +67,10 @@
 
 .back-button {
   padding: 0.5rem 1rem;
-  background: #2a2a2a;
-  border: 1px solid #444;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #fff;
+  color: var(--fg);
   font-size: 0.875rem;
   cursor: pointer;
   transition: all 0.2s;
@@ -80,8 +80,8 @@
 }
 
 .back-button:hover {
-  background: #333;
-  border-color: #555;
+  background: var(--border);
+  border-color: var(--fg-muted);
   transform: translateX(-2px);
 }
 
@@ -92,10 +92,10 @@
 
 .toggle-search-button {
   padding: 0.75rem 1.5rem;
-  background: #4a9eff;
+  background: var(--accent);
   border: none;
   border-radius: 6px;
-  color: #fff;
+  color: var(--fg);
   font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
@@ -103,17 +103,17 @@
 }
 
 .toggle-search-button:hover {
-  background: #3a8edf;
+  background: var(--accent-press);
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(74, 158, 255, 0.3);
 }
 
 .toggle-search-button.active {
-  background: #f44336;
+  background: var(--danger);
 }
 
 .toggle-search-button.active:hover {
-  background: #da190b;
+  background: var(--danger);
   box-shadow: 0 4px 12px rgba(244, 67, 54, 0.3);
 }
 
@@ -149,12 +149,12 @@
 }
 
 .deck-list-panel {
-  border-right: 2px solid #333;
+  border-right: 2px solid var(--border);
 }
 
 .card-search-panel {
-  background: #1a1a1a;
-  border-left: 2px solid #333;
+  background: var(--bg-raised);
+  border-left: 2px solid var(--border);
 }
 
 /* Footer */
@@ -163,8 +163,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 1rem 1.5rem;
-  background: #1e1e1e;
-  border-top: 2px solid #333;
+  background: var(--bg-raised);
+  border-top: 2px solid var(--border);
   min-height: 60px;
   flex-shrink: 0;
 }
@@ -172,7 +172,7 @@
 .quick-stats {
   display: flex;
   gap: 2rem;
-  color: #aaa;
+  color: var(--fg-secondary);
   font-size: 0.875rem;
 }
 
@@ -189,10 +189,10 @@
 
 .action-button {
   padding: 0.5rem 1rem;
-  background: #2a2a2a;
-  border: 1px solid #444;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: #fff;
+  color: var(--fg);
   font-size: 0.875rem;
   cursor: pointer;
   transition: all 0.2s;
@@ -202,16 +202,16 @@
 }
 
 .action-button:hover {
-  background: #333;
-  border-color: #555;
+  background: var(--border);
+  border-color: var(--fg-muted);
   transform: translateY(-2px);
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
 .action-button.active {
-  background: #4a9eff;
-  border-color: #4a9eff;
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--fg);
 }
 
 .action-button:disabled {
@@ -221,8 +221,8 @@
 }
 
 .action-button:disabled:hover {
-  background: #2a2a2a;
-  border-color: #444;
+  background: var(--bg-raised);
+  border-color: var(--border);
   transform: none;
   box-shadow: none;
 }
@@ -236,7 +236,7 @@
 .action-divider {
   width: 1px;
   height: 24px;
-  background: #444;
+  background: var(--border);
   margin: 0 0.25rem;
   align-self: center;
 }
@@ -249,18 +249,18 @@
 
 .deck-list-panel::-webkit-scrollbar-track,
 .card-search-panel::-webkit-scrollbar-track {
-  background: #1e1e1e;
+  background: var(--bg-raised);
 }
 
 .deck-list-panel::-webkit-scrollbar-thumb,
 .card-search-panel::-webkit-scrollbar-thumb {
-  background: #444;
+  background: var(--border);
   border-radius: 4px;
 }
 
 .deck-list-panel::-webkit-scrollbar-thumb:hover,
 .card-search-panel::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: var(--fg-muted);
 }
 
 /* Responsive Design */
@@ -278,12 +278,12 @@
 
   .deck-list-panel {
     border-right: none;
-    border-bottom: 2px solid #333;
+    border-bottom: 2px solid var(--border);
   }
 
   .card-search-panel {
     border-left: none;
-    border-top: 2px solid #333;
+    border-top: 2px solid var(--border);
   }
 }
 
@@ -316,7 +316,7 @@
 
 /* Recommendations Panel */
 .recommendations-panel {
-  background: #1e1e1e;
+  background: var(--bg-raised);
   border-radius: 8px;
   padding: 0.75rem;
   display: flex;
@@ -332,20 +332,20 @@
   justify-content: space-between;
   align-items: center;
   padding-bottom: 0.5rem;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
 .recommendations-header h3 {
   margin: 0;
   font-size: 1.1rem;
-  color: #fff;
+  color: var(--fg);
 }
 
 .close-recommendations {
   background: none;
   border: none;
-  color: #aaa;
+  color: var(--fg-secondary);
   font-size: 1.25rem;
   cursor: pointer;
   padding: 0;
@@ -359,14 +359,14 @@
 }
 
 .close-recommendations:hover {
-  color: #fff;
+  color: var(--fg);
 }
 
 .recommendations-loading,
 .recommendations-empty {
   text-align: center;
   padding: 1.5rem;
-  color: #aaa;
+  color: var(--fg-secondary);
   font-size: 0.875rem;
 }
 
@@ -384,15 +384,15 @@
   grid-template-columns: 45px 1fr auto;
   gap: 8px;
   padding: 6px 8px;
-  background: #2a2a2a;
+  background: var(--bg-raised);
   border-radius: 6px;
-  border: 1px solid #444;
+  border: 1px solid var(--border);
   transition: all 0.2s;
   align-items: center;
 }
 
 .recommendations-panel .recommendation-card:hover {
-  border-color: #4a9eff;
+  border-color: var(--accent);
   background: rgba(74, 158, 255, 0.05);
 }
 
@@ -415,7 +415,7 @@
 .recommendations-panel .rec-card-name {
   font-size: 0.8rem;
   font-weight: 600;
-  color: #fff;
+  color: var(--fg);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -436,10 +436,10 @@
 
 .recommendations-panel .add-rec-button {
   padding: 4px 8px;
-  background: #4caf50;
+  background: var(--success);
   border: none;
   border-radius: 4px;
-  color: #fff;
+  color: var(--fg);
   font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
@@ -448,7 +448,7 @@
 }
 
 .recommendations-panel .add-rec-button:hover {
-  background: #45a049;
+  background: var(--success);
 }
 
 /* Hide explain button in compact mode */
@@ -461,7 +461,7 @@
   grid-column: 1 / -1;
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid #444;
+  border-top: 1px solid var(--border);
 }
 
 .recommendations-list::-webkit-scrollbar {
@@ -469,17 +469,17 @@
 }
 
 .recommendations-list::-webkit-scrollbar-track {
-  background: #1e1e1e;
+  background: var(--bg-raised);
   border-radius: 4px;
 }
 
 .recommendations-list::-webkit-scrollbar-thumb {
-  background: #444;
+  background: var(--border);
   border-radius: 4px;
 }
 
 .recommendations-list::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: var(--fg-muted);
 }
 
 /* Notes and Suggestions Panel Containers */

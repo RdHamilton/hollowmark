@@ -3,8 +3,8 @@
   bottom: 0;
   left: 0;
   right: 0;
-  background-color: #2d2d2d;
-  border-top: 1px solid #3d3d3d;
+  background-color: var(--bg-overlay);
+  border-top: 1px solid var(--border);
   padding: 8px 16px;
   z-index: 100;
 }
@@ -14,12 +14,12 @@
   align-items: center;
   gap: 12px;
   font-size: 14px;
-  color: #ffffff;
+  color: var(--fg);
 }
 
 .footer-label {
   font-weight: 600;
-  color: #888888;
+  color: var(--fg-secondary);
   text-transform: uppercase;
   font-size: 11px;
   letter-spacing: 0.5px;
@@ -29,46 +29,46 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  color: #dddddd;
+  color: var(--fg);
 }
 
 .footer-stat strong {
-  color: #ffffff;
+  color: var(--fg);
   font-weight: 600;
 }
 
 .footer-separator {
-  color: #666666;
+  color: var(--fg-muted);
   user-select: none;
 }
 
 .footer-loading {
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-style: italic;
 }
 
 .footer-empty {
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-style: italic;
 }
 
 .footer-last-match {
   margin-left: auto;
-  color: #999999;
+  color: var(--fg-muted);
 }
 
 .footer-last-synced {
-  color: #888888;
+  color: var(--fg-secondary);
   font-size: 12px;
 }
 
 /* Streak styling */
 .streak-w {
-  color: #4caf50;
+  color: var(--success);
 }
 
 .streak-l {
-  color: #f44336;
+  color: var(--danger);
 }
 
 .streak-w strong,
