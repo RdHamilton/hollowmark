@@ -20,7 +20,9 @@
 | `draft_pack_2026.59.20.log` | draft_pack | FORMAT-CONFIRMED — format matches parser expectations for 2026.59.20 wire protocol. Current session was lobby-only (no draft played). GRP IDs are real card IDs from MTGA card database. | N/A — no real PII present. |
 | `draft_pick_2026.59.20.log` | draft_pick | FORMAT-CONFIRMED — see draft_pack note. | N/A — no real PII present. |
 | `collection_updated_2026.59.20.log` | collection_updated | FORMAT-CONFIRMED — `PlayerInventoryGetPlayerCardsV3` response is a flat `{"grpId": qty, ...}` map. Collection snapshot derived from memory dump (see #224 fixture); GRP IDs are real. | N/A — GRP IDs are non-PII per ADR-041. |
-| `authenticate_2026.59.20.log` | player_authenticated | FORMAT-CONFIRMED — format matches parser expectations. The authenticateResponse block appears during initial MTGA login, before detailed logging begins in 2026.59.20 sessions. All identifiers are synthetic. | N/A — no real PII present. |
+| `authenticate_2026.59.20.log` | player_authenticated | CORRECTED 2026-05-31 (#336) — Real 2026.59.20 wire shape: `{clientId, sessionId, screenName}`. Previous synthetic version incorrectly invented a `userId` key and set `clientId` to a different value than `reservedPlayers[].userId`. Corrected: no `userId`/`accountId` key; `clientId` is the join key and equals the `userId` in match fixtures. All identifiers are stable fakes (ADR-041). | N/A — no real PII present. |
+| `match_completed_win_2026.59.20.log` | match_completed | REAL-DERIVED 2026-05-31 (#336) — Derived from Player_capture_20260531T063410Z.log (Standard play WIN: local player teamId=1, winningTeamId=1). `clientId` fake matches auth fixture join key. Opponent userId/sessionId/playerName sanitized. | Sanitized: playerName→fake, opponent userId/playerName/sessionId→fake, real matchId→fake UUID. `clientId`/local `userId` consistent with auth fixture (join key preserved). |
+| `match_completed_loss_2026.59.20.log` | match_completed | REAL-DERIVED 2026-05-31 (#336) — Derived from Player_capture_20260531T063410Z.log (Standard ranked LOSS: local player teamId=2, winningTeamId=1). `clientId` fake matches auth fixture join key. Opponent userId/sessionId/playerName sanitized. | Sanitized: playerName→fake, opponent userId/playerName/sessionId→fake, real matchId→fake UUID. `clientId`/local `userId` consistent with auth fixture (join key preserved). |
 
 ## Sanitization Record
 
@@ -31,6 +33,7 @@ Applied to REAL-sourced fixtures:
 - **Cosmetic IDs**: removed from InventoryInfo (ArtStyle entries contain ArtId integers that are cosmetic product IDs, not user-identifiable, but excluded for minimal-footprint)
 - **GRP IDs in collection snapshot**: retained — confirmed non-PII per ADR-041 risk assessment
 - **Gem/Gold/WildCard counts**: retained — game resource values, not personally identifying
+- **Match fixtures (win/loss, 2026-05-31)**: real `clientId`/`sessionId`/`screenName`/`matchId`/opponent `userId`/`playerName`/`sessionId` all replaced with stable fakes. Join key relationship preserved: `clientId` in auth fixture == local player `userId` in match fixtures (`FAKEPLAYER0000000000000001`). Real matchIds replaced with fake UUIDs. Opponent identifiers fully synthetic.
 
 ## Session Coverage Note
 
