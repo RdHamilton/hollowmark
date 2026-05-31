@@ -33,20 +33,20 @@
 
 .empty-state-cta {
   display: inline-block;
-  margin-top: 20px;
+  margin-top: var(--space-5);
   padding: 10px 24px;
   background-color: var(--accent);
-  color: var(--fg);
-  border-radius: 6px;
+  color: var(--fg-inverse);
+  border-radius: var(--radius-md);
   text-decoration: none;
   font-size: 14px;
   font-weight: 600;
-  transition: background-color 0.2s ease;
+  transition: background-color var(--transition-base);
 }
 
 .empty-state-cta:hover {
   background-color: var(--accent-press);
-  color: var(--fg);
+  color: var(--fg-inverse);
 }
 
 /* Variant: coming-soon — muted, no CTA */
