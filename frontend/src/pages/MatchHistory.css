@@ -35,21 +35,21 @@
 }
 
 .result-badge.win {
-  background-color: var(--success);
-  color: #7dff7d;
+  background-color: var(--vault-success-dim);
+  color: var(--success);
 }
 
 .result-badge.loss {
-  background-color: var(--danger);
-  color: #ff7d7d;
+  background-color: var(--vault-danger-dim);
+  color: var(--danger);
 }
 
 tr.result-win {
-  border-left: 3px solid #7dff7d;
+  border-left: 3px solid var(--success);
 }
 
 tr.result-loss {
-  border-left: 3px solid #ff7d7d;
+  border-left: 3px solid var(--danger);
 }
 
 /* Pagination */
@@ -118,7 +118,7 @@ th[style*="cursor: pointer"]:hover {
   font-weight: 600;
   color: var(--accent);
   padding: 8px 12px;
-  background: rgba(74, 158, 255, 0.1);
+  background: rgba(var(--accent-rgb), 0.1);
   border-radius: 4px;
 }
 
@@ -134,7 +134,7 @@ th[style*="cursor: pointer"]:hover {
 }
 
 .notes-btn:hover {
-  background-color: rgba(74, 158, 255, 0.2);
+  background-color: rgba(var(--accent-rgb), 0.2);
 }
 
 /* Deck Name Cell */
@@ -190,11 +190,11 @@ th[style*="cursor: pointer"]:hover {
 }
 
 .comparison-panel-container {
-  background: var(--surface-color);
-  border-radius: 12px;
+  background: var(--bg-raised);
+  border-radius: var(--radius-lg);
   max-width: 900px;
   max-height: 90vh;
   width: 100%;
   overflow: auto;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg-vault);
 }

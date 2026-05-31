@@ -1,10 +1,73 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../test/utils/testUtils';
 import CurrentPackPicker from './CurrentPackPicker';
 import { mockDrafts } from '@/test/mocks/apiMock';
 import { gui } from '@/types/models';
+
+const CSS_PATH = join(dirname(fileURLToPath(import.meta.url)), 'CurrentPackPicker.css');
+
+// — Design token compliance (AC2, #312) ————————————————————————————————
+describe('CurrentPackPicker CSS — design token compliance (#312)', () => {
+  const css = readFileSync(CSS_PATH, 'utf8');
+
+  it('container uses canonical --bg-raised token, not legacy --bg-secondary', () => {
+    expect(css).toContain('background: var(--bg-raised)');
+    expect(css).not.toContain('var(--bg-secondary)');
+  });
+
+  it('header border uses canonical --border token, not legacy --border-color', () => {
+    expect(css).toContain('border-bottom: 1px solid var(--border)');
+    expect(css).not.toContain('var(--border-color)');
+  });
+
+  it('recommended banner uses sapphire-dim token, not raw gold rgba', () => {
+    expect(css).toContain('var(--vault-sapphire-dim)');
+    expect(css).not.toMatch(/rgba\(\s*255\s*,\s*215\s*,\s*0/);
+  });
+
+  it('recommended pack card uses sapphire shadow, not gold glow', () => {
+    expect(css).toContain('var(--shadow-sapphire-vault)');
+    expect(css).toContain('border-color: var(--accent)');
+    expect(css).not.toMatch(/rgba\(\s*255\s*,\s*215\s*,\s*0\s*,\s*0\.3\)/);
+  });
+
+  it('card color indicators for non-MTG colors use token not raw hex', () => {
+    expect(css).toContain('var(--danger)');
+    expect(css).toContain('var(--vault-mtg-colorless)');
+    // MTG pip categorical hex values are allowed
+    expect(css).toContain('#f9faf4');
+    expect(css).toContain('#0e68ab');
+    expect(css).toContain('#150b00');
+    expect(css).toContain('#00733e');
+    // But no legacy #555 border
+    expect(css).not.toContain('#555');
+  });
+
+  it('text colors use canonical fg tokens, not legacy --text-* names', () => {
+    expect(css).not.toContain('var(--text-primary)');
+    expect(css).not.toContain('var(--text-secondary)');
+    expect(css).not.toContain('var(--text-tertiary)');
+    expect(css).toContain('var(--fg)');
+    expect(css).toContain('var(--fg-secondary)');
+    expect(css).toContain('var(--fg-muted)');
+  });
+
+  it('accent buttons use canonical --accent token, not legacy --accent-color', () => {
+    expect(css).not.toContain('var(--accent-color)');
+    expect(css).toContain('var(--accent)');
+  });
+
+  it('refresh/retry buttons use --fg-inverse for text on sapphire background', () => {
+    expect(css).not.toContain('color: white');
+    expect(css).toContain('var(--fg-inverse)');
+  });
+});
+// ——————————————————————————————————————————————————————————————————————————
 
 function createMockPackCard(overrides: Partial<gui.PackCardWithRating> = {}): gui.PackCardWithRating {
   return new gui.PackCardWithRating({
