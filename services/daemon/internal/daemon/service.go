@@ -77,11 +77,13 @@ type Service struct {
 	// Wired into localAPI via SetDraftLookups; token kept in sync
 	// with the dispatcher via SetToken on each JWT rotation.
 	ratings *ratingsclient.Client
-	// mtgaUserID is the local player's MTGA Arena account ID (e.g.
-	// "WTC_12345678") extracted from the authenticateResponse log entry.
-	// It is used to identify the local player's team in match results so
-	// win/loss can be derived.  Empty until a player.authenticated event
-	// has been processed in this daemon session.
+	// mtgaUserID is the local player's MTGA Arena client ID (e.g.
+	// "KHG3YQDSS5ERNLKNFBFV2DCHJI", 26-char crockford-base32-style) extracted
+	// from the authenticateResponse["clientId"] log entry. It equals the
+	// reservedPlayers[].userId field in matchGameRoomStateChangedEvent, which
+	// is the join key used to identify the local player's team so win/loss can
+	// be derived. Empty until a player.authenticated event has been processed
+	// in this daemon session.
 	mtgaUserID string
 	// trayHooks connects the tray icon to the daemon event loop.
 	// All fields are optional — nil channels block forever in select (safe no-op).
@@ -1207,10 +1209,13 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 			payload = p
 		}
 	case "player.authenticated":
-		// Cache the local player's MTGA Arena account ID so subsequent
+		// Cache the local player's MTGA Arena client ID so subsequent
 		// match.completed events can determine win/loss from reservedPlayers.
+		// In 2026.59.20 the authenticateResponse contains clientId, sessionId,
+		// and screenName — there is no accountId or userId key. clientId is the
+		// join key: it equals reservedPlayers[].userId in match events.
 		if resp, ok := entry.JSON["authenticateResponse"].(map[string]interface{}); ok {
-			if uid, ok := resp["accountId"].(string); ok && uid != "" {
+			if uid, ok := resp["clientId"].(string); ok && uid != "" {
 				s.mtgaUserID = uid
 				log.Printf("[daemon] cached MTGA user ID from authenticateResponse")
 			}
