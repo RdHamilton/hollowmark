@@ -12,6 +12,7 @@ import (
 	"log"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1137,7 +1138,16 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 	var payload interface{}
 	switch eventType {
 	case "draft.pack":
-		p, err := logreader.ParseDraftPack(entry)
+		// Re-discriminate Premier vs BotDraft on the key signature. Premier
+		// (#338) = Draft.Notify (draftId + PackCards). BotDraft (#337) = the
+		// legacy draftPack key, handled by the else branch.
+		var p *logreader.DraftPackPayload
+		var err error
+		if _, hasDraftID := entry.JSON["draftId"]; hasDraftID {
+			p, err = logreader.ParsePremierDraftNotify(entry)
+		} else {
+			p, err = logreader.ParseDraftPack(entry)
+		}
 		if err != nil {
 			log.Printf("[daemon] warn: parse draft pack: %v", err)
 			s.recordParseFailure(eventType, entry.Raw)
@@ -1152,7 +1162,15 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 			}
 		}
 	case "draft.pick":
-		p, err := logreader.ParseDraftPick(entry)
+		// Premier (#338) = EventPlayerDraftMakePick (request string with
+		// DraftId). BotDraft (#337) = the legacy pickedCards key (else branch).
+		var p *logreader.DraftPickPayload
+		var err error
+		if req, hasReq := entry.JSON["request"].(string); hasReq && strings.Contains(req, `"DraftId"`) {
+			p, err = logreader.ParsePremierDraftMakePick(entry)
+		} else {
+			p, err = logreader.ParseDraftPick(entry)
+		}
 		if err != nil {
 			log.Printf("[daemon] warn: parse draft pick: %v", err)
 			s.recordParseFailure(eventType, entry.Raw)
@@ -1266,7 +1284,28 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 // classifyEntry maps a log entry to a semantic event type string.
 // Returns "" if the entry is not a tracked event.
 func classifyEntry(entry *logreader.LogEntry) string {
-	// Draft pick
+	// Draft events — format-dispatch. Premier probes run FIRST; the BotDraft
+	// draftPack/pickedCards branches below are the seam #337 will own (do not
+	// remove them — #337 depends on the existing BotDraft parsers).
+	//
+	// Premier pack: Draft.Notify line carries draftId + PackCards (comma string).
+	if _, hasDraftID := entry.JSON["draftId"]; hasDraftID {
+		if _, hasPackCards := entry.JSON["PackCards"]; hasPackCards {
+			return "draft.pack" // Premier format
+		}
+	}
+	// Premier pick: EventPlayerDraftMakePick request carries id + a "request"
+	// JSON string with DraftId inside. The Contains shortcut is fine in the
+	// classifier; ParsePremierDraftMakePick re-validates strictly.
+	if _, hasID := entry.JSON["id"]; hasID {
+		if req, hasReq := entry.JSON["request"].(string); hasReq && req != "" {
+			if strings.Contains(req, `"DraftId"`) {
+				return "draft.pick" // Premier format
+			}
+		}
+	}
+
+	// BotDraft pack/pick (legacy keys — #337 will add typed parsers here).
 	if _, ok := entry.JSON["draftPack"]; ok {
 		return "draft.pack"
 	}
