@@ -252,26 +252,27 @@ class TestCollectionDetection(unittest.TestCase):
 # envelope (double-parse required).
 _API_DRAFT_PICK_LINE = (
     '[UnityCrossThreadLogger]==> EventPlayerDraftMakePick '
-    '{"id":"e1acfb90-a0c3-4230-9527-e64d7a0abc5e",'
-    '"request":"{\\"DraftId\\":\\"62a14a91-bb89-470a-a7c0-6ad8d7ddf227\\",'
+    '{"id":"11111111-2222-4333-8444-555555555555",'
+    '"request":"{\\"DraftId\\":\\"99999999-8888-4777-8666-555555555555\\",'
     '\\"GrpIds\\":[102704],\\"Pack\\":0,\\"Pick\\":0}"}'
 )
 
 # Premier draft pack — bare-prefix Draft.Notify message.
 _DRAFT_NOTIFY_LINE = (
     '[UnityCrossThreadLogger]Draft.Notify '
-    '{"draftId":"62a14a91-bb89-470a-a7c0-6ad8d7ddf227","SelfPick":1,'
+    '{"draftId":"99999999-8888-4777-8666-555555555555","SelfPick":1,'
     '"SelfPack":1,"PackCards":"102614,102609,102691"}'
 )
 
 # Auth wrapped in the {transactionId, requestId, timestamp, <event>} envelope.
 # clientId is a 26-char base32 account token == reservedPlayers[].userId.
+# Values here are synthetic (not from any real capture).
 _ENVELOPE_AUTH_LINE = (
     '{"transactionId":"aaaaaaaa-0000-4000-8000-000000000001",'
     '"requestId":3,"timestamp":"2026-05-31T07:21:00Z",'
-    '"authenticateResponse":{"clientId":"KHG3YQDSS5ERNLKNFBFV2DCHJI",'
+    '"authenticateResponse":{"clientId":"ABCDEFGHIJKLMNOPQRSTUVWXYZ",'
     '"sessionId":"bbbbbbbb-0000-4000-8000-000000000002",'
-    '"screenName":"Jhixiaus"}}'
+    '"screenName":"SampleHandle"}}'
 )
 
 _GRE_LINE = (
@@ -339,18 +340,18 @@ class TestCatalogSanitisation(unittest.TestCase):
     def test_account_token_sanitised_and_stable(self):
         _, samples = _run_catalog([_ENVELOPE_AUTH_LINE])
         text = samples["authenticateResponse"]
-        self.assertNotIn("KHG3YQDSS5ERNLKNFBFV2DCHJI", text,
+        self.assertNotIn("ABCDEFGHIJKLMNOPQRSTUVWXYZ", text,
                          "26-char base32 clientId must be sanitised")
-        self.assertNotIn("Jhixiaus", text, "bare player handle must be sanitised")
+        self.assertNotIn("SampleHandle", text, "bare player handle must be sanitised")
 
     def test_bare_player_handle_sanitised(self):
         # A player handle with no #NNNNN suffix must still be replaced (the
         # screen-name regex alone would miss it).
-        line = '{"playerName":"OBGYNKanobi","teamId":1}'
+        line = '{"playerName":"BareHandleNoHash","teamId":1}'
         _, samples = _run_catalog([line])
         # business key is playerName
         for text in samples.values():
-            self.assertNotIn("OBGYNKanobi", text)
+            self.assertNotIn("BareHandleNoHash", text)
 
 
 if __name__ == "__main__":

@@ -63,7 +63,7 @@ All fixtures follow ADR-041 G3 rules (applied programmatically by `tools/fixture
 |---|---|
 | UUIDs (match / session / transaction / deck / draft IDs) | Stable fake UUIDs, deterministic by first sight |
 | Account tokens (`clientId` / `userId`, 26-char base32) | Stable fake `TESTACCOUNT…` tokens — the same real value maps to the same fake, so `clientId == reservedPlayers[].userId` is preserved |
-| Player / screen names (`playerName` / `screenName` / `displayName`) | Replaced by **field key**, not regex — MTGA handles may be bare (`Jhixiaus`), classic (`Name#12345`), or malformed; all → `TestPlayer#0000N` |
+| Player / screen names (`playerName` / `screenName` / `displayName`) | Replaced by **field key**, not regex — MTGA handles may be bare (`SomeHandle`), classic (`Name#12345`), or malformed; all → `TestPlayer#0000N` |
 | `requestId` / timestamps / reward-reset timestamps | Zeroed / replaced with fixed epoch (`2026-01-01T00:00:00Z`) |
 | GRP IDs / Arena card IDs (incl. `PackCards`, `GrpIds`) | Retained (non-PII per ADR-041 risk assessment) |
 | Gem / Gold / WildCard counts | Retained (game resource values, not personally identifying) |

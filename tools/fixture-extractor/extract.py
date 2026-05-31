@@ -133,7 +133,7 @@ _PII_VALUE_KEYS = {
     "_weeklyRewardResetTimestamp": ("ts", "2026-01-01T00:00:00Z"),
     "ServerTime":    ("ts", "2026-01-01T00:00:00Z"),
     # Player handles are PII regardless of textual shape — MTGA handles can be
-    # bare ("Jhixiaus"), classic ("Name#12345"), or malformed, so the
+    # bare ("SomeHandle"), classic ("Name#12345"), or malformed, so the
     # screen-name *regex* alone is insufficient. Replace by key.
     "playerName":    ("name", None),
     "screenName":    ("name", None),
