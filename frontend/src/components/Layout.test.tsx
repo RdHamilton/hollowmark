@@ -1,9 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../test/utils/testUtils';
 import Layout from './Layout';
 import { mockMatches } from '@/test/mocks/apiMock';
+
+const CSS_PATH = join(dirname(fileURLToPath(import.meta.url)), 'Layout.css');
 
 // Mock Sentry so Layout tests don't need a real DSN
 vi.mock('@sentry/react', async (importOriginal) => {
@@ -30,6 +35,36 @@ vi.mock('@/context/DownloadContext', () => ({
   }),
   DownloadProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
+
+// — Design token compliance (AC2, #312) ————————————————————————————————
+describe('Layout CSS — design token compliance (#312)', () => {
+  const css = readFileSync(CSS_PATH, 'utf8');
+
+  it('uses var(--vault-success-dim) for connected status background, not raw rgba', () => {
+    expect(css).toContain('var(--vault-success-dim)');
+    expect(css).not.toMatch(/rgba\(\s*76\s*,\s*175\s*,\s*80/);
+  });
+
+  it('uses var(--vault-warning-dim) for standalone status background, not raw rgba', () => {
+    expect(css).toContain('var(--vault-warning-dim)');
+    expect(css).not.toMatch(/rgba\(\s*255\s*,\s*152\s*,\s*0/);
+  });
+
+  it('uses var(--vault-info-dim) for reconnecting status background, not raw rgba', () => {
+    expect(css).toContain('var(--vault-info-dim)');
+    expect(css).not.toMatch(/rgba\(\s*33\s*,\s*150\s*,\s*243/);
+  });
+
+  it('active tab uses accent token not raw hex', () => {
+    expect(css).toContain('.tab.active');
+    expect(css).toContain('var(--accent)');
+    // No legacy blue hex
+    expect(css).not.toContain('#4a9eff');
+    expect(css).not.toContain('#4A9EFF');
+  });
+});
+
+// ——————————————————————————————————————————————————————————————————————————
 
 describe('Layout Component', () => {
   beforeEach(() => {
