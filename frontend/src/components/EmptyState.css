@@ -18,14 +18,14 @@
 .empty-state-heading {
   font-size: 24px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--fg);
   margin: 0 0 12px 0;
 }
 
 /* Subtext — new API */
 .empty-state-subtext {
   font-size: 16px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   margin: 0 0 8px 0;
   max-width: 600px;
   line-height: 1.5;
@@ -35,8 +35,8 @@
   display: inline-block;
   margin-top: 20px;
   padding: 10px 24px;
-  background-color: #4a9eff;
-  color: #ffffff;
+  background-color: var(--accent);
+  color: var(--fg);
   border-radius: 6px;
   text-decoration: none;
   font-size: 14px;
@@ -45,8 +45,8 @@
 }
 
 .empty-state-cta:hover {
-  background-color: #2a7edf;
-  color: #ffffff;
+  background-color: var(--accent-press);
+  color: var(--fg);
 }
 
 /* Variant: coming-soon — muted, no CTA */
@@ -55,5 +55,5 @@
 }
 
 .empty-state--coming-soon .empty-state-heading {
-  color: #cccccc;
+  color: var(--fg-secondary);
 }

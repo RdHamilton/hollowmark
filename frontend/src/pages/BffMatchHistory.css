@@ -17,12 +17,12 @@
 .bff-match-history-table-wrapper td {
   padding: 0.6rem 0.75rem;
   text-align: left;
-  border-bottom: 1px solid var(--border-color, #333);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .bff-match-history-table-wrapper th {
   font-weight: 600;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-secondary);
   text-transform: uppercase;
   font-size: 0.75rem;
   letter-spacing: 0.05em;
@@ -47,12 +47,12 @@
 
 .result-badge.win {
   background-color: rgba(74, 222, 128, 0.2);
-  color: #4ade80;
+  color: var(--success);
 }
 
 .result-badge.loss {
   background-color: rgba(248, 113, 113, 0.2);
-  color: #f87171;
+  color: var(--danger);
 }
 
 .bff-match-history-footer {
@@ -61,6 +61,6 @@
 
 .error-state {
   padding: 2rem 1.5rem;
-  color: var(--color-error, #f87171);
+  color: var(--color-error);
   text-align: center;
 }

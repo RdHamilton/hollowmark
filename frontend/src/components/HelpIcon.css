@@ -9,18 +9,18 @@
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: #3a3a3a;
-  color: #888;
-  border: 1px solid #555;
+  background: var(--border);
+  color: var(--fg-secondary);
+  border: 1px solid var(--fg-muted);
   cursor: pointer;
   font-weight: bold;
   transition: all 0.15s ease;
 }
 
 .help-icon-button:hover {
-  background: #4a4a4a;
-  color: #fff;
-  border-color: #666;
+  background: var(--border);
+  color: var(--fg);
+  border-color: var(--fg-muted);
 }
 
 .help-icon-button:focus {
@@ -53,8 +53,8 @@
   z-index: 1000;
   min-width: 280px;
   max-width: 360px;
-  background: #2a2a2a;
-  border: 1px solid #444;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   animation: helpPopoverFadeIn 0.15s ease;
@@ -101,21 +101,21 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  border-bottom: 1px solid #444;
-  background: #333;
+  border-bottom: 1px solid var(--border);
+  background: var(--border);
   border-radius: 8px 8px 0 0;
 }
 
 .help-popover-title {
   font-weight: 600;
   font-size: 13px;
-  color: #fff;
+  color: var(--fg);
 }
 
 .help-popover-close {
   background: none;
   border: none;
-  color: #888;
+  color: var(--fg-secondary);
   font-size: 18px;
   cursor: pointer;
   padding: 0;
@@ -124,14 +124,14 @@
 }
 
 .help-popover-close:hover {
-  color: #fff;
+  color: var(--fg);
 }
 
 .help-popover-content {
   padding: 12px;
   font-size: 12px;
   line-height: 1.5;
-  color: #ccc;
+  color: var(--fg-secondary);
 }
 
 .help-popover-content p {
@@ -152,11 +152,11 @@
 }
 
 .help-popover-content strong {
-  color: #fff;
+  color: var(--fg);
 }
 
 .help-popover-content code {
-  background: #3a3a3a;
+  background: var(--border);
   padding: 1px 4px;
   border-radius: 3px;
   font-size: 11px;
@@ -172,8 +172,8 @@
   vertical-align: middle;
 }
 
-.help-color-green { background: #4ade80; }
-.help-color-blue { background: #60a5fa; }
-.help-color-yellow { background: #facc15; }
-.help-color-orange { background: #fb923c; }
-.help-color-red { background: #f87171; }
+.help-color-green { background: var(--success); }
+.help-color-blue { background: var(--info); }
+.help-color-yellow { background: var(--warning); }
+.help-color-orange { background: var(--warning); }
+.help-color-red { background: var(--danger); }

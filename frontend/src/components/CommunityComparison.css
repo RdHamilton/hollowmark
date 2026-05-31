@@ -1,5 +1,5 @@
 .community-comparison {
-  background-color: var(--bg-secondary, #1e1e1e);
+  background-color: var(--bg-secondary);
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 16px;
@@ -14,16 +14,16 @@
   justify-content: center;
   min-height: 150px;
   gap: 12px;
-  color: var(--color-text-secondary, #888);
+  color: var(--color-text-secondary);
 }
 
 .community-comparison--error {
-  color: var(--color-error, #ff6b6b);
+  color: var(--color-error);
 }
 
 .community-comparison--error button {
   padding: 8px 16px;
-  background-color: var(--color-primary, #4a9eff);
+  background-color: var(--color-primary);
   border: none;
   border-radius: 4px;
   color: white;
@@ -33,8 +33,8 @@
 .community-comparison__spinner {
   width: 24px;
   height: 24px;
-  border: 2px solid var(--color-text-secondary, #888);
-  border-top-color: var(--color-primary, #4a9eff);
+  border: 2px solid var(--color-text-secondary);
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -55,16 +55,16 @@
 .community-comparison__header h3 {
   margin: 0;
   font-size: 1.1rem;
-  color: var(--color-text-primary, #fff);
+  color: var(--color-text-primary);
 }
 
 .community-comparison__set {
   padding: 4px 10px;
-  background-color: var(--bg-tertiary, #2d2d2d);
+  background-color: var(--bg-tertiary);
   border-radius: 4px;
   font-size: 0.875rem;
   font-weight: bold;
-  color: var(--color-text-secondary, #888);
+  color: var(--color-text-secondary);
 }
 
 .community-comparison__main {
@@ -84,33 +84,33 @@
 }
 
 .community-comparison__rank--elite {
-  background: linear-gradient(135deg, #ffd700, #ffb300);
-  color: #000;
+  background: linear-gradient(135deg, var(--warning), var(--warning));
+  color: var(--vault-fg-inverse);
 }
 
 .community-comparison__rank--high {
   background: linear-gradient(135deg, #82ca9d, #50c878);
-  color: #000;
+  color: var(--vault-fg-inverse);
 }
 
 .community-comparison__rank--above {
-  background-color: #3d5a3d;
-  color: var(--color-text-primary, #fff);
+  background-color: var(--success);
+  color: var(--color-text-primary);
 }
 
 .community-comparison__rank--average {
-  background-color: var(--bg-tertiary, #2d2d2d);
-  color: var(--color-text-primary, #fff);
+  background-color: var(--bg-tertiary);
+  color: var(--color-text-primary);
 }
 
 .community-comparison__rank--below {
-  background-color: #5a3d3d;
-  color: var(--color-text-primary, #fff);
+  background-color: var(--danger);
+  color: var(--color-text-primary);
 }
 
 .community-comparison__rank--low {
-  background-color: #4a2d2d;
-  color: var(--color-text-primary, #fff);
+  background-color: var(--danger);
+  color: var(--color-text-primary);
 }
 
 .community-comparison__rank-label {
@@ -151,37 +151,37 @@
 
 .community-comparison__stat-label {
   font-size: 0.75rem;
-  color: var(--color-text-secondary, #888);
+  color: var(--color-text-secondary);
   margin-bottom: 4px;
 }
 
 .community-comparison__stat-value {
   font-size: 1.5rem;
   font-weight: bold;
-  color: var(--color-text-primary, #fff);
+  color: var(--color-text-primary);
 }
 
 .community-comparison__stat-value--primary {
-  color: var(--color-primary, #4a9eff);
+  color: var(--color-primary);
 }
 
 .community-comparison__stat-value--positive {
-  color: var(--color-success, #82ca9d);
+  color: var(--color-success);
 }
 
 .community-comparison__stat-value--negative {
-  color: var(--color-error, #ff6b6b);
+  color: var(--color-error);
 }
 
 .community-comparison__archetypes {
-  border-top: 1px solid var(--border-color, #444);
+  border-top: 1px solid var(--border-color);
   padding-top: 16px;
 }
 
 .community-comparison__archetypes h4 {
   margin: 0 0 12px 0;
   font-size: 0.95rem;
-  color: var(--color-text-primary, #fff);
+  color: var(--color-text-primary);
 }
 
 .community-comparison__archetype-list {
@@ -195,7 +195,7 @@
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  background-color: var(--bg-tertiary, #2d2d2d);
+  background-color: var(--bg-tertiary);
   border-radius: 4px;
 }
 
@@ -217,33 +217,33 @@
 
 .community-comparison__color--w {
   background-color: #f9faf4;
-  color: #333;
+  color: var(--border);
 }
 
 .community-comparison__color--u {
   background-color: #0e68ab;
-  color: #fff;
+  color: var(--fg);
 }
 
 .community-comparison__color--b {
   background-color: #150b00;
-  color: #fff;
+  color: var(--fg);
 }
 
 .community-comparison__color--r {
-  background-color: #d3202a;
-  color: #fff;
+  background-color: var(--danger);
+  color: var(--fg);
 }
 
 .community-comparison__color--g {
   background-color: #00733e;
-  color: #fff;
+  color: var(--fg);
 }
 
 .community-comparison__archetype-name {
   flex: 1;
   font-size: 0.875rem;
-  color: var(--color-text-primary, #fff);
+  color: var(--color-text-primary);
 }
 
 .community-comparison__archetype-stats {
@@ -255,15 +255,15 @@
 
 .community-comparison__archetype-user {
   font-weight: bold;
-  color: var(--color-primary, #4a9eff);
+  color: var(--color-primary);
 }
 
 .community-comparison__archetype-vs {
-  color: var(--color-text-secondary, #888);
+  color: var(--color-text-secondary);
 }
 
 .community-comparison__archetype-community {
-  color: var(--color-text-secondary, #888);
+  color: var(--color-text-secondary);
 }
 
 .community-comparison__archetype-delta {
@@ -271,16 +271,16 @@
 }
 
 .community-comparison__archetype-delta--positive {
-  color: var(--color-success, #82ca9d);
+  color: var(--color-success);
 }
 
 .community-comparison__archetype-delta--negative {
-  color: var(--color-error, #ff6b6b);
+  color: var(--color-error);
 }
 
 .community-comparison__archetype-matches {
   font-size: 0.75rem;
-  color: var(--color-text-secondary, #888);
+  color: var(--color-text-secondary);
   min-width: 70px;
   text-align: right;
 }

@@ -1,9 +1,9 @@
 /* Game Play Timeline Panel */
 .game-play-timeline-panel {
   margin-top: 16px;
-  border: 1px solid #3d3d3d;
+  border: 1px solid var(--border);
   border-radius: 4px;
-  background-color: #1e1e1e;
+  background-color: var(--bg-raised);
 }
 
 .game-play-timeline-panel .panel-header {
@@ -15,12 +15,12 @@
   background: none;
   border: none;
   cursor: pointer;
-  color: #ffffff;
+  color: var(--fg);
   transition: background-color 0.2s;
 }
 
 .game-play-timeline-panel .panel-header:hover {
-  background-color: #2d2d2d;
+  background-color: var(--bg-overlay);
 }
 
 .game-play-timeline-panel .panel-header h3 {
@@ -40,7 +40,7 @@
 
 .game-play-timeline-panel .panel-content {
   padding: 16px;
-  border-top: 1px solid #3d3d3d;
+  border-top: 1px solid var(--border);
 }
 
 /* Turn Navigation */
@@ -56,10 +56,10 @@
 
 .turn-btn {
   padding: 6px 12px;
-  background-color: #2d2d2d;
-  border: 1px solid #3d3d3d;
+  background-color: var(--bg-overlay);
+  border: 1px solid var(--border);
   border-radius: 4px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   cursor: pointer;
   font-size: 12px;
   font-weight: 500;
@@ -67,19 +67,19 @@
 }
 
 .turn-btn:hover {
-  background-color: #3d3d3d;
-  color: #ffffff;
+  background-color: var(--border);
+  color: var(--fg);
 }
 
 .turn-btn.active {
-  background-color: #4a9eff;
-  border-color: #4a9eff;
-  color: #ffffff;
+  background-color: var(--accent);
+  border-color: var(--accent);
+  color: var(--fg);
 }
 
 /* Selected Turn */
 .selected-turn {
-  background-color: #252525;
+  background-color: var(--bg-raised);
   border-radius: 4px;
   padding: 16px;
 }
@@ -90,19 +90,19 @@
   align-items: center;
   margin-bottom: 16px;
   padding-bottom: 12px;
-  border-bottom: 1px solid #3d3d3d;
+  border-bottom: 1px solid var(--border);
 }
 
 .turn-header h4 {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--fg);
 }
 
 .active-player {
   font-size: 14px;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
 }
 
 /* Turn Snapshot */
@@ -112,7 +112,7 @@
   gap: 12px;
   margin-bottom: 16px;
   padding: 12px;
-  background-color: #1e1e1e;
+  background-color: var(--bg-raised);
   border-radius: 4px;
 }
 
@@ -124,14 +124,14 @@
 
 .snapshot-label {
   font-size: 11px;
-  color: #888888;
+  color: var(--fg-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .snapshot-value {
   font-size: 13px;
-  color: #ffffff;
+  color: var(--fg);
 }
 
 .life-values .player-life,
@@ -147,7 +147,7 @@
 }
 
 .separator {
-  color: #555555;
+  color: var(--fg-muted);
   margin: 0 6px;
 }
 
@@ -159,7 +159,7 @@
 }
 
 .plays-column {
-  background-color: #1e1e1e;
+  background-color: var(--bg-raised);
   border-radius: 4px;
   padding: 12px;
 }
@@ -168,7 +168,7 @@
   margin: 0 0 12px 0;
   font-size: 13px;
   font-weight: 600;
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -188,7 +188,7 @@
 }
 
 .no-plays {
-  color: #666666;
+  color: var(--fg-muted);
   font-size: 13px;
   font-style: italic;
 }
@@ -199,7 +199,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px;
-  background-color: #252525;
+  background-color: var(--bg-raised);
   border-radius: 4px;
   font-size: 13px;
 }
@@ -217,20 +217,20 @@
 }
 
 .play-action {
-  color: #aaaaaa;
+  color: var(--fg-secondary);
   font-weight: 500;
   min-width: 60px;
 }
 
 .play-card {
-  color: #ffffff;
+  color: var(--fg);
   font-weight: 500;
   flex: 1;
 }
 
 .play-zones {
   font-size: 11px;
-  color: #666666;
+  color: var(--fg-muted);
 }
 
 /* Life Change Display */
@@ -240,11 +240,11 @@
   margin-left: auto;
   padding: 2px 8px;
   border-radius: 4px;
-  background-color: #333333;
+  background-color: var(--border);
 }
 
 .play-life-change.damage {
-  color: #ff6b6b;
+  color: var(--danger);
   background-color: rgba(255, 77, 77, 0.15);
 }
 
@@ -263,14 +263,14 @@
 .empty-state {
   text-align: center;
   padding: 24px;
-  color: #888888;
+  color: var(--fg-secondary);
   font-size: 14px;
 }
 
 .error-message {
   padding: 12px;
   background-color: rgba(255, 77, 77, 0.1);
-  border: 1px solid #5f2d2d;
+  border: 1px solid var(--danger);
   border-radius: 4px;
   color: #ff7d7d;
   font-size: 14px;

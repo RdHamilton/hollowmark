@@ -13,8 +13,8 @@
 }
 
 .progress-modal {
-  background-color: var(--bg-primary, #1a1a1a);
-  border: 1px solid var(--border-color, #333);
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 24px;
   min-width: 320px;
@@ -51,7 +51,7 @@
   margin: 0;
   font-size: 18px;
   font-weight: 600;
-  color: var(--text-primary, #ffffff);
+  color: var(--text-primary);
 }
 
 .progress-modal-content {
@@ -65,8 +65,8 @@
 
 .progress-modal-cancel {
   background-color: transparent;
-  border: 1px solid var(--border-color, #444);
-  color: var(--text-secondary, #a0a0a0);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
   padding: 8px 24px;
   border-radius: 6px;
   font-size: 14px;
@@ -75,13 +75,13 @@
 }
 
 .progress-modal-cancel:hover {
-  background-color: var(--bg-hover, #2a2a2a);
-  color: var(--text-primary, #ffffff);
-  border-color: var(--border-hover, #666);
+  background-color: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-hover);
 }
 
 .progress-modal-cancel:focus {
-  outline: 2px solid var(--focus-ring, #4a9eff);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
