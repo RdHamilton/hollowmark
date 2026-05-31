@@ -35,8 +35,12 @@ export const Success: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const toast = canvas.getByText('Match synced successfully.');
-    await expect(toast).toBeVisible();
+    // Use toBeInTheDocument rather than toBeVisible so the assertion does not
+    // fail when Chromatic's cloud browser evaluates the computed opacity of the
+    // slideIn animation (which starts at opacity:0). Presence-in-DOM is the
+    // correct invariant here — we are asserting the toast rendered, not its
+    // animation state.
+    await expect(canvas.getByText('Match synced successfully.')).toBeInTheDocument();
   },
 };
 

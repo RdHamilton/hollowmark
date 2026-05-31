@@ -68,9 +68,12 @@ export const ConfirmationOpen: Story = {
     const uninstallBtn = canvas.getByTestId('danger-zone-uninstall-button');
     await userEvent.click(uninstallBtn);
 
-    // Confirmation panel must now be visible.
-    await expect(canvas.getByRole('button', { name: /confirm uninstall/i })).toBeInTheDocument();
-    await expect(canvas.getByRole('checkbox')).toBeInTheDocument();
+    // Use findByRole (async) rather than getByRole (sync) for the post-click
+    // assertions. After userEvent.click, React schedules a re-render; findByRole
+    // polls the DOM until the element appears (or a timeout), making the check
+    // resilient to any async flush delay in Chromatic's cloud browser.
+    await expect(await canvas.findByRole('button', { name: /confirm uninstall/i })).toBeInTheDocument();
+    await expect(await canvas.findByRole('checkbox')).toBeInTheDocument();
   },
 };
 
