@@ -38,7 +38,9 @@ func loadRealFixture(t *testing.T, filename string) *LogEntry {
 
 // TestRealFixture_Authenticate_2026_59_20 asserts that the authenticate fixture
 // parses as JSON and contains the expected authenticateResponse structure.
-// Wire format: {"authenticateResponse":{"screenName":...,"userId":...,...}}
+// Wire format (2026.59.20): {"authenticateResponse":{"clientId":...,"sessionId":...,"screenName":...}}
+// There is NO "userId" or "accountId" key — clientId is the player join key.
+// clientId equals reservedPlayers[].userId in matchGameRoomStateChangedEvent.
 func TestRealFixture_Authenticate_2026_59_20(t *testing.T) {
 	entry := loadRealFixture(t, "authenticate_2026.59.20.log")
 
@@ -49,10 +51,11 @@ func TestRealFixture_Authenticate_2026_59_20(t *testing.T) {
 	screenName, _ := authResp["screenName"].(string)
 	assert.NotEmpty(t, screenName, "screenName must be non-empty")
 
-	// All four fields present in the 2026.59.20 wire format.
-	assert.NotEmpty(t, authResp["userId"], "userId must be present")
-	assert.NotEmpty(t, authResp["clientId"], "clientId must be present")
+	// Real 2026.59.20 wire format: clientId and sessionId present, no userId/accountId.
+	assert.NotEmpty(t, authResp["clientId"], "clientId must be present (join key for match events)")
 	assert.NotEmpty(t, authResp["sessionId"], "sessionId must be present")
+	assert.Nil(t, authResp["userId"], "userId must NOT be present in real 2026.59.20 wire format")
+	assert.Nil(t, authResp["accountId"], "accountId must NOT be present in real 2026.59.20 wire format")
 }
 
 // ---------------------------------------------------------------------------
