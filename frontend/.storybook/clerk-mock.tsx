@@ -116,6 +116,16 @@ export function RedirectToSignIn() {
   return null;
 }
 
+/**
+ * `<APIKeys />` — stubbed Clerk API Keys management UI.
+ * ApiKeys.tsx renders this component; without a stub the Storybook Vite
+ * module graph would fail with "APIKeys is not exported by clerk-mock.tsx"
+ * whenever any story transitively imports ApiKeys.tsx.
+ */
+export function APIKeys() {
+  return null;
+}
+
 /** Stubbed `<UserButton />` — a static avatar so organism stories render cleanly. */
 export function UserButton() {
   return (
