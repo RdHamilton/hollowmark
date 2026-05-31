@@ -8,7 +8,10 @@ const config: StorybookConfig = {
 
   // Storybook 10 ships docs, controls, backgrounds, and actions in core, so no
   // separate addons are required for autodocs or the controls panel.
-  addons: [],
+  // @storybook/addon-a11y surfaces axe-core violations in the Accessibility
+  // panel during development so contrast and ARIA issues are caught before
+  // Chromatic and before code review.
+  addons: ['@storybook/addon-a11y'],
 
   framework: {
     // Vite builder — the SPA is built with Vite (see vite.config.ts).
