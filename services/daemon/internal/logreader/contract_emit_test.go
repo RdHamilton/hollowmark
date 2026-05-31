@@ -37,10 +37,12 @@ const corpusDir = "../../testdata/corpus"
 const (
 	testAccountID = "test-account-001"
 	testSessionID = "22222222-0000-0000-0000-000000000001"
-	// localPlayerID is the stable fake MTGA userId in the match-completed corpus
-	// fixture. ParseMatchCompletedEntry requires it to derive win/loss and
-	// identify the opponent.
-	localPlayerID = "00000000-0000-4000-8000-000000000010"
+	// localPlayerID is the stable fake MTGA userId of the local player in the
+	// match-completed corpus fixture (#262 promotion: the fixture is now REAL,
+	// and the local player's account token is keyed to the same stable fake as
+	// the corrected player-authenticated fixture's clientId == reservedPlayers[].userId).
+	// ParseMatchCompletedEntry requires it to derive win/loss and identify the opponent.
+	localPlayerID = "TESTACCOUNT000000000000003"
 )
 
 // ---------------------------------------------------------------------------
@@ -340,6 +342,69 @@ func TestContractEmit_DraftPick(t *testing.T) {
 	pickedCards, _ := rawPayload["pickedCards"].([]interface{})
 	assert.GreaterOrEqualf(t, len(pickedCards), 1,
 		"[contract-gate] draft.pick pickedCards must have at least 1 entry; corpus fixture: daemon-emit/draft-pick.json; parser source: draft_pick.go")
+}
+
+// TestContractEmit_DraftPack_Premier round-trips the Premier draft-pack corpus
+// fixture (Draft.Notify wire format, #338) through ParsePremierDraftNotify +
+// BuildEvent and asserts the emitted payload carries the DraftID and a non-empty
+// PackCards slice. CourseName is intentionally empty for Premier.
+func TestContractEmit_DraftPack_Premier(t *testing.T) {
+	entry := loadCorpusLogEntry(t, "player-log/premier-draft-pack.log")
+
+	p, err := logreader.ParsePremierDraftNotify(entry)
+	require.NoErrorf(t, err,
+		"[contract-gate] ParsePremierDraftNotify failed for corpus player-log/premier-draft-pack.log")
+
+	evt, err := dispatch.BuildEvent("draft.pack", testAccountID, testSessionID, p)
+	require.NoErrorf(t, err,
+		"[contract-gate] dispatch.BuildEvent failed for draft.pack (Premier)")
+
+	assertEnvelopeFields(t, evt, "draft.pack")
+
+	var rawPayload map[string]interface{}
+	require.NoErrorf(t, json.Unmarshal(evt.Payload, &rawPayload),
+		"[contract-gate] unmarshal Premier draft.pack payload")
+
+	draftID, _ := rawPayload["draft_id"].(string)
+	assert.NotEmptyf(t, draftID,
+		"[contract-gate] Premier draft.pack draft_id must be non-empty; corpus fixture: player-log/premier-draft-pack.log; parser source: draft_pick.go")
+
+	draftPack, _ := rawPayload["draftPack"].(map[string]interface{})
+	require.NotNilf(t, draftPack,
+		"[contract-gate] Premier draft.pack payload must contain draftPack object; corpus fixture: player-log/premier-draft-pack.log; parser source: draft_pick.go")
+	packCards, _ := draftPack["PackCards"].([]interface{})
+	assert.GreaterOrEqualf(t, len(packCards), 1,
+		"[contract-gate] Premier draft.pack draftPack.PackCards must have at least 1 card; corpus fixture: player-log/premier-draft-pack.log; parser source: draft_pick.go")
+}
+
+// TestContractEmit_DraftPick_Premier round-trips the Premier draft-pick corpus
+// fixture (EventPlayerDraftMakePick wire format, #338) through
+// ParsePremierDraftMakePick + BuildEvent and asserts the emitted payload carries
+// the DraftID and a non-empty pickedCards slice.
+func TestContractEmit_DraftPick_Premier(t *testing.T) {
+	entry := loadCorpusLogEntry(t, "player-log/premier-draft-pick.log")
+
+	p, err := logreader.ParsePremierDraftMakePick(entry)
+	require.NoErrorf(t, err,
+		"[contract-gate] ParsePremierDraftMakePick failed for corpus player-log/premier-draft-pick.log")
+
+	evt, err := dispatch.BuildEvent("draft.pick", testAccountID, testSessionID, p)
+	require.NoErrorf(t, err,
+		"[contract-gate] dispatch.BuildEvent failed for draft.pick (Premier)")
+
+	assertEnvelopeFields(t, evt, "draft.pick")
+
+	var rawPayload map[string]interface{}
+	require.NoErrorf(t, json.Unmarshal(evt.Payload, &rawPayload),
+		"[contract-gate] unmarshal Premier draft.pick payload")
+
+	draftID, _ := rawPayload["draft_id"].(string)
+	assert.NotEmptyf(t, draftID,
+		"[contract-gate] Premier draft.pick draft_id must be non-empty; corpus fixture: player-log/premier-draft-pick.log; parser source: draft_pick.go")
+
+	pickedCards, _ := rawPayload["pickedCards"].([]interface{})
+	assert.GreaterOrEqualf(t, len(pickedCards), 1,
+		"[contract-gate] Premier draft.pick pickedCards must have at least 1 entry; corpus fixture: player-log/premier-draft-pick.log; parser source: draft_pick.go")
 }
 
 // TestContractEmit_CollectionUpdated round-trips the collection-updated corpus
