@@ -1,9 +1,53 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import MatchHistory from './MatchHistory';
 import { mockMatches } from '@/test/mocks/apiMock';
 import { AppProvider } from '../context/AppContext';
 import { models } from '@/types/models';
+
+const CSS_PATH = join(dirname(fileURLToPath(import.meta.url)), 'MatchHistory.css');
+
+// — Design token compliance (AC2, #312) ————————————————————————————————
+describe('MatchHistory CSS — design token compliance (#312)', () => {
+  const css = readFileSync(CSS_PATH, 'utf8');
+
+  it('result-badge.win uses semantic dim token, not raw success hex', () => {
+    expect(css).toContain('var(--vault-success-dim)');
+    expect(css).not.toMatch(/background-color:\s*var\(--success\)[\s\S]*?\.result-badge\.win/);
+  });
+
+  it('result-badge.loss uses semantic dim token, not raw danger hex', () => {
+    expect(css).toContain('var(--vault-danger-dim)');
+  });
+
+  it('result-win row left border uses token, not raw #7dff7d hex', () => {
+    expect(css).toContain('border-left: 3px solid var(--success)');
+    expect(css).not.toMatch(/border-left:\s*3px solid #7dff7d/);
+  });
+
+  it('result-loss row left border uses token, not raw #ff7d7d hex', () => {
+    expect(css).toContain('border-left: 3px solid var(--danger)');
+    expect(css).not.toMatch(/border-left:\s*3px solid #ff7d7d/);
+  });
+
+  it('record-value background uses --accent-rgb token, not hardcoded legacy blue', () => {
+    expect(css).toContain('rgba(var(--accent-rgb), 0.1)');
+    expect(css).not.toContain('rgba(74, 158, 255');
+  });
+
+  it('notes-btn hover uses --accent-rgb token, not hardcoded legacy blue', () => {
+    expect(css).toContain('rgba(var(--accent-rgb), 0.2)');
+  });
+
+  it('comparison-panel-container uses canonical --bg-raised token, not legacy alias', () => {
+    expect(css).toContain('background: var(--bg-raised)');
+    expect(css).not.toContain('var(--surface-color)');
+  });
+});
+// ——————————————————————————————————————————————————————————————————————————
 
 // Helper function to create mock Match
 function createMockMatch(overrides: Partial<models.Match> = {}): models.Match {
