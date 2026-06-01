@@ -93,29 +93,29 @@
 }
 
 .opponent-analysis-panel .mana-white {
-  background-color: #f8f6d8; /* stylelint-disable-line color-no-hex */
-  color: var(--border);
+  background-color: var(--mana-w-bg);
+  color: var(--mana-pip-fg);
 }
 
 .opponent-analysis-panel .mana-blue {
-  background-color: #0e68ab; /* stylelint-disable-line color-no-hex */
-  color: var(--fg);
+  background-color: var(--mana-u-bg);
+  color: var(--mana-pip-fg);
 }
 
 .opponent-analysis-panel .mana-black {
-  background-color: #150b00; /* stylelint-disable-line color-no-hex */
-  color: var(--fg-secondary);
+  background-color: var(--mana-b-bg);
+  color: var(--mana-pip-fg);
   border: 1px solid var(--border);
 }
 
 .opponent-analysis-panel .mana-red {
-  background-color: var(--danger);
-  color: var(--fg);
+  background-color: var(--mana-r-bg);
+  color: var(--mana-pip-fg);
 }
 
 .opponent-analysis-panel .mana-green {
-  background-color: #00733e; /* stylelint-disable-line color-no-hex */
-  color: var(--fg);
+  background-color: var(--mana-g-bg);
+  color: var(--mana-pip-fg);
 }
 
 .opponent-analysis-panel .mana-colorless {

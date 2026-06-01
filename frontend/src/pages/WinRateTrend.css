@@ -53,11 +53,11 @@
 }
 
 .trend-improving {
-  color: #7dff7d !important; /* stylelint-disable-line color-no-hex */
+  color: var(--win) !important;
 }
 
 .trend-declining {
-  color: #ff7d7d !important; /* stylelint-disable-line color-no-hex */
+  color: var(--loss) !important;
 }
 
 .trend-stable {

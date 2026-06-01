@@ -7,18 +7,18 @@
 
 /* Urgency variants */
 .legality-banner--info {
-  background: linear-gradient(135deg, #1a3a5c 0%, #0d2137 100%); /* stylelint-disable-line color-no-hex */
-  border: 1px solid #2d5a8a; /* stylelint-disable-line color-no-hex */
+  background: linear-gradient(135deg, var(--vault-banner-info-from) 0%, var(--vault-banner-info-to) 100%);
+  border: 1px solid var(--vault-banner-info-border);
 }
 
 .legality-banner--warning {
-  background: linear-gradient(135deg, #5c4a1a 0%, #372d0d 100%); /* stylelint-disable-line color-no-hex */
-  border: 1px solid #8a7a2d; /* stylelint-disable-line color-no-hex */
+  background: linear-gradient(135deg, var(--vault-banner-warn-from) 0%, var(--vault-banner-warn-to) 100%);
+  border: 1px solid var(--vault-banner-warn-border);
 }
 
 .legality-banner--critical {
-  background: linear-gradient(135deg, #5c1a1a 0%, #370d0d 100%); /* stylelint-disable-line color-no-hex */
-  border: 1px solid #8a2d2d; /* stylelint-disable-line color-no-hex */
+  background: linear-gradient(135deg, var(--vault-banner-danger-from) 0%, var(--vault-banner-danger-to) 100%);
+  border: 1px solid var(--vault-banner-danger-border);
 }
 
 /* Header */

@@ -53,11 +53,11 @@
 }
 
 .trend-up {
-  color: #7dff7d !important; /* stylelint-disable-line color-no-hex */
+  color: var(--win) !important;
 }
 
 .trend-down {
-  color: #ff7d7d !important; /* stylelint-disable-line color-no-hex */
+  color: var(--loss) !important;
 }
 
 .trend-stable {
@@ -104,7 +104,7 @@
 }
 
 .timeline-item.changed {
-  border-color: #7dff7d; /* stylelint-disable-line color-no-hex */
+  border-color: var(--win);
   background-color: var(--success);
 }
 
@@ -120,7 +120,7 @@
 }
 
 .timeline-change {
-  color: #7dff7d; /* stylelint-disable-line color-no-hex */
+  color: var(--win);
   font-weight: 500;
 }
 

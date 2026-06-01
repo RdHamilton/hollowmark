@@ -135,8 +135,8 @@
 }
 
 .color-button.white {
-  background: #fffbd5; /* stylelint-disable-line color-no-hex */
-  color: var(--border);
+  background: var(--mana-w-bg);
+  color: var(--mana-pip-fg);
 }
 
 .color-button.white.active {
@@ -144,8 +144,8 @@
 }
 
 .color-button.blue {
-  background: #0e68ab; /* stylelint-disable-line color-no-hex */
-  color: var(--fg);
+  background: var(--mana-u-bg);
+  color: var(--mana-pip-fg);
 }
 
 .color-button.blue.active {
@@ -153,8 +153,8 @@
 }
 
 .color-button.black {
-  background: #150b00; /* stylelint-disable-line color-no-hex */
-  color: var(--fg-secondary);
+  background: var(--mana-b-bg);
+  color: var(--mana-pip-fg);
 }
 
 .color-button.black.active {
@@ -162,8 +162,8 @@
 }
 
 .color-button.red {
-  background: var(--danger);
-  color: var(--fg);
+  background: var(--mana-r-bg);
+  color: var(--mana-pip-fg);
 }
 
 .color-button.red.active {
@@ -171,12 +171,12 @@
 }
 
 .color-button.green {
-  background: #00733e; /* stylelint-disable-line color-no-hex */
-  color: var(--fg);
+  background: var(--mana-g-bg);
+  color: var(--mana-pip-fg);
 }
 
 .color-button.green.active {
-  border-color: #44ff88; /* stylelint-disable-line color-no-hex */
+  border-color: var(--win);
 }
 
 .color-button.colorless {
@@ -189,7 +189,7 @@
 }
 
 .color-button.multicolor {
-  background: linear-gradient(135deg, var(--danger) 0%, #00733e 25%, #0e68ab 50%, #fffbd5 75%, #150b00 100%); /* stylelint-disable-line color-no-hex */
+  background: linear-gradient(135deg, var(--mana-r-bg) 0%, var(--mana-g-bg) 25%, var(--mana-u-bg) 50%, var(--mana-w-bg) 75%, var(--mana-b-bg) 100%);
   color: var(--fg);
   text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
 }

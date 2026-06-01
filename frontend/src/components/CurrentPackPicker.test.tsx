@@ -36,14 +36,20 @@ describe('CurrentPackPicker CSS — design token compliance (#312)', () => {
     expect(css).not.toMatch(/rgba\(\s*255\s*,\s*215\s*,\s*0\s*,\s*0\.3\)/);
   });
 
-  it('card color indicators for non-MTG colors use token not raw hex', () => {
-    expect(css).toContain('var(--danger)');
+  it('card color indicators use mana-pip tokens, not raw hex (#328)', () => {
     expect(css).toContain('var(--vault-mtg-colorless)');
-    // MTG pip categorical hex values are allowed
-    expect(css).toContain('#f9faf4');
-    expect(css).toContain('#0e68ab');
-    expect(css).toContain('#150b00');
-    expect(css).toContain('#00733e');
+    // #328: MTG pip backgrounds migrated onto the canonical mana-pip token
+    // contract (Ramone 2026-05-31) — no raw pip hex remains.
+    expect(css).toContain('var(--mana-w-bg)');
+    expect(css).toContain('var(--mana-u-bg)');
+    expect(css).toContain('var(--mana-b-bg)');
+    expect(css).toContain('var(--mana-r-bg)');
+    expect(css).toContain('var(--mana-g-bg)');
+    expect(css).toContain('var(--mana-pip-fg)');
+    expect(css).not.toContain('#f9faf4');
+    expect(css).not.toContain('#0e68ab');
+    expect(css).not.toContain('#150b00');
+    expect(css).not.toContain('#00733e');
     // But no legacy #555 border
     expect(css).not.toContain('#555');
   });
