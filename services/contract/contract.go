@@ -177,6 +177,42 @@ type LifeChangeEntry struct {
 	TurnNumber int `json:"turn_number"`
 }
 
+// CardPlayEntry records a single card play, land drop, combat declaration, or zone transition
+// observed during a game. Stored as game_summaries.card_plays_json (ADR-046).
+type CardPlayEntry struct {
+	GameNumber int    `json:"game_number"`
+	TurnNumber int    `json:"turn_number"`
+	Phase      string `json:"phase"`
+	ArenaID    int    `json:"arena_id"`
+	PlayerType string `json:"player_type"` // "player" or "opponent"
+	ActionType string `json:"action_type"` // "play_card", "land_drop", "cast_spell", "attack", "block", etc.
+	ZoneFrom   string `json:"zone_from"`
+	ZoneTo     string `json:"zone_to"`
+}
+
+// GameSnapshotEntry captures per-turn board state.
+// Stored as game_summaries.life_arc_json (ADR-046) and used for the variance score heuristic.
+type GameSnapshotEntry struct {
+	GameNumber          int `json:"game_number"`
+	TurnNumber          int `json:"turn_number"`
+	PlayerLife          int `json:"player_life"`
+	OpponentLife        int `json:"opponent_life"`
+	PlayerCardsInHand   int `json:"player_cards_in_hand"`
+	OpponentCardsInHand int `json:"opponent_cards_in_hand"`
+	PlayerLandsInPlay   int `json:"player_lands_in_play"`
+	OpponentLandsInPlay int `json:"opponent_lands_in_play"`
+}
+
+// OpponentCardEntry records an opponent card that was observed during a game.
+// Foundation for opponent archetype identification (ADR-046 §5).
+// ArenaID is the MTGA GRPId (grpId) as observed in GRE game objects.
+type OpponentCardEntry struct {
+	ArenaID       int    `json:"arena_id"`
+	ZoneObserved  string `json:"zone_observed"`
+	TurnFirstSeen int    `json:"turn_first_seen"`
+	TimesSeen     int    `json:"times_seen"`
+}
+
 // GamePlayPayload is embedded in a DaemonEvent with Type "match.game_ended".
 // It carries per-game telemetry collected from the GRE session buffer.
 //
@@ -184,12 +220,28 @@ type LifeChangeEntry struct {
 // complete — either because the GRE buffer reached its flush threshold or
 // because the stale-buffer sweep evicted it.  When Partial is true the BFF
 // must set partial=true on the corresponding game_plays row.
+//
+// CardPlays, Snapshots, and OpponentCards are omitted from the wire payload
+// when empty (omitempty). They are stored in daemon_events.payload (JSONB)
+// for retroactive projection into game_summaries (ADR-046, v0.3.8).
+//
+// WinningTeamID is zero in v0.3.7: GRE messages do not carry a final win
+// signal; the BFF projection cross-references the matches table at projection
+// time.
+//
+// Timing note: this event is emitted retrospectively from flushGREBuffer —
+// the game has already ended when the event arrives at the BFF. For v0.3.7
+// this is acceptable because the BFF projection is async. Real-time
+// gre.game_started emission is a v0.3.8 enhancement.
 type GamePlayPayload struct {
-	MatchID       string            `json:"match_id"`
-	GameNumber    int               `json:"game_number"`
-	WinningTeamID int               `json:"winning_team_id"`
-	TurnCount     int               `json:"turn_count"`
-	DurationSecs  int               `json:"duration_secs"`
-	LifeChanges   []LifeChangeEntry `json:"life_changes"`
-	Partial       bool              `json:"partial"`
+	MatchID       string              `json:"match_id"`
+	GameNumber    int                 `json:"game_number"`
+	WinningTeamID int                 `json:"winning_team_id"`
+	TurnCount     int                 `json:"turn_count"`
+	DurationSecs  int                 `json:"duration_secs"`
+	LifeChanges   []LifeChangeEntry   `json:"life_changes"`
+	CardPlays     []CardPlayEntry     `json:"card_plays,omitempty"`
+	Snapshots     []GameSnapshotEntry `json:"snapshots,omitempty"`
+	OpponentCards []OpponentCardEntry `json:"opponent_cards,omitempty"`
+	Partial       bool                `json:"partial"`
 }

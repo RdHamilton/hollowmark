@@ -81,6 +81,7 @@ type GamePlayEvent struct {
 	Phase          string
 	Step           string
 	PlayerType     string // "player" or "opponent"
+	TeamID         int    // MTGA teamId from GREPlayerState; populated for life_change events
 	ActionType     string // "play_card", "attack", "block", "land_drop", "life_change", etc.
 	CardID         int    // Arena card ID (GRPId)
 	CardName       string // Will be populated later from card database
@@ -743,6 +744,7 @@ func detectLifeChanges(prev, curr *GREGameStateMessage, playerConn *GREConnectio
 				Phase:      phase,
 				Step:       step,
 				PlayerType: playerType,
+				TeamID:     player.TeamID, // populated from GREPlayerState.TeamID
 				ActionType: "life_change",
 				LifeFrom:   prevLife,
 				LifeTo:     player.LifeTotal,
