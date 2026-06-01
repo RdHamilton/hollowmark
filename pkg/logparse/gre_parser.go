@@ -1264,8 +1264,22 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 	// Mulligan: scan pre-game messages before any per-state iteration.
 	mulligan := detectMulligan(messages, playerConn)
 
+	// extractOpponentCardsFromMessages and extractSnapshotsFromMessages operate
+	// on individual messages — no diff pair is required. Run them before the
+	// early-return so a single-message buffer still produces opponent cards and
+	// snapshots.
+	snapshots, err := extractSnapshotsFromMessages(messages, playerConn)
+	if err != nil {
+		return GamePlaysResult{}, err
+	}
+	opponentCards := extractOpponentCardsFromMessages(messages, playerConn)
+
 	if len(messages) < 2 {
-		return GamePlaysResult{Mulligan: mulligan}, nil
+		return GamePlaysResult{
+			Snapshots:     snapshots,
+			OpponentCards: opponentCards,
+			Mulligan:      mulligan,
+		}, nil
 	}
 
 	// Build a cumulative zones map from all messages.
@@ -1391,14 +1405,6 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 			lifeTotals[player.SeatID] = player.LifeTotal
 		}
 	}
-
-	// Snapshots and opponent cards are derived from the full message slice in
-	// one pass each — this matches their pre-existing extraction logic.
-	snapshots, err := extractSnapshotsFromMessages(messages, playerConn)
-	if err != nil {
-		return GamePlaysResult{}, err
-	}
-	opponentCards := extractOpponentCardsFromMessages(messages, playerConn)
 
 	return GamePlaysResult{
 		Plays:          plays,
