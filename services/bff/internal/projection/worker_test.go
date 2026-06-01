@@ -1645,6 +1645,304 @@ func TestRunOnce_CrossTenantAccount_QuestProgress(t *testing.T) {
 	}
 }
 
+// --- counter projection tests (vmt-t#613) ---
+
+// fakeCounterStore captures InsertCounters calls for assertion.
+type fakeCounterStore struct {
+	inserts []repository.GameEventCounterInsert
+	err     error
+}
+
+func (f *fakeCounterStore) InsertCounters(_ context.Context, ins []repository.GameEventCounterInsert) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.inserts = append(f.inserts, ins...)
+	return nil
+}
+
+func newWorkerWithCounters(events *fakeEventStore, accounts *fakeAccountStore, gp *fakeGamePlayStoreCapturing, ctr *fakeCounterStore) *Worker {
+	w := NewWorker(events, accounts, &fakeMatchStore{}, &fakeDraftStore{}, &fakeCollectionStore{}, &fakeInventoryStore{}, &fakeQuestStore{}, &fakeDeckStore{}, gp)
+	w.WithCounterStore(ctr)
+	return w
+}
+
+// TestRunOnce_GamePlayEvent_CounterChanges_ProjectsToCounterStore verifies that
+// CounterChanges in the payload are forwarded to the counter store with the
+// correct fields and account/game_play IDs.
+func TestRunOnce_GamePlayEvent_CounterChanges_ProjectsToCounterStore(t *testing.T) {
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":        "match-ctr-proj-001",
+		"game_number":     1,
+		"winning_team_id": 1,
+		"turn_count":      8,
+		"duration_secs":   200,
+		"life_changes":    []map[string]interface{}{},
+		"counter_changes": []map[string]interface{}{
+			{"instance_id": 101, "arena_id": 80001, "counter_type": "loyalty", "count": 3, "delta": -1, "controller": "player", "turn_number": 4},
+			{"instance_id": 102, "arena_id": 80002, "counter_type": "+1/+1", "count": 2, "delta": 1, "controller": "opponent", "turn_number": 5},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	ctr := &fakeCounterStore{}
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 600, UserID: 1, AccountID: "acct-ctr", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 55}
+
+	w := newWorkerWithCounters(events, accounts, gp, ctr)
+	w.RunOnce(context.Background())
+
+	if len(gp.gamePlayInserts) != 1 {
+		t.Fatalf("expected 1 game_play insert, got %d", len(gp.gamePlayInserts))
+	}
+	if len(ctr.inserts) != 2 {
+		t.Fatalf("expected 2 counter inserts, got %d", len(ctr.inserts))
+	}
+
+	ins0 := ctr.inserts[0]
+	if ins0.InstanceID != 101 {
+		t.Errorf("inserts[0].InstanceID: want 101, got %d", ins0.InstanceID)
+	}
+	if ins0.CounterType != "loyalty" {
+		t.Errorf("inserts[0].CounterType: want loyalty, got %q", ins0.CounterType)
+	}
+	if ins0.Count != 3 {
+		t.Errorf("inserts[0].Count: want 3, got %d", ins0.Count)
+	}
+	if ins0.Delta != -1 {
+		t.Errorf("inserts[0].Delta: want -1, got %d", ins0.Delta)
+	}
+	if ins0.Controller != "player" {
+		t.Errorf("inserts[0].Controller: want player, got %q", ins0.Controller)
+	}
+	if ins0.TurnNumber != 4 {
+		t.Errorf("inserts[0].TurnNumber: want 4, got %d", ins0.TurnNumber)
+	}
+	// GamePlayID must be the ID returned by fakeGamePlayStoreCapturing.
+	if ins0.GamePlayID != 1 {
+		t.Errorf("inserts[0].GamePlayID: want 1 (first fakeGamePlay id), got %d", ins0.GamePlayID)
+	}
+	// AccountID must match the resolved accounts.id.
+	if ins0.AccountID != 55 {
+		t.Errorf("inserts[0].AccountID: want 55, got %d", ins0.AccountID)
+	}
+
+	if len(events.projected) != 1 || events.projected[0] != 600 {
+		t.Errorf("expected row 600 marked projected, got %v", events.projected)
+	}
+}
+
+// TestRunOnce_GamePlayEvent_NoCounterChanges_CounterStoreNotCalled verifies that
+// the counter store is not called when CounterChanges is empty.
+func TestRunOnce_GamePlayEvent_NoCounterChanges_CounterStoreNotCalled(t *testing.T) {
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":     "match-noctr-001",
+		"game_number":  1,
+		"turn_count":   6,
+		"life_changes": []map[string]interface{}{},
+		// counter_changes intentionally absent
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	ctr := &fakeCounterStore{}
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 601, UserID: 1, AccountID: "acct-noctr", EventType: "match.game_ended", Payload: payload, OccurredAt: time.Now(), Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 56}
+
+	w := newWorkerWithCounters(events, accounts, gp, ctr)
+	w.RunOnce(context.Background())
+
+	if len(ctr.inserts) != 0 {
+		t.Errorf("expected 0 counter inserts for empty counter_changes, got %d", len(ctr.inserts))
+	}
+	if len(events.projected) != 1 || events.projected[0] != 601 {
+		t.Errorf("expected row 601 marked projected, got %v", events.projected)
+	}
+}
+
+// TestRunOnce_GamePlayEvent_CounterChanges_NoCounterStoreWired_NoError verifies
+// that when counter_changes are present but WithCounterStore was not called, the
+// projection succeeds (no error, game_play row is written, event marked projected).
+func TestRunOnce_GamePlayEvent_CounterChanges_NoCounterStoreWired_NoError(t *testing.T) {
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":     "match-ctr-nowire-001",
+		"game_number":  1,
+		"turn_count":   7,
+		"life_changes": []map[string]interface{}{},
+		"counter_changes": []map[string]interface{}{
+			{"instance_id": 201, "arena_id": 70001, "counter_type": "poison", "count": 5, "delta": 2, "controller": "opponent", "turn_number": 3},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 602, UserID: 1, AccountID: "acct-nowire", EventType: "match.game_ended", Payload: payload, OccurredAt: time.Now(), Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 57}
+
+	// Worker WITHOUT WithCounterStore wired.
+	w := newWorkerWithGamePlay(events, accounts, gp)
+	w.RunOnce(context.Background())
+
+	if len(gp.gamePlayInserts) != 1 {
+		t.Fatalf("expected 1 game_play insert even without counter store, got %d", len(gp.gamePlayInserts))
+	}
+	if len(events.projected) != 1 || events.projected[0] != 602 {
+		t.Errorf("expected row 602 marked projected, got %v", events.projected)
+	}
+}
+
+// TestRunOnce_GamePlayEvent_CounterChanges_IdempotentReplay verifies that
+// replaying the same event calls InsertCounters again (the DB's ON CONFLICT
+// handles dedup; the worker does not guard at the store interface level).
+func TestRunOnce_GamePlayEvent_CounterChanges_IdempotentReplay(t *testing.T) {
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":     "match-ctr-idem-001",
+		"game_number":  1,
+		"turn_count":   5,
+		"life_changes": []map[string]interface{}{},
+		"counter_changes": []map[string]interface{}{
+			{"instance_id": 301, "arena_id": 60001, "counter_type": "loyalty", "count": 4, "delta": 0, "controller": "player", "turn_number": 2},
+		},
+	})
+
+	row := repository.DaemonEventRow{ID: 603, UserID: 1, AccountID: "acct-ctr-idem", EventType: "match.game_ended", Payload: payload, OccurredAt: time.Now(), Sequence: 1}
+
+	gp := &fakeGamePlayStoreCapturing{}
+	ctr := &fakeCounterStore{}
+	events := &fakeEventStore{pending: []repository.DaemonEventRow{row}}
+	accounts := &fakeAccountStore{accountID: 58}
+
+	w := newWorkerWithCounters(events, accounts, gp, ctr)
+
+	// First run.
+	w.RunOnce(context.Background())
+	firstCtrCount := len(ctr.inserts)
+
+	// Replay: reset pending to simulate daemon retransmission.
+	events.pending = []repository.DaemonEventRow{row}
+	events.projected = nil
+
+	w.RunOnce(context.Background())
+
+	// Worker calls InsertCounters again; DB's ON CONFLICT handles idempotency.
+	if len(ctr.inserts) != firstCtrCount*2 {
+		t.Errorf("expected %d total counter inserts after 2 runs, got %d", firstCtrCount*2, len(ctr.inserts))
+	}
+}
+
+// --- mulligan deferral tests (vmt-t#614) ---
+
+// TestRunOnce_GamePlayEvent_MulliganPresent_NoWriteNoError verifies that a
+// match.game_ended payload with Mulligan data:
+//  1. Does NOT error.
+//  2. Marks the event projected.
+//  3. Does NOT attempt any write beyond game_plays + life_changes (i.e. the
+//     counter store is NOT called, no summary table write occurs).
+func TestRunOnce_GamePlayEvent_MulliganPresent_NoWriteNoError(t *testing.T) {
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":     "match-mulligan-001",
+		"game_number":  1,
+		"turn_count":   10,
+		"life_changes": []map[string]interface{}{},
+		// Mulligan data present — v0.3.8 deferred, must not trigger any write.
+		"mulligan": map[string]interface{}{
+			"opening_hand_size": 6,
+			"mulligan_count":    1,
+			"kept_card_ids":     []int{10001, 10002, 10003, 10004, 10005, 10006},
+			"bottomed_card_ids": []int{10007},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	ctr := &fakeCounterStore{}
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 610, UserID: 1, AccountID: "acct-mulligan", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 59}
+
+	w := newWorkerWithCounters(events, accounts, gp, ctr)
+	w.RunOnce(context.Background())
+
+	// Must not error — event must be projected.
+	if len(events.projected) != 1 || events.projected[0] != 610 {
+		t.Errorf("expected row 610 marked projected, got %v", events.projected)
+	}
+	// game_play row must be inserted.
+	if len(gp.gamePlayInserts) != 1 {
+		t.Errorf("expected 1 game_play insert, got %d", len(gp.gamePlayInserts))
+	}
+	// No counter writes (counter_changes absent).
+	if len(ctr.inserts) != 0 {
+		t.Errorf("expected 0 counter inserts for mulligan-only payload, got %d", len(ctr.inserts))
+	}
+	// No life_changes written.
+	if len(gp.lifeChanges) != 0 {
+		t.Errorf("expected 0 life changes, got %d", len(gp.lifeChanges))
+	}
+}
+
+// TestRunOnce_GamePlayEvent_MulliganPresentWithCounters_BothHandledCorrectly
+// verifies a payload that carries both Mulligan and CounterChanges: counters
+// are written, mulligan is not.
+func TestRunOnce_GamePlayEvent_MulliganPresentWithCounters_BothHandledCorrectly(t *testing.T) {
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":     "match-mull-ctr-001",
+		"game_number":  1,
+		"turn_count":   12,
+		"life_changes": []map[string]interface{}{},
+		"counter_changes": []map[string]interface{}{
+			{"instance_id": 401, "arena_id": 50001, "counter_type": "loyalty", "count": 2, "delta": -1, "controller": "player", "turn_number": 6},
+		},
+		"mulligan": map[string]interface{}{
+			"opening_hand_size": 7,
+			"mulligan_count":    0,
+			"kept_card_ids":     []int{20001, 20002, 20003, 20004, 20005, 20006, 20007},
+			"bottomed_card_ids": []int{},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	ctr := &fakeCounterStore{}
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 611, UserID: 1, AccountID: "acct-mull-ctr", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 60}
+
+	w := newWorkerWithCounters(events, accounts, gp, ctr)
+	w.RunOnce(context.Background())
+
+	if len(events.projected) != 1 || events.projected[0] != 611 {
+		t.Errorf("expected row 611 marked projected, got %v", events.projected)
+	}
+	if len(gp.gamePlayInserts) != 1 {
+		t.Fatalf("expected 1 game_play insert, got %d", len(gp.gamePlayInserts))
+	}
+	// Counter must be written.
+	if len(ctr.inserts) != 1 {
+		t.Errorf("expected 1 counter insert, got %d", len(ctr.inserts))
+	}
+	if ctr.inserts[0].InstanceID != 401 {
+		t.Errorf("counter InstanceID: want 401, got %d", ctr.inserts[0].InstanceID)
+	}
+}
+
 // TestRunOnce_CrossTenantAccount_MatchGameEnded verifies that a
 // match.game_ended event whose client_id belongs to a different user is
 // skipped and no game_plays row is written (AC4).
