@@ -64,6 +64,34 @@ InstallDir        "$LOCALAPPDATA\VaultMTG"
 !define MUI_UNICON "..\..\icons\vaultmtg.ico"
 
 ;----------------------------------------------------------------------
+; Beta unsigned-binary notice (vmt-t#394)
+;
+; When BETA_UNSIGNED is defined at build time (/DBETA_UNSIGNED=1 on the
+; makensis command line), the WELCOME page body text is replaced with a
+; notice explaining the expected SmartScreen warning and how to bypass it.
+;
+; GoReleaser passes /DBETA_UNSIGNED=1 in daemon-release.yml until Azure
+; Trusted Signing is active (5 GitHub secrets populated, signing pipeline
+; green).  Remove /DBETA_UNSIGNED=1 from the goreleaser-nsis job and delete
+; this block once signing is confirmed working.
+;
+; Reference: vault-mtg-docs/engineering/runbooks/windows-trusted-signing.md
+;----------------------------------------------------------------------
+!ifdef BETA_UNSIGNED
+  !define MUI_WELCOMEPAGE_TEXT "Welcome to the VaultMTG Daemon installer.$\r$\n$\r$\n\
+IMPORTANT: This beta build is not yet code-signed.$\r$\n$\r$\n\
+Windows SmartScreen may show 'Windows protected your PC' when you run \
+this installer.  This is expected during the beta period.$\r$\n$\r$\n\
+To proceed:$\r$\n\
+  1. On the SmartScreen dialog, click 'More info'.$\r$\n\
+  2. Click 'Run anyway'.$\r$\n$\r$\n\
+The installer is safe: it is built by the VaultMTG CI pipeline (Ray \
+Hamilton Engineering, LLC) and published via GitHub Releases.  Code \
+signing will be active before the public launch.$\r$\n$\r$\n\
+Click Next to continue."
+!endif
+
+;----------------------------------------------------------------------
 ; Pages
 ;----------------------------------------------------------------------
 !insertmacro MUI_PAGE_WELCOME
