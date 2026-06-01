@@ -183,6 +183,212 @@ func TestGamePlayPayload_OmitemptySlices(t *testing.T) {
 	}
 }
 
+// TestGamePlayPayload_SchemaVersion verifies that SchemaVersion is emitted
+// with key "schema_version" and that it is present even when zero.
+func TestGamePlayPayload_SchemaVersion(t *testing.T) {
+	payload := contract.GamePlayPayload{
+		MatchID:       "match-sv-001",
+		GameNumber:    1,
+		SchemaVersion: 2,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+
+	if _, ok := raw["schema_version"]; !ok {
+		t.Error("expected key \"schema_version\" in marshaled GamePlayPayload")
+	}
+
+	var decoded contract.GamePlayPayload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal GamePlayPayload: %v", err)
+	}
+	if decoded.SchemaVersion != 2 {
+		t.Errorf("SchemaVersion: got %d, want 2", decoded.SchemaVersion)
+	}
+}
+
+// TestCounterChangeEntry_WireKeys verifies CounterChangeEntry marshals to the
+// expected JSON keys (ADR-046 A2.1) and round-trips correctly.
+func TestCounterChangeEntry_WireKeys(t *testing.T) {
+	entry := contract.CounterChangeEntry{
+		InstanceID:  42,
+		ArenaID:     99999,
+		CounterType: "loyalty",
+		Count:       3,
+		Delta:       -1,
+		Controller:  "player",
+		TurnNumber:  5,
+	}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("marshal CounterChangeEntry: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal to raw map: %v", err)
+	}
+
+	for _, key := range []string{"instance_id", "arena_id", "counter_type", "count", "delta", "controller", "turn_number"} {
+		if _, ok := raw[key]; !ok {
+			t.Errorf("expected JSON key %q in CounterChangeEntry wire format", key)
+		}
+	}
+
+	var decoded contract.CounterChangeEntry
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal CounterChangeEntry: %v", err)
+	}
+	if decoded.InstanceID != entry.InstanceID {
+		t.Errorf("InstanceID: got %d, want %d", decoded.InstanceID, entry.InstanceID)
+	}
+	if decoded.ArenaID != entry.ArenaID {
+		t.Errorf("ArenaID: got %d, want %d", decoded.ArenaID, entry.ArenaID)
+	}
+	if decoded.CounterType != entry.CounterType {
+		t.Errorf("CounterType: got %q, want %q", decoded.CounterType, entry.CounterType)
+	}
+	if decoded.Count != entry.Count {
+		t.Errorf("Count: got %d, want %d", decoded.Count, entry.Count)
+	}
+	if decoded.Delta != entry.Delta {
+		t.Errorf("Delta: got %d, want %d", decoded.Delta, entry.Delta)
+	}
+	if decoded.Controller != entry.Controller {
+		t.Errorf("Controller: got %q, want %q", decoded.Controller, entry.Controller)
+	}
+	if decoded.TurnNumber != entry.TurnNumber {
+		t.Errorf("TurnNumber: got %d, want %d", decoded.TurnNumber, entry.TurnNumber)
+	}
+}
+
+// TestMulliganEntry_WireKeys verifies MulliganEntry marshals to the expected
+// JSON keys (ADR-046 A2.2) and round-trips correctly.
+func TestMulliganEntry_WireKeys(t *testing.T) {
+	entry := contract.MulliganEntry{
+		OpeningHandSize: 7,
+		MulliganCount:   1,
+		KeptCardIDs:     []int{11111, 22222, 33333, 44444, 55555, 66666},
+		BottomedCardIDs: []int{77777},
+	}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("marshal MulliganEntry: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal to raw map: %v", err)
+	}
+
+	for _, key := range []string{"opening_hand_size", "mulligan_count", "kept_card_ids", "bottomed_card_ids"} {
+		if _, ok := raw[key]; !ok {
+			t.Errorf("expected JSON key %q in MulliganEntry wire format", key)
+		}
+	}
+
+	var decoded contract.MulliganEntry
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal MulliganEntry: %v", err)
+	}
+	if decoded.OpeningHandSize != entry.OpeningHandSize {
+		t.Errorf("OpeningHandSize: got %d, want %d", decoded.OpeningHandSize, entry.OpeningHandSize)
+	}
+	if decoded.MulliganCount != entry.MulliganCount {
+		t.Errorf("MulliganCount: got %d, want %d", decoded.MulliganCount, entry.MulliganCount)
+	}
+	if len(decoded.KeptCardIDs) != len(entry.KeptCardIDs) {
+		t.Errorf("KeptCardIDs length: got %d, want %d", len(decoded.KeptCardIDs), len(entry.KeptCardIDs))
+	}
+	if len(decoded.BottomedCardIDs) != len(entry.BottomedCardIDs) {
+		t.Errorf("BottomedCardIDs length: got %d, want %d", len(decoded.BottomedCardIDs), len(entry.BottomedCardIDs))
+	}
+}
+
+// TestGamePlayPayload_CounterChangesOmitempty verifies CounterChanges is omitted
+// when nil (omitempty).
+func TestGamePlayPayload_CounterChangesOmitempty(t *testing.T) {
+	payload := contract.GamePlayPayload{
+		MatchID:    "match-cc-001",
+		GameNumber: 1,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, ok := raw["counter_changes"]; ok {
+		t.Error("counter_changes should be absent (omitempty) when nil")
+	}
+	if _, ok := raw["mulligan"]; ok {
+		t.Error("mulligan should be absent (omitempty) when nil")
+	}
+}
+
+// TestGamePlayPayload_WithCountersAndMulligan verifies both new fields marshal
+// and unmarshal correctly when populated.
+func TestGamePlayPayload_WithCountersAndMulligan(t *testing.T) {
+	payload := contract.GamePlayPayload{
+		MatchID:       "match-cm-001",
+		GameNumber:    1,
+		SchemaVersion: 2,
+		CounterChanges: []contract.CounterChangeEntry{
+			{InstanceID: 10, ArenaID: 555, CounterType: "+1/+1", Count: 2, Delta: 1, Controller: "player", TurnNumber: 3},
+		},
+		Mulligan: &contract.MulliganEntry{
+			OpeningHandSize: 7,
+			MulliganCount:   0,
+			KeptCardIDs:     []int{1, 2, 3, 4, 5, 6, 7},
+			BottomedCardIDs: []int{},
+		},
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded contract.GamePlayPayload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if decoded.SchemaVersion != 2 {
+		t.Errorf("SchemaVersion: got %d, want 2", decoded.SchemaVersion)
+	}
+	if len(decoded.CounterChanges) != 1 {
+		t.Fatalf("CounterChanges: got %d, want 1", len(decoded.CounterChanges))
+	}
+	if decoded.CounterChanges[0].CounterType != "+1/+1" {
+		t.Errorf("CounterType: got %q, want \"+1/+1\"", decoded.CounterChanges[0].CounterType)
+	}
+	if decoded.Mulligan == nil {
+		t.Fatal("Mulligan should be non-nil")
+	}
+	if decoded.Mulligan.MulliganCount != 0 {
+		t.Errorf("MulliganCount: got %d, want 0", decoded.Mulligan.MulliganCount)
+	}
+	if len(decoded.Mulligan.KeptCardIDs) != 7 {
+		t.Errorf("KeptCardIDs length: got %d, want 7", len(decoded.Mulligan.KeptCardIDs))
+	}
+}
+
 // TestGamePlayPayload_WithGRESlices verifies that CardPlays, Snapshots, and
 // OpponentCards are correctly marshaled and unmarshaled when populated.
 func TestGamePlayPayload_WithGRESlices(t *testing.T) {
