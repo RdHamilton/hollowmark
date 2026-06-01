@@ -213,6 +213,47 @@ type OpponentCardEntry struct {
 	TimesSeen     int    `json:"times_seen"`
 }
 
+// CounterChangeEntry records a single counter mutation observed on a permanent
+// between consecutive GRE game state messages. Stored in
+// daemon_events.payload (JSONB) for projection into game_event_counters
+// (ADR-046 A2.1, v0.3.7).
+//
+// InstanceID is the GRE instanceId of the permanent that holds the counter.
+// ArenaID is the GRPId (card ID) of the permanent.
+// CounterType is the raw counter type string from the GRE (e.g. "loyalty",
+// "+1/+1", "poison").
+// Count is the new total after the change.
+// Delta is Count minus the previous Count (negative for decrements).
+// Controller is "player" or "opponent" relative to the local player.
+// TurnNumber is the turn on which the change was observed.
+type CounterChangeEntry struct {
+	InstanceID  int    `json:"instance_id"`
+	ArenaID     int    `json:"arena_id"`
+	CounterType string `json:"counter_type"`
+	Count       int    `json:"count"`
+	Delta       int    `json:"delta"`
+	Controller  string `json:"controller"`
+	TurnNumber  int    `json:"turn_number"`
+}
+
+// MulliganEntry records the opening hand decision for a single game.
+// Stored in daemon_events.payload (JSONB) for projection into
+// game_summaries.mulligan_json (ADR-046 A2.2, v0.3.8).
+//
+// OpeningHandSize is the initial hand size (7 for a fresh game, less after
+// mulligans under London rules because maxHandSize decrements by 1 per
+// mulligan taken).
+// MulliganCount is the total number of mulligans taken (0 = kept opening 7).
+// KeptCardIDs contains the GRPIds of cards in hand at game start.
+// BottomedCardIDs contains the GRPIds of cards placed on the bottom of the
+// library under London mulligan rules (empty when MulliganCount == 0).
+type MulliganEntry struct {
+	OpeningHandSize int   `json:"opening_hand_size"`
+	MulliganCount   int   `json:"mulligan_count"`
+	KeptCardIDs     []int `json:"kept_card_ids"`
+	BottomedCardIDs []int `json:"bottomed_card_ids"`
+}
+
 // GamePlayPayload is embedded in a DaemonEvent with Type "match.game_ended".
 // It carries per-game telemetry collected from the GRE session buffer.
 //
@@ -221,9 +262,13 @@ type OpponentCardEntry struct {
 // because the stale-buffer sweep evicted it.  When Partial is true the BFF
 // must set partial=true on the corresponding game_plays row.
 //
-// CardPlays, Snapshots, and OpponentCards are omitted from the wire payload
-// when empty (omitempty). They are stored in daemon_events.payload (JSONB)
-// for retroactive projection into game_summaries (ADR-046, v0.3.8).
+// SchemaVersion identifies the payload shape for the archival Lambda (ADR-046
+// A1.4). The daemon sets SchemaVersion = 2 from this release onward. Rows
+// without the field are treated as schema_version 0 (no backfill required).
+//
+// CardPlays, Snapshots, OpponentCards, CounterChanges, and Mulligan are
+// omitted from the wire payload when empty/nil (omitempty). They are stored
+// in daemon_events.payload (JSONB) for retroactive projection.
 //
 // WinningTeamID is zero in v0.3.7: GRE messages do not carry a final win
 // signal; the BFF projection cross-references the matches table at projection
@@ -234,14 +279,17 @@ type OpponentCardEntry struct {
 // this is acceptable because the BFF projection is async. Real-time
 // gre.game_started emission is a v0.3.8 enhancement.
 type GamePlayPayload struct {
-	MatchID       string              `json:"match_id"`
-	GameNumber    int                 `json:"game_number"`
-	WinningTeamID int                 `json:"winning_team_id"`
-	TurnCount     int                 `json:"turn_count"`
-	DurationSecs  int                 `json:"duration_secs"`
-	LifeChanges   []LifeChangeEntry   `json:"life_changes"`
-	CardPlays     []CardPlayEntry     `json:"card_plays,omitempty"`
-	Snapshots     []GameSnapshotEntry `json:"snapshots,omitempty"`
-	OpponentCards []OpponentCardEntry `json:"opponent_cards,omitempty"`
-	Partial       bool                `json:"partial"`
+	MatchID        string               `json:"match_id"`
+	GameNumber     int                  `json:"game_number"`
+	WinningTeamID  int                  `json:"winning_team_id"`
+	TurnCount      int                  `json:"turn_count"`
+	DurationSecs   int                  `json:"duration_secs"`
+	SchemaVersion  int                  `json:"schema_version"`
+	LifeChanges    []LifeChangeEntry    `json:"life_changes"`
+	CardPlays      []CardPlayEntry      `json:"card_plays,omitempty"`
+	Snapshots      []GameSnapshotEntry  `json:"snapshots,omitempty"`
+	OpponentCards  []OpponentCardEntry  `json:"opponent_cards,omitempty"`
+	CounterChanges []CounterChangeEntry `json:"counter_changes,omitempty"`
+	Mulligan       *MulliganEntry       `json:"mulligan,omitempty"`
+	Partial        bool                 `json:"partial"`
 }

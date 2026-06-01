@@ -1216,4 +1216,445 @@ type GameSnapshot struct {
 	Timestamp           time.Time
 }
 
+// CounterChangeEvent records a single counter mutation observed on a permanent
+// between two consecutive GRE game state messages.
+type CounterChangeEvent struct {
+	InstanceID  int
+	ArenaID     int
+	CounterType string
+	Count       int    // new total after the change
+	Delta       int    // Count minus previous Count (negative for decrements)
+	Controller  string // "player" or "opponent"
+	TurnNumber  int
+}
+
+// MulliganData records the opening hand decision for a single game, inferred
+// from pre-game (turn < 1) GRE game state messages.
+type MulliganData struct {
+	OpeningHandSize int
+	MulliganCount   int
+	KeptCardIDs     []int
+	BottomedCardIDs []int
+}
+
+// GamePlaysResult contains all parsed GRE outputs from a single
+// ParseGamePlaysResult call, replacing the previous three-function pattern of
+// ParseGamePlays + ExtractGameSnapshots + ExtractOpponentCards.
+type GamePlaysResult struct {
+	Plays          []*GamePlayEvent
+	Snapshots      []*GameSnapshot
+	OpponentCards  []OpponentCard
+	CounterChanges []CounterChangeEvent
+	Mulligan       *MulliganData
+}
+
+// ParseGamePlaysResult parses a GRE session buffer and returns all detected
+// game events in a single pass: plays, snapshots, opponent cards, counter
+// changes, and mulligan data.
+//
+// The caller is the daemon's flushGREBuffer. This replaces the three
+// separate calls to ParseGamePlays / ExtractGameSnapshots /
+// ExtractOpponentCards without changing their individual semantics.
+func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GamePlaysResult, error) {
+	messages, err := ParseGREMessages(entries)
+	if err != nil {
+		return GamePlaysResult{}, err
+	}
+
+	// Mulligan: scan pre-game messages before any per-state iteration.
+	mulligan := detectMulligan(messages, playerConn)
+
+	if len(messages) < 2 {
+		return GamePlaysResult{Mulligan: mulligan}, nil
+	}
+
+	// Build a cumulative zones map from all messages.
+	cumulativeZones := make(map[int]*GREZone)
+	for _, msg := range messages {
+		for zoneID, zone := range msg.Zones {
+			cumulativeZones[zoneID] = zone
+		}
+	}
+
+	allTrackedObjects := make(map[int]*trackedObject)
+	lifeTotals := make(map[int]int)
+	// prevCounters tracks the last-observed counter state per instanceID so we
+	// can compute deltas without re-reading the previous GRE message on each
+	// iteration.
+	prevCounters := make(map[int]map[string]int)
+
+	var plays []*GamePlayEvent
+	var counterChanges []CounterChangeEvent
+	seqNum := 0
+	currentGameNumber := 1
+	lastValidTurnNumber := 1
+
+	// Seed prevCounters from the first message so the first comparison has a
+	// baseline to diff against.
+	for _, obj := range messages[0].GameObjects {
+		if len(obj.Counters) > 0 {
+			snapshot := make(map[string]int, len(obj.Counters))
+			for k, v := range obj.Counters {
+				snapshot[k] = v
+			}
+			prevCounters[obj.InstanceID] = snapshot
+		}
+	}
+
+	for i := 1; i < len(messages); i++ {
+		prev := messages[i-1]
+		curr := messages[i]
+
+		if curr.GameNumber > 0 {
+			currentGameNumber = curr.GameNumber
+		}
+		if curr.TurnInfo != nil && curr.TurnInfo.TurnNumber > 0 {
+			lastValidTurnNumber = curr.TurnInfo.TurnNumber
+		}
+
+		// Life changes.
+		for _, lc := range detectLifeChanges(prev, curr, playerConn, lifeTotals) {
+			lc.SequenceNumber = seqNum
+			seqNum++
+			if lc.GameNumber == 0 {
+				lc.GameNumber = currentGameNumber
+			}
+			if lc.TurnNumber == 0 {
+				lc.TurnNumber = lastValidTurnNumber
+			}
+			plays = append(plays, lc)
+		}
+
+		// Zone changes.
+		for _, zc := range detectZoneChangesWithZones(prev, curr, playerConn, cumulativeZones, allTrackedObjects) {
+			zc.SequenceNumber = seqNum
+			seqNum++
+			if zc.GameNumber == 0 {
+				zc.GameNumber = currentGameNumber
+			}
+			if zc.TurnNumber == 0 {
+				zc.TurnNumber = lastValidTurnNumber
+			}
+			plays = append(plays, zc)
+		}
+
+		// Attacks.
+		for _, a := range detectAttacks(prev, curr, playerConn) {
+			a.SequenceNumber = seqNum
+			seqNum++
+			if a.GameNumber == 0 {
+				a.GameNumber = currentGameNumber
+			}
+			if a.TurnNumber == 0 {
+				a.TurnNumber = lastValidTurnNumber
+			}
+			plays = append(plays, a)
+		}
+
+		// Blocks.
+		for _, b := range detectBlocks(prev, curr, playerConn) {
+			b.SequenceNumber = seqNum
+			seqNum++
+			if b.GameNumber == 0 {
+				b.GameNumber = currentGameNumber
+			}
+			if b.TurnNumber == 0 {
+				b.TurnNumber = lastValidTurnNumber
+			}
+			plays = append(plays, b)
+		}
+
+		// Counter changes (only during in-game turns, not pre-game).
+		if curr.TurnInfo != nil && curr.TurnInfo.TurnNumber > 0 {
+			for _, cc := range detectCounterChanges(prev, curr, playerConn) {
+				counterChanges = append(counterChanges, cc)
+			}
+		}
+
+		// Update tracking state.
+		for _, obj := range curr.GameObjects {
+			allTrackedObjects[obj.InstanceID] = &trackedObject{
+				instanceID:   obj.InstanceID,
+				grpID:        obj.GRPId,
+				zoneID:       obj.ZoneID,
+				controllerID: obj.ControllerSeatID,
+			}
+			if len(obj.Counters) > 0 {
+				snapshot := make(map[string]int, len(obj.Counters))
+				for k, v := range obj.Counters {
+					snapshot[k] = v
+				}
+				prevCounters[obj.InstanceID] = snapshot
+			}
+		}
+		for _, player := range curr.Players {
+			lifeTotals[player.SeatID] = player.LifeTotal
+		}
+	}
+
+	// Snapshots and opponent cards are derived from the full message slice in
+	// one pass each — this matches their pre-existing extraction logic.
+	snapshots, err := extractSnapshotsFromMessages(messages, playerConn)
+	if err != nil {
+		return GamePlaysResult{}, err
+	}
+	opponentCards := extractOpponentCardsFromMessages(messages, playerConn)
+
+	return GamePlaysResult{
+		Plays:          plays,
+		Snapshots:      snapshots,
+		OpponentCards:  opponentCards,
+		CounterChanges: counterChanges,
+		Mulligan:       mulligan,
+	}, nil
+}
+
+// detectCounterChanges compares the counter maps of game objects between two
+// consecutive game state messages and emits one CounterChangeEvent per
+// (instance, counter_type) pair whose count changed.
+func detectCounterChanges(prev, curr *GREGameStateMessage, playerConn *GREConnection) []CounterChangeEvent {
+	// Build a map of previous counter state keyed by instanceID.
+	prevState := make(map[int]map[string]int, len(prev.GameObjects))
+	for _, obj := range prev.GameObjects {
+		if len(obj.Counters) == 0 {
+			continue
+		}
+		snap := make(map[string]int, len(obj.Counters))
+		for k, v := range obj.Counters {
+			snap[k] = v
+		}
+		prevState[obj.InstanceID] = snap
+	}
+
+	turnNumber := 0
+	if curr.TurnInfo != nil {
+		turnNumber = curr.TurnInfo.TurnNumber
+	}
+
+	var events []CounterChangeEvent
+	for _, obj := range curr.GameObjects {
+		if len(obj.Counters) == 0 {
+			continue
+		}
+		controller := "opponent"
+		if playerConn != nil && obj.ControllerSeatID == playerConn.SeatID {
+			controller = "player"
+		}
+		prevObj := prevState[obj.InstanceID]
+		for cType, newCount := range obj.Counters {
+			oldCount := 0
+			if prevObj != nil {
+				oldCount = prevObj[cType]
+			}
+			if newCount == oldCount {
+				continue
+			}
+			events = append(events, CounterChangeEvent{
+				InstanceID:  obj.InstanceID,
+				ArenaID:     obj.GRPId,
+				CounterType: cType,
+				Count:       newCount,
+				Delta:       newCount - oldCount,
+				Controller:  controller,
+				TurnNumber:  turnNumber,
+			})
+		}
+		// Also detect counter types that existed in prev but are absent in curr
+		// (counter removed entirely — count dropped to 0).
+		for cType, oldCount := range prevObj {
+			if _, stillPresent := obj.Counters[cType]; !stillPresent && oldCount > 0 {
+				events = append(events, CounterChangeEvent{
+					InstanceID:  obj.InstanceID,
+					ArenaID:     obj.GRPId,
+					CounterType: cType,
+					Count:       0,
+					Delta:       -oldCount,
+					Controller:  controller,
+					TurnNumber:  turnNumber,
+				})
+			}
+		}
+	}
+	return events
+}
+
+// detectMulligan scans pre-game GRE game state messages (those with nil
+// TurnInfo or TurnNumber == 0) and infers the mulligan count from decrements
+// in the player's maxHandSize field (London mulligan rules).
+//
+// Returns nil when no pre-game messages are found.
+func detectMulligan(messages []*GREGameStateMessage, playerConn *GREConnection) *MulliganData {
+	// Collect only pre-game messages (nil TurnInfo or TurnNumber == 0).
+	var preGameMsgs []*GREGameStateMessage
+	for _, msg := range messages {
+		if msg.TurnInfo == nil || msg.TurnInfo.TurnNumber == 0 {
+			preGameMsgs = append(preGameMsgs, msg)
+		}
+	}
+	if len(preGameMsgs) == 0 {
+		return nil
+	}
+
+	// Scan pre-game messages for the local player's maxHandSize.
+	// The starting value is 7 (or whatever value appears first for the player).
+	// Each time maxHandSize decrements by 1, a mulligan was taken.
+	maxHandSizeHistory := make([]int, 0, len(preGameMsgs))
+	for _, msg := range preGameMsgs {
+		for _, player := range msg.Players {
+			if playerConn != nil && player.SeatID != playerConn.SeatID {
+				continue
+			}
+			if player.MaxHandSize > 0 {
+				maxHandSizeHistory = append(maxHandSizeHistory, player.MaxHandSize)
+			}
+		}
+	}
+
+	if len(maxHandSizeHistory) == 0 {
+		return nil
+	}
+
+	initialMaxHand := maxHandSizeHistory[0]
+	finalMaxHand := maxHandSizeHistory[len(maxHandSizeHistory)-1]
+	mulliganCount := initialMaxHand - finalMaxHand
+	if mulliganCount < 0 {
+		mulliganCount = 0
+	}
+
+	// Use the last pre-game message to determine the final kept hand.
+	lastPreGame := preGameMsgs[len(preGameMsgs)-1]
+	var keptCardIDs []int
+	for _, obj := range lastPreGame.GameObjects {
+		if playerConn != nil && obj.OwnerSeatID != playerConn.SeatID {
+			continue
+		}
+		if obj.ZoneName == "hand" {
+			keptCardIDs = append(keptCardIDs, obj.GRPId)
+		} else if obj.ZoneID > 0 {
+			// Resolve via zones map when ZoneName is not pre-populated.
+			if lastPreGame.Zones != nil {
+				if zone, ok := lastPreGame.Zones[obj.ZoneID]; ok {
+					if zone.Type == "ZoneType_Hand" && zone.OwnerSeatID == obj.OwnerSeatID {
+						keptCardIDs = append(keptCardIDs, obj.GRPId)
+					}
+				}
+			}
+		}
+	}
+
+	bottomed := make([]int, 0)
+	return &MulliganData{
+		OpeningHandSize: finalMaxHand,
+		MulliganCount:   mulliganCount,
+		KeptCardIDs:     keptCardIDs,
+		BottomedCardIDs: bottomed,
+	}
+}
+
+// extractSnapshotsFromMessages is the internal implementation of
+// ExtractGameSnapshots operating on already-parsed messages.
+func extractSnapshotsFromMessages(messages []*GREGameStateMessage, playerConn *GREConnection) ([]*GameSnapshot, error) {
+	turnSnapshots := make(map[int]*GREGameStateMessage)
+	for _, msg := range messages {
+		if msg.TurnInfo == nil {
+			continue
+		}
+		turnSnapshots[msg.TurnInfo.TurnNumber] = msg
+	}
+
+	var snapshots []*GameSnapshot
+	for turnNumber, msg := range turnSnapshots {
+		snapshot := &GameSnapshot{
+			MatchID:    msg.MatchID,
+			GameNumber: msg.GameNumber,
+			TurnNumber: turnNumber,
+			Timestamp:  msg.Timestamp,
+		}
+		if msg.TurnInfo != nil {
+			activePlayer := "opponent"
+			if playerConn != nil && msg.TurnInfo.ActivePlayer == playerConn.SeatID {
+				activePlayer = "player"
+			}
+			snapshot.ActivePlayer = activePlayer
+		}
+		for _, player := range msg.Players {
+			if playerConn != nil && player.SeatID == playerConn.SeatID {
+				snapshot.PlayerLife = player.LifeTotal
+			} else {
+				snapshot.OpponentLife = player.LifeTotal
+			}
+		}
+		playerCardsInHand := 0
+		opponentCardsInHand := 0
+		playerLands := 0
+		opponentLands := 0
+		for _, obj := range msg.GameObjects {
+			isPlayer := playerConn != nil && obj.ControllerSeatID == playerConn.SeatID
+			if obj.ZoneName == "hand" {
+				if isPlayer {
+					playerCardsInHand++
+				} else {
+					opponentCardsInHand++
+				}
+			}
+			if obj.ZoneName == "battlefield" {
+				for _, ct := range obj.CardTypes {
+					if ct == "CardType_Land" {
+						if isPlayer {
+							playerLands++
+						} else {
+							opponentLands++
+						}
+						break
+					}
+				}
+			}
+		}
+		snapshot.PlayerCardsInHand = playerCardsInHand
+		snapshot.OpponentCardsInHand = opponentCardsInHand
+		snapshot.PlayerLandsInPlay = playerLands
+		snapshot.OpponentLandsInPlay = opponentLands
+		snapshots = append(snapshots, snapshot)
+	}
+	return snapshots, nil
+}
+
+// extractOpponentCardsFromMessages is the internal implementation of
+// ExtractOpponentCards operating on already-parsed messages.
+func extractOpponentCardsFromMessages(messages []*GREGameStateMessage, playerConn *GREConnection) []OpponentCard {
+	seenCards := make(map[int]*OpponentCard)
+	for _, msg := range messages {
+		turnNumber := 0
+		if msg.TurnInfo != nil {
+			turnNumber = msg.TurnInfo.TurnNumber
+		}
+		for _, obj := range msg.GameObjects {
+			if playerConn != nil && obj.ControllerSeatID == playerConn.SeatID {
+				continue
+			}
+			if obj.GRPId == 0 {
+				continue
+			}
+			if existing, exists := seenCards[obj.GRPId]; exists {
+				existing.TimesSeen++
+				if obj.ZoneName == "battlefield" || obj.ZoneName == "hand" || obj.ZoneName == "graveyard" {
+					existing.ZoneObserved = obj.ZoneName
+				}
+			} else {
+				seenCards[obj.GRPId] = &OpponentCard{
+					CardID:        obj.GRPId,
+					ZoneObserved:  obj.ZoneName,
+					TurnFirstSeen: turnNumber,
+					TimesSeen:     1,
+				}
+			}
+		}
+	}
+	var cards []OpponentCard
+	for _, card := range seenCards {
+		cards = append(cards, *card)
+	}
+	return cards
+}
+
 // parseLogTimestamp is defined in draft_picks.go
