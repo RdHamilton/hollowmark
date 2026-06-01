@@ -441,4 +441,137 @@ describe('CurrentPackPicker Component', () => {
       });
     });
   });
+
+  // ── Phase A recommendation contract tests ────────────────────────────────
+  // These tests verify that the daemon's snake_case recommendation payload
+  // is correctly consumed by CurrentPackPicker. They exercise the contract
+  // established in MH-ML1 (vmt-t#399): arena_id, is_recommended, score,
+  // reasoning, recommended_card.
+
+  describe('Phase A Recommendation Contract', () => {
+    it('populates recommended_card from daemon response', async () => {
+      // Simulate the daemon response shape for Phase A: top-pick card has
+      // is_recommended=true and a plain-English reason (no raw % in reason).
+      const recommendedCard = createMockPackCard({
+        arena_id: '100',
+        name: 'Lightning Bolt',
+        is_recommended: true,
+        score: 1.0,
+        reasoning: 'Best pick in the pack',
+        gihwr: 72.0,
+      });
+      const packData = createMockPackResponse({
+        cards: [
+          recommendedCard,
+          createMockPackCard({ arena_id: '200', name: 'Bear', gihwr: 55.0, reasoning: 'Solid pick' }),
+        ],
+        recommended_card: recommendedCard,
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Recommended Pick:')).toBeInTheDocument();
+        expect(screen.getAllByText('Lightning Bolt').length).toBeGreaterThanOrEqual(1);
+      });
+    });
+
+    it('displays plain-English reasoning (no raw GIHWR percentage in primary display)', async () => {
+      // Prof gate: raw GIHWR % must not appear in the card reasoning field.
+      // The reasoning text itself must not contain a literal "%".
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({
+            arena_id: '1',
+            name: 'Test Card',
+            reasoning: 'Best pick in the pack',  // plain English, no %
+            is_recommended: true,
+            score: 1.0,
+            // Override gihwr to 0 so the GIHWR span doesn't render a "%" near by.
+            gihwr: 0,
+          }),
+        ],
+        recommended_card: createMockPackCard({
+          arena_id: '1',
+          name: 'Test Card',
+          reasoning: 'Best pick in the pack',
+          is_recommended: true,
+          gihwr: 0,
+        }),
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        // Find the .card-reasoning div and check its text content has no %.
+        const reasonDivs = container.querySelectorAll('.card-reasoning');
+        expect(reasonDivs.length).toBeGreaterThan(0);
+        reasonDivs.forEach((div) => {
+          expect(div.textContent).not.toMatch(/%/);
+        });
+      });
+    });
+
+    it('highlights recommended card with is_recommended class', async () => {
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: '1', name: 'Best Card', is_recommended: true }),
+          createMockPackCard({ arena_id: '2', name: 'Other Card', is_recommended: false }),
+        ],
+        recommended_card: createMockPackCard({ arena_id: '1', name: 'Best Card', is_recommended: true }),
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const recommendedCards = container.querySelectorAll('.pack-card.recommended');
+        expect(recommendedCards.length).toBe(1);
+      });
+    });
+
+    it('renders gracefully when no recommended_card is present (N/A state)', async () => {
+      // When the daemon returns no ratings for a new set, recommended_card
+      // is absent — the component must not crash.
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: '1', name: 'Card A', gihwr: 0, reasoning: 'No rating data available for this set', is_recommended: false }),
+        ],
+        recommended_card: undefined,
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Card A')).toBeInTheDocument();
+        // Banner must not render when recommended_card is absent.
+        expect(screen.queryByText('Recommended Pick:')).not.toBeInTheDocument();
+      });
+    });
+
+    it('displays pool size from daemon response', async () => {
+      const packData = createMockPackResponse({ pool_size: 7 });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Pool: 7 cards')).toBeInTheDocument();
+      });
+    });
+
+    it('uses pack_label from daemon response as heading', async () => {
+      const packData = createMockPackResponse({ pack_label: 'Pack 2, Pick 8' });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Pack 2, Pick 8')).toBeInTheDocument();
+      });
+    });
+  });
 });
