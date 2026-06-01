@@ -72,6 +72,11 @@ type gamePlayStore interface {
 	InsertLifeChanges(ctx context.Context, changes []repository.LifeChangeInsert) error
 }
 
+// counterStore writes counter-change rows to game_event_counters.
+type counterStore interface {
+	InsertCounters(ctx context.Context, inserts []repository.GameEventCounterInsert) error
+}
+
 // dlqStore writes permanently-failed projection rows to the dead-letter table.
 type dlqStore interface {
 	Insert(ctx context.Context, ins repository.ProjectionErrorInsert) error
@@ -124,6 +129,7 @@ type Worker struct {
 	quests     questStore
 	decks      deckStore
 	gamePlays  gamePlayStore
+	counters   counterStore
 	dlq        dlqStore
 	postHog    postHogClient
 }
@@ -150,9 +156,16 @@ func NewWorker(
 		quests:     quests,
 		decks:      decks,
 		gamePlays:  gamePlays,
+		counters:   nil, // optional; wired via WithCounterStore
 		dlq:        nil, // optional; wired via WithDLQ
 		postHog:    noopPostHogClient{},
 	}
+}
+
+// WithCounterStore wires the game_event_counters store into w and returns w.
+func (w *Worker) WithCounterStore(store counterStore) *Worker {
+	w.counters = store
+	return w
 }
 
 // WithDLQ wires the dead-letter store into w and returns w.
@@ -760,14 +773,24 @@ func (w *Worker) projectDeckUpdated(ctx context.Context, row *repository.DaemonE
 
 // --- match.game_ended projector ---
 
-// projectGamePlayEvent projects a match.game_ended event into game_plays and
-// life_change_tracking.
+// projectGamePlayEvent projects a match.game_ended event into game_plays,
+// life_change_tracking, and game_event_counters.
 //
 // Ordering guarantee: the Sequence field from the DaemonEvent envelope is
 // written to game_plays.sequence.  InsertGamePlay enforces a WHERE
 // game_plays.sequence < EXCLUDED.sequence guard on conflict, ensuring that
 // out-of-order retransmissions of the same (match_id, game_number) do not
 // regress the stored state.
+//
+// Counter projection (ADR-046 A2.1, vmt-t#613): if the payload carries
+// CounterChanges and the counterStore is wired, each entry is written to
+// game_event_counters with ON CONFLICT DO NOTHING so replay is idempotent.
+//
+// Mulligan deferral (ADR-046 A2.2, vmt-t#614, deferred to v0.3.8): the
+// Mulligan field is already stored verbatim in daemon_events.payload (JSONB)
+// by the existing ingest path.  game_summaries.mulligan_json does not exist
+// until v0.3.8 (its FK to mtgzone_archetypes is a Tier 1 gate).  This method
+// logs at DEBUG and takes no write action for mulligan data.
 func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.DaemonEventRow) error {
 	var p contract.GamePlayPayload
 	if err := json.Unmarshal(row.Payload, &p); err != nil {
@@ -808,24 +831,50 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 		return fmt.Errorf("InsertGamePlay: %w", err)
 	}
 
-	if len(p.LifeChanges) == 0 {
-		return nil
+	if len(p.LifeChanges) > 0 {
+		changes := make([]repository.LifeChangeInsert, 0, len(p.LifeChanges))
+		for _, lc := range p.LifeChanges {
+			changes = append(changes, repository.LifeChangeInsert{
+				AccountID:  accountID,
+				GamePlayID: gamePlayID,
+				TeamID:     lc.TeamID,
+				LifeTotal:  lc.LifeTotal,
+				Delta:      lc.Delta,
+				TurnNumber: lc.TurnNumber,
+			})
+		}
+		if err := w.gamePlays.InsertLifeChanges(ctx, changes); err != nil {
+			return fmt.Errorf("InsertLifeChanges: %w", err)
+		}
 	}
 
-	changes := make([]repository.LifeChangeInsert, 0, len(p.LifeChanges))
-	for _, lc := range p.LifeChanges {
-		changes = append(changes, repository.LifeChangeInsert{
-			AccountID:  accountID,
-			GamePlayID: gamePlayID,
-			TeamID:     lc.TeamID,
-			LifeTotal:  lc.LifeTotal,
-			Delta:      lc.Delta,
-			TurnNumber: lc.TurnNumber,
-		})
+	// Counter projection (ADR-046 A2.1, vmt-t#613).
+	if len(p.CounterChanges) > 0 && w.counters != nil {
+		cInserts := make([]repository.GameEventCounterInsert, 0, len(p.CounterChanges))
+		for _, cc := range p.CounterChanges {
+			cInserts = append(cInserts, repository.GameEventCounterInsert{
+				GamePlayID:  gamePlayID,
+				AccountID:   accountID,
+				InstanceID:  cc.InstanceID,
+				ArenaID:     cc.ArenaID,
+				CounterType: cc.CounterType,
+				Count:       cc.Count,
+				Delta:       cc.Delta,
+				Controller:  cc.Controller,
+				TurnNumber:  cc.TurnNumber,
+			})
+		}
+		if err := w.counters.InsertCounters(ctx, cInserts); err != nil {
+			return fmt.Errorf("InsertCounters: %w", err)
+		}
 	}
 
-	if err := w.gamePlays.InsertLifeChanges(ctx, changes); err != nil {
-		return fmt.Errorf("InsertLifeChanges: %w", err)
+	// Mulligan deferral (ADR-046 A2.2, vmt-t#614, deferred to v0.3.8).
+	// game_summaries.mulligan_json does not exist yet — storing verbatim in
+	// daemon_events.payload (JSONB) is the current storage path.
+	if p.Mulligan != nil {
+		log.Printf("[projection] projectGamePlayEvent id=%d: mulligan data present (count=%d) — stored verbatim in daemon_events.payload; game_summaries.mulligan_json write deferred to v0.3.8 (ADR-046 A2.2)",
+			row.ID, p.Mulligan.MulliganCount)
 	}
 
 	return nil
