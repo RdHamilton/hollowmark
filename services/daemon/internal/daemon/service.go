@@ -292,39 +292,28 @@ func (s *Service) flushGREBuffer(ctx context.Context, sessionID string, entries 
 		}
 	}
 
-	// Resolve the player's seat — used to distinguish "player" from "opponent"
-	// in ParseGamePlays / ExtractGameSnapshots / ExtractOpponentCards.
+	// Resolve the player's seat — used to distinguish "player" from "opponent".
 	// Returns nil when no connectResp entry is present in the buffer window
-	// (stale-sweep flush). Both parsers handle nil gracefully per their contracts.
+	// (stale-sweep flush). ParseGamePlaysResult handles nil gracefully.
 	playerConn := logparse.GetPlayerSeatID(logEntries)
 
-	// Parse game plays (life changes, zone transitions, attacks, blocks).
-	plays, err := logparse.ParseGamePlays(logEntries, playerConn)
+	// Single-pass parse: plays, snapshots, opponent cards, counter changes, mulligan.
+	result, err := logparse.ParseGamePlaysResult(logEntries, playerConn)
 	if err != nil {
-		log.Printf("[daemon] warn: flushGREBuffer: ParseGamePlays: %v", err)
-	}
-
-	// Extract per-turn snapshots (life totals, hand sizes, land counts).
-	snapshots, err := logparse.ExtractGameSnapshots(logEntries, playerConn)
-	if err != nil {
-		log.Printf("[daemon] warn: flushGREBuffer: ExtractGameSnapshots: %v", err)
-	}
-
-	// Extract opponent cards observed during the game.
-	opponentCards, err := logparse.ExtractOpponentCards(logEntries, playerConn)
-	if err != nil {
-		log.Printf("[daemon] warn: flushGREBuffer: ExtractOpponentCards: %v", err)
+		log.Printf("[daemon] warn: flushGREBuffer: ParseGamePlaysResult: %v", err)
 	}
 
 	// Build the payload from parsed data.
+	// SchemaVersion 2 is the first A1.4 implementation (Ray Q3, vmt-t#613/#614).
 	payload := contract.GamePlayPayload{
-		Partial:     partial,
-		LifeChanges: []contract.LifeChangeEntry{},
+		Partial:       partial,
+		SchemaVersion: 2,
+		LifeChanges:   []contract.LifeChangeEntry{},
 	}
 
 	// Derive game-level fields and populate LifeChanges + CardPlays.
 	maxTurn := 0
-	for _, play := range plays {
+	for _, play := range result.Plays {
 		if play.TurnNumber > maxTurn {
 			maxTurn = play.TurnNumber
 		}
@@ -365,7 +354,7 @@ func (s *Service) flushGREBuffer(ctx context.Context, sessionID string, entries 
 	}
 
 	// Map GameSnapshot → contract.GameSnapshotEntry.
-	for _, snap := range snapshots {
+	for _, snap := range result.Snapshots {
 		// Backfill MatchID/GameNumber from snapshots if not yet set.
 		if payload.MatchID == "" && snap.MatchID != "" {
 			payload.MatchID = snap.MatchID
@@ -389,7 +378,7 @@ func (s *Service) flushGREBuffer(ctx context.Context, sessionID string, entries 
 	}
 
 	// Map OpponentCard → contract.OpponentCardEntry.
-	for _, oc := range opponentCards {
+	for _, oc := range result.OpponentCards {
 		payload.OpponentCards = append(payload.OpponentCards, contract.OpponentCardEntry{
 			// ArenaID is the MTGA GRPId (grpId) as observed in GRE game objects.
 			ArenaID:       oc.CardID,
@@ -397,6 +386,29 @@ func (s *Service) flushGREBuffer(ctx context.Context, sessionID string, entries 
 			TurnFirstSeen: oc.TurnFirstSeen,
 			TimesSeen:     oc.TimesSeen,
 		})
+	}
+
+	// Map CounterChangeEvent → contract.CounterChangeEntry (#613).
+	for _, cc := range result.CounterChanges {
+		payload.CounterChanges = append(payload.CounterChanges, contract.CounterChangeEntry{
+			InstanceID:  cc.InstanceID,
+			ArenaID:     cc.ArenaID,
+			CounterType: cc.CounterType,
+			Count:       cc.Count,
+			Delta:       cc.Delta,
+			Controller:  cc.Controller,
+			TurnNumber:  cc.TurnNumber,
+		})
+	}
+
+	// Map MulliganData → contract.MulliganEntry (#614).
+	if result.Mulligan != nil {
+		payload.Mulligan = &contract.MulliganEntry{
+			OpeningHandSize: result.Mulligan.OpeningHandSize,
+			MulliganCount:   result.Mulligan.MulliganCount,
+			KeptCardIDs:     result.Mulligan.KeptCardIDs,
+			BottomedCardIDs: result.Mulligan.BottomedCardIDs,
+		}
 	}
 
 	// Emit gre.game_started for each distinct gameNumber found in this buffer.
