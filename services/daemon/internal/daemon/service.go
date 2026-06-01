@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/RdHamilton/vault-mtg/pkg/logparse"
 	"github.com/RdHamilton/vault-mtg/services/contract"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/config"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/dispatch"
@@ -265,12 +266,162 @@ func computeAuthStatus(cfg *config.Config, keychainErr error, authPaused bool) s
 }
 
 // flushGREBuffer is the FlushFunc wired into the GRE session manager.
-// It builds a GamePlayPayload from the accumulated entries and dispatches it
-// to the BFF as a "match.game_ended" DaemonEvent with partial=true.
+// It parses the accumulated GRE log entries using pkg/logparse and dispatches
+// the resulting GamePlayPayload to the BFF as a "match.game_ended" DaemonEvent.
+//
+// Timing note: this function is called retrospectively — the game has already
+// ended (or the buffer threshold was reached) when the flush fires. For v0.3.7
+// this is acceptable because the BFF projection is async. Real-time
+// gre.game_started emission per-entry is a v0.3.8 enhancement.
+//
+// Nil-seat degradation: when GetPlayerSeatID returns nil (no connectResp entry
+// in the buffer window — typical on stale-sweep flushes), PlayerType defaults to
+// "opponent" for all events. The Partial flag is set to true in this case per the
+// contract godoc; downstream consumers must treat the event as incomplete.
+//
+// WinningTeamID is always zero: GRE messages do not carry a final win signal.
+// The BFF projection worker cross-references the matches table at projection time.
 func (s *Service) flushGREBuffer(ctx context.Context, sessionID string, entries []json.RawMessage, partial bool) error {
+	// Convert raw GRE log JSON stored in the buffer into LogEntry values that
+	// pkg/logparse functions can consume.
+	logEntries := make([]*logparse.LogEntry, 0, len(entries))
+	for _, raw := range entries {
+		e := logparse.ParseLine(string(raw))
+		if e.IsJSON {
+			logEntries = append(logEntries, e)
+		}
+	}
+
+	// Resolve the player's seat — used to distinguish "player" from "opponent"
+	// in ParseGamePlays / ExtractGameSnapshots / ExtractOpponentCards.
+	// Returns nil when no connectResp entry is present in the buffer window
+	// (stale-sweep flush). Both parsers handle nil gracefully per their contracts.
+	playerConn := logparse.GetPlayerSeatID(logEntries)
+
+	// Parse game plays (life changes, zone transitions, attacks, blocks).
+	plays, err := logparse.ParseGamePlays(logEntries, playerConn)
+	if err != nil {
+		log.Printf("[daemon] warn: flushGREBuffer: ParseGamePlays: %v", err)
+	}
+
+	// Extract per-turn snapshots (life totals, hand sizes, land counts).
+	snapshots, err := logparse.ExtractGameSnapshots(logEntries, playerConn)
+	if err != nil {
+		log.Printf("[daemon] warn: flushGREBuffer: ExtractGameSnapshots: %v", err)
+	}
+
+	// Extract opponent cards observed during the game.
+	opponentCards, err := logparse.ExtractOpponentCards(logEntries, playerConn)
+	if err != nil {
+		log.Printf("[daemon] warn: flushGREBuffer: ExtractOpponentCards: %v", err)
+	}
+
+	// Build the payload from parsed data.
 	payload := contract.GamePlayPayload{
 		Partial:     partial,
 		LifeChanges: []contract.LifeChangeEntry{},
+	}
+
+	// Derive game-level fields and populate LifeChanges + CardPlays.
+	maxTurn := 0
+	for _, play := range plays {
+		if play.TurnNumber > maxTurn {
+			maxTurn = play.TurnNumber
+		}
+		// Derive game-level fields from the first play that has them.
+		if payload.MatchID == "" && play.MatchID != "" {
+			payload.MatchID = play.MatchID
+		}
+		if payload.GameNumber == 0 && play.GameNumber > 0 {
+			payload.GameNumber = play.GameNumber
+		}
+
+		switch play.ActionType {
+		case "life_change":
+			payload.LifeChanges = append(payload.LifeChanges, contract.LifeChangeEntry{
+				TeamID:     play.TeamID,
+				LifeTotal:  play.LifeTo,
+				Delta:      play.LifeTo - play.LifeFrom,
+				TurnNumber: play.TurnNumber,
+			})
+		default:
+			// All non-life-change plays are card plays (zone transitions, attacks, blocks).
+			payload.CardPlays = append(payload.CardPlays, contract.CardPlayEntry{
+				GameNumber: play.GameNumber,
+				TurnNumber: play.TurnNumber,
+				Phase:      play.Phase,
+				ArenaID:    play.CardID,
+				PlayerType: play.PlayerType,
+				ActionType: play.ActionType,
+				ZoneFrom:   play.ZoneFrom,
+				ZoneTo:     play.ZoneTo,
+			})
+		}
+	}
+
+	// TurnCount is the maximum turn number observed.
+	if maxTurn > 0 {
+		payload.TurnCount = maxTurn
+	}
+
+	// Map GameSnapshot → contract.GameSnapshotEntry.
+	for _, snap := range snapshots {
+		// Backfill MatchID/GameNumber from snapshots if not yet set.
+		if payload.MatchID == "" && snap.MatchID != "" {
+			payload.MatchID = snap.MatchID
+		}
+		if payload.GameNumber == 0 && snap.GameNumber > 0 {
+			payload.GameNumber = snap.GameNumber
+		}
+		if snap.TurnNumber > payload.TurnCount {
+			payload.TurnCount = snap.TurnNumber
+		}
+		payload.Snapshots = append(payload.Snapshots, contract.GameSnapshotEntry{
+			GameNumber:          snap.GameNumber,
+			TurnNumber:          snap.TurnNumber,
+			PlayerLife:          snap.PlayerLife,
+			OpponentLife:        snap.OpponentLife,
+			PlayerCardsInHand:   snap.PlayerCardsInHand,
+			OpponentCardsInHand: snap.OpponentCardsInHand,
+			PlayerLandsInPlay:   snap.PlayerLandsInPlay,
+			OpponentLandsInPlay: snap.OpponentLandsInPlay,
+		})
+	}
+
+	// Map OpponentCard → contract.OpponentCardEntry.
+	for _, oc := range opponentCards {
+		payload.OpponentCards = append(payload.OpponentCards, contract.OpponentCardEntry{
+			// ArenaID is the MTGA GRPId (grpId) as observed in GRE game objects.
+			ArenaID:       oc.CardID,
+			ZoneObserved:  oc.ZoneObserved,
+			TurnFirstSeen: oc.TurnFirstSeen,
+			TimesSeen:     oc.TimesSeen,
+		})
+	}
+
+	// Emit gre.game_started for each distinct gameNumber found in this buffer.
+	// This event is emitted retrospectively (game already over when flush fires).
+	// A real-time emission path is a v0.3.8 enhancement.
+	if payload.GameNumber > 0 {
+		startedPayload := contract.GamePlayPayload{
+			MatchID:    payload.MatchID,
+			GameNumber: payload.GameNumber,
+		}
+		startedRaw, marshalErr := json.Marshal(startedPayload)
+		if marshalErr == nil {
+			startedEvt := contract.DaemonEvent{
+				Type:       "gre.game_started",
+				AccountID:  s.cfg.AccountID,
+				SessionID:  s.sessionID,
+				OccurredAt: time.Now().UTC(),
+				Payload:    json.RawMessage(startedRaw),
+			}
+			startedCtx, startedCancel := context.WithTimeout(ctx, 5*time.Second)
+			defer startedCancel()
+			if dispatchErr := s.dispatcher.SendOrBuffer(startedCtx, startedEvt); dispatchErr != nil {
+				log.Printf("[daemon] warn: flushGREBuffer: dispatch gre.game_started: %v", dispatchErr)
+			}
+		}
 	}
 
 	raw, err := json.Marshal(payload)
@@ -1250,6 +1401,13 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 		} else {
 			payload = p
 		}
+	case "greToClientEvent":
+		// GRE entries are never dispatched individually — they are buffered in
+		// the GRE session manager and flushed as a single "match.game_ended"
+		// event when the buffer reaches its threshold, on stale-sweep eviction,
+		// or on shutdown.  Using entry.Raw preserves the original log line
+		// exactly so logparse.ParseLine can re-parse it during flush.
+		return s.greManager.Append(ctx, s.sessionID, json.RawMessage(entry.Raw))
 	default:
 		payload = entry.JSON
 	}
@@ -1376,6 +1534,13 @@ func classifyEntry(entry *logreader.LogEntry) string {
 	// Deck update (DeckUpsertDeckV2).
 	if logreader.IsDeckEntry(entry) {
 		return "deck.updated"
+	}
+
+	// GRE game state messages — buffered into the GRE session manager for batch
+	// dispatch. greToClientEvent lines are never dispatched individually; they
+	// accumulate until a threshold/stale-sweep/shutdown flush fires.
+	if _, ok := entry.JSON["greToClientEvent"]; ok {
+		return "greToClientEvent"
 	}
 
 	return ""
