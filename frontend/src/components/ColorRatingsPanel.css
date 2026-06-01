@@ -59,19 +59,19 @@
 }
 
 .win-rate.wr-excellent {
-  color: #a6e3a1; /* stylelint-disable-line color-no-hex */
+  color: var(--success);
 }
 
 .win-rate.wr-good {
-  color: #f9e2af; /* stylelint-disable-line color-no-hex */
+  color: var(--warning);
 }
 
 .win-rate.wr-average {
-  color: #cdd6f4; /* stylelint-disable-line color-no-hex */
+  color: var(--fg-secondary);
 }
 
 .win-rate.wr-below {
-  color: #f38ba8; /* stylelint-disable-line color-no-hex */
+  color: var(--danger);
 }
 
 .games-played {

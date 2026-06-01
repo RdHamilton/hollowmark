@@ -216,3 +216,26 @@ export const DaemonLoading: Story = {
     <NavShell activeTab="Home" signedIn daemonStatus="loading" />
   ),
 };
+
+/**
+ * ConnectedStatusBadge — the compact connected status badge in Layout.css.
+ *
+ * Token migration (#328): `.status-badge-compact.status-connected .status-dot-compact`
+ * moved off the raw bright-green `#7dff7d` onto the on-brand `--win` token
+ * (= `--vault-sapphire`). Rendered directly for a stable Chromatic snapshot of
+ * the recolored indicator.
+ */
+export const ConnectedStatusBadge: Story = {
+  render: () => (
+    <span
+      className="status-badge-compact status-connected"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '4px 10px', borderRadius: 12 }}
+    >
+      <span
+        className="status-dot-compact"
+        style={{ width: 10, height: 10, borderRadius: '50%', display: 'inline-block' }}
+      />
+      Connected
+    </span>
+  ),
+};
