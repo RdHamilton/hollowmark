@@ -445,6 +445,7 @@ func main() {
 			deckProjectorRepo := repository.NewDeckProjectorRepository(sqlDB)
 			gamePlayRepo := repository.NewGamePlayRepository(sqlDB)
 			projectionErrorsRepo := repository.NewProjectionErrorsRepository(sqlDB)
+			gameEventCountersRepo := repository.NewGameEventCountersRepository(sqlDB)
 			worker := projection.NewWorker(
 				daemonEventsRepo,
 				accountRepo,
@@ -456,6 +457,7 @@ func main() {
 				deckProjectorRepo,
 				gamePlayRepo,
 			)
+			worker.WithCounterStore(gameEventCountersRepo)
 			worker.WithDLQ(projectionErrorsRepo)
 			if postHogClient != nil {
 				worker.WithPostHogClient(postHogClient)
