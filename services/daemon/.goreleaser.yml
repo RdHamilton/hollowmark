@@ -170,6 +170,11 @@ builds:
           env:
             - TARGET_GOOS={{ .Os }}
       post:
+        # -DBETA_UNSIGNED=1 bakes the SmartScreen bypass notice into the NSIS
+        # installer until Azure Trusted Signing is active.  Remove it (and the
+        # corresponding block in installer.nsi) once the sign-windows job is green
+        # (AZURE_* secrets populated).  See:
+        # vault-mtg-docs/engineering/runbooks/windows-trusted-signing.md (vmt-t#394)
         - cmd: >
             bash -c '[ "${IS_SNAPSHOT}" = "true" ] && exit 0;
             [ "${TARGET_GOOS}" != "windows" ] && exit 0;
@@ -178,6 +183,7 @@ builds:
             -DVERSION={{ .Env.PLAIN_VERSION }}
             "-DBINARY_PATH={{ .Path }}"
             "-DCLOUD_API_URL={{ .Env.DEFAULT_CLOUD_API_URL }}"
+            -DBETA_UNSIGNED=1
             services/daemon/install/windows/nsis/installer.nsi'
           env:
             - IS_SNAPSHOT={{ .IsSnapshot }}
