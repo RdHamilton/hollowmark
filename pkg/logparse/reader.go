@@ -123,6 +123,18 @@ func (r *Reader) ReadAll() ([]*LogEntry, error) {
 	return entries, nil
 }
 
+// ParseLine parses a single raw log line into a LogEntry.
+// It is an exported wrapper around the unexported parseJSON method so that callers
+// outside the package (e.g., the daemon's GRE buffer flush) can convert a stored
+// raw string into a fully-parsed LogEntry without duplicating parse logic.
+// Returns a non-nil *LogEntry in all cases; IsJSON is false when the line contains
+// no parseable JSON.
+func ParseLine(raw string) *LogEntry {
+	entry := &LogEntry{Raw: raw}
+	entry.parseJSON()
+	return entry
+}
+
 // ReadAllJSON reads all JSON entries from the log file, skipping non-JSON lines.
 func (r *Reader) ReadAllJSON() ([]*LogEntry, error) {
 	var entries []*LogEntry
