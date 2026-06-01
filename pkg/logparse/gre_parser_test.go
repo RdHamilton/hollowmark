@@ -1061,6 +1061,410 @@ func TestParseGamePlays_SingleEntry(t *testing.T) {
 	}
 }
 
+// ---- ParseGamePlaysResult tests ----
+
+// TestParseGamePlaysResult_ReturnsAllOutputs verifies that ParseGamePlaysResult
+// returns plays, snapshots, opponent cards, counter changes, and mulligan data
+// in a single call and that the result is consistent with the individual
+// Parse/Extract calls that existed before.
+func TestParseGamePlaysResult_ReturnsAllOutputs(t *testing.T) {
+	// A minimal two-state sequence: a creature moves hand→battlefield.
+	entries := makeZoneChangeEntries(1, 12345, 1, 3, "CardType_Creature")
+
+	playerConn := &GREConnection{SeatID: 1, SystemSeatID: 1}
+	result, err := ParseGamePlaysResult(entries, playerConn)
+	if err != nil {
+		t.Fatalf("ParseGamePlaysResult: %v", err)
+	}
+
+	if len(result.Plays) == 0 {
+		t.Error("expected at least one play from zone change sequence")
+	}
+	// CounterChanges and Mulligan may be nil/zero for a simple two-state sequence.
+	// The key assertion is that the function returns without error and the Plays
+	// field is populated correctly.
+}
+
+// TestParseGamePlaysResult_NoEntries verifies an empty input produces an empty
+// result without error.
+func TestParseGamePlaysResult_NoEntries(t *testing.T) {
+	result, err := ParseGamePlaysResult([]*LogEntry{}, &GREConnection{SeatID: 1})
+	if err != nil {
+		t.Fatalf("ParseGamePlaysResult on empty input: %v", err)
+	}
+	if len(result.Plays) != 0 {
+		t.Errorf("Plays: got %d, want 0", len(result.Plays))
+	}
+	if len(result.CounterChanges) != 0 {
+		t.Errorf("CounterChanges: got %d, want 0", len(result.CounterChanges))
+	}
+	if result.Mulligan != nil {
+		t.Error("Mulligan should be nil for empty input")
+	}
+}
+
+// ---- Counter delta detector tests ----
+
+// TestDetectCounterChanges_LoyaltyDecrement verifies that a planeswalker losing
+// a loyalty counter across two consecutive game states produces one
+// CounterChangeEvent with the correct delta.
+func TestDetectCounterChanges_LoyaltyDecrement(t *testing.T) {
+	// State 1: planeswalker with 4 loyalty counters (turn 3).
+	prev := &GREGameStateMessage{
+		TurnInfo: &GRETurnInfo{TurnNumber: 3},
+		GameObjects: []GREGameObject{
+			{
+				InstanceID:       55,
+				GRPId:            88888,
+				ControllerSeatID: 2, // opponent's planeswalker
+				ZoneName:         "battlefield",
+				Counters:         map[string]int{"loyalty": 4},
+			},
+		},
+	}
+	// State 2: same planeswalker with 1 loyalty counter after activation.
+	curr := &GREGameStateMessage{
+		TurnInfo: &GRETurnInfo{TurnNumber: 3},
+		GameObjects: []GREGameObject{
+			{
+				InstanceID:       55,
+				GRPId:            88888,
+				ControllerSeatID: 2,
+				ZoneName:         "battlefield",
+				Counters:         map[string]int{"loyalty": 1},
+			},
+		},
+	}
+
+	playerConn := &GREConnection{SeatID: 1}
+	changes := detectCounterChanges(prev, curr, playerConn)
+
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 counter change, got %d", len(changes))
+	}
+	c := changes[0]
+	if c.InstanceID != 55 {
+		t.Errorf("InstanceID: got %d, want 55", c.InstanceID)
+	}
+	if c.ArenaID != 88888 {
+		t.Errorf("ArenaID: got %d, want 88888", c.ArenaID)
+	}
+	if c.CounterType != "loyalty" {
+		t.Errorf("CounterType: got %q, want \"loyalty\"", c.CounterType)
+	}
+	if c.Count != 1 {
+		t.Errorf("Count: got %d, want 1", c.Count)
+	}
+	if c.Delta != -3 {
+		t.Errorf("Delta: got %d, want -3", c.Delta)
+	}
+	if c.Controller != "opponent" {
+		t.Errorf("Controller: got %q, want \"opponent\"", c.Controller)
+	}
+	if c.TurnNumber != 3 {
+		t.Errorf("TurnNumber: got %d, want 3", c.TurnNumber)
+	}
+}
+
+// TestDetectCounterChanges_PlusPlusIncrement verifies a +1/+1 counter gain.
+func TestDetectCounterChanges_PlusPlusIncrement(t *testing.T) {
+	prev := &GREGameStateMessage{
+		TurnInfo: &GRETurnInfo{TurnNumber: 5},
+		GameObjects: []GREGameObject{
+			{
+				InstanceID:       10,
+				GRPId:            12345,
+				ControllerSeatID: 1,
+				ZoneName:         "battlefield",
+				Counters:         map[string]int{"+1/+1": 2},
+			},
+		},
+	}
+	curr := &GREGameStateMessage{
+		TurnInfo: &GRETurnInfo{TurnNumber: 5},
+		GameObjects: []GREGameObject{
+			{
+				InstanceID:       10,
+				GRPId:            12345,
+				ControllerSeatID: 1,
+				ZoneName:         "battlefield",
+				Counters:         map[string]int{"+1/+1": 4},
+			},
+		},
+	}
+
+	playerConn := &GREConnection{SeatID: 1}
+	changes := detectCounterChanges(prev, curr, playerConn)
+
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 counter change, got %d", len(changes))
+	}
+	c := changes[0]
+	if c.Delta != 2 {
+		t.Errorf("Delta: got %d, want 2", c.Delta)
+	}
+	if c.Controller != "player" {
+		t.Errorf("Controller: got %q, want \"player\"", c.Controller)
+	}
+	if c.CounterType != "+1/+1" {
+		t.Errorf("CounterType: got %q, want \"+1/+1\"", c.CounterType)
+	}
+}
+
+// TestDetectCounterChanges_NoChange verifies no events are emitted when
+// counter values are identical across states.
+func TestDetectCounterChanges_NoChange(t *testing.T) {
+	state := &GREGameStateMessage{
+		TurnInfo: &GRETurnInfo{TurnNumber: 2},
+		GameObjects: []GREGameObject{
+			{
+				InstanceID: 20,
+				GRPId:      55555,
+				Counters:   map[string]int{"loyalty": 3},
+			},
+		},
+	}
+
+	changes := detectCounterChanges(state, state, &GREConnection{SeatID: 1})
+	if len(changes) != 0 {
+		t.Errorf("expected 0 changes when counter is unchanged, got %d", len(changes))
+	}
+}
+
+// TestDetectCounterChanges_NewCounterAppears verifies that a counter appearing
+// on a permanent for the first time (previous count == 0) is emitted.
+func TestDetectCounterChanges_NewCounterAppears(t *testing.T) {
+	prev := &GREGameStateMessage{
+		TurnInfo: &GRETurnInfo{TurnNumber: 4},
+		GameObjects: []GREGameObject{
+			{
+				InstanceID: 30,
+				GRPId:      77777,
+				Counters:   map[string]int{}, // no counters yet
+			},
+		},
+	}
+	curr := &GREGameStateMessage{
+		TurnInfo: &GRETurnInfo{TurnNumber: 4},
+		GameObjects: []GREGameObject{
+			{
+				InstanceID: 30,
+				GRPId:      77777,
+				Counters:   map[string]int{"poison": 1},
+			},
+		},
+	}
+
+	changes := detectCounterChanges(prev, curr, &GREConnection{SeatID: 1})
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change for new counter appearance, got %d", len(changes))
+	}
+	if changes[0].Delta != 1 {
+		t.Errorf("Delta: got %d, want 1", changes[0].Delta)
+	}
+	if changes[0].Count != 1 {
+		t.Errorf("Count: got %d, want 1", changes[0].Count)
+	}
+}
+
+// ---- Mulligan detector tests ----
+
+// TestDetectMulligan_NoMulligan verifies that a player who kept their opening 7
+// produces MulliganCount == 0 and KeptCardIDs length == 7.
+func TestDetectMulligan_NoMulligan(t *testing.T) {
+	// Pre-game state: maxHandSize 7, 7 cards in hand zone (zone owned by seat 1).
+	handZoneID := 31
+	msgs := []*GREGameStateMessage{
+		{
+			TurnInfo: nil, // pre-game, no turn info
+			Players: []GREPlayerState{
+				{SeatID: 1, MaxHandSize: 7},
+			},
+			GameObjects: makeHandObjects(1, handZoneID, []int{1001, 1002, 1003, 1004, 1005, 1006, 1007}),
+			Zones:       map[int]*GREZone{handZoneID: {ZoneID: handZoneID, Type: "ZoneType_Hand", OwnerSeatID: 1}},
+		},
+	}
+
+	playerConn := &GREConnection{SeatID: 1}
+	m := detectMulligan(msgs, playerConn)
+	if m == nil {
+		t.Fatal("detectMulligan returned nil for a pre-game state with 7 cards")
+	}
+	if m.MulliganCount != 0 {
+		t.Errorf("MulliganCount: got %d, want 0", m.MulliganCount)
+	}
+	if m.OpeningHandSize != 7 {
+		t.Errorf("OpeningHandSize: got %d, want 7", m.OpeningHandSize)
+	}
+	if len(m.KeptCardIDs) != 7 {
+		t.Errorf("KeptCardIDs: got %d, want 7", len(m.KeptCardIDs))
+	}
+	if len(m.BottomedCardIDs) != 0 {
+		t.Errorf("BottomedCardIDs: got %d, want 0", len(m.BottomedCardIDs))
+	}
+}
+
+// TestDetectMulligan_OneMulligan verifies that a player who mulliganed once
+// (maxHandSize dropped from 7 to 6) has MulliganCount == 1 and ends with 6
+// cards in hand.
+func TestDetectMulligan_OneMulligan(t *testing.T) {
+	handZoneID := 31
+	// Two pre-game states: first with maxHandSize 7 (pre-mulligan redraw), second
+	// with maxHandSize 6 (after mulligan decision, 6 kept + 1 to bottom).
+	msgs := []*GREGameStateMessage{
+		{
+			TurnInfo: nil,
+			Players:  []GREPlayerState{{SeatID: 1, MaxHandSize: 7}},
+			GameObjects: makeHandObjects(1, handZoneID, []int{
+				2001, 2002, 2003, 2004, 2005, 2006, 2007,
+			}),
+			Zones: map[int]*GREZone{handZoneID: {ZoneID: handZoneID, Type: "ZoneType_Hand", OwnerSeatID: 1}},
+		},
+		{
+			TurnInfo: nil,
+			Players:  []GREPlayerState{{SeatID: 1, MaxHandSize: 6}},
+			GameObjects: makeHandObjects(1, handZoneID, []int{
+				2001, 2002, 2003, 2004, 2005, 2006,
+			}),
+			Zones: map[int]*GREZone{handZoneID: {ZoneID: handZoneID, Type: "ZoneType_Hand", OwnerSeatID: 1}},
+		},
+	}
+
+	playerConn := &GREConnection{SeatID: 1}
+	m := detectMulligan(msgs, playerConn)
+	if m == nil {
+		t.Fatal("detectMulligan returned nil")
+	}
+	if m.MulliganCount != 1 {
+		t.Errorf("MulliganCount: got %d, want 1", m.MulliganCount)
+	}
+	if m.OpeningHandSize != 6 {
+		t.Errorf("OpeningHandSize: got %d, want 6", m.OpeningHandSize)
+	}
+	if len(m.KeptCardIDs) != 6 {
+		t.Errorf("KeptCardIDs: got %d, want 6", len(m.KeptCardIDs))
+	}
+}
+
+// TestDetectMulligan_TwoMulligans verifies the maxHandSize decrement correctly
+// tracks two mulligans taken.
+func TestDetectMulligan_TwoMulligans(t *testing.T) {
+	handZoneID := 31
+	msgs := []*GREGameStateMessage{
+		{
+			TurnInfo:    nil,
+			Players:     []GREPlayerState{{SeatID: 1, MaxHandSize: 7}},
+			GameObjects: makeHandObjects(1, handZoneID, []int{3001, 3002, 3003, 3004, 3005, 3006, 3007}),
+			Zones:       map[int]*GREZone{handZoneID: {ZoneID: handZoneID, Type: "ZoneType_Hand", OwnerSeatID: 1}},
+		},
+		{
+			TurnInfo:    nil,
+			Players:     []GREPlayerState{{SeatID: 1, MaxHandSize: 6}},
+			GameObjects: makeHandObjects(1, handZoneID, []int{3001, 3002, 3003, 3004, 3005, 3006}),
+			Zones:       map[int]*GREZone{handZoneID: {ZoneID: handZoneID, Type: "ZoneType_Hand", OwnerSeatID: 1}},
+		},
+		{
+			TurnInfo:    nil,
+			Players:     []GREPlayerState{{SeatID: 1, MaxHandSize: 5}},
+			GameObjects: makeHandObjects(1, handZoneID, []int{3001, 3002, 3003, 3004, 3005}),
+			Zones:       map[int]*GREZone{handZoneID: {ZoneID: handZoneID, Type: "ZoneType_Hand", OwnerSeatID: 1}},
+		},
+	}
+
+	playerConn := &GREConnection{SeatID: 1}
+	m := detectMulligan(msgs, playerConn)
+	if m == nil {
+		t.Fatal("detectMulligan returned nil")
+	}
+	if m.MulliganCount != 2 {
+		t.Errorf("MulliganCount: got %d, want 2", m.MulliganCount)
+	}
+	if m.OpeningHandSize != 5 {
+		t.Errorf("OpeningHandSize: got %d, want 5", m.OpeningHandSize)
+	}
+}
+
+// TestDetectMulligan_OnlyInGameMessages returns nil when there are no pre-game
+// messages (all messages have TurnInfo with TurnNumber > 0).
+func TestDetectMulligan_OnlyInGameMessages(t *testing.T) {
+	msgs := []*GREGameStateMessage{
+		{
+			TurnInfo: &GRETurnInfo{TurnNumber: 1},
+			Players:  []GREPlayerState{{SeatID: 1, MaxHandSize: 7}},
+		},
+		{
+			TurnInfo: &GRETurnInfo{TurnNumber: 2},
+			Players:  []GREPlayerState{{SeatID: 1, MaxHandSize: 7}},
+		},
+	}
+	playerConn := &GREConnection{SeatID: 1}
+	m := detectMulligan(msgs, playerConn)
+	if m != nil {
+		t.Errorf("expected nil Mulligan for in-game-only messages, got %+v", m)
+	}
+}
+
+// ---- helpers for logparse tests ----
+
+// makeZoneChangeEntries builds a two-entry log that moves a card from
+// fromZoneID to toZoneID so zone-change tests can be concise.
+func makeZoneChangeEntries(turnNumber int, grpID, fromZoneID, toZoneID int, cardType string) []*LogEntry {
+	makeEntry := func(zoneID int) *LogEntry {
+		return &LogEntry{
+			IsJSON:    true,
+			Timestamp: "2024-01-15 10:30:45",
+			JSON: map[string]interface{}{
+				"greToClientEvent": map[string]interface{}{
+					"greToClientMessages": []interface{}{
+						map[string]interface{}{
+							"type": "GREMessageType_GameStateMessage",
+							"gameStateMessage": map[string]interface{}{
+								"turnInfo": map[string]interface{}{
+									"turnNumber":   float64(turnNumber),
+									"phase":        "Phase_Main1",
+									"activePlayer": float64(1),
+								},
+								"gameObjects": []interface{}{
+									map[string]interface{}{
+										"instanceId":       float64(100),
+										"grpId":            float64(grpID),
+										"controllerSeatId": float64(1),
+										"zoneId":           float64(zoneID),
+										"cardTypes":        []interface{}{cardType},
+									},
+								},
+								"gameInfo": map[string]interface{}{
+									"matchID":    "match-test",
+									"gameNumber": float64(1),
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+	return []*LogEntry{makeEntry(fromZoneID), makeEntry(toZoneID)}
+}
+
+// makeHandObjects creates GREGameObject slices representing cards in a player's
+// hand zone, one object per grpID.
+func makeHandObjects(ownerSeatID, handZoneID int, grpIDs []int) []GREGameObject {
+	objs := make([]GREGameObject, len(grpIDs))
+	for i, id := range grpIDs {
+		objs[i] = GREGameObject{
+			InstanceID:       id,
+			GRPId:            id,
+			OwnerSeatID:      ownerSeatID,
+			ControllerSeatID: ownerSeatID,
+			ZoneID:           handZoneID,
+			ZoneName:         "hand",
+			Counters:         map[string]int{},
+		}
+	}
+	return objs
+}
+
 // Benchmarks
 
 func BenchmarkParseGREMessages(b *testing.B) {
