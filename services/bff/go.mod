@@ -5,7 +5,7 @@ go 1.25.0
 toolchain go1.25.10
 
 require (
-	github.com/RdHamilton/vault-mtg/services/contract v0.1.2
+	github.com/RdHamilton/vault-mtg/services/contract v0.1.4
 	github.com/aws/aws-sdk-go-v2/config v1.32.18
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.7
 	github.com/clerk/clerk-sdk-go/v2 v2.6.0
