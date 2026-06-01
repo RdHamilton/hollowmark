@@ -32,6 +32,7 @@ import (
 	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
 	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/pickquality"
 	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/prediction"
+	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/recommend"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/draftstate"
 )
 
@@ -58,23 +59,43 @@ func (noopCards) CardName(_ string) string { return "" }
 
 // ─── /api/v1/drafts/{id}/current-pack ─────────────────────────────────────
 
-// currentPackCard mirrors the SPA's gui.CurrentPackResponse.cards entry
-// (frontend/src/types/models.ts).
-type currentPackCard struct {
-	ArenaID  int     `json:"arenaId"`
-	CardName string  `json:"cardName"`
-	GIHWR    float64 `json:"gihwr"`
+// packCardWithRating mirrors the SPA's gui.PackCardWithRating
+// (frontend/src/types/models.ts). All keys are snake_case to match the
+// SPA TypeScript type exactly. Phase A populates:
+//
+//	arena_id, name, gihwr, is_recommended, score, reasoning.
+//
+// Phase B will add: alsa, colors, tier, mana_cost, cmc, type_line, rarity.
+// Fields the Phase A daemon can't populate yet are emitted as zero/empty
+// so the SPA falls back to its existing defaults gracefully.
+type packCardWithRating struct {
+	ArenaID       string   `json:"arena_id"`
+	Name          string   `json:"name"`
+	ImageURL      string   `json:"image_url"`
+	Rarity        string   `json:"rarity"`
+	Colors        []string `json:"colors"`
+	ManaCost      string   `json:"mana_cost"`
+	CMC           float64  `json:"cmc"`
+	TypeLine      string   `json:"type_line"`
+	GIHWR         float64  `json:"gihwr"`
+	ALSA          float64  `json:"alsa"`
+	Tier          string   `json:"tier"`
+	IsRecommended bool     `json:"is_recommended"`
+	Score         float64  `json:"score"`
+	Reasoning     string   `json:"reasoning"`
 }
 
-// currentPackResponse mirrors the SPA's gui.CurrentPackResponse.
+// currentPackResponse mirrors the SPA's gui.CurrentPackResponse
+// (frontend/src/types/models.ts). All keys are snake_case.
 type currentPackResponse struct {
-	SessionID      string            `json:"sessionId"`
-	PackNumber     int               `json:"packNumber"` // 1-based for display
-	PickNumber     int               `json:"pickNumber"` // 1-based for display
-	Cards          []currentPackCard `json:"cards"`
-	Recommendation string            `json:"recommendation,omitempty"`
-	SetCode        string            `json:"setCode"`
-	Format         string            `json:"format"`
+	SessionID       string               `json:"session_id"`
+	PackNumber      int                  `json:"pack_number"` // 1-based for display
+	PickNumber      int                  `json:"pick_number"` // 1-based for display
+	PackLabel       string               `json:"pack_label"`  // e.g. "Pack 1, Pick 1"
+	Cards           []packCardWithRating `json:"cards"`
+	RecommendedCard *packCardWithRating  `json:"recommended_card,omitempty"`
+	PoolColors      []string             `json:"pool_colors"`
+	PoolSize        int                  `json:"pool_size"`
 }
 
 // gradePickRequest mirrors the SPA's drafts.GradePickRequest body.
@@ -139,23 +160,86 @@ func (s *Server) handleDraftsPathPrefix(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	cards := make([]currentPackCard, 0, len(sess.CurrentCards))
+	// Build the string-form pack card IDs for the algorithms.
+	packIDs := make([]string, 0, len(sess.CurrentCards))
 	for _, id := range sess.CurrentCards {
-		cards = append(cards, currentPackCard{
-			ArenaID:  id,
-			CardName: lookupName(s, strconv.Itoa(id)),
-			GIHWR:    lookupGIHWR(s, strconv.Itoa(id), sess.Format),
+		packIDs = append(packIDs, strconv.Itoa(id))
+	}
+
+	// Build the player's current pool (previously picked card IDs).
+	poolIDs := make([]string, 0, len(sess.Picks))
+	for _, p := range sess.Picks {
+		if p.Picked != 0 {
+			poolIDs = append(poolIDs, strconv.Itoa(p.Picked))
+		}
+	}
+
+	// Run the recommendation algorithm over the current pack.
+	recs := recommend.Recommend(sess.Format, packIDs, poolIDs, s.ratings(), s.cards())
+
+	// Build a map from card ID → recommendation entry for O(1) lookup
+	// when constructing the per-card response objects.
+	type recEntry struct {
+		isRecommended bool
+		score         float64
+		reasoning     string
+	}
+	recByID := make(map[string]recEntry, len(packIDs))
+	for i, r := range recs.TopPicks {
+		recByID[r.CardID] = recEntry{
+			isRecommended: i == 0, // only rank-1 is the recommended card
+			score:         float64(r.Priority) / 5.0,
+			reasoning:     r.Reason,
+		}
+	}
+	for _, r := range recs.Alternatives {
+		recByID[r.CardID] = recEntry{
+			isRecommended: false,
+			score:         float64(r.Priority) / 5.0,
+			reasoning:     r.Reason,
+		}
+	}
+
+	packCards := make([]packCardWithRating, 0, len(sess.CurrentCards))
+	for _, id := range sess.CurrentCards {
+		idStr := strconv.Itoa(id)
+		re := recByID[idStr]
+		packCards = append(packCards, packCardWithRating{
+			ArenaID:       idStr,
+			Name:          lookupName(s, idStr),
+			GIHWR:         lookupGIHWR(s, idStr, sess.Format),
+			IsRecommended: re.isRecommended,
+			Score:         re.score,
+			Reasoning:     re.reasoning,
+			// Phase B fields (colors, tier, alsa, etc.) remain zero/empty
+			// until ratingsclient retains them.
+			Colors: []string{},
 		})
 	}
 
+	// The recommended card is the rank-1 top pick (first TopPick entry).
+	var recommendedCard *packCardWithRating
+	if len(recs.TopPicks) > 0 {
+		for i := range packCards {
+			if packCards[i].ArenaID == recs.TopPicks[0].CardID {
+				cp := packCards[i]
+				recommendedCard = &cp
+				break
+			}
+		}
+	}
+
+	packLabel := fmt.Sprintf("Pack %d, Pick %d", sess.CurrentPack+1, sess.CurrentPick+1)
+
 	writeJSON(w, r, http.StatusOK, currentPackResponse{
-		SessionID:      sess.ID,
-		PackNumber:     sess.CurrentPack + 1, // SPA displays 1-based
-		PickNumber:     sess.CurrentPick + 1,
-		Cards:          cards,
-		Recommendation: "", // Wails-era simple recommendation logic deferred
-		SetCode:        sess.SetCode,
-		Format:         sess.Format,
+		SessionID:       sess.ID,
+		PackNumber:      sess.CurrentPack + 1, // SPA displays 1-based
+		PickNumber:      sess.CurrentPick + 1,
+		PackLabel:       packLabel,
+		Cards:           packCards,
+		RecommendedCard: recommendedCard,
+		PoolColors:      []string{}, // Phase B: derive from pool card colors
+		PoolSize:        len(poolIDs),
 	})
 }
 

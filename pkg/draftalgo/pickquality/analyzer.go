@@ -10,9 +10,9 @@ package pickquality
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 
 	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
+	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/rank"
 )
 
 // Alternative represents an alternative card pick with its rating.
@@ -53,40 +53,16 @@ func Analyze(
 		return nil, fmt.Errorf("no cards in pack")
 	}
 
-	type entry struct {
-		cardID string
-		gihwr  float64
-		name   string
-	}
-
-	entries := make([]entry, 0, len(packCardIDs))
-	for _, id := range packCardIDs {
-		gihwr := 0.0
-		if ratings != nil {
-			if v, ok := ratings.GIHWR(id, format); ok {
-				gihwr = v
-			}
-		}
-		name := ""
-		if cards != nil {
-			name = cards.CardName(id)
-		}
-		if name == "" {
-			name = "Unknown Card"
-		}
-		entries = append(entries, entry{cardID: id, gihwr: gihwr, name: name})
-	}
-
-	sort.SliceStable(entries, func(i, j int) bool {
-		return entries[i].gihwr > entries[j].gihwr
-	})
+	// Delegate pack ordering to the shared primitive so pickquality and
+	// recommend always agree on which card is best in a given pack.
+	ranked := rank.ByGIHWR(format, packCardIDs, ratings, cards)
 
 	pickedRank := 0
 	pickedGIHWR := 0.0
-	for i, e := range entries {
-		if e.cardID == pickedCardID {
-			pickedRank = i + 1
-			pickedGIHWR = e.gihwr
+	for _, r := range ranked {
+		if r.CardID == pickedCardID {
+			pickedRank = r.Rank
+			pickedGIHWR = r.GIHWR
 			break
 		}
 	}
@@ -94,10 +70,11 @@ func Analyze(
 		return nil, fmt.Errorf("picked card %q not found in pack", pickedCardID)
 	}
 
-	// If every card scored 0 we have no rating coverage and can't grade.
+	// If no card in the pack has real rating data, grade is N/A rather
+	// than F — distinguishing "ungraded" from "worst pick".
 	hasRatings := false
-	for _, e := range entries {
-		if e.gihwr > 0 {
+	for _, r := range ranked {
+		if r.HasGIHWR {
 			hasRatings = true
 			break
 		}
@@ -105,29 +82,29 @@ func Analyze(
 
 	grade := "N/A"
 	if hasRatings {
-		grade = calculateGrade(pickedRank, len(entries))
+		grade = calculateGrade(pickedRank, len(ranked))
 	}
 
 	alternatives := make([]Alternative, 0, 5)
-	for i, e := range entries {
-		if e.cardID == pickedCardID {
+	for _, r := range ranked {
+		if r.CardID == pickedCardID {
 			continue
 		}
 		if len(alternatives) >= 5 {
 			break
 		}
 		alternatives = append(alternatives, Alternative{
-			CardID:   e.cardID,
-			CardName: e.name,
-			GIHWR:    e.gihwr,
-			Rank:     i + 1,
+			CardID:   r.CardID,
+			CardName: r.CardName,
+			GIHWR:    r.GIHWR,
+			Rank:     r.Rank,
 		})
 	}
 
 	return &PickQuality{
 		Grade:           grade,
 		Rank:            pickedRank,
-		PackBestGIHWR:   entries[0].gihwr,
+		PackBestGIHWR:   ranked[0].GIHWR,
 		PickedCardGIHWR: pickedGIHWR,
 		Alternatives:    alternatives,
 	}, nil
