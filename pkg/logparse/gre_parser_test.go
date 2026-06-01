@@ -1103,6 +1103,110 @@ func TestParseGamePlaysResult_NoEntries(t *testing.T) {
 	}
 }
 
+// TestParseGamePlaysResult_SingleMessage_OpponentCardsAndSnapshotsPopulated is the
+// regression test for the bug introduced in v0.1.2: when the GRE buffer contains
+// exactly one game state message, extractOpponentCardsFromMessages and
+// extractSnapshotsFromMessages were skipped by the len(messages) < 2 early-return
+// guard. Both functions operate per-message (no diff-pair needed), so they must
+// run even for a single-message buffer.
+//
+// This test must FAIL before the fix and PASS after.
+func TestParseGamePlaysResult_SingleMessage_OpponentCardsAndSnapshotsPopulated(t *testing.T) {
+	// A single game state message: turn 2, opponent has a creature on the battlefield.
+	entry := &LogEntry{
+		IsJSON:    true,
+		Timestamp: "2024-01-15 10:30:45",
+		JSON: map[string]interface{}{
+			"greToClientEvent": map[string]interface{}{
+				"greToClientMessages": []interface{}{
+					map[string]interface{}{
+						"type": "GREMessageType_GameStateMessage",
+						"gameStateMessage": map[string]interface{}{
+							"turnInfo": map[string]interface{}{
+								"turnNumber":   float64(2),
+								"phase":        "Phase_Main1",
+								"activePlayer": float64(2),
+							},
+							"players": []interface{}{
+								map[string]interface{}{
+									"seatId":    float64(1),
+									"lifeTotal": float64(20),
+								},
+								map[string]interface{}{
+									"seatId":    float64(2),
+									"lifeTotal": float64(18),
+								},
+							},
+							"gameObjects": []interface{}{
+								// Opponent creature on battlefield (seat 2 = opponent when playerConn.SeatID=1).
+								map[string]interface{}{
+									"instanceId":       float64(201),
+									"grpId":            float64(99999),
+									"ownerSeatId":      float64(2),
+									"controllerSeatId": float64(2),
+									"zoneId":           float64(3), // battlefield
+									"cardTypes":        []interface{}{"CardType_Creature"},
+								},
+							},
+							"gameInfo": map[string]interface{}{
+								"matchID":    "match-single",
+								"gameNumber": float64(1),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	playerConn := &GREConnection{SeatID: 1, SystemSeatID: 1}
+	result, err := ParseGamePlaysResult([]*LogEntry{entry}, playerConn)
+	if err != nil {
+		t.Fatalf("ParseGamePlaysResult: %v", err)
+	}
+
+	// Opponent card (grpId 99999) must appear in OpponentCards even though
+	// there is only one GRE message — no diff pair is needed to observe it.
+	if len(result.OpponentCards) == 0 {
+		t.Error("OpponentCards: got 0, want at least 1 — single-message regression")
+	} else {
+		found := false
+		for _, c := range result.OpponentCards {
+			if c.CardID == 99999 {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("OpponentCards: card 99999 not present; got %+v", result.OpponentCards)
+		}
+	}
+
+	// A snapshot for turn 2 must exist — TurnInfo is present in the message.
+	if len(result.Snapshots) == 0 {
+		t.Error("Snapshots: got 0, want at least 1 — single-message regression")
+	} else {
+		found := false
+		for _, s := range result.Snapshots {
+			if s.TurnNumber == 2 {
+				found = true
+				if s.MatchID != "match-single" {
+					t.Errorf("Snapshots[turn=2].MatchID: got %q, want %q", s.MatchID, "match-single")
+				}
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Snapshots: no snapshot for turn 2; got %+v", result.Snapshots)
+		}
+	}
+
+	// Plays must be empty — no diff pair means no zone-change/life-change/attack detection.
+	if len(result.Plays) != 0 {
+		t.Errorf("Plays: got %d, want 0 for single-message buffer", len(result.Plays))
+	}
+}
+
 // ---- Counter delta detector tests ----
 
 // TestDetectCounterChanges_LoyaltyDecrement verifies that a planeswalker losing
