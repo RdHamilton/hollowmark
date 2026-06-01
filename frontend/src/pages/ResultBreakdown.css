@@ -68,15 +68,15 @@
 }
 
 .metric-value.win {
-  color: #7dff7d; /* stylelint-disable-line color-no-hex */
+  color: var(--win);
 }
 
 .metric-value.loss {
-  color: #ff7d7d; /* stylelint-disable-line color-no-hex */
+  color: var(--loss);
 }
 
 .metric-value.excellent {
-  color: #7dff7d; /* stylelint-disable-line color-no-hex */
+  color: var(--win);
 }
 
 .metric-value.good {
@@ -88,7 +88,7 @@
 }
 
 .metric-value.below-average {
-  color: #ff7d7d; /* stylelint-disable-line color-no-hex */
+  color: var(--loss);
 }
 
 .metric-sublabel {
@@ -150,11 +150,11 @@
 }
 
 .breakdown-segment.wins {
-  background-color: #7dff7d; /* stylelint-disable-line color-no-hex */
+  background-color: var(--win);
 }
 
 .breakdown-segment.losses {
-  background-color: #ff7d7d; /* stylelint-disable-line color-no-hex */
+  background-color: var(--loss);
 }
 
 .breakdown-label {
@@ -185,11 +185,11 @@
 }
 
 .stat-dot.wins {
-  background-color: #7dff7d; /* stylelint-disable-line color-no-hex */
+  background-color: var(--win);
 }
 
 .stat-dot.losses {
-  background-color: #ff7d7d; /* stylelint-disable-line color-no-hex */
+  background-color: var(--loss);
 }
 
 /* Win/Loss Breakdown — zero-match empty state (#2019) */

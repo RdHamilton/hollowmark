@@ -12,6 +12,9 @@ import './EnvBadge.css';
  * `Staging` and `Preview` stories below illustrate the other variants by
  * rendering the `.env-badge--*` classes directly — useful as a visual
  * reference and a stable Chromatic snapshot for each variant.
+ *
+ * Token migration (#328): the default staging tint + development tint moved off
+ * raw hex onto the `--vault-env-*` token set; these stories pin the snapshot.
  */
 const meta: Meta<typeof EnvBadge> = {
   title: 'Atoms/EnvBadge',

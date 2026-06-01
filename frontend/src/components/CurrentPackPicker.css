@@ -221,29 +221,29 @@
 }
 
 .color-indicator.color-w {
-    background: #f9faf4; /* stylelint-disable-line color-no-hex */
-    color: var(--vault-border);
+    background: var(--mana-w-bg);
+    color: var(--mana-pip-fg);
 }
 
 .color-indicator.color-u {
-    background: #0e68ab; /* stylelint-disable-line color-no-hex */
-    color: var(--fg-inverse);
+    background: var(--mana-u-bg);
+    color: var(--mana-pip-fg);
 }
 
 .color-indicator.color-b {
-    background: #150b00; /* stylelint-disable-line color-no-hex */
-    color: var(--fg);
+    background: var(--mana-b-bg);
+    color: var(--mana-pip-fg);
     border: 1px solid var(--vault-border);
 }
 
 .color-indicator.color-r {
-    background: var(--danger);
-    color: var(--fg-inverse);
+    background: var(--mana-r-bg);
+    color: var(--mana-pip-fg);
 }
 
 .color-indicator.color-g {
-    background: #00733e; /* stylelint-disable-line color-no-hex */
-    color: var(--fg-inverse);
+    background: var(--mana-g-bg);
+    color: var(--mana-pip-fg);
 }
 
 .color-indicator.colorless {
