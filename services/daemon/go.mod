@@ -6,8 +6,8 @@ toolchain go1.25.10
 
 require (
 	github.com/RdHamilton/vault-mtg/pkg/draftalgo v0.1.2
-	github.com/RdHamilton/vault-mtg/pkg/logparse v0.1.1
-	github.com/RdHamilton/vault-mtg/services/contract v0.1.3
+	github.com/RdHamilton/vault-mtg/pkg/logparse v0.1.4
+	github.com/RdHamilton/vault-mtg/services/contract v0.1.4
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/getlantern/systray v1.2.2
 	github.com/getsentry/sentry-go v0.46.2
