@@ -40,13 +40,20 @@
   --vault-info:             #38BDF8;
   --vault-info-dim:         rgba(56, 189, 248, 0.15);
 
-  /* ---- MTG Color Identity Pips ---- */
-  --vault-mtg-white:        #E8E0C8;
-  --vault-mtg-blue:         #4A90D9;
-  --vault-mtg-black:        #9B7FC2;
-  --vault-mtg-red:          #C94E3A;
-  --vault-mtg-green:        #3A9E5F;
+  /* ---- MTG Color Identity Pips ----
+     Pip BACKGROUND values are MTG-canonical (player-recognizable WUBRG swatches),
+     per Ramone's brand decision 2026-05-31 (#328): chosen over the
+     brand-harmonized hues for max recognizability. The source-of-truth doc
+     (colors_and_type.css --vault-mtg-*) is reconciled to these canonical values
+     in a Greg/Najah follow-up. All five are light pastels → pip text uses the
+     dark --vault-mtg-pip-fg below. */
+  --vault-mtg-white:        #FFFBD5;
+  --vault-mtg-blue:         #AAE0FA;
+  --vault-mtg-black:        #CBC2BF;
+  --vault-mtg-red:          #F9AA8F;
+  --vault-mtg-green:        #9BD3AE;
   --vault-mtg-colorless:    #8B9BB4;
+  --vault-mtg-pip-fg:       #0D1117;   /* dark text on the light pip backgrounds */
 
   /* ---- Tier Rating Colors ---- */
   --vault-tier-a:           #4A90D9;   /* sapphire — exceptional */
@@ -54,6 +61,65 @@
   --vault-tier-c:           #94A3B8;   /* slate — average */
   --vault-tier-d:           #EAB308;   /* yellow — below average */
   --vault-tier-f:           #EF4444;   /* red — avoid */
+
+  /* ---- Win / Loss Indicators (#328, Ramone 2026-05-31) ----
+     Win reads on-brand (sapphire accent), NOT generic green — leaves green
+     free for tier use. Loss is the danger red. */
+  --vault-win:              var(--vault-sapphire);
+  --vault-loss:             var(--vault-danger);
+
+  /* ---- Rarity / Wildcard Badges (categorical, non-brand) ---- */
+  --vault-rarity-common:    #4B5563;
+  --vault-rarity-uncommon:  #C0C0C0;
+  --vault-rarity-rare:      #D4AF37;   /* gold */
+  --vault-rarity-mythic:    #DC7E0E;   /* orange */
+  --vault-rarity-bronze:    #CD7F32;
+
+  /* ---- Third-party brand reference — MTGA companion CTA surfaces (Ray, #328) ---- */
+  --vault-twitch:           #9147FF;
+  --vault-twitch-dark:      #7B2FFF;   /* pressed / border state */
+
+  /* ---- Env Badge (internal tooling, non-brand) (Ray, #328) ---- */
+  --vault-env-staging-bg:   #4A4A1A;
+  --vault-env-staging-text: #D4C24A;
+  --vault-env-staging-border: #6A6A2A;
+  --vault-env-dev-bg:       #2A1A4A;
+  --vault-env-dev-border:   #4A2A6A;
+
+  /* ---- Decorative gradient / brewing accents (categorical, non-brand) ---- */
+  --vault-decorative-purple:      #9C27B0;
+  --vault-decorative-purple-light: #BA68C8;
+  --vault-decorative-magenta:     #EC4899;
+  --vault-decorative-magenta-light: #F472B6;
+  --vault-decorative-violet:      #A855F7;
+  --vault-decorative-indigo-grad-from: #667EEA;
+  --vault-decorative-indigo-grad-to:   #764BA2;
+  --vault-decorative-quest-from:  #AB47BC;
+  --vault-decorative-quest-to:    #8E24AA;
+
+  /* ---- Grade / quality gradient stops (draft-grade & quantity badges, data-viz) ---- */
+  --vault-grade-gold-light:   #FFED4E;   /* gold gradient companion */
+  --vault-grade-orange:       #FF8844;
+  --vault-grade-orange-light: #FF9966;
+  --vault-grade-amber-light:  #FFBB66;
+  --vault-grade-bronze:       #CD7F32;
+  --vault-grade-bronze-light: #E69559;
+
+  /* ---- Recommendation source categories (ML / meta / personal) ---- */
+  --vault-source-ml:        #CE93D8;   /* ML — purple */
+  --vault-source-meta:      #64B5F6;   /* meta — blue */
+  --vault-source-personal:  #81C784;   /* personal — green */
+
+  /* ---- Urgency Banner gradient stops (RotationBanner / LegalityBanner) ---- */
+  --vault-banner-info-from:     #1A3A5C;
+  --vault-banner-info-to:       #0D2137;
+  --vault-banner-info-border:   #2D5A8A;
+  --vault-banner-warn-from:     #5C4A1A;
+  --vault-banner-warn-to:       #372D0D;
+  --vault-banner-warn-border:   #8A7A2D;
+  --vault-banner-danger-from:   #5C1A1A;
+  --vault-banner-danger-to:     #370D0D;
+  --vault-banner-danger-border: #8A2D2D;
 
   /* ---- Typography ---- */
   --font-display-vault:     "Space Grotesk", system-ui, sans-serif;
@@ -144,6 +210,19 @@
   --danger:       var(--vault-danger);
   --warning:      var(--vault-warning);
   --info:         var(--vault-info);
+
+  /* Win / loss outcome indicators (#328) */
+  --win:          var(--vault-win);
+  --loss:         var(--vault-loss);
+
+  /* MTG mana pip backgrounds + dark pip text (#328) */
+  --mana-w-bg:    var(--vault-mtg-white);
+  --mana-u-bg:    var(--vault-mtg-blue);
+  --mana-b-bg:    var(--vault-mtg-black);
+  --mana-r-bg:    var(--vault-mtg-red);
+  --mana-g-bg:    var(--vault-mtg-green);
+  --mana-c-bg:    var(--vault-mtg-colorless);
+  --mana-pip-fg:  var(--vault-mtg-pip-fg);
 
   --font-display: var(--font-display-vault);
   --shadow-sm:    var(--shadow-sm-vault);

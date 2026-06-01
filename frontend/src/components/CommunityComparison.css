@@ -89,7 +89,7 @@
 }
 
 .community-comparison__rank--high {
-  background: linear-gradient(135deg, #82ca9d, #50c878); /* stylelint-disable-line color-no-hex */
+  background: linear-gradient(135deg, var(--win), var(--vault-sapphire-dark));
   color: var(--vault-fg-inverse);
 }
 
@@ -216,28 +216,28 @@
 }
 
 .community-comparison__color--w {
-  background-color: #f9faf4; /* stylelint-disable-line color-no-hex */
-  color: var(--border);
+  background-color: var(--mana-w-bg);
+  color: var(--mana-pip-fg);
 }
 
 .community-comparison__color--u {
-  background-color: #0e68ab; /* stylelint-disable-line color-no-hex */
-  color: var(--fg);
+  background-color: var(--mana-u-bg);
+  color: var(--mana-pip-fg);
 }
 
 .community-comparison__color--b {
-  background-color: #150b00; /* stylelint-disable-line color-no-hex */
-  color: var(--fg);
+  background-color: var(--mana-b-bg);
+  color: var(--mana-pip-fg);
 }
 
 .community-comparison__color--r {
-  background-color: var(--danger);
-  color: var(--fg);
+  background-color: var(--mana-r-bg);
+  color: var(--mana-pip-fg);
 }
 
 .community-comparison__color--g {
-  background-color: #00733e; /* stylelint-disable-line color-no-hex */
-  color: var(--fg);
+  background-color: var(--mana-g-bg);
+  color: var(--mana-pip-fg);
 }
 
 .community-comparison__archetype-name {

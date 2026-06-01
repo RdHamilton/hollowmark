@@ -124,7 +124,7 @@
 }
 
 .daily-wins-fill.weekly {
-  background: linear-gradient(90deg, #ab47bc 0%, #8e24aa 100%); /* stylelint-disable-line color-no-hex */
+  background: linear-gradient(90deg, var(--vault-decorative-quest-from) 0%, var(--vault-decorative-quest-to) 100%);
 }
 
 .daily-wins-footer {
@@ -184,7 +184,7 @@
   border-radius: 4px;
   font-size: 10px;
   font-weight: 600;
-  color: #7dff7d; /* stylelint-disable-line color-no-hex */
+  color: var(--fg-inverse);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -213,7 +213,7 @@
 
 .quest-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent) 0%, #7dcfff 100%); /* stylelint-disable-line color-no-hex */
+  background: linear-gradient(90deg, var(--accent) 0%, var(--vault-sapphire-light) 100%);
   transition: width 0.3s ease;
 }
 
@@ -266,7 +266,7 @@
 
 .mini-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent) 0%, #7dcfff 100%); /* stylelint-disable-line color-no-hex */
+  background: linear-gradient(90deg, var(--accent) 0%, var(--vault-sapphire-light) 100%);
   transition: width 0.3s ease;
 }
 
@@ -281,12 +281,12 @@
 
 .status-badge.completed {
   background-color: var(--success);
-  color: #7dff7d; /* stylelint-disable-line color-no-hex */
+  color: var(--fg-inverse);
 }
 
 .status-badge.incomplete {
-  background-color: #5a5a2d; /* stylelint-disable-line color-no-hex */
-  color: #ffff7d; /* stylelint-disable-line color-no-hex */
+  background-color: var(--vault-warning-dim);
+  color: var(--warning);
 }
 
 .status-badge.rerolled {
@@ -295,11 +295,11 @@
 }
 
 tr.quest-completed {
-  border-left: 3px solid #7dff7d; /* stylelint-disable-line color-no-hex */
+  border-left: 3px solid var(--win);
 }
 
 tr.quest-incomplete {
-  border-left: 3px solid #ffff7d; /* stylelint-disable-line color-no-hex */
+  border-left: 3px solid var(--warning);
 }
 
 tr.quest-rerolled {
