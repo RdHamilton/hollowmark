@@ -2,8 +2,13 @@
 -- to reference game_plays(id), and drop match_game_results.
 --
 -- NOTE: this down migration is for staging rollback only. Never run in
--- production without a full wave revert. It assumes 0 rows in all affected
--- tables (same invariant as the up migration).
+-- production without a full wave revert.
+--
+-- PROD-SAFETY: TRUNCATE before re-adding NOT NULL columns without DEFAULT,
+-- same rationale as the up migration — any rows present reference FKs that
+-- are invalid under the reverted schema.
+TRUNCATE TABLE game_event_counters CASCADE;
+TRUNCATE TABLE life_change_tracking CASCADE;
 
 -- Restore game_event_counters FK to game_plays.
 ALTER TABLE game_event_counters
