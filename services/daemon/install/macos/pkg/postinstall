@@ -10,12 +10,14 @@
 #      registering the new one.  Prevents two daemon processes from running
 #      simultaneously after an in-place upgrade.
 #   3. Writes a default LaunchAgent plist to ~/Library/LaunchAgents/ using the
-#      new label com.vaultmtg.daemon (per-user, not system-wide — no sudo).
+#      channel-derived label (per-user, not system-wide — no sudo).
 #   4. Loads the new LaunchAgent with launchctl bootstrap so the daemon starts
 #      immediately without requiring a logout/login cycle.
 #
-# The binary is installed by pkgbuild into /usr/local/bin/vaultmtg-daemon
-# (the package root maps to / at install time).
+# Identity constants (BINARY_NAME, PLIST_LABEL, KEYCHAIN_SERVICE, CONFIG_DIR,
+# APP_BUNDLE_PATH) are DERIVED from CHANNEL using the same suffix table as
+# common.sh (ADR-036 I-4 / ADR-049 §2).  No per-channel literal appears
+# outside the suffix case statement below.
 #
 # The Clerk env vars (CLERK_FRONTEND_API, CLERK_PUBLISHABLE_KEY) and
 # cloud_api_url are baked in at build time via the CI workflow's env block
@@ -23,19 +25,12 @@
 
 set -euo pipefail
 
-INSTALL_DIR="/usr/local/bin"
-BINARY_NAME="vaultmtg-daemon"
-BINARY_PATH="${INSTALL_DIR}/${BINARY_NAME}"
+INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
 # Share directory constant — must match SHARE_DIR in build-pkg.sh.
 # The uninstall script is installed here by build-pkg.sh; we echo the path to
 # the user at the end of postinstall so they know how to remove the daemon.
 SHARE_DIR="/usr/local/share/vaultmtg"
-
-# ADR-022 Phase 2: new label (production).
-PLIST_LABEL="com.vaultmtg.daemon"
-# Legacy label — detected and unloaded before registering the new one.
-PLIST_LABEL_LEGACY="com.mtga-companion.daemon"
 
 # Resolve the real (non-root) user so all files under $HOME are created with
 # correct ownership. postinstall runs as root; $SUDO_USER names the invoking
@@ -43,16 +38,6 @@ PLIST_LABEL_LEGACY="com.mtga-companion.daemon"
 REAL_USER="${SUDO_USER:-$(stat -f '%Su' "${HOME}")}"
 REAL_UID=$(id -u "${REAL_USER}")
 REAL_HOME=$(eval echo "~${REAL_USER}")
-
-PLIST_DIR="${REAL_HOME}/Library/LaunchAgents"
-PLIST_PATH="${PLIST_DIR}/${PLIST_LABEL}.plist"
-PLIST_PATH_LEGACY="${PLIST_DIR}/${PLIST_LABEL_LEGACY}.plist"
-
-# ADR-022 Phase 2: new config dir (~/.vaultmtg).
-CONFIG_DIR="${REAL_HOME}/.vaultmtg"
-CONFIG_FILE="${CONFIG_DIR}/daemon.json"
-
-LOG_FILE="${REAL_HOME}/Library/Logs/vaultmtg-daemon.log"
 
 # Values are substituted at build time by .github/workflows/daemon-release.yml
 # using `sed` BEFORE pkgbuild is invoked. pkgbuild does NOT propagate env vars
@@ -66,9 +51,6 @@ CLERK_PUBLISHABLE_KEY="__CLERK_PUBLISHABLE_KEY__"
 CLERK_OAUTH_CLIENT_ID="__CLERK_OAUTH_CLIENT_ID__"
 # CHANNEL is the build-time channel discriminator (ADR-049 §2).
 # Values: "stable" (bare daemon/v* tag) or "staging" (pre-release suffix).
-# Consumed by common.sh (ADR-036 I-4 source of truth) when it lands (#651).
-# For now it is recorded in the plist EnvironmentVariables so the running
-# daemon process can read VAULTMTG_DAEMON_CHANNEL from its launchd environment.
 CHANNEL="__VAULTMTG_CHANNEL__"
 
 # Fail loudly if any placeholder was not substituted at build time.
@@ -81,6 +63,66 @@ for var in CLOUD_API_URL CLERK_FRONTEND_API CLERK_PUBLISHABLE_KEY CLERK_OAUTH_CL
       ;;
   esac
 done
+
+# ---------------------------------------------------------------------------
+# Derive channel-keyed identity constants (mirrors common.sh suffix table).
+# ADR-036 I-4 / ADR-049 §2: single source of truth is common.sh; this block
+# reproduces the same case statement so postinstall is self-contained when
+# embedded in the .pkg (common.sh is not packaged into the scripts dir).
+# Adding a future channel: add one case arm here AND in common.sh.
+# ---------------------------------------------------------------------------
+case "${CHANNEL}" in
+  stable)
+    SUFFIX=""
+    LABEL_SUFFIX=""
+    APP_SUFFIX=""
+    ;;
+  staging)
+    SUFFIX="-staging"
+    LABEL_SUFFIX=".staging"
+    APP_SUFFIX=" Staging"
+    ;;
+  *)
+    echo "[postinstall] ERROR: unknown CHANNEL '${CHANNEL}' — must be 'stable' or 'staging'" >&2
+    exit 1
+    ;;
+esac
+
+BINARY_NAME="vaultmtg-daemon${SUFFIX}"
+BINARY_PATH="${INSTALL_DIR}/${BINARY_NAME}"
+
+PLIST_LABEL="com.vaultmtg.daemon${LABEL_SUFFIX}"
+# Legacy label — only applicable for stable channel (staging never had one).
+# Left unset for staging so guard blocks below skip cleanly.
+PLIST_LABEL_LEGACY=""
+if [[ "${CHANNEL}" == "stable" ]]; then
+  PLIST_LABEL_LEGACY="com.mtga-companion.daemon"
+fi
+
+# OS keychain service (matches keychain.go ServiceNameNew).
+KEYCHAIN_SERVICE="com.vaultmtg.daemon${LABEL_SUFFIX}"
+
+# Per-user paths (all relative to the real user's home).
+PLIST_DIR="${REAL_HOME}/Library/LaunchAgents"
+PLIST_PATH="${PLIST_DIR}/${PLIST_LABEL}.plist"
+PLIST_PATH_LEGACY="${PLIST_DIR}/${PLIST_LABEL_LEGACY}.plist"
+
+CONFIG_DIR="${REAL_HOME}/.vaultmtg${SUFFIX}"
+CONFIG_FILE="${CONFIG_DIR}/daemon.json"
+
+LOG_FILE="${REAL_HOME}/Library/Logs/vaultmtg-daemon${SUFFIX}.log"
+
+# Local-API port for the post-install liveness check.
+# stable=9001, staging=9011 (matches common.sh LOCAL_API_PORT and Go install.stagingPortOffset).
+if [[ "${CHANNEL}" == "staging" ]]; then
+  LOCAL_API_PORT=9011
+else
+  LOCAL_API_PORT=9001
+fi
+HEALTH_URL="http://127.0.0.1:${LOCAL_API_PORT}/health"
+
+# App bundle path (honor env override for tests).
+APP_BUNDLE_PATH="${APP_BUNDLE_PATH:-/Applications/VaultMTG${APP_SUFFIX}.app}"
 
 # ---------------------------------------------------------------------------
 # 1. Clear quarantine attribute (ADR-020 §macOS Quarantine Clearing).
@@ -110,7 +152,6 @@ xattr -dr com.apple.quarantine "${BINARY_PATH}" || true
 #    su/sudo to avoid root-owned config that the daemon (running as the user)
 #    cannot write later.
 # ---------------------------------------------------------------------------
-KEYCHAIN_SERVICE="com.vaultmtg.daemon"
 KEYCHAIN_ACCOUNT="api-key"
 
 install -d -m 755 -o "${REAL_USER}" "${CONFIG_DIR}"
@@ -174,9 +215,13 @@ install -d -m 755 -o "${REAL_USER}" "${PLIST_DIR}"
 # 4. CRITICAL (ADR-022 Constraint 1): Stop and unregister the OLD daemon label
 #    BEFORE writing and bootstrapping the new plist.
 #
-#    If the old label (com.mtga-companion.daemon) is still registered with
-#    launchd, both daemons would run simultaneously after this postinstall
-#    completes — causing duplicate log ingestion and BFF event duplication.
+#    Only applicable for the stable channel — the staging channel never had a
+#    legacy identity (com.mtga-companion.daemon).  PLIST_LABEL_LEGACY is empty
+#    for staging; this block is skipped.
+#
+#    If the old label is still registered with launchd, both daemons would run
+#    simultaneously after this postinstall completes — causing duplicate log
+#    ingestion and BFF event duplication.
 #
 #    Steps:
 #      a. Try label-based bootout (modern, macOS 10.11+) as the real user.
@@ -184,27 +229,32 @@ install -d -m 755 -o "${REAL_USER}" "${PLIST_DIR}"
 #      c. Remove the legacy plist so it is not re-loaded at next login.
 #    All steps use `|| true` — a fresh install has no legacy label registered.
 # ---------------------------------------------------------------------------
-echo "[postinstall] checking for legacy launchd label ${PLIST_LABEL_LEGACY}"
-if launchctl asuser "${REAL_UID}" launchctl list "${PLIST_LABEL_LEGACY}" >/dev/null 2>&1; then
-  echo "[postinstall] found legacy daemon — booting out ${PLIST_LABEL_LEGACY}"
-  launchctl asuser "${REAL_UID}" launchctl bootout "gui/${REAL_UID}/${PLIST_LABEL_LEGACY}" 2>/dev/null || \
-    launchctl asuser "${REAL_UID}" launchctl bootout "gui/${REAL_UID}" "${PLIST_PATH_LEGACY}" 2>/dev/null || true
-  echo "[postinstall] legacy daemon stopped"
-else
-  echo "[postinstall] no legacy daemon found — skipping (fresh install)"
-fi
+if [[ -n "${PLIST_LABEL_LEGACY}" ]]; then
+  echo "[postinstall] checking for legacy launchd label ${PLIST_LABEL_LEGACY}"
+  if launchctl asuser "${REAL_UID}" launchctl list "${PLIST_LABEL_LEGACY}" >/dev/null 2>&1; then
+    echo "[postinstall] found legacy daemon — booting out ${PLIST_LABEL_LEGACY}"
+    launchctl asuser "${REAL_UID}" launchctl bootout "gui/${REAL_UID}/${PLIST_LABEL_LEGACY}" 2>/dev/null || \
+      launchctl asuser "${REAL_UID}" launchctl bootout "gui/${REAL_UID}" "${PLIST_PATH_LEGACY}" 2>/dev/null || true
+    echo "[postinstall] legacy daemon stopped"
+  else
+    echo "[postinstall] no legacy daemon found — skipping (fresh install)"
+  fi
 
-# Remove legacy plist (idempotent — ignore missing-file errors).
-if [[ -f "${PLIST_PATH_LEGACY}" ]]; then
-  echo "[postinstall] removing legacy plist: ${PLIST_PATH_LEGACY}"
-  rm -f "${PLIST_PATH_LEGACY}"
+  # Remove legacy plist (idempotent — ignore missing-file errors).
+  if [[ -f "${PLIST_PATH_LEGACY}" ]]; then
+    echo "[postinstall] removing legacy plist: ${PLIST_PATH_LEGACY}"
+    rm -f "${PLIST_PATH_LEGACY}"
+  fi
+else
+  echo "[postinstall] ${CHANNEL} channel — no legacy label to clean up"
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Write the new LaunchAgent plist (com.vaultmtg.daemon).
+# 5. Write the new LaunchAgent plist (channel-derived label).
 #    - RunAtLoad=true   start at login.
 #    - KeepAlive=true   restart if the daemon exits unexpectedly.
 #    - EnvironmentVariables injects the Clerk values the PKCE flow requires.
+#    - -config flag points at CONFIG_FILE (channel-derived path).
 #
 #    Use install(1) to pre-create the file owned by the real user before
 #    writing content. LaunchAgent plists must be owned by the user, not root;
@@ -284,7 +334,7 @@ launchctl asuser "${REAL_UID}" launchctl bootout "gui/${REAL_UID}/${PLIST_LABEL}
 
 # Kill any stale processes that slipped past launchctl (e.g. orphaned after a
 # crash or a prior install that used a different label).
-pkill -x vaultmtg-daemon 2>/dev/null || true
+pkill -x "${BINARY_NAME}" 2>/dev/null || true
 
 # Brief wait so the process has time to exit cleanly before bootstrap starts.
 sleep 1
@@ -321,7 +371,6 @@ fi
 #
 #    curl and python3 are both available on macOS 11+.
 # ---------------------------------------------------------------------------
-HEALTH_URL="http://127.0.0.1:9001/health"
 HEALTH_MAX_ATTEMPTS=5
 HEALTH_DELAY=3
 
