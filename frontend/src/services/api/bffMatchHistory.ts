@@ -2,36 +2,80 @@
  * BFF match history adapter.
  *
  * Targets GET /api/v1/history/matches on the BFF.
- * The endpoint is Clerk-protected and returns a paginated list of matches.
+ * The endpoint is Clerk-protected and returns a cursor-paginated list of matches.
  *
- * Response shape:
- *   { matches: MatchHistoryItem[], total: number, limit: number, offset: number }
+ * Response shape (cursorPaginatedMatchResponse from history.go):
+ *   {
+ *     "data": MatchHistoryItem[],
+ *     "has_more": boolean,
+ *     "next_cursor_ts": string,   // omitempty — absent when has_more is false
+ *     "next_cursor_id": string,   // omitempty — absent when has_more is false
+ *     "limit": number
+ *   }
+ *
+ * Query params:
+ *   - limit:      page size (1–100, default 20)
+ *   - format:     optional format filter
+ *   - cursor_ts:  RFC3339Nano timestamp from previous response's next_cursor_ts
+ *   - cursor_id:  match ID from previous response's next_cursor_id
+ *
+ * Both cursor_ts + cursor_id must be supplied together; omitting both returns
+ * the first page.
+ *
+ * NOTE: This adapter calls fetch directly (does NOT use apiClient.get) because
+ * the history endpoint returns a top-level JSON object — not the
+ * { data: T } envelope that apiClient.get unwraps. Using apiClient here would
+ * double-unwrap and lose the pagination tokens.
  */
 
 import { getApiConfig, ApiRequestError } from '../apiClient';
 
 // ---------------------------------------------------------------------------
-// Types
+// Types — mirror history.go matchResponse + cursorPaginatedMatchResponse
 // ---------------------------------------------------------------------------
 
+/**
+ * A single match row from GET /api/v1/history/matches.
+ * Field names match history.go matchResponse JSON tags exactly.
+ */
 export interface MatchHistoryItem {
-  id: number;
-  opponent_deck: string;
-  result: string;
+  id: string;
   format: string;
-  played_at: string;
+  result: string;
+  /** ISO-8601 timestamp of when the match was played. */
+  timestamp: string;
+  player_wins: number;
+  opponent_wins: number;
+  duration_seconds: number | null;
+  deck_id: string | null;
+  rank_before: string | null;
+  rank_after: string | null;
+  opponent_rank: string | null;
 }
 
+/**
+ * Query params accepted by GET /api/v1/history/matches.
+ */
 export interface MatchHistoryParams {
   limit?: number;
-  offset?: number;
+  format?: string;
+  /** Keyset cursor — supply together with cursor_id to fetch the next page. */
+  cursor_ts?: string;
+  cursor_id?: string;
 }
 
+/**
+ * The cursor-paginated envelope returned by the BFF history endpoint.
+ * Matches cursorPaginatedMatchResponse in history.go.
+ */
 export interface MatchHistoryResponse {
-  matches: MatchHistoryItem[];
-  total: number;
+  data: MatchHistoryItem[];
+  has_more: boolean;
+  /** Present only when has_more === true (omitempty in Go). */
+  next_cursor_ts?: string;
+  /** Present only when has_more === true (omitempty in Go). */
+  next_cursor_id?: string;
   limit: number;
-  offset: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -39,15 +83,19 @@ export interface MatchHistoryResponse {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch paginated match history from the BFF.
+ * Fetch cursor-paginated match history from the BFF.
  *
  * Targets: GET /api/v1/history/matches
  *
  * The endpoint is Clerk-protected — pass the Clerk session token obtained via
  * `useAuth().getToken()` as the `clerkToken` parameter.
  *
+ * To page forward, pass next_cursor_ts + next_cursor_id from the previous
+ * response as cursor_ts + cursor_id in params. Both must be supplied together
+ * (or both omitted to get the first page).
+ *
  * @param clerkToken  Clerk session JWT returned by useAuth().getToken()
- * @param params      Optional pagination params (limit, offset)
+ * @param params      Optional pagination + filter params
  */
 export async function getMatchHistory(
   clerkToken: string,
@@ -59,8 +107,14 @@ export async function getMatchHistory(
   if (params.limit !== undefined) {
     url.searchParams.set('limit', String(params.limit));
   }
-  if (params.offset !== undefined) {
-    url.searchParams.set('offset', String(params.offset));
+  if (params.format) {
+    url.searchParams.set('format', params.format);
+  }
+  if (params.cursor_ts !== undefined) {
+    url.searchParams.set('cursor_ts', params.cursor_ts);
+  }
+  if (params.cursor_id !== undefined) {
+    url.searchParams.set('cursor_id', params.cursor_id);
   }
 
   const response = await fetch(url.toString(), {

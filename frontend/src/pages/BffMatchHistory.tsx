@@ -12,6 +12,16 @@ const FIRST_DATA_FLAG = 'vaultmtg_ph_funnel_first_data_loaded_fired';
 
 const PAGE_SIZE = 20;
 
+/**
+ * Cursor entry for a page in the history stack.
+ * The first page uses undefined cursor (no cursor params sent).
+ * Subsequent pages use the cursor returned by the previous page's response.
+ */
+interface PageCursor {
+  cursor_ts?: string;
+  cursor_id?: string;
+}
+
 const BffMatchHistory = () => {
   const { getToken, isSignedIn } = useAuth();
   // Stable ref so useCallback / useEffect deps don't re-fire on every render
@@ -19,26 +29,38 @@ const BffMatchHistory = () => {
   useEffect(() => { getTokenRef.current = getToken; });
 
   const [matches, setMatches] = useState<MatchHistoryItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursorTS, setNextCursorTS] = useState<string | undefined>(undefined);
+  const [nextCursorID, setNextCursorID] = useState<string | undefined>(undefined);
+  // Stack of cursors used to navigate backwards. Each entry is the cursor that
+  // was used to fetch that page, so popping gives us the cursor for the previous page.
+  const [cursorHistory, setCursorHistory] = useState<PageCursor[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchMatches = useCallback(
-    async (nextOffset: number) => {
+  const fetchPage = useCallback(
+    async (cursor: PageCursor, page: number, newHistory: PageCursor[]) => {
       if (!isSignedIn) return;
       setLoading(true);
       setError(null);
       try {
         const token = await getTokenRef.current();
         if (!token) throw new Error('No auth token');
-        const data = await getMatchHistory(token, { limit: PAGE_SIZE, offset: nextOffset });
-        setMatches(data.matches);
-        setTotal(data.total);
-        setOffset(nextOffset);
+        const resp = await getMatchHistory(token, {
+          limit: PAGE_SIZE,
+          cursor_ts: cursor.cursor_ts,
+          cursor_id: cursor.cursor_id,
+        });
+        setMatches(resp.data);
+        setHasMore(resp.has_more);
+        setNextCursorTS(resp.next_cursor_ts);
+        setNextCursorID(resp.next_cursor_id);
+        setCursorHistory(newHistory);
+        setCurrentPage(page);
         // Fire funnel_first_data_loaded once per user (localStorage guard).
-        if (data.total > 0 && !localStorage.getItem(FIRST_DATA_FLAG)) {
-          trackEvent({ name: 'funnel_first_data_loaded', properties: { match_count: data.total } });
+        if (resp.data.length > 0 && !localStorage.getItem(FIRST_DATA_FLAG)) {
+          trackEvent({ name: 'funnel_first_data_loaded', properties: { match_count: resp.data.length } });
           localStorage.setItem(FIRST_DATA_FLAG, '1');
         }
       } catch (err) {
@@ -50,22 +72,41 @@ const BffMatchHistory = () => {
     [isSignedIn]
   );
 
-  useEffect(() => {
-    void fetchMatches(0);
-  }, [fetchMatches]);
+  // Load the first page on mount / sign-in change.
+  const loadFirstPage = useCallback(() => {
+    void fetchPage({}, 1, []);
+  }, [fetchPage]);
 
-  // Refresh when the BFF emits stats:updated (fired after a match is processed).
   useEffect(() => {
-    const unsub = EventsOn('stats:updated', () => {
-      void fetchMatches(0);
-    });
+    loadFirstPage();
+  }, [loadFirstPage]);
+
+  // Refresh the first page when BFF emits match.completed over SSE.
+  // The BFF broker publishes contract.DaemonEvent.Type names; the correct event
+  // name is "match.completed" (not "stats:updated" which is never emitted).
+  useEffect(() => {
+    const unsub = EventsOn('match.completed', loadFirstPage);
     return unsub;
-  }, [fetchMatches]);
+  }, [loadFirstPage]);
 
-  const hasPrev = offset > 0;
-  const hasNext = offset + PAGE_SIZE < total;
-  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const handleNext = () => {
+    if (!hasMore || !nextCursorTS || !nextCursorID) return;
+    // Push the current page's cursor onto the history stack so we can go back.
+    const newHistory: PageCursor[] = [
+      ...cursorHistory,
+      { cursor_ts: cursorHistory.length === 0 ? undefined : nextCursorTS, cursor_id: cursorHistory.length === 0 ? undefined : nextCursorID },
+    ];
+    void fetchPage({ cursor_ts: nextCursorTS, cursor_id: nextCursorID }, currentPage + 1, newHistory);
+  };
+
+  const handlePrev = () => {
+    if (cursorHistory.length === 0) return;
+    const newHistory = cursorHistory.slice(0, -1);
+    const prevCursor = newHistory.length === 0 ? {} : cursorHistory[newHistory.length - 1];
+    void fetchPage(prevCursor, currentPage - 1, newHistory);
+  };
+
+  const hasPrev = cursorHistory.length > 0;
 
   const formatDate = (iso: string) =>
     new Date(iso).toLocaleDateString(undefined, {
@@ -73,6 +114,9 @@ const BffMatchHistory = () => {
       month: 'short',
       day: 'numeric',
     });
+
+  const isEmpty = !loading && !error && matches.length === 0;
+  const hasData = !loading && !error && matches.length > 0;
 
   return (
     <div className="page-container" data-testid="match-history-page">
@@ -88,7 +132,7 @@ const BffMatchHistory = () => {
         </div>
       )}
 
-      {!loading && !error && total === 0 && (
+      {isEmpty && (
         <div data-testid="match-history-empty">
           <EmptyState
             icon="🎮"
@@ -99,7 +143,7 @@ const BffMatchHistory = () => {
         </div>
       )}
 
-      {!loading && !error && total > 0 && (
+      {hasData && (
         <>
           <div className="bff-match-history-table-wrapper">
             <table data-testid="match-history-table">
@@ -107,21 +151,21 @@ const BffMatchHistory = () => {
                 <tr>
                   <th>Date</th>
                   <th>Format</th>
-                  <th>Opponent Deck</th>
                   <th>Result</th>
+                  <th>Score</th>
                 </tr>
               </thead>
               <tbody>
                 {matches.map((match) => (
                   <tr key={match.id} className={`result-${match.result.toLowerCase()}`}>
-                    <td>{formatDate(match.played_at)}</td>
+                    <td>{formatDate(match.timestamp)}</td>
                     <td>{match.format}</td>
-                    <td className="ph-no-capture">{match.opponent_deck || '—'}</td>
                     <td>
                       <span className={`result-badge ${match.result.toLowerCase()}`}>
                         {match.result.toUpperCase()}
                       </span>
                     </td>
+                    <td>{match.player_wins}–{match.opponent_wins}</td>
                   </tr>
                 ))}
               </tbody>
@@ -132,18 +176,18 @@ const BffMatchHistory = () => {
             <div className="pagination">
               <button
                 className="pagination-btn"
-                onClick={() => void fetchMatches(offset - PAGE_SIZE)}
+                onClick={handlePrev}
                 disabled={!hasPrev}
               >
                 Previous
               </button>
               <span className="pagination-info">
-                Page {currentPage} of {totalPages}
+                Page {currentPage}
               </span>
               <button
                 className="pagination-btn"
-                onClick={() => void fetchMatches(offset + PAGE_SIZE)}
-                disabled={!hasNext}
+                onClick={handleNext}
+                disabled={!hasMore}
               >
                 Next
               </button>
