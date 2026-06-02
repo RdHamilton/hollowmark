@@ -297,5 +297,10 @@ type GamePlayPayload struct {
 	OpponentCards  []OpponentCardEntry  `json:"opponent_cards,omitempty"`
 	CounterChanges []CounterChangeEntry `json:"counter_changes,omitempty"`
 	Mulligan       *MulliganEntry       `json:"mulligan,omitempty"`
-	Partial        bool                 `json:"partial"`
+	// PlayerOnPlay is true when the local player went first (was on the play)
+	// in this game. False means the player was on the draw. Nil means the
+	// daemon could not determine the starting player — the GRE buffer lacked
+	// the first-turn GameStateMessage (e.g. stale-sweep partial flush).
+	PlayerOnPlay *bool `json:"player_on_play,omitempty"`
+	Partial      bool  `json:"partial"`
 }
