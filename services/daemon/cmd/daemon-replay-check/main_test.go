@@ -225,6 +225,124 @@ func TestDiffOutcome_QuestProgressMismatch(t *testing.T) {
 	assert.True(t, found, "Progress diff must be present")
 }
 
+// TestDiffOutcome_EmptyProjectionSentinel_UnknownFormat verifies that
+// diffOutcome hard-fails when any actual match has Format="Unknown" — the
+// BFF projection default when the daemon dispatched player_team_id=0 (the
+// clientId→accountId bug, fixed in c2fa895d). This is always a projection
+// error regardless of what the golden artifact says.
+func TestDiffOutcome_EmptyProjectionSentinel_UnknownFormat(t *testing.T) {
+	golden := goldenOutcome{
+		Matches: []goldenMatch{
+			{Format: "QuickDraft_SOS_20260526", Result: "win", PlayerWins: 1, OpponentWins: 0},
+		},
+	}
+	actual := goldenOutcome{
+		Matches: []goldenMatch{
+			{Format: "Unknown", Result: "unknown", PlayerWins: 0, OpponentWins: 0},
+		},
+	}
+
+	diffs := diffOutcome(golden, actual)
+	require.NotEmpty(t, diffs, "should fail when actual match has Format=Unknown (empty-projection sentinel)")
+	found := false
+	for _, d := range diffs {
+		if d.Field == "EmptyProjection" {
+			found = true
+			assert.Contains(t, d.Actual, "Unknown", "diff should identify the sentinel value")
+		}
+	}
+	assert.True(t, found, "must emit an EmptyProjection diff for Format=Unknown")
+}
+
+// TestDiffOutcome_EmptyProjectionSentinel_EmptyFormat verifies that
+// diffOutcome hard-fails when any actual match has Format="" — the empty
+// format that the projection stores when the daemon emits format="" from a
+// match event where mtgaUserID was not yet known.
+func TestDiffOutcome_EmptyProjectionSentinel_EmptyFormat(t *testing.T) {
+	golden := goldenOutcome{} // golden is empty — sentinel check is unconditional
+	actual := goldenOutcome{
+		Matches: []goldenMatch{
+			{Format: "", Result: "win", PlayerWins: 1, OpponentWins: 0},
+		},
+	}
+
+	diffs := diffOutcome(golden, actual)
+	require.NotEmpty(t, diffs, "should fail when actual match has Format='' (empty-projection sentinel)")
+	found := false
+	for _, d := range diffs {
+		if d.Field == "EmptyProjection" {
+			found = true
+		}
+	}
+	assert.True(t, found, "must emit an EmptyProjection diff for Format=''")
+}
+
+// TestDiffOutcome_EmptyProjectionSentinel_UnknownResult verifies that
+// diffOutcome hard-fails when any actual match has Result="unknown" — the
+// BFF projection default when player_team_id=0 prevented win/loss derivation.
+func TestDiffOutcome_EmptyProjectionSentinel_UnknownResult(t *testing.T) {
+	golden := goldenOutcome{}
+	actual := goldenOutcome{
+		Matches: []goldenMatch{
+			{Format: "QuickDraft_SOS_20260526", Result: "unknown", PlayerWins: 0, OpponentWins: 0},
+		},
+	}
+
+	diffs := diffOutcome(golden, actual)
+	require.NotEmpty(t, diffs, "should fail when actual match has Result=unknown (empty-projection sentinel)")
+	found := false
+	for _, d := range diffs {
+		if d.Field == "EmptyProjection" {
+			found = true
+			assert.Contains(t, d.Actual, "unknown")
+		}
+	}
+	assert.True(t, found, "must emit an EmptyProjection diff for Result=unknown")
+}
+
+// TestDiffOutcome_EmptyProjectionSentinel_EmptyResult verifies that
+// diffOutcome hard-fails when any actual match has Result="" — an empty
+// result string is never a valid projected match state.
+func TestDiffOutcome_EmptyProjectionSentinel_EmptyResult(t *testing.T) {
+	golden := goldenOutcome{}
+	actual := goldenOutcome{
+		Matches: []goldenMatch{
+			{Format: "QuickDraft_SOS_20260526", Result: "", PlayerWins: 0, OpponentWins: 0},
+		},
+	}
+
+	diffs := diffOutcome(golden, actual)
+	require.NotEmpty(t, diffs, "should fail when actual match has Result='' (empty-projection sentinel)")
+	found := false
+	for _, d := range diffs {
+		if d.Field == "EmptyProjection" {
+			found = true
+		}
+	}
+	assert.True(t, found, "must emit an EmptyProjection diff for Result=''")
+}
+
+// TestDiffOutcome_ValidMatch_NoSentinelDiff verifies that diffOutcome does NOT
+// emit a sentinel diff for a correctly-projected match (win/loss with real format).
+func TestDiffOutcome_ValidMatch_NoSentinelDiff(t *testing.T) {
+	golden := goldenOutcome{
+		Matches: []goldenMatch{
+			{Format: "QuickDraft_SOS_20260526", Result: "win", PlayerWins: 1, OpponentWins: 0},
+		},
+	}
+	actual := goldenOutcome{
+		Matches: []goldenMatch{
+			{Format: "QuickDraft_SOS_20260526", Result: "win", PlayerWins: 1, OpponentWins: 0},
+		},
+	}
+
+	diffs := diffOutcome(golden, actual)
+	for _, d := range diffs {
+		assert.NotEqual(t, "EmptyProjection", d.Field,
+			"valid match must not emit EmptyProjection diff")
+	}
+}
+
 // TestDiffOutcome_NeverAssertsOccurredAt verifies that diffOutcome does NOT
 // include OccurredAt or Sequence in its output even when they differ — these
 // are non-deterministic fields per ADR-042 Amendment 1 §1 determinism note.
