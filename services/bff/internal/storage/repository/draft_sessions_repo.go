@@ -31,13 +31,15 @@ type DraftPickInsert struct {
 
 // DraftSessionRow is a row returned from draft_sessions for history reads.
 type DraftSessionRow struct {
-	ID        string
-	SetCode   string
-	DraftType string
-	StartTime time.Time
-	EndTime   *time.Time
-	Wins      int
-	Losses    int
+	ID         string
+	SetCode    string
+	DraftType  string
+	StartTime  time.Time
+	EndTime    *time.Time
+	Wins       int
+	Losses     int
+	FormatType string
+	IsTrophy   bool
 }
 
 // DraftSessionsRepository provides read access to the draft_sessions table.
@@ -71,11 +73,12 @@ func (r *DraftSessionsRepository) ListByAccountID(
 		const q = `
 			SELECT ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time,
 			       COALESCE(SUM(CASE WHEN dmr.result = 'win' THEN 1 ELSE 0 END), 0)  AS wins,
-			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses
+			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses,
+			       ds.format_type, ds.is_trophy
 			FROM draft_sessions ds
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
 			WHERE ds.account_id = $1 AND ds.set_code = $2
-			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time
+			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC
 			LIMIT $3 OFFSET $4`
 
@@ -84,11 +87,12 @@ func (r *DraftSessionsRepository) ListByAccountID(
 		const q = `
 			SELECT ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time,
 			       COALESCE(SUM(CASE WHEN dmr.result = 'win' THEN 1 ELSE 0 END), 0)  AS wins,
-			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses
+			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses,
+			       ds.format_type, ds.is_trophy
 			FROM draft_sessions ds
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
 			WHERE ds.account_id = $1
-			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time
+			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC
 			LIMIT $2 OFFSET $3`
 
@@ -106,7 +110,7 @@ func (r *DraftSessionsRepository) ListByAccountID(
 		var s DraftSessionRow
 		if err := rows.Scan(
 			&s.ID, &s.SetCode, &s.DraftType, &s.StartTime, &s.EndTime,
-			&s.Wins, &s.Losses,
+			&s.Wins, &s.Losses, &s.FormatType, &s.IsTrophy,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -174,13 +178,14 @@ func (r *DraftSessionsRepository) ListByAccountIDCursorP(
 		const q = `
 			SELECT ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time,
 			       COALESCE(SUM(CASE WHEN dmr.result = 'win' THEN 1 ELSE 0 END), 0)  AS wins,
-			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses
+			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses,
+			       ds.format_type, ds.is_trophy
 			FROM draft_sessions ds
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
 			WHERE ds.account_id = $1
 			  AND ds.set_code = $2
 			  AND (ds.start_time < $3 OR (ds.start_time = $3 AND ds.id < $4))
-			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time
+			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC, ds.id DESC
 			LIMIT $5`
 
@@ -190,11 +195,12 @@ func (r *DraftSessionsRepository) ListByAccountIDCursorP(
 		const q = `
 			SELECT ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time,
 			       COALESCE(SUM(CASE WHEN dmr.result = 'win' THEN 1 ELSE 0 END), 0)  AS wins,
-			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses
+			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses,
+			       ds.format_type, ds.is_trophy
 			FROM draft_sessions ds
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
 			WHERE ds.account_id = $1 AND ds.set_code = $2
-			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time
+			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC, ds.id DESC
 			LIMIT $3`
 
@@ -204,12 +210,13 @@ func (r *DraftSessionsRepository) ListByAccountIDCursorP(
 		const q = `
 			SELECT ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time,
 			       COALESCE(SUM(CASE WHEN dmr.result = 'win' THEN 1 ELSE 0 END), 0)  AS wins,
-			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses
+			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses,
+			       ds.format_type, ds.is_trophy
 			FROM draft_sessions ds
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
 			WHERE ds.account_id = $1
 			  AND (ds.start_time < $2 OR (ds.start_time = $2 AND ds.id < $3))
-			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time
+			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC, ds.id DESC
 			LIMIT $4`
 
@@ -219,11 +226,12 @@ func (r *DraftSessionsRepository) ListByAccountIDCursorP(
 		const q = `
 			SELECT ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time,
 			       COALESCE(SUM(CASE WHEN dmr.result = 'win' THEN 1 ELSE 0 END), 0)  AS wins,
-			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses
+			       COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses,
+			       ds.format_type, ds.is_trophy
 			FROM draft_sessions ds
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
 			WHERE ds.account_id = $1
-			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time
+			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC, ds.id DESC
 			LIMIT $2`
 
@@ -242,7 +250,7 @@ func (r *DraftSessionsRepository) ListByAccountIDCursorP(
 		var s DraftSessionRow
 		if err := rows.Scan(
 			&s.ID, &s.SetCode, &s.DraftType, &s.StartTime, &s.EndTime,
-			&s.Wins, &s.Losses,
+			&s.Wins, &s.Losses, &s.FormatType, &s.IsTrophy,
 		); err != nil {
 			return nil, err
 		}
@@ -255,22 +263,53 @@ func (r *DraftSessionsRepository) ListByAccountIDCursorP(
 
 // UpsertDraftSession inserts or updates a draft_sessions row.
 // Used by the projection worker.
+//
+// format_type: DraftSessionUpsert.FormatType may be empty for partial upserts
+// (e.g. draft.pick events that only carry session_id + total_picks). When
+// empty, the existing column value is preserved via COALESCE on conflict.
+// On INSERT, the column default ('quick_draft') applies when FormatType is
+// empty.
+//
+// is_trophy: DraftSessionUpsert.IsTrophy may be nil for partial upserts.
+// When nil, the existing column value is preserved. A session that achieves
+// trophy (is_trophy = TRUE) is never retroactively cleared by a subsequent
+// partial upsert.
 func (r *DraftSessionsRepository) UpsertDraftSession(ctx context.Context, s DraftSessionUpsert) error {
+	// Pass FormatType as NULL when empty so the ON CONFLICT COALESCE guard
+	// retains the existing value. On INSERT, COALESCE(NULL, 'quick_draft')
+	// applies the column default.
+	var formatTypeParam *string
+	if s.FormatType != "" {
+		ft := s.FormatType
+		formatTypeParam = &ft
+	}
+
+	// is_trophy: nil → NULL so COALESCE retains existing. TRUE is sticky — once
+	// set it is never cleared by a partial upsert.
+	var isTrophyParam *bool
+	if s.IsTrophy != nil && *s.IsTrophy {
+		t := true
+		isTrophyParam = &t
+	}
+
 	const q = `
 		INSERT INTO draft_sessions (
 			id, account_id, event_name, set_code, draft_type, start_time, end_time,
-			status, total_picks, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+			status, total_picks, format_type, is_trophy, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,'quick_draft'),COALESCE($11,FALSE),NOW())
 		ON CONFLICT (id) DO UPDATE
 			SET end_time    = COALESCE(EXCLUDED.end_time, draft_sessions.end_time),
 			    total_picks = GREATEST(EXCLUDED.total_picks, draft_sessions.total_picks),
 			    status      = EXCLUDED.status,
+			    format_type = COALESCE($10, draft_sessions.format_type),
+			    is_trophy   = CASE WHEN $11 IS TRUE THEN TRUE ELSE draft_sessions.is_trophy END,
 			    updated_at  = NOW()`
 
 	_, err := r.db.ExecContext(
 		ctx, q,
 		s.ID, s.AccountID, s.EventName, s.SetCode, s.DraftType,
 		s.StartTime, s.EndTime, s.Status, s.TotalPicks,
+		formatTypeParam, isTrophyParam,
 	)
 	return err
 }
@@ -286,6 +325,14 @@ type DraftSessionUpsert struct {
 	EndTime    *time.Time
 	Status     string
 	TotalPicks int
+	// FormatType is the normalised draft format derived from CourseName/EventName
+	// at projection time. Values: quick_draft | premier_draft |
+	// traditional_draft | contender_draft. Empty string means "do not update"
+	// (the column retains its existing value via COALESCE).
+	FormatType string
+	// IsTrophy, when non-nil, sets draft_sessions.is_trophy. Nil means "do not
+	// update" (the column retains its existing value via COALESCE).
+	IsTrophy *bool
 }
 
 // SessionExists returns true if a draft_sessions row with the given sessionID
@@ -337,6 +384,18 @@ func (r *DraftSessionsRepository) InferSessionForMatch(ctx context.Context, acco
 		return "", nil
 	}
 	return ids[0], nil
+}
+
+// GetWinsForSession returns the number of 'win' rows in draft_match_results
+// for the given sessionID. Used by the projection worker to compute is_trophy
+// when projecting a draft.completed event.
+func (r *DraftSessionsRepository) GetWinsForSession(ctx context.Context, sessionID string) (int, error) {
+	const q = `SELECT COUNT(*) FROM draft_match_results WHERE session_id = $1 AND result = 'win'`
+	var n int
+	if err := r.db.QueryRowContext(ctx, q, sessionID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // InsertDraftMatchResult writes one row to draft_match_results.

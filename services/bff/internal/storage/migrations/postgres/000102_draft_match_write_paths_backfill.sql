@@ -67,3 +67,19 @@ UPDATE draft_sessions
 SET status = 'completed'
 WHERE end_time IS NOT NULL
   AND status = 'in_progress';
+
+-- Step 4: Backfill is_trophy on draft_sessions.
+-- A session is a trophy when the player accumulated >= 7 wins.
+-- Counts wins from draft_match_results (result = 'win').
+-- Idempotent: safe to re-run.
+UPDATE draft_sessions ds
+SET is_trophy = TRUE
+FROM (
+    SELECT session_id
+    FROM draft_match_results
+    WHERE result = 'win'
+    GROUP BY session_id
+    HAVING COUNT(*) >= 7
+) winners
+WHERE ds.id = winners.session_id
+  AND ds.is_trophy = FALSE;

@@ -4,6 +4,22 @@
 -- before running. If non-zero, the FK add in step 2 will fail on rows pointing
 -- to non-existent draft sessions — investigate before proceeding.
 --
+-- 0. Add format_type and is_trophy to draft_sessions (Prof review — must ship
+--    in this migration so the columns are available for the backfill step and
+--    all new projections from day one).
+--
+--    format_type: derived from CourseName (event_name) at projection time;
+--    avoids parsing event_name at query time on every list call.
+--    Values: quick_draft | premier_draft | traditional_draft | contender_draft
+--
+--    is_trophy: true when the session completes with wins >= 7;
+--    avoids re-joining draft_match_results to compute this on every list call.
+ALTER TABLE draft_sessions
+    ADD COLUMN IF NOT EXISTS format_type TEXT NOT NULL DEFAULT 'quick_draft';
+
+ALTER TABLE draft_sessions
+    ADD COLUMN IF NOT EXISTS is_trophy BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- 1. Add draft_session_id to matches (nullable; REFERENCES draft_sessions so the
 --    FK is enforced when set, but NOT NULL is not required — non-draft matches
 --    always have NULL here).
