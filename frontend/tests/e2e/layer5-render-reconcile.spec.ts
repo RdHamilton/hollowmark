@@ -67,12 +67,6 @@ async function setClerkSignedIn(page: Page): Promise<void> {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /**
- * Match ID used for game timeline assertions.
- * Must exist in the seeded database (test-data.sql).
- */
-const SEEDED_MATCH_ID = 'match-001';
-
-/**
  * Deck ID used for deck-builder resolution assertions.
  * Must exist in test-data.sql with card IDs that exist in set_cards.
  */
