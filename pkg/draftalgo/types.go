@@ -66,6 +66,44 @@ type RatingsLookup interface {
 	GIHWR(arenaID string, format string) (float64, bool)
 }
 
+// CardMeta holds the Phase B card metadata retained from the BFF's
+// /api/v1/draft-ratings response. Added in v0.3.8 (ADR-047).
+type CardMeta struct {
+	// Colors is the card's color identity (e.g. ["R"], ["G","U"], []).
+	// Parsed from the BFF "color" field: a single-char string expanded
+	// into a one-element slice; multi-color cards use the BFF's future
+	// multi-color support if added, falling back to the single char.
+	Colors []string
+	// Rarity is the card's rarity string (e.g. "common", "uncommon",
+	// "rare", "mythic"). Empty when not present in the BFF response.
+	Rarity string
+	// ALSA is the Average Last Seen At metric from 17Lands. Zero when
+	// not present in the BFF response.
+	ALSA float64
+	// ATA is the Average Taken At metric from 17Lands. Zero when not
+	// present.
+	ATA float64
+	// GIHCount is the number of "games in hand" used to compute GIHWR.
+	// nil when the BFF did not include gih_count (new set, low volume).
+	// A nil GIHCount means low_confidence=true regardless of GIHWR.
+	GIHCount *int
+	// IsLand is true when the card is a basic land or mana-producer.
+	// Computed daemon-side from the card's type_line (e.g. "Land",
+	// "Basic Land — Forest"). Used to exclude lands from color-fit
+	// penalty logic (ADR-047 §5 + Prof constraint C).
+	IsLand bool
+}
+
+// CardMetaLookup resolves an Arena card ID to its Phase B metadata.
+// The daemon's ratingsclient.Client satisfies this interface after
+// the Phase B cache widening (ADR-047 §1).
+type CardMetaLookup interface {
+	// CardMetaByID returns the CardMeta for the given arena card ID.
+	// The bool is false when no metadata is on file (unknown card,
+	// BFF unreachable, or set not yet scraped).
+	CardMetaByID(arenaID string) (CardMeta, bool)
+}
+
 // LetterGrade converts a 0–100 score to the SPA-compatible letter grade.
 // Shared by grading + pickquality so both packages agree on bucket
 // boundaries.

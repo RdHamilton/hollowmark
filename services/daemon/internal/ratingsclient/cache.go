@@ -25,10 +25,22 @@ type entry struct {
 // cardRec is one row from the BFF response, normalised for in-memory
 // lookup. HasGIHWR keeps the *float64 pointer-or-nil semantics from
 // the wire shape without forcing handlers to deref.
+//
+// Phase B (v0.3.8, ADR-047): added Color, Rarity, ALSA, ATA, GIHCount
+// — retained from the BFF wire so the daemon's recommend package can
+// drive color-fit reasoning, ALSA signals, and the low-confidence marker
+// without a BFF deploy.
 type cardRec struct {
 	Name     string
 	GIHWR    float64
 	HasGIHWR bool
+	// Phase B fields — retained from the BFF wire (ADR-047 §1).
+	// Zero/empty/nil when the BFF did not include the field.
+	Color    string  // single-char BFF color string (e.g. "R", "G")
+	Rarity   string  // "common", "uncommon", "rare", "mythic"
+	ALSA     float64 // Average Last Seen At
+	ATA      float64 // Average Taken At
+	GIHCount *int    // games-in-hand sample size; nil = absent
 }
 
 // isExpired returns true when the entry's age has crossed the client's
