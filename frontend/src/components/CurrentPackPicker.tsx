@@ -181,6 +181,15 @@ const CurrentPackPicker: React.FC<CurrentPackPickerProps> = ({ sessionID, onRefr
                             {card.is_recommended && (
                                 <div className="recommended-indicator" data-testid="best-pick-indicator">Best Pick</div>
                             )}
+                            {card.low_confidence && (
+                                <div
+                                    className="low-confidence-pill"
+                                    data-testid={`low-confidence-${card.arena_id || index}`}
+                                    title="Fewer than 500 games in hand — treat this rating as a rough guide"
+                                >
+                                    Limited data
+                                </div>
+                            )}
                         </div>
                         <div className="card-info">
                             <div className="card-name">{card.name}</div>
