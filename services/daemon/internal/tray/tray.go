@@ -112,6 +112,13 @@ func New(appURL, version string, openURL func(string) error, onQuit func()) *App
 // onReady is called after the menu bar icon is ready; start the daemon event
 // loop inside it (in a new goroutine).
 func (a *App) Run(onReady func()) {
+	// Promote the process to UIElement activation policy before entering the
+	// NSRunLoop inside systray.Run. This is required when the daemon is launched
+	// by launchd as a bare executable (spawn type "daemon") rather than from a
+	// .app bundle; without it NSStatusBar silently drops the menu-bar icon.
+	// The call is a no-op on non-Darwin platforms (tray_nondarwin.go) and on
+	// headless machines (no WindowServer session).
+	ensureUIElementPolicy()
 	systray.Run(func() {
 		a.setup()
 		if onReady != nil {
