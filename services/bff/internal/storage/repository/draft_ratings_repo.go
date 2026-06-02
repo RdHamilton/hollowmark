@@ -178,3 +178,23 @@ func (r *DraftRatingsRepository) GetMaxCachedAt(ctx context.Context, setCode, dr
 
 	return t.Time, nil
 }
+
+// GetGlobalMaxCachedAt returns MAX(cached_at) across ALL rows in
+// draft_card_ratings — the most recent successful 17Lands sync write,
+// regardless of set or format.  Returns (zero time, nil) when the table is
+// empty (Lambda has never run or all rows have been deleted).
+func (r *DraftRatingsRepository) GetGlobalMaxCachedAt(ctx context.Context) (time.Time, error) {
+	const q = `SELECT MAX(cached_at) FROM draft_card_ratings`
+
+	var t sql.NullTime
+
+	if err := r.db.QueryRowContext(ctx, q).Scan(&t); err != nil {
+		return time.Time{}, err
+	}
+
+	if !t.Valid {
+		return time.Time{}, nil
+	}
+
+	return t.Time, nil
+}
