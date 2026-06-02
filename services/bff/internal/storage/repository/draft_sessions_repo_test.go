@@ -455,6 +455,249 @@ func TestInsertDraftMatchResult_Idempotent(t *testing.T) {
 	}
 }
 
+// ─── format_type / is_trophy integration tests (Prof additions) ─────────────
+
+// TestUpsertDraftSession_FormatType verifies that UpsertDraftSession stores the
+// supplied FormatType and that a partial upsert (empty FormatType) preserves the
+// existing value rather than overwriting it with the default.
+func TestUpsertDraftSession_FormatType(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "draft-fmt-acct")
+	sessionID := fmt.Sprintf("ds-fmt-%d", accountID)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, sessionID)
+	})
+
+	// INSERT with FormatType = "premier_draft".
+	if err := repo.UpsertDraftSession(context.Background(), repository.DraftSessionUpsert{
+		ID:         sessionID,
+		AccountID:  accountID,
+		EventName:  "PremierDraft_BLB",
+		SetCode:    "BLB",
+		DraftType:  "premier_draft",
+		StartTime:  now,
+		Status:     "in_progress",
+		FormatType: "premier_draft",
+	}); err != nil {
+		t.Fatalf("first UpsertDraftSession: %v", err)
+	}
+
+	var ft string
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT format_type FROM draft_sessions WHERE id = $1`, sessionID,
+	).Scan(&ft); err != nil {
+		t.Fatalf("select after insert: %v", err)
+	}
+	if ft != "premier_draft" {
+		t.Errorf("format_type after insert: want premier_draft, got %q", ft)
+	}
+
+	// Partial upsert with empty FormatType must NOT clobber the stored value.
+	if err := repo.UpsertDraftSession(context.Background(), repository.DraftSessionUpsert{
+		ID:         sessionID,
+		AccountID:  accountID,
+		StartTime:  now,
+		Status:     "in_progress",
+		TotalPicks: 1,
+		// FormatType intentionally empty
+	}); err != nil {
+		t.Fatalf("partial UpsertDraftSession: %v", err)
+	}
+
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT format_type FROM draft_sessions WHERE id = $1`, sessionID,
+	).Scan(&ft); err != nil {
+		t.Fatalf("select after partial upsert: %v", err)
+	}
+	if ft != "premier_draft" {
+		t.Errorf("format_type after partial upsert: want premier_draft (preserved), got %q", ft)
+	}
+}
+
+// TestUpsertDraftSession_IsTrophy_SetOnCompletion verifies that IsTrophy=true
+// is stored when a session completes with wins >= 7, and that a subsequent
+// partial upsert with IsTrophy=nil does not clear it.
+func TestUpsertDraftSession_IsTrophy_SetOnCompletion(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "draft-trophy-acct")
+	sessionID := fmt.Sprintf("ds-trophy-%d", accountID)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, sessionID)
+	})
+
+	tru := true
+
+	// INSERT then update to completed with IsTrophy=true.
+	if err := repo.UpsertDraftSession(context.Background(), repository.DraftSessionUpsert{
+		ID:        sessionID,
+		AccountID: accountID,
+		EventName: "QuickDraft_SOS",
+		SetCode:   "SOS",
+		StartTime: now,
+		Status:    "in_progress",
+	}); err != nil {
+		t.Fatalf("first UpsertDraftSession: %v", err)
+	}
+
+	endTime := now.Add(2 * time.Hour)
+	if err := repo.UpsertDraftSession(context.Background(), repository.DraftSessionUpsert{
+		ID:        sessionID,
+		AccountID: accountID,
+		EventName: "QuickDraft_SOS",
+		SetCode:   "SOS",
+		StartTime: now,
+		EndTime:   &endTime,
+		Status:    "completed",
+		IsTrophy:  &tru,
+	}); err != nil {
+		t.Fatalf("completion UpsertDraftSession: %v", err)
+	}
+
+	var isTrophy bool
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT is_trophy FROM draft_sessions WHERE id = $1`, sessionID,
+	).Scan(&isTrophy); err != nil {
+		t.Fatalf("select after completion: %v", err)
+	}
+	if !isTrophy {
+		t.Error("is_trophy: want true after completion with 7 wins, got false")
+	}
+
+	// Partial upsert with nil IsTrophy must NOT clear the trophy flag.
+	if err := repo.UpsertDraftSession(context.Background(), repository.DraftSessionUpsert{
+		ID:        sessionID,
+		AccountID: accountID,
+		StartTime: now,
+		Status:    "completed",
+		// IsTrophy nil — must preserve existing TRUE
+	}); err != nil {
+		t.Fatalf("partial UpsertDraftSession after trophy: %v", err)
+	}
+
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT is_trophy FROM draft_sessions WHERE id = $1`, sessionID,
+	).Scan(&isTrophy); err != nil {
+		t.Fatalf("select after partial upsert: %v", err)
+	}
+	if !isTrophy {
+		t.Error("is_trophy: want true (sticky), got false after partial upsert with nil IsTrophy")
+	}
+}
+
+// TestGetWinsForSession verifies that GetWinsForSession counts only 'win'
+// rows in draft_match_results for the given session.
+func TestGetWinsForSession(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "draft-wins-acct")
+	now := time.Now().UTC().Truncate(time.Second)
+	sessionID := fmt.Sprintf("ds-wins-%d", accountID)
+
+	insertTestDraftSession(t, db, sessionID, accountID, "SOS", now)
+
+	// 3 wins, 1 loss.
+	insertTestDraftMatchResult(t, db, sessionID, "mw1", "win", now.Add(time.Minute))
+	insertTestDraftMatchResult(t, db, sessionID, "mw2", "win", now.Add(2*time.Minute))
+	insertTestDraftMatchResult(t, db, sessionID, "mw3", "win", now.Add(3*time.Minute))
+	insertTestDraftMatchResult(t, db, sessionID, "ml1", "loss", now.Add(4*time.Minute))
+
+	wins, err := repo.GetWinsForSession(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("GetWinsForSession: %v", err)
+	}
+	if wins != 3 {
+		t.Errorf("wins: want 3, got %d", wins)
+	}
+}
+
+// TestGetWinsForSession_Trophy verifies that GetWinsForSession returns >= 7
+// for a trophy session (enabling the projection worker to set is_trophy=true).
+func TestGetWinsForSession_Trophy(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "draft-trophy-wins-acct")
+	now := time.Now().UTC().Truncate(time.Second)
+	sessionID := fmt.Sprintf("ds-trophy-wins-%d", accountID)
+
+	insertTestDraftSession(t, db, sessionID, accountID, "SOS", now)
+
+	for i := 0; i < 7; i++ {
+		insertTestDraftMatchResult(t, db, sessionID, fmt.Sprintf("mw-%d", i), "win", now.Add(time.Duration(i+1)*time.Minute))
+	}
+	insertTestDraftMatchResult(t, db, sessionID, "ml1", "loss", now.Add(8*time.Minute))
+
+	wins, err := repo.GetWinsForSession(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("GetWinsForSession trophy: %v", err)
+	}
+	if wins < 7 {
+		t.Errorf("wins: want >= 7 for trophy, got %d", wins)
+	}
+}
+
+// TestListByAccountID_FormatTypeAndIsTrophy verifies that format_type and
+// is_trophy are returned correctly by ListByAccountID.
+func TestListByAccountID_FormatTypeAndIsTrophy(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "draft-list-fmt-trophy-acct")
+	now := time.Now().UTC().Truncate(time.Second)
+	sessionID := fmt.Sprintf("ds-list-fmt-%d", accountID)
+
+	// Insert a session with format_type=premier_draft and is_trophy=true directly.
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO draft_sessions
+			(id, account_id, event_name, set_code, draft_type, start_time, status, format_type, is_trophy)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		sessionID, accountID, "PremierDraft_BLB", "BLB", "PremierDraft", now, "completed",
+		"premier_draft", true,
+	)
+	if err != nil {
+		t.Fatalf("insert draft_sessions: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, sessionID)
+	})
+
+	rows, _, err := repo.ListByAccountID(context.Background(), accountID, "", 1, 10)
+	if err != nil {
+		t.Fatalf("ListByAccountID: %v", err)
+	}
+
+	var found *repository.DraftSessionRow
+	for i := range rows {
+		if rows[i].ID == sessionID {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("seeded session %q not found in results", sessionID)
+	}
+	if found.FormatType != "premier_draft" {
+		t.Errorf("FormatType: want premier_draft, got %q", found.FormatType)
+	}
+	if !found.IsTrophy {
+		t.Error("IsTrophy: want true, got false")
+	}
+}
+
 // TestInsertDraftPick_Idempotent verifies that InsertDraftPick with the same
 // (session_id, pack_number, pick_number) twice does not return an error.
 func TestInsertDraftPick_Idempotent(t *testing.T) {

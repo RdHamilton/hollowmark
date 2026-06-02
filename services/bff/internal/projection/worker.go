@@ -50,6 +50,9 @@ type draftStore interface {
 	// completed session matching eventName within 48 hours before matchTime.
 	// Returns ("", nil) when zero or multiple sessions match.
 	InferSessionForMatch(ctx context.Context, accountID int64, eventName string, matchTime time.Time) (string, error)
+	// GetWinsForSession returns the number of 'win' rows in draft_match_results
+	// for the given sessionID. Used to compute is_trophy on draft.completed.
+	GetWinsForSession(ctx context.Context, sessionID string) (int, error)
 	// InsertDraftMatchResult writes one row to draft_match_results.
 	// ON CONFLICT (session_id, match_id) DO NOTHING — idempotent.
 	InsertDraftMatchResult(ctx context.Context, r repository.DraftMatchResultInsert) error
@@ -630,6 +633,30 @@ func isDraftEventName(eventName string) bool {
 	return strings.Contains(eventName, "Draft") || strings.Contains(eventName, "draft")
 }
 
+// deriveDraftFormatType maps an MTGA CourseName / event_name to the canonical
+// format_type stored in draft_sessions. The rules follow the MTGA event naming
+// convention used by the daemon and by the 17Lands primary filter.
+//
+//   - contains "QuickDraft"     → "quick_draft"
+//   - contains "PremierDraft"   → "premier_draft"
+//   - contains "TradDraft"      → "traditional_draft"
+//   - contains "ContenderDraft" → "contender_draft"
+//   - unknown                   → "quick_draft" (safe default matches column DEFAULT)
+func deriveDraftFormatType(eventName string) string {
+	switch {
+	case strings.Contains(eventName, "QuickDraft"):
+		return "quick_draft"
+	case strings.Contains(eventName, "PremierDraft"):
+		return "premier_draft"
+	case strings.Contains(eventName, "TradDraft"):
+		return "traditional_draft"
+	case strings.Contains(eventName, "ContenderDraft"):
+		return "contender_draft"
+	default:
+		return "quick_draft"
+	}
+}
+
 func (w *Worker) projectDraftSession(ctx context.Context, row *repository.DaemonEventRow) error {
 	var p draftPayload
 	if err := json.Unmarshal(row.Payload, &p); err != nil {
@@ -660,15 +687,38 @@ func (w *Worker) projectDraftSession(ctx context.Context, row *repository.Daemon
 		endTime = &t
 	}
 
+	// Derive format_type from the MTGA CourseName (stored as event_name).
+	// This is only available when the event carries EventName — draft.pick
+	// partial upserts may not, and the repo COALESCE guard retains existing.
+	formatType := deriveDraftFormatType(p.EventName)
+
+	// Compute is_trophy when the session is completing (draft.completed).
+	// Query the current win count from draft_match_results — the match results
+	// are projected before draft.completed in normal ordering, so this count
+	// reflects the actual final record. Soft-fail: if the query fails, log and
+	// leave is_trophy nil (DB default FALSE remains; backfill script corrects).
+	var isTrophy *bool
+	if row.EventType == "draft.completed" {
+		wins, winsErr := w.drafts.GetWinsForSession(ctx, p.SessionID)
+		if winsErr != nil {
+			log.Printf("[projection] projectDraftSession id=%d: GetWinsForSession: %v — is_trophy not set", row.ID, winsErr)
+		} else if wins >= 7 {
+			t := true
+			isTrophy = &t
+		}
+	}
+
 	return w.drafts.UpsertDraftSession(ctx, repository.DraftSessionUpsert{
-		ID:        p.SessionID,
-		AccountID: accountID,
-		EventName: p.EventName,
-		SetCode:   p.SetCode,
-		DraftType: p.DraftType,
-		StartTime: row.OccurredAt,
-		EndTime:   endTime,
-		Status:    status,
+		ID:         p.SessionID,
+		AccountID:  accountID,
+		EventName:  p.EventName,
+		SetCode:    p.SetCode,
+		DraftType:  p.DraftType,
+		StartTime:  row.OccurredAt,
+		EndTime:    endTime,
+		Status:     status,
+		FormatType: formatType,
+		IsTrophy:   isTrophy,
 	})
 }
 

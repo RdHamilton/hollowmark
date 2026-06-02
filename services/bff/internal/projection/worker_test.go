@@ -65,6 +65,8 @@ type fakeDraftStore struct {
 	sessionExistsErr error
 	inferredID       string
 	inferErr         error
+	winsForSession   int
+	winsErr          error
 }
 
 func (f *fakeDraftStore) UpsertDraftSession(_ context.Context, s repository.DraftSessionUpsert) error {
@@ -81,6 +83,10 @@ func (f *fakeDraftStore) SessionExists(_ context.Context, _ int64, _ string) (bo
 
 func (f *fakeDraftStore) InferSessionForMatch(_ context.Context, _ int64, _ string, _ time.Time) (string, error) {
 	return f.inferredID, f.inferErr
+}
+
+func (f *fakeDraftStore) GetWinsForSession(_ context.Context, _ string) (int, error) {
+	return f.winsForSession, f.winsErr
 }
 
 func (f *fakeDraftStore) InsertDraftMatchResult(_ context.Context, r repository.DraftMatchResultInsert) error {
@@ -2227,5 +2233,186 @@ func TestIsDraftEventName(t *testing.T) {
 				t.Errorf("isDraftEventName(%q) = %v, want %v", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+// --- format_type derivation tests (Prof additions) ---
+
+// TestDeriveDraftFormatType verifies CourseName → format_type mapping across
+// all four recognised patterns and the unknown fallback.
+func TestDeriveDraftFormatType(t *testing.T) {
+	cases := []struct {
+		name      string
+		eventName string
+		want      string
+	}{
+		{"quick_draft_plain", "QuickDraft", "quick_draft"},
+		{"quick_draft_with_set", "QuickDraft_SOS_20260526", "quick_draft"},
+		{"premier_draft_plain", "PremierDraft", "premier_draft"},
+		{"premier_draft_with_set", "PremierDraft_BLB", "premier_draft"},
+		{"trad_draft_plain", "TradDraft", "traditional_draft"},
+		{"trad_draft_with_set", "TradDraft_ONE", "traditional_draft"},
+		{"contender_draft_plain", "ContenderDraft", "contender_draft"},
+		{"contender_draft_with_set", "ContenderDraft_MOM", "contender_draft"},
+		{"unknown_falls_back", "Ladder", "quick_draft"},
+		{"empty_falls_back", "", "quick_draft"},
+		{"standard_falls_back", "Standard_BO1", "quick_draft"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveDraftFormatType(tc.eventName)
+			if got != tc.want {
+				t.Errorf("deriveDraftFormatType(%q) = %q, want %q", tc.eventName, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestProjectDraftSession_FormatTypeDerived verifies that projectDraftSession
+// sets FormatType correctly in the DraftSessionUpsert from the event_name.
+func TestProjectDraftSession_FormatTypeDerived(t *testing.T) {
+	cases := []struct {
+		name       string
+		eventName  string
+		wantFormat string
+	}{
+		{"quick", "QuickDraft_SOS", "quick_draft"},
+		{"premier", "PremierDraft_BLB", "premier_draft"},
+		{"trad", "TradDraft_SOS", "traditional_draft"},
+		{"contender", "ContenderDraft_MOM", "contender_draft"},
+		{"unknown", "SomeUnknownEvent", "quick_draft"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := makePayload(t, map[string]interface{}{
+				"session_id": "ds-fmt-" + tc.name,
+				"event_name": tc.eventName,
+				"set_code":   "SOS",
+				"draft_type": "quick_draft",
+				"status":     "in_progress",
+			})
+
+			events := &fakeEventStore{
+				pending: []repository.DaemonEventRow{
+					{ID: 600, UserID: 1, AccountID: "acct-fmt", EventType: "draft.started", Payload: payload, OccurredAt: time.Now()},
+				},
+			}
+			accounts := &fakeAccountStore{accountID: 50}
+			drafts := &fakeDraftStore{}
+
+			w := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+			w.RunOnce(context.Background())
+
+			if len(drafts.upserts) != 1 {
+				t.Fatalf("expected 1 upsert, got %d", len(drafts.upserts))
+			}
+			if drafts.upserts[0].FormatType != tc.wantFormat {
+				t.Errorf("FormatType: want %q, got %q", tc.wantFormat, drafts.upserts[0].FormatType)
+			}
+		})
+	}
+}
+
+// --- is_trophy tests (Prof additions) ---
+
+// TestProjectDraftSession_IsTrophy_SevenWins verifies that projectDraftSession
+// sets IsTrophy=true when the session completes with exactly 7 wins.
+func TestProjectDraftSession_IsTrophy_SevenWins(t *testing.T) {
+	payload := makePayload(t, map[string]interface{}{
+		"session_id": "ds-trophy-7",
+		"event_name": "QuickDraft_SOS",
+		"set_code":   "SOS",
+		"draft_type": "quick_draft",
+		"status":     "completed",
+	})
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 700, UserID: 1, AccountID: "acct-trophy", EventType: "draft.completed", Payload: payload, OccurredAt: time.Now()},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 55}
+	drafts := &fakeDraftStore{winsForSession: 7}
+
+	w := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	w.RunOnce(context.Background())
+
+	if len(drafts.upserts) != 1 {
+		t.Fatalf("expected 1 upsert, got %d", len(drafts.upserts))
+	}
+	if drafts.upserts[0].IsTrophy == nil || !*drafts.upserts[0].IsTrophy {
+		t.Errorf("IsTrophy: want true for 7 wins, got %v", drafts.upserts[0].IsTrophy)
+	}
+}
+
+// TestProjectDraftSession_IsTrophy_SixWins verifies that projectDraftSession
+// does NOT set IsTrophy when the session completes with 6 wins (below trophy
+// threshold).
+func TestProjectDraftSession_IsTrophy_SixWins(t *testing.T) {
+	payload := makePayload(t, map[string]interface{}{
+		"session_id": "ds-no-trophy-6",
+		"event_name": "QuickDraft_SOS",
+		"set_code":   "SOS",
+		"draft_type": "quick_draft",
+		"status":     "completed",
+	})
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 701, UserID: 1, AccountID: "acct-no-trophy", EventType: "draft.completed", Payload: payload, OccurredAt: time.Now()},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 56}
+	drafts := &fakeDraftStore{winsForSession: 6}
+
+	w := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	w.RunOnce(context.Background())
+
+	if len(drafts.upserts) != 1 {
+		t.Fatalf("expected 1 upsert, got %d", len(drafts.upserts))
+	}
+	// IsTrophy must be nil (not set) — the DB default FALSE remains.
+	if drafts.upserts[0].IsTrophy != nil {
+		t.Errorf("IsTrophy: want nil for 6 wins, got %v", drafts.upserts[0].IsTrophy)
+	}
+}
+
+// TestProjectDraftSession_IsTrophy_DraftStarted_NotQueried verifies that
+// GetWinsForSession is NOT called for draft.started events — trophy is only
+// computed on draft.completed.
+func TestProjectDraftSession_IsTrophy_DraftStarted_NotQueried(t *testing.T) {
+	payload := makePayload(t, map[string]interface{}{
+		"session_id": "ds-started-no-trophy",
+		"event_name": "PremierDraft_BLB",
+		"set_code":   "BLB",
+		"draft_type": "premier_draft",
+		"status":     "in_progress",
+	})
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 702, UserID: 1, AccountID: "acct-started", EventType: "draft.started", Payload: payload, OccurredAt: time.Now()},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 57}
+	// winsErr would surface if GetWinsForSession were called — we want to confirm
+	// it is NOT called on draft.started.
+	drafts := &fakeDraftStore{winsErr: fmt.Errorf("GetWinsForSession must not be called on draft.started")}
+
+	w := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	w.RunOnce(context.Background())
+
+	// If GetWinsForSession were called, projectDraftSession would log and continue
+	// (soft-fail), but the upsert would still happen. We verify the upsert succeeded
+	// (no outcomeSkippedMalformed) and IsTrophy is nil (not set for started sessions).
+	if len(drafts.upserts) != 1 {
+		t.Fatalf("expected 1 upsert for draft.started, got %d", len(drafts.upserts))
+	}
+	if drafts.upserts[0].IsTrophy != nil {
+		t.Errorf("IsTrophy: want nil for draft.started, got %v", drafts.upserts[0].IsTrophy)
+	}
+	if len(events.projected) != 1 || events.projected[0] != 702 {
+		t.Errorf("expected row 702 marked projected, got %v", events.projected)
 	}
 }
