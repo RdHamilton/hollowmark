@@ -1723,9 +1723,9 @@ func TestRunOnce_GamePlayEvent_CounterChanges_ProjectsToCounterStore(t *testing.
 	if ins0.TurnNumber != 4 {
 		t.Errorf("inserts[0].TurnNumber: want 4, got %d", ins0.TurnNumber)
 	}
-	// GamePlayID must be the ID returned by fakeGamePlayStoreCapturing.
-	if ins0.GamePlayID != 1 {
-		t.Errorf("inserts[0].GamePlayID: want 1 (first fakeGamePlay id), got %d", ins0.GamePlayID)
+	// MatchGameResultID must be the ID returned by fakeGamePlayStoreCapturing.
+	if ins0.MatchGameResultID != 1 {
+		t.Errorf("inserts[0].MatchGameResultID: want 1 (first fakeGamePlay id), got %d", ins0.MatchGameResultID)
 	}
 	// AccountID must match the resolved accounts.id.
 	if ins0.AccountID != 55 {
