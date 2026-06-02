@@ -583,7 +583,7 @@ type RouterDeps struct {
 	IngestHandler       *handlers.IngestHandler
 	APIKeysHandler      *handlers.APIKeysHandler
 	DraftRatingsHandler *handlers.DraftRatingsHandler
-	HistoryHandler        *handlers.HistoryHandler
+	HistoryHandler      *handlers.HistoryHandler
 	// HistorySummaryHandler serves GET /api/v1/history/summary — the HomePage
 	// summary card (today/this_week/all_time stats + streak + last_match).
 	// Protected by Clerk auth. See ticket #689.
