@@ -32,13 +32,29 @@ harness does not generate false failures.
 
 | File | Surface | expected_empty | Notes |
 |---|---|---|---|
-| `match-detail-timeline.json` | Game Timeline `/matches/{id}/plays/timeline` | true | game_plays not written by daemon yet; ADR-050 write path is separate |
-| `match-list.json` | Match History `/history/matches` | false | REAL corpus: QuickDraft_SOS_20260526, result=win |
-| `quest-list.json` | Quests `/quests/active` | false | REAL corpus: 3 quests with first_seen_at field |
-| `win-rate-trend.json` | Win-Rate Trend `/matches/trends` | false | Seeded from test-data.sql player_stats rows |
-| `rank-progression.json` | Rank Progression `/matches/rank-progression-timeline` | false | Seeded from test-data.sql rank_history rows |
-| `deck-builder-resolution.json` | Deck Builder `/decks/{id}/cards` + `/cards?grp_ids=` | false | REAL corpus: deck-updated fixture + set_cards in test-data.sql |
-| `draft-surface.json` | Draft History `/draft-sessions` | true | ADR-051 write paths not yet built; empty is the correct assertion |
+| `match-detail-timeline.json` | Game Timeline `/matches/{id}/plays/timeline` | true | 12 corpus matches project; 0 game_plays — GRE ingest path not yet built |
+| `match-list.json` | Match History `/history/matches` | false | REAL corpus: 12 unique matches from 36-log snapshot; first row QuickDraft_SOS_20260526, result=win |
+| `quest-list.json` | Quests `/quests/active` | false | REAL corpus: 5 unique quests from 36-log snapshot (3 named SOS quests + 2 additional) |
+| `win-rate-trend.json` | Win-Rate Trend `/matches/trends` | false | SYNTHETIC: seeded from test-data.sql player_stats rows |
+| `rank-progression.json` | Rank Progression `/matches/rank-progression-timeline` | false | SYNTHETIC: seeded from test-data.sql rank_history rows |
+| `deck-builder-resolution.json` | Deck Builder `/decks/{id}/cards` + `/cards?grp_ids=` | false | REAL corpus: 4 decks project; deck-004 for card assertions |
+| `draft-surface.json` | Draft History `/history/drafts` | true | 1,142 pack + 1,136 pick events parse; 0 project — historical logs predate session_id |
+
+## Full Corpus Promotion (2026-06-02)
+
+The manifests above were promoted from `corpus-snapshot-20260602T170441Z/` (36 log files) via Bob's replay injector (#2919).
+
+| Surface | Reconstructed | Notes |
+|---|---|---|
+| Matches | 12 | 200 parsed → 12 unique IDs after ON CONFLICT dedup |
+| Quests | 5 | 119 parsed → 5 unique quest IDs after upsert |
+| Decks | 4 | 82 parsed → 4 unique deck IDs |
+| Draft sessions | 0 | 1,142 packs + 1,136 picks parse; 0 project — historical logs predate session_id |
+| Game plays (GRE) | 0 | GRE ingest path not yet built |
+
+Determinism: `TestLayer5ReplayDeterminism` PASS — run-1 and run-2 produce identical row sets.
+
+To advance draft surfaces: play new drafts on the fixed daemon, capture the log, promote per `ADD-CORPUS-ENTRY.md`, and regenerate.
 
 ## Update protocol
 
