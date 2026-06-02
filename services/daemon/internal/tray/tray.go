@@ -13,11 +13,25 @@ import (
 	"sync"
 	"time"
 
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
 	"github.com/getlantern/systray"
 )
 
 //go:embed assets/icon.png
-var iconData []byte
+var prodIconData []byte
+
+//go:embed assets/staging_icon.png
+var stagingIconData []byte
+
+// iconBytes returns the tray icon bytes for the current build channel.
+// Returns stagingIconData when install.Channel is "staging"; prodIconData
+// for all other channels (including the default "stable" channel).
+func iconBytes() []byte {
+	if install.Channel == install.ChannelStaging {
+		return stagingIconData
+	}
+	return prodIconData
+}
 
 // Status represents the daemon's connection state shown in the menu bar.
 type Status int
@@ -250,7 +264,7 @@ func (a *App) SetLastSync(t time.Time) {
 }
 
 func (a *App) setup() {
-	systray.SetIcon(iconData)
+	systray.SetIcon(iconBytes())
 	// Tooltip shows the channel-specific label so users know which channel is running.
 	systray.SetTooltip(a.appLabel)
 
