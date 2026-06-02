@@ -5,9 +5,10 @@ go 1.25.0
 toolchain go1.25.10
 
 require (
+	aead.dev/minisign v0.3.0
 	github.com/RdHamilton/vault-mtg/pkg/draftalgo v0.1.2
 	github.com/RdHamilton/vault-mtg/pkg/logparse v0.1.4
-	github.com/RdHamilton/vault-mtg/services/contract v0.1.4
+	github.com/RdHamilton/vault-mtg/services/contract v0.1.5
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/getlantern/systray v1.2.2
 	github.com/getsentry/sentry-go v0.46.2
@@ -19,7 +20,6 @@ require (
 )
 
 require (
-	aead.dev/minisign v0.3.0 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/getlantern/context v0.0.0-20190109183933-c447772a6520 // indirect

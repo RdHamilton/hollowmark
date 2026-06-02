@@ -177,3 +177,40 @@ func TestAppRetrySetupChannel_NonBlocking(t *testing.T) {
 	}
 	assert.Len(t, a.RetrySetup, 1)
 }
+
+// ---------------------------------------------------------------------------
+// InstallUpdate channel (auto-updater — #632)
+// ---------------------------------------------------------------------------
+
+// TestAppInstallUpdateChannel_InitialisedInNew verifies that New() initialises
+// InstallUpdate as a buffered channel with cap=1. This is required for both
+// the CGO tray (real menu item click) and the !CGO stub (headless — channel is
+// still referenced by TrayHooks wiring in cmd/daemon/main.go).
+func TestAppInstallUpdateChannel_InitialisedInNew(t *testing.T) {
+	a := newTestApp()
+	assert.NotNil(t, a.InstallUpdate, "InstallUpdate channel must not be nil after New()")
+	assert.Equal(t, 1, cap(a.InstallUpdate), "InstallUpdate must be buffered cap=1")
+}
+
+// TestAppInstallUpdateChannel_NonBlocking verifies that sending twice without
+// draining does not block (buffered cap=1 drops the second send).
+func TestAppInstallUpdateChannel_NonBlocking(t *testing.T) {
+	a := newTestApp()
+	a.InstallUpdate <- struct{}{}
+	select {
+	case a.InstallUpdate <- struct{}{}:
+		// dropped — channel full, not a panic
+	default:
+	}
+	assert.Len(t, a.InstallUpdate, 1)
+}
+
+// TestAppNotifyUpdateAvailable_Noop verifies that NotifyUpdateAvailable does not
+// panic in the stub (no tray items to update). This guards the method signature
+// on the !CGO stub so CGO_ENABLED=0 lifecycle CI continues to compile.
+func TestAppNotifyUpdateAvailable_Noop(t *testing.T) {
+	a := newTestApp()
+	assert.NotPanics(t, func() {
+		a.NotifyUpdateAvailable("0.3.7", "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg")
+	})
+}

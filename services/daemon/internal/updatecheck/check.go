@@ -13,12 +13,33 @@ import (
 )
 
 // VersionResponse is the JSON body returned by GET /api/v1/daemon/version.
+// Fields mirror contract.DaemonVersionResponse — update together.
 type VersionResponse struct {
 	Latest         string `json:"latest"`
 	ReleasedAt     string `json:"released_at"`
 	DownloadURL    string `json:"download_url"`
 	Sha256SumsURL  string `json:"sha256sums_url"`
 	AttestationURL string `json:"attestation_url"`
+	// MacOSInstallerURL is the direct download URL for the macOS universal .pkg
+	// installer asset. Empty when the BFF has not yet been updated to v0.1.5+.
+	MacOSInstallerURL string `json:"macos_installer_url,omitempty"`
+	// WindowsInstallerURL is the direct download URL for the Windows amd64 .exe
+	// installer asset. Empty when the BFF has not yet been updated to v0.1.5+.
+	WindowsInstallerURL string `json:"windows_installer_url,omitempty"`
+}
+
+// SelectInstallerURL returns the platform-specific installer download URL for
+// the given OS (runtime.GOOS value). Returns empty string when the URL is not
+// available or the OS is unsupported — callers must abort cleanly on empty.
+func SelectInstallerURL(vr *VersionResponse, goos string) string {
+	switch goos {
+	case "darwin":
+		return vr.MacOSInstallerURL
+	case "windows":
+		return vr.WindowsInstallerURL
+	default:
+		return ""
+	}
 }
 
 // Options configures an update check. All callbacks are optional; nil callbacks

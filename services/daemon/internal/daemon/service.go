@@ -1136,8 +1136,17 @@ func (s *Service) handleInstallUpdate(ctx context.Context) {
 		return
 	}
 
-	if vr.DownloadURL == "" || vr.Sha256SumsURL == "" || vr.AttestationURL == "" {
-		log.Printf("[daemon] install-update: missing URL fields in version response (BFF not updated yet)")
+	if vr.Sha256SumsURL == "" || vr.AttestationURL == "" {
+		log.Printf("[daemon] install-update: missing SHA256SUMS/attestation URL fields in version response (BFF not updated yet)")
+		return
+	}
+
+	// Select the platform-specific installer asset URL (per-platform binary, not the
+	// HTML release page). Empty return means this OS is unsupported or the BFF has
+	// not yet been updated to expose per-platform URLs — abort cleanly.
+	installerURL := updatecheck.SelectInstallerURL(&vr, runtime.GOOS)
+	if installerURL == "" {
+		log.Printf("[daemon] install-update: no installer URL for platform %s in version response (BFF not updated yet or unsupported OS)", runtime.GOOS)
 		return
 	}
 
@@ -1161,11 +1170,7 @@ func (s *Service) handleInstallUpdate(ctx context.Context) {
 	sigDir := filepath.Dir(sigPath)
 	defer func() { _ = os.RemoveAll(sigDir) }()
 
-	// Determine the platform-specific installer URL from the download URL.
-	// The DownloadURL is the releases page; for the actual binary we need to
-	// construct the download URL. For now use the DownloadURL as the entry point;
-	// a future ticket will expose per-platform binary URLs from the BFF.
-	installerURL := vr.DownloadURL
+	// Download the platform-specific installer binary.
 	installerPath, err := d.DownloadToTempDir(installerURL, parentDir)
 	if err != nil {
 		log.Printf("[daemon] install-update: download installer failed: %v", err)
