@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { trackEvent } from '@/services/analytics';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { matches } from '@/services/api';
 import { storage } from '@/types/models';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import { useAppContext } from '../context/AppContext';
+import { getVisibleSetAnnotations, type ChartPeriodMeta } from '@/utils/setReleaseAnnotations';
 import './WinRateTrend.css';
 
 const WinRateTrend = () => {
@@ -98,6 +99,19 @@ const WinRateTrend = () => {
     matches: period.Stats?.TotalMatches || 0
   })) || [];
 
+  // Build period metadata (label + startDate) for annotation matching.
+  // StartDate may be a Date object or ISO string depending on the BFF class
+  // conversion; normalise to YYYY-MM-DD for consistent string comparison.
+  const periodMeta: ChartPeriodMeta[] = analysis?.Trends?.map(period => {
+    const raw = period.Period.StartDate;
+    const startDate = raw
+      ? String(raw).slice(0, 10)  // "2024-09-24T00:00:00Z" → "2024-09-24"
+      : '';
+    return { name: period.Period.Label, startDate };
+  }) || [];
+
+  const setAnnotations = getVisibleSetAnnotations(periodMeta);
+
   return (
     <div className="page-container">
       {/* Filters */}
@@ -176,6 +190,22 @@ const WinRateTrend = () => {
                     strokeWidth={2}
                     dot={{ fill: '#4a9eff', r: 4 }}
                   />
+                  {setAnnotations.map((annotation) => (
+                    <ReferenceLine
+                      key={annotation.code}
+                      x={annotation.xLabel}
+                      stroke="var(--fg-muted)"
+                      strokeDasharray="4 3"
+                      strokeWidth={1}
+                      label={{
+                        value: annotation.code,
+                        position: 'top',
+                        fill: 'var(--fg-muted)',
+                        fontSize: 10,
+                      }}
+                      data-testid={`set-annotation-${annotation.code}`}
+                    />
+                  ))}
                 </LineChart>
               ) : (
                 <BarChart data={chartData}>
@@ -188,10 +218,38 @@ const WinRateTrend = () => {
                   />
                   <Legend />
                   <Bar dataKey="winRate" fill="#4a9eff" name="Win Rate (%)" />
+                  {setAnnotations.map((annotation) => (
+                    <ReferenceLine
+                      key={annotation.code}
+                      x={annotation.xLabel}
+                      stroke="var(--fg-muted)"
+                      strokeDasharray="4 3"
+                      strokeWidth={1}
+                      label={{
+                        value: annotation.code,
+                        position: 'top',
+                        fill: 'var(--fg-muted)',
+                        fontSize: 10,
+                      }}
+                      data-testid={`set-annotation-${annotation.code}`}
+                    />
+                  ))}
                 </BarChart>
               )}
             </ResponsiveContainer>
           </div>
+
+          {/* Set-release annotation legend */}
+          {setAnnotations.length > 0 && (
+            <div className="set-annotation-legend" data-testid="set-annotation-legend">
+              {setAnnotations.map((annotation) => (
+                <span key={annotation.code} className="set-annotation-legend-item">
+                  <span className="set-annotation-legend-swatch" aria-hidden="true" />
+                  <span>{annotation.code} — {annotation.name}</span>
+                </span>
+              ))}
+            </div>
+          )}
 
           {/* Summary */}
           <div className="summary">
