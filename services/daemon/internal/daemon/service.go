@@ -26,6 +26,7 @@ import (
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/dispatch"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/draftstate"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/gre"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/keychain"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/localapi"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
@@ -170,6 +171,11 @@ type Service struct {
 
 // New creates a Service from cfg.
 func New(cfg *config.Config) *Service {
+	// ADR-049 Ticket 2: use the channel-derived keychain service so the staging
+	// daemon reads/writes its own slot rather than clobbering the prod entry.
+	keychainService := install.Identity(install.Channel).KeychainService
+	keychainGetFn := func() (string, error) { return keychain.GetForService(keychainService) }
+
 	// Resolve the dispatcher bearer token in this priority order:
 	//   1. cfg.Keychain == true → load api_key from the OS keychain (PKCE path).
 	//   2. cfg.DaemonJWT (legacy HMAC daemon-JWT path).
@@ -181,10 +187,10 @@ func New(cfg *config.Config) *Service {
 	var keychainErr error
 	switch {
 	case cfg.Keychain:
-		key, err := keychain.Get()
+		key, err := keychainGetFn()
 		if err != nil {
 			keychainErr = err
-			log.Printf("[daemon] warn: keychain.Get failed: %v — will retry on startup", err)
+			log.Printf("[daemon] warn: keychain.GetForService(%q) failed: %v — will retry on startup", keychainService, err)
 		}
 		token = key
 	case cfg.DaemonJWT != "":
@@ -206,7 +212,7 @@ func New(cfg *config.Config) *Service {
 		version:     "dev",
 		draftState:  draftstate.New(),
 		keychainErr: keychainErr,
-		keychainGet: keychain.Get,
+		keychainGet: keychainGetFn,
 		ratings: ratingsclient.New(ratingsclient.Config{
 			BFFURL: cfg.CloudAPIURL,
 			Token:  token,

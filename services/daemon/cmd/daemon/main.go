@@ -51,6 +51,7 @@ import (
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/config"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/daemon"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/daemonstate"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/keychain"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/migrate"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/pkce"
@@ -105,7 +106,13 @@ var DefaultSPAURL = "https://app.vaultmtg.app"
 var DefaultSetupURL = "https://vaultmtg.app/setup"
 
 func main() {
-	defaultCfgPath := defaultConfigPath()
+	// ADR-049 Ticket 2: resolve the channel-scoped identity once at startup.
+	// All OS-level identifiers (keychain service, plist label, config dir) are
+	// derived from this identity so stable and staging daemons never collide.
+	identity := install.Identity(install.Channel)
+	keychainService := identity.KeychainService
+
+	defaultCfgPath := defaultConfigPath(identity)
 	cfgPath := flag.String("config", defaultCfgPath, "path to JSON config file")
 	replayFile := flag.String("replay", "", "path to a Player.log fixture for one-shot corpus replay (ADR-042 Amendment 1, #640)")
 	flag.Parse()
@@ -178,7 +185,7 @@ func main() {
 	}()
 
 	// ── Step 2: keychain migration (legacy plaintext api_key → OS keychain) ────
-	if err := migrateLegacyAPIKey(cfg); err != nil {
+	if err := migrateLegacyAPIKey(cfg, keychainService); err != nil {
 		log.Printf("[mtga-daemon] warn: keychain migration failed: %v", err)
 	}
 
@@ -219,9 +226,11 @@ func main() {
 	//     menu bar. The onReady goroutine re-checks NeedsFirstRunAuth and shows
 	//     StatusSetupRequired + "Retry Setup…" so the user can retry without a
 	//     daemon restart (#2132).
-	if !dState.AuthPaused && cfg.NeedsFirstRunAuth(keychain.Get) && cfg.CloudAPIURL != "" {
+	keychainGetFn := func() (string, error) { return keychain.GetForService(keychainService) }
+
+	if !dState.AuthPaused && cfg.NeedsFirstRunAuth(keychainGetFn) && cfg.CloudAPIURL != "" {
 		log.Printf("[mtga-daemon] first-run: no API key detected — starting PKCE auth flow")
-		if err := runPKCEAuth(cfg, *cfgPath); err != nil {
+		if err := runPKCEAuth(cfg, *cfgPath, keychainService); err != nil {
 			fmt.Fprintf(os.Stderr, "auth error: %v\n", err)
 
 			// Increment attempt counter and check cap (RC3: no timer reset).
@@ -282,7 +291,7 @@ func main() {
 	// We capture cfgPath from the outer scope (set via -config flag) so the
 	// callback can persist the refreshed account_id / daemon_id if they change.
 	svc.WithReauthFunc(func(ctx context.Context) error {
-		return runInProcessReauth(ctx, cfg, *cfgPath)
+		return runInProcessReauth(ctx, cfg, *cfgPath, keychainService)
 	})
 
 	log.Printf("[mtga-daemon] starting, cloud_api=%s", cfg.CloudAPIURL)
@@ -338,7 +347,7 @@ func main() {
 			//
 			// RC6: we block on app.RetrySetup (the RetrySetup channel from tray.App)
 			// which mirrors the existing TryAgain pattern — NOT SetReauthRequired.
-			for (cfg.NeedsFirstRunAuth(keychain.Get) || dState.AuthPaused) && cfg.CloudAPIURL != "" {
+			for (cfg.NeedsFirstRunAuth(keychainGetFn) || dState.AuthPaused) && cfg.CloudAPIURL != "" {
 				app.SetSetupRequired(true)
 
 				if headless {
@@ -373,7 +382,7 @@ func main() {
 					log.Printf("[mtga-daemon] retry setup: could not open browser: %v", err)
 				}
 
-				if err := runPKCEAuth(cfg, *cfgPath); err != nil {
+				if err := runPKCEAuth(cfg, *cfgPath, keychainService); err != nil {
 					log.Printf("[mtga-daemon] retry setup: PKCE failed: %v — incrementing counter", err)
 
 					// Increment attempt counter and check cap again (RC3).
@@ -485,14 +494,15 @@ func handleMissingConfig(cfgPath string) {
 // migrateLegacyAPIKey detects a plaintext api_key in the config file and migrates
 // it to the OS keychain, rewriting daemon.json with keychain:true.
 // This is a one-time, transparent upgrade per ADR-020 §Migration path.
-func migrateLegacyAPIKey(cfg *config.Config) error {
+// keychainService is the channel-derived service name (ADR-049 Ticket 2).
+func migrateLegacyAPIKey(cfg *config.Config, keychainService string) error {
 	if cfg.Keychain || cfg.APIKey == "" || cfg.FilePath() == "" {
 		return nil // nothing to migrate
 	}
 
 	log.Printf("[mtga-daemon] migrating plaintext api_key to OS keychain")
 
-	if err := keychain.Set(cfg.APIKey); err != nil {
+	if err := keychain.SetForService(keychainService, cfg.APIKey); err != nil {
 		return fmt.Errorf("write to keychain: %w", err)
 	}
 
@@ -519,7 +529,9 @@ func migrateLegacyAPIKey(cfg *config.Config) error {
 //     to revoke the stale row, then re-registers with an empty device_id so the
 //     BFF mints a fresh identity (ADR-034 §3, ADR-036 I-3). One attempt only;
 //     if recovery fails, returns StatusSetupRequired and exits so launchd respawns.
-func runPKCEAuth(cfg *config.Config, cfgPath string) error {
+//
+// keychainService is the channel-derived OS keychain service name (ADR-049 Ticket 2).
+func runPKCEAuth(cfg *config.Config, cfgPath string, keychainService string) error {
 	clerkFrontendAPI := os.Getenv("CLERK_FRONTEND_API")
 	clientID := os.Getenv("CLERK_OAUTH_CLIENT_ID")
 	if clerkFrontendAPI == "" || clientID == "" {
@@ -563,7 +575,7 @@ func runPKCEAuth(cfg *config.Config, cfgPath string) error {
 		// wiped by an OS reinstall even though daemon.json survived).
 		log.Printf("[mtga-daemon] device already registered; using existing keychain key")
 
-		existing, kcErr := keychain.Get()
+		existing, kcErr := keychain.GetForService(keychainService)
 		if kcErr == nil && existing != "" {
 			// Keychain entry is intact. Write/refresh daemon.json with the account_id
 			// and the BFF-authoritative device_id (ADR-028: daemon always persists the
@@ -605,7 +617,7 @@ func runPKCEAuth(cfg *config.Config, cfgPath string) error {
 		}
 
 		log.Printf("[mtga-daemon] recovery: re-registered as device %s (account %s)", newDeviceID, newAccountID)
-		if err := keychain.Set(newAPIKey); err != nil {
+		if err := keychain.SetForService(keychainService, newAPIKey); err != nil {
 			return fmt.Errorf("re-register recovery: store new API key in keychain: %w", err)
 		}
 
@@ -626,7 +638,7 @@ func runPKCEAuth(cfg *config.Config, cfgPath string) error {
 
 	// Fresh registration (201 Created + non-empty api_key).
 	log.Printf("[mtga-daemon] BFF registered (account_id=%s); storing key in OS keychain", accountID)
-	if err := keychain.Set(apiKey); err != nil {
+	if err := keychain.SetForService(keychainService, apiKey); err != nil {
 		return fmt.Errorf("store API key in keychain: %w", err)
 	}
 
@@ -769,7 +781,9 @@ func revokeFromBFF(ctx context.Context, bffBaseURL, clerkJWT, deviceID string) e
 // DaemonID, and Keychain=true. If CLERK_FRONTEND_API or CLERK_OAUTH_CLIENT_ID
 // are not set, the call returns an error and the daemon's keychainErr is set to
 // ErrReauthFailed so the user sees "Keychain unavailable" in the tray.
-func runInProcessReauth(ctx context.Context, cfg *config.Config, cfgPath string) error {
+//
+// keychainService is the channel-derived OS keychain service name (ADR-049 Ticket 2).
+func runInProcessReauth(ctx context.Context, cfg *config.Config, cfgPath string, keychainService string) error {
 	clerkFrontendAPI := os.Getenv("CLERK_FRONTEND_API")
 	clientID := os.Getenv("CLERK_OAUTH_CLIENT_ID")
 	if clerkFrontendAPI == "" || clientID == "" {
@@ -822,7 +836,7 @@ func runInProcessReauth(ctx context.Context, cfg *config.Config, cfgPath string)
 
 	// Fresh key issued: store in keychain and update daemon.json.
 	log.Printf("[mtga-daemon] in-process reauth: new API key issued; storing in keychain")
-	if err := keychain.Set(apiKey); err != nil {
+	if err := keychain.SetForService(keychainService, apiKey); err != nil {
 		return fmt.Errorf("in-process reauth: store API key in keychain: %w", err)
 	}
 
@@ -846,19 +860,21 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// defaultConfigPath returns the platform-appropriate default config path:
-//   - Windows: %APPDATA%\vaultmtg\daemon.json
-//   - macOS/Linux: ~/.vaultmtg/daemon.json
+// defaultConfigPath returns the channel-appropriate default config path derived
+// from the install identity (ADR-049 Ticket 2):
+//   - stable / Windows:  %APPDATA%\vaultmtg\daemon.json
+//   - stable / macOS:    ~/.vaultmtg/daemon.json
+//   - staging / Windows: %APPDATA%\vaultmtg-staging\daemon.json
+//   - staging / macOS:   ~/.vaultmtg-staging/daemon.json
 //
 // The -config flag overrides this; Task Scheduler on Windows always passes
 // -config explicitly, so the default is only used when running the binary
 // directly without that flag.
-func defaultConfigPath() string {
-	if runtime.GOOS == "windows" {
-		if appdata := os.Getenv("APPDATA"); appdata != "" {
-			return filepath.Join(appdata, "vaultmtg", "daemon.json")
-		}
+func defaultConfigPath(id install.IdentitySet) string {
+	if id.ConfigDir != "" {
+		return filepath.Join(id.ConfigDir, "daemon.json")
 	}
+	// Fallback: should never be reached since Identity always populates ConfigDir.
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "daemon.json"
@@ -1080,10 +1096,12 @@ func runReplayEntryPoint(logFile, cfgPath string) int {
 	}
 
 	// Resolve the API key: keychain → config → headless pair.
+	// ADR-049 Ticket 2: use the channel-derived keychain service so replay mode
+	// reads from the correct slot (staging vs. prod).
 	apiKey := ""
 	accountID := cfg.AccountID
 	if cfg.Keychain {
-		if k, err := keychain.Get(); err == nil {
+		if k, err := keychain.GetForService(install.Identity(install.Channel).KeychainService); err == nil {
 			apiKey = k
 		}
 	}

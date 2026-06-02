@@ -468,6 +468,8 @@ func main() {
 				gamePlayRepo,
 			)
 			worker.WithCounterStore(gameEventCountersRepo)
+			worker.WithCardPlayStore(gamePlayRepo)
+			worker.WithGameIDResolver(gamePlayRepo)
 			worker.WithDLQ(projectionErrorsRepo)
 			if postHogClient != nil {
 				worker.WithPostHogClient(postHogClient)
