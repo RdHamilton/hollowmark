@@ -14,15 +14,38 @@ import (
 
 // VersionResponse is the JSON body returned by GET /api/v1/daemon/version.
 type VersionResponse struct {
-	Latest      string `json:"latest"`
-	ReleasedAt  string `json:"released_at"`
-	DownloadURL string `json:"download_url"`
+	Latest         string `json:"latest"`
+	ReleasedAt     string `json:"released_at"`
+	DownloadURL    string `json:"download_url"`
+	Sha256SumsURL  string `json:"sha256sums_url"`
+	AttestationURL string `json:"attestation_url"`
+}
+
+// Options configures an update check. All callbacks are optional; nil callbacks
+// are skipped. Use CheckWithOptions to pass options; use Check for the zero-config
+// log-only path (backward-compatible).
+type Options struct {
+	// NotifyUpdateAvailable is called (from the goroutine running the check)
+	// when a newer version is available. version is the bare semver (e.g. "0.3.7");
+	// downloadURL is the GitHub Releases page URL for the release. The callback
+	// is the tray prompt trigger — it must signal the tray to show
+	// "Update available: vX.Y.Z — Click to Install".
+	//
+	// This is the ONLY signal the daemon emits for update availability. The daemon
+	// is the trigger, never the executor — see downloader.go LaunchInstaller.
+	NotifyUpdateAvailable func(version, downloadURL string)
 }
 
 // Check fetches the latest daemon version from the BFF and logs a warning if
 // a newer version is available. All errors are logged at INFO level and swallowed.
 // If currentVersion is "dev", the check is skipped entirely.
 func Check(ctx context.Context, baseURL string, currentVersion string) {
+	CheckWithOptions(ctx, baseURL, currentVersion, Options{})
+}
+
+// CheckWithOptions is Check with configurable callbacks. All swallowing / error
+// semantics are identical to Check.
+func CheckWithOptions(ctx context.Context, baseURL string, currentVersion string, opts Options) {
 	if currentVersion == "dev" {
 		return
 	}
@@ -63,5 +86,10 @@ func Check(ctx context.Context, baseURL string, currentVersion string) {
 	latest := "v" + vr.Latest
 	if semver.Compare(latest, current) > 0 {
 		log.Printf("[mtga-daemon] WARN: new version available: %s (current: %s) — %s", vr.Latest, currentVersion, vr.DownloadURL)
+
+		// Fire the tray prompt callback if wired.
+		if opts.NotifyUpdateAvailable != nil {
+			opts.NotifyUpdateAvailable(vr.Latest, vr.DownloadURL)
+		}
 	}
 }

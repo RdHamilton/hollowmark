@@ -261,16 +261,18 @@ func main() {
 	})
 
 	svc.WithTray(daemon.TrayHooks{
-		SyncNow:            app.SyncNow,
-		GrantAccess:        app.GrantAccess,
-		TryAgain:           app.TryAgain,
-		RetrySetup:         app.RetrySetup,
-		SetHelperInstalled: app.SetHelperInstalled,
-		SetLastSync:        app.SetLastSync,
-		SetKeychainError:   app.SetKeychainError,
-		SetSetupRequired:   app.SetSetupRequired,
-		SetWaitingForArena: app.SetWaitingForArena,
-		NotifySyncResult:   app.NotifySyncResult,
+		SyncNow:               app.SyncNow,
+		GrantAccess:           app.GrantAccess,
+		TryAgain:              app.TryAgain,
+		RetrySetup:            app.RetrySetup,
+		InstallUpdate:         app.InstallUpdate,
+		SetHelperInstalled:    app.SetHelperInstalled,
+		SetLastSync:           app.SetLastSync,
+		SetKeychainError:      app.SetKeychainError,
+		SetSetupRequired:      app.SetSetupRequired,
+		SetWaitingForArena:    app.SetWaitingForArena,
+		NotifySyncResult:      app.NotifySyncResult,
+		NotifyUpdateAvailable: app.NotifyUpdateAvailable,
 	})
 
 	// Handle OS signals: forward SIGTERM/SIGINT to systray so onQuit fires cleanly.
