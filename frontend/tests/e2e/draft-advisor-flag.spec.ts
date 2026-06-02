@@ -25,31 +25,6 @@ function sseData(payload: object): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
-/**
- * Intercept the SSE endpoint and serve the given event bodies one per
- * connection (in order). After the list is exhausted, reconnections are
- * aborted so the EventSource backs off.
- */
-async function mockSse(page: Page, bodies: string[]): Promise<void> {
-  let index = 0;
-  await page.route('**/api/v1/events*', async (route) => {
-    if (index >= bodies.length) {
-      await route.abort();
-      return;
-    }
-    const body = bodies[index];
-    index += 1;
-    await route.fulfill({
-      status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-      },
-      body,
-    });
-  });
-}
-
 function injectSignedIn(page: Page) {
   return page.addInitScript(() => {
     (window as unknown as Record<string, unknown>).__CLERK_TEST_STATE__ = { isSignedIn: true };
@@ -76,58 +51,89 @@ test.describe('Draft.tsx — live_draft_advisor_enabled flag gate', () => {
     await injectSignedIn(page);
     await injectFlag(page, flagValue);
 
-    // Stub active draft session with a session ID
-    await page.route('**/api/v1/draft/sessions/active', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify([
-          {
-            ID: 'session-e2e-1',
-            EventName: 'QuickDraft',
-            SetCode: 'ONE',
-            DraftType: 'PremierDraft',
-            StartTime: '2026-06-01T00:00:00Z',
-            Status: 'active',
-            TotalPicks: 45,
-            CreatedAt: '2026-06-01T00:00:00Z',
-            UpdatedAt: '2026-06-01T00:00:00Z',
-          },
-        ]),
-      });
+    // POST /api/v1/drafts — getActiveDraftSessions() calls getDraftSessions({ status: 'active' })
+    // which POSTs to /drafts. Mirror the working pattern from mockBffForActiveDraft in
+    // current-pack-picker.spec.ts. The apiClient unwraps response.json().data, so all
+    // BFF responses must be wrapped in { data: ... }.
+    await page.route('**/api/v1/drafts', async (route) => {
+      if (route.request().method() === 'POST') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: [
+              {
+                ID: 'session-e2e-1',
+                EventName: 'QuickDraft',
+                SetCode: 'ONE',
+                DraftType: 'PremierDraft',
+                Status: 'active',
+                TotalPicks: 45,
+              },
+            ],
+          }),
+        });
+      } else {
+        await route.continue();
+      }
     });
 
-    // Stub all other data endpoints Draft.tsx touches
-    await page.route('**/api/v1/draft/sessions/session-e2e-1/picks', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
-    });
-    await page.route('**/api/v1/draft/sessions/session-e2e-1/pool', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
-    });
-    await page.route('**/api/v1/cards/set/ONE', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
-    });
-    await page.route('**/api/v1/cards/ratings/ONE/**', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
-    });
-    await page.route('**/api/v1/cards/ratings/staleness/**', async (route) => {
+    // Stub all other data endpoints Draft.tsx touches.
+    // Wildcard session ID so the mock fires regardless of the ID returned above.
+    await page.route('**/api/v1/drafts/*/picks', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ cachedAt: new Date().toISOString(), isStale: false, cardCount: 0 }),
+        body: JSON.stringify({ data: [] }),
       });
     });
-    // CurrentPackPicker polls this endpoint
-    await page.route('**/api/v1/draft/sessions/session-e2e-1/current-pack', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(null) });
+    await page.route('**/api/v1/drafts/*/pool', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: [] }),
+      });
     });
-    // BFF color ratings
+    await page.route('**/api/v1/cards/sets/*/cards', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: [] }),
+      });
+    });
+    await page.route('**/api/v1/cards/ratings/**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: [] }),
+      });
+    });
+    // CurrentPackPicker polls this daemon endpoint — allow any session ID
+    await page.route('**/api/v1/drafts/*/current-pack*', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: null }),
+      });
+    });
+    // BFF color/card ratings — getDraftRatings issues a raw fetch (not through apiClient),
+    // so the BFF returns the JSON envelope directly without a { data: ... } wrapper.
     await page.route('**/api/v1/draft-ratings/**', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ card_ratings: [], color_ratings: [] }),
+        body: JSON.stringify({
+          set_code: 'ONE',
+          draft_format: 'PremierDraft',
+          cached_at: '2026-01-01T00:00:00Z',
+          card_ratings: [],
+          color_ratings: [],
+        }),
       });
+    });
+    // POST /api/v1/drafts/*/analyze-picks — auto-analysis fires if picks > 0 (won't here, but safe to stub)
+    await page.route('**/api/v1/drafts/*/analyze-picks', async (route) => {
+      await route.fulfill({ status: 204 });
     });
 
     await page.goto('/draft');
@@ -136,22 +142,26 @@ test.describe('Draft.tsx — live_draft_advisor_enabled flag gate', () => {
   }
 
   test('flag ON — CurrentPackPicker (advisor surface) renders', async ({ page }) => {
+    // Register the request spy BEFORE navigation so it captures the mount-time poll.
+    const currentPackRequest = page.waitForRequest('**/current-pack*', { timeout: 15_000 });
     await setupDraftPage(page, true);
 
-    // When flag is ON, the CurrentPackPicker component should mount.
-    // It always hits the current-pack endpoint on mount — we detect it via network.
-    const currentPackRequest = page.waitForRequest('**/current-pack**', { timeout: 5_000 }).catch(() => null);
-    // Navigate to page (already done above) — if CurrentPackPicker mounted it should have fired
-    const req = await currentPackRequest;
+    // CurrentPackPicker mounts and polls the current-pack endpoint on load.
+    const req = await currentPackRequest.catch(() => null);
     expect(req).not.toBeNull();
   });
 
   test('flag OFF — CurrentPackPicker (advisor surface) is hidden', async ({ page }) => {
-    // Intercept the current-pack endpoint and fail the test if it is called
+    // Intercept the current-pack endpoint and fail the test if it is called.
+    // Register before setupDraftPage so the monitor is in place before navigation.
     let currentPackCalled = false;
-    await page.route('**/current-pack**', async (route) => {
+    await page.route('**/current-pack*', async (route) => {
       currentPackCalled = true;
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(null) });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: null }),
+      });
     });
 
     await setupDraftPage(page, false);
@@ -163,12 +173,13 @@ test.describe('Draft.tsx — live_draft_advisor_enabled flag gate', () => {
   });
 
   test('flag undefined/loading — CurrentPackPicker renders (optimistic-show)', async ({ page }) => {
+    // Register the request spy BEFORE navigation so it captures the mount-time poll.
+    const currentPackRequest = page.waitForRequest('**/current-pack*', { timeout: 15_000 });
     // No flag injection = optimistic-show default
     await setupDraftPage(page, undefined);
 
     // CurrentPackPicker should mount (same as flag ON)
-    const currentPackRequest = page.waitForRequest('**/current-pack**', { timeout: 5_000 }).catch(() => null);
-    const req = await currentPackRequest;
+    const req = await currentPackRequest.catch(() => null);
     expect(req).not.toBeNull();
   });
 
@@ -275,6 +286,21 @@ test.describe('Draft.tsx — live_draft_advisor_enabled flag gate', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('DraftLive.tsx — live_draft_advisor_enabled flag gate', () => {
+  // Warm up Vite's module graph for DraftLive and bffDraftRatings so that the
+  // first real test does not have to wait for on-demand transpilation. Without
+  // this, the ratings fetch (which happens after setSetCode fires) may race
+  // against Vite's initial module compile and arrive too late for the badge.
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    await page.route('**/api/v1/events*', (r) => r.fulfill({ status: 200, headers: { 'Content-Type': 'text/event-stream' }, body: '' }));
+    await page.route('**/api/v1/draft-ratings/**', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ set_code: 'ONE', draft_format: 'PremierDraft', cached_at: '2026-01-01T00:00:00Z', card_ratings: [], color_ratings: [] }) }));
+    await page.addInitScript(() => {
+      (window as unknown as Record<string, unknown>).__CLERK_TEST_STATE__ = { isSignedIn: true };
+    });
+    await page.goto('/draft/live');
+    await page.locator('[data-testid="draft-live-container"]').waitFor({ timeout: 30_000 });
+    await page.close();
+  });
   const startedEvent = {
     type: 'draft.started',
     account_id: 'acc1',
@@ -315,7 +341,58 @@ test.describe('DraftLive.tsx — live_draft_advisor_enabled flag gate', () => {
       });
     });
 
-    await mockSse(page, [sseData(startedEvent), sseData(packEvent)]);
+    // SSE routing for DraftLive tests.
+    //
+    // Two SSE consumers connect to /api/v1/events:
+    //   1. websocketClient (adapter.ts) — fetch-based, no ?token= param
+    //   2. useDraftEventStream — EventSource, appends ?token=<clerk-jwt>
+    //
+    // DraftLive.tsx processes events only from useDraftEventStream (its own
+    // EventSource); the websocketClient feeds a separate EventsOn bus.
+    //
+    // Strategy:
+    //   - Token-bearing connections are from useDraftEventStream.
+    //   - First token connection → draft.started (so setSetCode/setDraftFormat fire).
+    //   - Subsequent token connections → draft.pack (so currentPackCards populates).
+    //   - Tokenless connections (websocketClient) → draft.started (no-op for DraftLive).
+    //
+    // This guarantees React processes draft.started and draft.pack as separate
+    // renders (React 18 batches simultaneous setLatestEvent calls, collapsing
+    // both events into one if they arrive in the same connection response).
+    let tokenConnections = 0;
+    await page.route('**/api/v1/events*', async (route) => {
+      const hasToken = route.request().url().includes('token=');
+      if (hasToken) {
+        tokenConnections += 1;
+        if (tokenConnections === 1) {
+          // First token connection: deliver draft.started so React can call
+          // setSetCode/setDraftFormat in its own render cycle.
+          await route.fulfill({
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+            body: sseData(startedEvent),
+          });
+        } else {
+          // Subsequent token connections: deliver draft.pack. Wait 300ms before
+          // responding so that React has had time to process the draft.started
+          // render cycle (setSetCode → useEffect → getDraftRatings) before the
+          // pack event triggers a second render.
+          await new Promise((r) => setTimeout(r, 300));
+          await route.fulfill({
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+            body: sseData(packEvent),
+          });
+        }
+      } else {
+        // websocketClient tokenless connection — deliver started so adapter is happy
+        await route.fulfill({
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+          body: sseData(startedEvent),
+        });
+      }
+    });
     await page.goto('/draft/live');
     await expect(page.locator('[data-testid="draft-live-container"]')).toBeVisible();
     // Wait for pack cards to render
@@ -324,6 +401,10 @@ test.describe('DraftLive.tsx — live_draft_advisor_enabled flag gate', () => {
 
   test('flag ON — top-pick badge IS rendered on highest-GIHWR card', async ({ page }) => {
     await setupDraftLivePage(page, true);
+
+    // Wait for ratings to load: the card name changes from '#601' (no rating) to
+    // 'Bomb Rare' (from mock ratings) once getDraftRatings resolves.
+    await expect(page.locator('[data-testid="pack-card-601"]')).not.toContainText('#601', { timeout: 10_000 });
 
     await expect(page.locator('[data-testid="top-pick-badge"]')).toBeVisible();
     await expect(page.locator('[data-testid="pack-card-601"]')).toHaveAttribute('data-top-pick', 'true');
@@ -346,6 +427,11 @@ test.describe('DraftLive.tsx — live_draft_advisor_enabled flag gate', () => {
 
   test('flag undefined/loading — top-pick IS shown (optimistic-show)', async ({ page }) => {
     await setupDraftLivePage(page, undefined);
+
+    // Wait for ratings to load: the card name changes from '#601' (no rating) to
+    // 'Bomb Rare' (from mock ratings) once getDraftRatings resolves.
+    // This guards against asserting the badge before the ratings fetch completes.
+    await expect(page.locator('[data-testid="pack-card-601"]')).not.toContainText('#601', { timeout: 10_000 });
 
     await expect(page.locator('[data-testid="top-pick-badge"]')).toBeVisible();
     await expect(page.locator('[data-testid="pack-card-601"]')).toHaveAttribute('data-top-pick', 'true');
