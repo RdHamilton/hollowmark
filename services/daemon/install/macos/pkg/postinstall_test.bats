@@ -211,7 +211,31 @@ setup() {
 }
 
 # ---------------------------------------------------------------------------
-# 4. Plist contains KeepAlive=true and RunAtLoad=true
+# 4. Plist contains VAULTMTG_DAEMON_CHANNEL with the substituted channel value
+#    (ADR-049 §1 — wired by #2894; regression guard so CI detects a missing
+#    __VAULTMTG_CHANNEL__ substitution in the lifecycle workflow).
+# ---------------------------------------------------------------------------
+@test "plist: VAULTMTG_DAEMON_CHANNEL key is present with substituted value" {
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${TMP_SCRIPT}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  [ -f "${PLIST_PATH}" ]
+
+  grep -q "VAULTMTG_DAEMON_CHANNEL" "${PLIST_PATH}"
+  # _make_test_script substitutes __VAULTMTG_CHANNEL__ -> "stable" (default arg).
+  grep -q "<string>stable</string>" "${PLIST_PATH}"
+  # Guard: the raw placeholder must not survive into the plist.
+  ! grep -q "__VAULTMTG_CHANNEL__" "${PLIST_PATH}"
+}
+
+# ---------------------------------------------------------------------------
+# 4b. Plist contains KeepAlive=true and RunAtLoad=true
 # ---------------------------------------------------------------------------
 @test "plist: KeepAlive and RunAtLoad are set to true" {
   run env \
