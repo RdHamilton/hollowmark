@@ -89,7 +89,10 @@ jobs:
         # gcc-mingw-w64-x86-64: mingw-w64 cross-compiler required for CGO_ENABLED=1
         # Windows/amd64 build. Without it, CGO falls back to the system gcc which
         # cannot produce PE (Windows) object files.  vault-mtg-tickets#199.
-        run: sudo apt-get update -qq && sudo apt-get install -y nsis libayatana-appindicator3-dev gcc-mingw-w64-x86-64
+        # minisign: required by the .goreleaser.yml signs: stanza to produce
+        # sha256sums.txt.minisig. The signs: cmd is a bash wrapper that decodes
+        # MINISIGN_PRIVATE_KEY and pipes MINISIGN_PASSWORD.
+        run: sudo apt-get update -qq && sudo apt-get install -y nsis libayatana-appindicator3-dev gcc-mingw-w64-x86-64 minisign
 
       - name: Install goversioninfo (Windows .exe icon embed, #307)
         # Pure-Go tool consumed by the .goreleaser.yml builds[].hooks.pre step.
@@ -164,6 +167,59 @@ jobs:
           fi
           echo "dsn=$DSN" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve minisign public key
+        # Read MINISIGN_PUBLIC_KEY from CI variables (not secrets -- it is a
+        # public key).  Fail fast if the key is missing or is still the
+        # placeholder value so signing is never silently skipped.
+        #
+        # The public key is injected into the daemon binary via ldflags:
+        #   -X .../updatecheck.EmbeddedPublicKey=<key>
+        # and into GoReleaser's environment as MINISIGN_PUBLIC_KEY (referenced
+        # by .goreleaser.yml ldflags {{ .Env.MINISIGN_PUBLIC_KEY }}).
+        #
+        # MINISIGN_PRIVATE_KEY and MINISIGN_PASSWORD are repo secrets consumed
+        # directly by the GoReleaser signs: stanza -- they are never echoed.
+        id: minisign_key
+        env:
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+        run: |
+          if [[ -z "${MINISIGN_PUBLIC_KEY}" ]]; then
+            echo "ERROR: MINISIGN_PUBLIC_KEY CI variable is not set." >&2
+            echo "Set it in the repository Variables (not Secrets) to the" >&2
+            echo "minisign public key string (e.g. 'RWS...'). See:" >&2
+            echo "vault-mtg-docs/engineering/runbooks/daemon-minisign-signing.md" >&2
+            exit 1
+          fi
+          if [[ "${MINISIGN_PUBLIC_KEY}" == "PLACEHOLDER"* ]]; then
+            echo "ERROR: MINISIGN_PUBLIC_KEY is still the placeholder value." >&2
+            echo "Generate a real keypair and store the public key. See:" >&2
+            echo "vault-mtg-docs/engineering/runbooks/daemon-minisign-signing.md" >&2
+            exit 1
+          fi
+          echo "pub=${MINISIGN_PUBLIC_KEY}" >> "$GITHUB_OUTPUT"
+          echo "PASS: MINISIGN_PUBLIC_KEY is present and non-placeholder."
+
+      - name: Assert minisign signing secrets are present
+        # Fail-closed: if either signing secret is missing, stop now rather than
+        # letting GoReleaser run and produce an unsigned release asset.
+        # MINISIGN_PRIVATE_KEY is the base64-encoded private key file.
+        # MINISIGN_PASSWORD is the passphrase protecting it.
+        # Neither value is echoed; presence-only check.
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          missing=()
+          [[ -z "${MINISIGN_PRIVATE_KEY}" ]] && missing+=("MINISIGN_PRIVATE_KEY")
+          [[ -z "${MINISIGN_PASSWORD}"    ]] && missing+=("MINISIGN_PASSWORD")
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "ERROR: Missing minisign secrets: ${missing[*]}" >&2
+            echo "Store the private key (base64-encoded) and password as repo secrets." >&2
+            echo "See: vault-mtg-docs/engineering/runbooks/daemon-minisign-signing.md" >&2
+            exit 1
+          fi
+          echo "PASS: MINISIGN_PRIVATE_KEY and MINISIGN_PASSWORD are both present."
+
       - name: Resolve semver tag for GoReleaser
         # GoReleaser v2 requires GORELEASER_CURRENT_TAG to be a parseable semver
         # string -- the prefixed form `daemon/v0.3.2-rc1` fails the internal
@@ -217,6 +273,16 @@ jobs:
           # for daemon-side crash capture. Empty for snapshot builds — leaves
           # Sentry disabled at runtime per sentryhook.Init contract. #1832.
           DEFAULT_SENTRY_DSN: ${{ steps.sentry_dsn.outputs.dsn }}
+          # Minisign public key baked into the binary via:
+          #   -X .../updatecheck.EmbeddedPublicKey=<key>
+          # This is the trust anchor for SHA256SUMS.minisig verification at
+          # update-install time. Sourced from CI variable (public key only).
+          MINISIGN_PUBLIC_KEY: ${{ steps.minisign_key.outputs.pub }}
+          # Minisign private key (base64-encoded) and password -- consumed by
+          # the .goreleaser.yml signs: stanza to produce sha256sums.txt.minisig.
+          # Never echoed; passed directly to the bash signing wrapper.
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
 
       - name: Verify Windows systray dep in binary buildinfo (CGO guard)
         # What this catches: CGO_ENABLED flipped back to 0, CC misconfigured,
@@ -578,6 +644,25 @@ jobs:
             echo "url=https://staging-api.vaultmtg.app/api/v1" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve minisign public key (for EmbeddedPublicKey ldflag)
+        # Mirror the goreleaser job's minisign_key step so the macOS binary
+        # receives the same EmbeddedPublicKey ldflag as the Windows binary.
+        # Fail-closed: a missing or placeholder key stops the build here.
+        id: minisign_key
+        env:
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+        run: |
+          if [[ -z "${MINISIGN_PUBLIC_KEY}" ]]; then
+            echo "ERROR: MINISIGN_PUBLIC_KEY CI variable is not set." >&2
+            exit 1
+          fi
+          if [[ "${MINISIGN_PUBLIC_KEY}" == "PLACEHOLDER"* ]]; then
+            echo "ERROR: MINISIGN_PUBLIC_KEY is still the placeholder value." >&2
+            exit 1
+          fi
+          echo "pub=${MINISIGN_PUBLIC_KEY}" >> "$GITHUB_OUTPUT"
+          echo "PASS: MINISIGN_PUBLIC_KEY resolved."
+
       - name: Resolve build-time Sentry DSN
         id: sentry_dsn
         env:
@@ -607,7 +692,7 @@ jobs:
           GOARCH: arm64
         run: |
           go build \
-            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }}" \
+            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }}" \
             -o /tmp/vaultmtg-daemon-arm64 \
             ./cmd/daemon
 
@@ -621,7 +706,7 @@ jobs:
           GOARCH: amd64
         run: |
           go build \
-            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }}" \
+            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }}" \
             -o /tmp/vaultmtg-daemon-amd64 \
             ./cmd/daemon
 
@@ -1108,6 +1193,39 @@ jobs:
             exit 1
           }
           Write-Host "PASS: All 5 Azure Trusted Signing secrets are present"
+
+
+  dry-run-minisign:
+    name: 'DRY-RUN: Validate minisign signing wiring (secrets + variable)'
+    runs-on: ubuntu-latest
+    # Only run on manual dispatch with dry_run=true.  Never runs on tag push.
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
+
+    steps:
+      - name: Assert minisign secrets and CI variable are present
+        # Fails closed if MINISIGN_PRIVATE_KEY or MINISIGN_PASSWORD repo secrets
+        # are missing, or if MINISIGN_PUBLIC_KEY CI variable is absent or is
+        # still the placeholder value.  Matches the failure class of the existing
+        # dry-run-sign-windows job.  vault-mtg-tickets#256.
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+        run: |
+          missing=()
+          [[ -z "${MINISIGN_PRIVATE_KEY}" ]] && missing+=("MINISIGN_PRIVATE_KEY (secret)")
+          [[ -z "${MINISIGN_PASSWORD}"    ]] && missing+=("MINISIGN_PASSWORD (secret)")
+          [[ -z "${MINISIGN_PUBLIC_KEY}"  ]] && missing+=("MINISIGN_PUBLIC_KEY (variable)")
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "ERROR: Missing minisign credentials: ${missing[*]}" >&2
+            echo "See: vault-mtg-docs/engineering/runbooks/daemon-minisign-signing.md" >&2
+            exit 1
+          fi
+          if [[ "${MINISIGN_PUBLIC_KEY}" == "PLACEHOLDER"* ]]; then
+            echo "ERROR: MINISIGN_PUBLIC_KEY is still the placeholder value." >&2
+            exit 1
+          fi
+          echo "PASS: All minisign credentials present and non-placeholder."
 
 
   dry-run-sign-macos:

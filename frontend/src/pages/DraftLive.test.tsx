@@ -11,6 +11,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import DraftLive from './DraftLive';
 import type { DraftSessionState, UseDraftSessionReturn } from '@/hooks/useDraftSession';
+import * as useFeatureFlagModule from '@/hooks/useFeatureFlag';
+import * as analyticsModule from '@/services/analytics';
 
 // ---------------------------------------------------------------------------
 // Mock hooks and adapters
@@ -46,6 +48,16 @@ vi.mock('@clerk/react', () => ({
   useAuth: vi.fn(() => ({ getToken: vi.fn().mockResolvedValue('test-token') })),
 }));
 
+// Feature flag mock — default ON (preserves existing test behaviour)
+vi.mock('@/hooks/useFeatureFlag', () => ({
+  useFeatureFlag: vi.fn().mockReturnValue({ enabled: true }),
+}));
+
+// Analytics mock — lets us assert telemetry suppression
+vi.mock('@/services/analytics', () => ({
+  trackEvent: vi.fn(),
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -56,6 +68,8 @@ import { getDraftRatings } from '@/services/api/bffDraftRatings';
 const mockUseDraftEventStream = vi.mocked(useDraftEventStream);
 const mockUseDraftSession = vi.mocked(useDraftSession);
 const mockGetDraftRatings = vi.mocked(getDraftRatings);
+const mockUseFeatureFlag = vi.mocked(useFeatureFlagModule.useFeatureFlag);
+const mockTrackEvent = vi.mocked(analyticsModule.trackEvent);
 
 function buildSession(overrides: Partial<DraftSessionState> = {}): DraftSessionState {
   return {
@@ -93,6 +107,8 @@ describe('DraftLive', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetDraftRatings.mockResolvedValue(buildRatingsResult([]));
+    // Default: flag ON — preserves existing test behaviour
+    mockUseFeatureFlag.mockReturnValue({ enabled: true });
   });
 
   // ── Empty / idle state ────────────────────────────────────────────────────
@@ -468,6 +484,102 @@ describe('DraftLive', () => {
       render(<DraftLive />);
 
       expect(screen.getByTestId('stream-status')).toHaveTextContent(expectedText);
+    });
+  });
+
+  // ── live_draft_advisor_enabled feature flag gate (vmt-t#628) ─────────────
+  // Per Ray's ADR-047 condition: keep SSE stream alive; only suppress the
+  // top-pick highlight + feature_draft_advisor_pick_viewed telemetry when OFF.
+  describe('live_draft_advisor_enabled feature flag gate', () => {
+    const startedEvent: import('@/hooks/useDraftEventStream').DaemonEvent = {
+      type: 'draft.started',
+      account_id: 'acc1',
+      event_id: 'e0',
+      session_id: 's1',
+      sequence: 0,
+      occurred_at: '2026-05-08T00:00:00Z',
+      payload: { set_code: 'ONE', draft_type: 'PremierDraft' },
+    };
+
+    function setupActivePackWithRatings() {
+      mockGetDraftRatings.mockResolvedValue(
+        buildRatingsResult([
+          { arena_id: 501, name: 'Top Bomb', gihwr: 70 },
+          { arena_id: 502, name: 'Filler', gihwr: 48 },
+        ])
+      );
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: startedEvent, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({
+          sessionStatus: 'active',
+          packNumber: 1,
+          pickNumber: 1,
+          currentPackCards: [501, 502],
+        }),
+        dispatch: vi.fn(),
+      });
+    }
+
+    it('flag ON — top-pick badge IS rendered and telemetry fires', async () => {
+      mockUseFeatureFlag.mockReturnValue({ enabled: true });
+      setupActivePackWithRatings();
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('top-pick-badge')).toBeInTheDocument();
+      });
+
+      const topCard = screen.getByTestId('pack-card-501');
+      expect(topCard).toHaveAttribute('data-top-pick', 'true');
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'feature_draft_advisor_pick_viewed' })
+        );
+      });
+    });
+
+    it('flag OFF — top-pick highlight suppressed and telemetry does NOT fire', async () => {
+      mockUseFeatureFlag.mockReturnValue({ enabled: false });
+      setupActivePackWithRatings();
+
+      render(<DraftLive />);
+
+      // Cards are still rendered (stream stays alive)
+      await waitFor(() => {
+        expect(screen.getByTestId('pack-card-501')).toBeInTheDocument();
+        expect(screen.getByTestId('pack-card-502')).toBeInTheDocument();
+      });
+
+      // Top-pick badge must NOT appear
+      expect(screen.queryByTestId('top-pick-badge')).not.toBeInTheDocument();
+
+      // No card should have the top-pick attribute
+      const topCard = screen.getByTestId('pack-card-501');
+      expect(topCard).not.toHaveAttribute('data-top-pick');
+
+      // Telemetry must be suppressed
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'feature_draft_advisor_pick_viewed' })
+      );
+    });
+
+    it('flag null/undefined (loading) — top-pick IS shown and telemetry fires (optimistic-show)', async () => {
+      mockUseFeatureFlag.mockReturnValue({ enabled: null });
+      setupActivePackWithRatings();
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('top-pick-badge')).toBeInTheDocument();
+      });
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'feature_draft_advisor_pick_viewed' })
+        );
+      });
     });
   });
 });
