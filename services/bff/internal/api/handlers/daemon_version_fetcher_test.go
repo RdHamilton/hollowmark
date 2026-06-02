@@ -290,6 +290,137 @@ func TestGetDaemonVersion_FetcherFallsBackToConfig(t *testing.T) {
 	}
 }
 
+// TestReleaseFetcher_PerPlatformAssetURLs verifies that parseDaemonRelease
+// populates MacOSInstallerURL and WindowsInstallerURL from the GitHub release
+// assets, allowing the daemon to select the correct binary by platform.
+func TestReleaseFetcher_PerPlatformAssetURLs(t *testing.T) {
+	releases := []githubRelease{
+		{
+			TagName:     "daemon/v0.3.7",
+			PublishedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+			HTMLURL:     "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon%2Fv0.3.7",
+			Assets: []struct {
+				Name               string `json:"name"`
+				BrowserDownloadURL string `json:"browser_download_url"`
+			}{
+				{Name: "SHA256SUMS", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS"},
+				{Name: "SHA256SUMS.minisig", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig"},
+				{Name: "vaultmtg-daemon-darwin-universal.pkg", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg"},
+				{Name: "vaultmtg-daemon-windows-amd64.exe", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe"},
+			},
+		},
+	}
+
+	srv, _ := makeGitHubReleasesServer(t, releases)
+	f := handlers.NewReleaseFetcher(srv.URL+"/releases", 5*time.Minute, nil)
+
+	result, err := f.LatestDaemonRelease()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg"
+	if result.MacOSInstallerURL != want {
+		t.Errorf("macos_installer_url: got %q, want %q", result.MacOSInstallerURL, want)
+	}
+	want = "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe"
+	if result.WindowsInstallerURL != want {
+		t.Errorf("windows_installer_url: got %q, want %q", result.WindowsInstallerURL, want)
+	}
+}
+
+// TestReleaseFetcher_HostValidation_RejectsOffListURL verifies that assets whose
+// BrowserDownloadURL has a host not in {github.com, objects.githubusercontent.com}
+// are omitted from the response rather than propagated to the daemon.
+func TestReleaseFetcher_HostValidation_RejectsOffListURL(t *testing.T) {
+	releases := []githubRelease{
+		{
+			TagName:     "daemon/v0.3.7",
+			PublishedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+			HTMLURL:     "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon%2Fv0.3.7",
+			Assets: []struct {
+				Name               string `json:"name"`
+				BrowserDownloadURL string `json:"browser_download_url"`
+			}{
+				// Evil host injected into SHA256SUMS asset
+				{Name: "SHA256SUMS", BrowserDownloadURL: "https://evil.example.com/SHA256SUMS"},
+				// Valid minisig
+				{Name: "SHA256SUMS.minisig", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig"},
+				// Evil host injected into macOS asset
+				{Name: "vaultmtg-daemon-darwin-universal.pkg", BrowserDownloadURL: "https://evil.example.com/vaultmtg-daemon-darwin-universal.pkg"},
+				// Valid Windows asset
+				{Name: "vaultmtg-daemon-windows-amd64.exe", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe"},
+			},
+		},
+	}
+
+	srv, _ := makeGitHubReleasesServer(t, releases)
+	f := handlers.NewReleaseFetcher(srv.URL+"/releases", 5*time.Minute, nil)
+
+	result, err := f.LatestDaemonRelease()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Off-list hosts must be rejected (empty string).
+	if result.Sha256SumsURL != "" {
+		t.Errorf("sha256sums_url: expected empty (off-list host rejected), got %q", result.Sha256SumsURL)
+	}
+	if result.MacOSInstallerURL != "" {
+		t.Errorf("macos_installer_url: expected empty (off-list host rejected), got %q", result.MacOSInstallerURL)
+	}
+	// Valid host must pass through.
+	if result.AttestationURL == "" {
+		t.Errorf("attestation_url: expected non-empty (valid host), got empty")
+	}
+	if result.WindowsInstallerURL == "" {
+		t.Errorf("windows_installer_url: expected non-empty (valid host), got empty")
+	}
+}
+
+// TestReleaseFetcher_HostValidation_AllowsObjectsGithubusercontentHost verifies that
+// the CDN redirect host (objects.githubusercontent.com) is accepted in addition to
+// github.com. GitHub CDN assets often use this host.
+func TestReleaseFetcher_HostValidation_AllowsObjectsGithubusercontentHost(t *testing.T) {
+	releases := []githubRelease{
+		{
+			TagName:     "daemon/v0.3.7",
+			PublishedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+			HTMLURL:     "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon%2Fv0.3.7",
+			Assets: []struct {
+				Name               string `json:"name"`
+				BrowserDownloadURL string `json:"browser_download_url"`
+			}{
+				{Name: "SHA256SUMS", BrowserDownloadURL: "https://objects.githubusercontent.com/github-production-release-asset/SHA256SUMS"},
+				{Name: "SHA256SUMS.minisig", BrowserDownloadURL: "https://objects.githubusercontent.com/github-production-release-asset/SHA256SUMS.minisig"},
+				{Name: "vaultmtg-daemon-darwin-universal.pkg", BrowserDownloadURL: "https://objects.githubusercontent.com/github-production-release-asset/vaultmtg-daemon-darwin-universal.pkg"},
+				{Name: "vaultmtg-daemon-windows-amd64.exe", BrowserDownloadURL: "https://objects.githubusercontent.com/github-production-release-asset/vaultmtg-daemon-windows-amd64.exe"},
+			},
+		},
+	}
+
+	srv, _ := makeGitHubReleasesServer(t, releases)
+	f := handlers.NewReleaseFetcher(srv.URL+"/releases", 5*time.Minute, nil)
+
+	result, err := f.LatestDaemonRelease()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Sha256SumsURL == "" {
+		t.Error("sha256sums_url: expected non-empty (objects.githubusercontent.com allowed)")
+	}
+	if result.AttestationURL == "" {
+		t.Error("attestation_url: expected non-empty (objects.githubusercontent.com allowed)")
+	}
+	if result.MacOSInstallerURL == "" {
+		t.Error("macos_installer_url: expected non-empty (objects.githubusercontent.com allowed)")
+	}
+	if result.WindowsInstallerURL == "" {
+		t.Error("windows_installer_url: expected non-empty (objects.githubusercontent.com allowed)")
+	}
+}
+
 // testCfg satisfies the VersionConfig interface for tests.
 type testCfg struct {
 	version    string
