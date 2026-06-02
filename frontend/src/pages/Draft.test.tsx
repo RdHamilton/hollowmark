@@ -6,6 +6,12 @@ import Draft from './Draft';
 import { mockDrafts, mockCards } from '@/test/mocks/apiMock';
 import { mockEventEmitter } from '@/test/mocks/websocketMock';
 import { models, gui } from '@/types/models';
+import * as useFeatureFlagModule from '@/hooks/useFeatureFlag';
+
+// Mock useFeatureFlag so flag state is test-controlled without PostHog
+vi.mock('@/hooks/useFeatureFlag', () => ({
+  useFeatureFlag: vi.fn().mockReturnValue({ enabled: true }),
+}));
 
 // Helper function to create mock data
 function createMockDraftSession(overrides: Partial<models.DraftSession> = {}): models.DraftSession {
@@ -651,6 +657,70 @@ describe('Draft Component', () => {
       });
 
       consoleSpy.mockRestore();
+    });
+  });
+
+  // ── live_draft_advisor_enabled feature flag gate (vmt-t#628) ─────────────
+  describe('live_draft_advisor_enabled feature flag gate', () => {
+    function setupActiveDraft() {
+      const session = createMockDraftSession();
+      const picks: models.DraftPickSession[] = [];
+      const packs: models.DraftPackSession[] = [];
+      const setCards = [createMockSetCard()];
+      const ratings = [createMockCardRating()];
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
+      mockDrafts.getDraftPicks.mockResolvedValue(picks);
+      mockDrafts.getDraftPool.mockResolvedValue(packs);
+      mockCards.getSetCards.mockResolvedValue(setCards);
+      mockCards.getCardRatings.mockResolvedValue(ratings);
+      // getCurrentPackWithRecommendation is called by CurrentPackPicker
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(null);
+    }
+
+    it('flag ON — CurrentPackPicker (advisor surface) IS rendered', async () => {
+      vi.mocked(useFeatureFlagModule.useFeatureFlag).mockReturnValue({ enabled: true });
+      setupActiveDraft();
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
+      });
+
+      // CurrentPackPicker container appears when flag is ON
+      await waitFor(() => {
+        expect(mockDrafts.getCurrentPackWithRecommendation).toHaveBeenCalled();
+      });
+    });
+
+    it('flag OFF — CurrentPackPicker (advisor surface) is NOT rendered', async () => {
+      vi.mocked(useFeatureFlagModule.useFeatureFlag).mockReturnValue({ enabled: false });
+      setupActiveDraft();
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
+      });
+
+      // CurrentPackPicker must not be mounted when flag is OFF
+      expect(mockDrafts.getCurrentPackWithRecommendation).not.toHaveBeenCalled();
+    });
+
+    it('flag null/undefined (loading) — CurrentPackPicker IS rendered (optimistic-show)', async () => {
+      vi.mocked(useFeatureFlagModule.useFeatureFlag).mockReturnValue({ enabled: null });
+      setupActiveDraft();
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
+      });
+
+      // Optimistic show: treat null as enabled so the surface is visible while PostHog loads
+      await waitFor(() => {
+        expect(mockDrafts.getCurrentPackWithRecommendation).toHaveBeenCalled();
+      });
     });
   });
 });
