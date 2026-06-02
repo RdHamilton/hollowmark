@@ -1032,6 +1032,7 @@ func runReplayMode(ctx context.Context, cfg replayModeConfig) error {
 
 	daemonCfg := &config.Config{
 		CloudAPIURL: cfg.CloudAPIURL,
+		IngestPath:  "/ingest/events",
 		APIKey:      cfg.APIKey,
 		AccountID:   cfg.AccountID,
 		LogPath:     cfg.LogFile,
