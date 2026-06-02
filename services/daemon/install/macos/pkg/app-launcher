@@ -16,3 +16,9 @@ launchctl enable "${TARGET}" 2>/dev/null || true
 
 # Step 2: bootstrap the LaunchAgent so launchd starts the daemon.
 launchctl bootstrap "${USER_DOMAIN}" "${PLIST_PATH}" 2>/dev/null || true
+
+# Step 3: notify the user that VaultMTG is running (#636).
+# Fires whether the daemon was just started or was already running — the user
+# learns the daemon is active either way. osascript is always present on macOS.
+# This does NOT introduce a persistent process; osascript exits after posting.
+osascript -e 'display notification "VaultMTG is running" with title "VaultMTG"' 2>/dev/null || true
