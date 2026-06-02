@@ -308,11 +308,34 @@ jobs:
           # This is the trust anchor for SHA256SUMS.minisig verification at
           # update-install time. Sourced from CI variable (public key only).
           MINISIGN_PUBLIC_KEY: ${{ steps.minisign_key.outputs.pub }}
-          # Minisign private key (base64-encoded) and password -- consumed by
-          # the .goreleaser.yml signs: stanza to produce sha256sums.txt.minisig.
-          # Never echoed; passed directly to the bash signing wrapper.
+          # Minisign private key (base64-encoded) and password -- passed here for
+          # ldflag injection of MINISIGN_PUBLIC_KEY. Signing of sha256sums.txt is
+          # handled by the "Sign sha256sums.txt with minisign" step below, not by
+          # GoReleaser's signs: stanza (which cannot access GHA secrets).
           MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+
+      - name: Sign sha256sums.txt with minisign
+        # Root cause of all prior rc2 signing failures: GoReleaser's signs: stanza
+        # spawns bash in a subprocess that does NOT inherit the GHA step env — so
+        # MINISIGN_PRIVATE_KEY and MINISIGN_PASSWORD are always empty there.
+        #
+        # Fix: remove signs: from .goreleaser.yml entirely and sign here in a
+        # direct run: step where GHA env: vars ARE available to the bash process.
+        # The resulting sha256sums.txt.minisig is uploaded by the next step.
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          TMPKEY=$(mktemp)
+          trap 'rm -f "${TMPKEY}"' EXIT
+          echo "${MINISIGN_PRIVATE_KEY}" | base64 --decode > "${TMPKEY}"
+          echo "${MINISIGN_PASSWORD}" | minisign -S -s "${TMPKEY}" \
+            -x dist/sha256sums.txt.minisig \
+            -m dist/sha256sums.txt
+          echo "PASS: sha256sums.txt signed — dist/sha256sums.txt.minisig created"
+          ls -lh dist/sha256sums.txt dist/sha256sums.txt.minisig
 
       - name: Verify Windows systray dep in binary buildinfo (CGO guard)
         # What this catches: CGO_ENABLED flipped back to 0, CC misconfigured,
@@ -413,6 +436,22 @@ jobs:
             "repos/${REPO}/releases/${RELEASE_ID}" \
             -f "tag_name=${PREFIXED_TAG}" \
             --jq '"renamed: \(.tag_name) at \(.html_url)"'
+
+      - name: Upload sha256sums.txt.minisig to GitHub Release
+        # Upload the .minisig produced by the "Sign sha256sums.txt" step above.
+        # This step runs after the Rename step so the release is already at the
+        # daemon/v* tag before we upload (avoids an asset landing on the wrong tag).
+        # GoReleaser no longer handles signing (signs: removed from .goreleaser.yml).
+        if: startsWith(github.ref, 'refs/tags/daemon/v')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ github.ref_name }}" \
+            dist/sha256sums.txt.minisig \
+            --repo "${{ github.repository }}" \
+            --clobber
+          echo "PASS: sha256sums.txt.minisig uploaded to ${{ github.ref_name }}"
 
       - name: Delete orphan bare v* git ref
         # Run even on earlier step failure so a bare v* tag never persists on
