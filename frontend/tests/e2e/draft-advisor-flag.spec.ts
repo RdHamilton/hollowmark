@@ -182,6 +182,103 @@ test.describe('Draft.tsx — live_draft_advisor_enabled flag gate', () => {
     const req = await currentPackRequest.catch(() => null);
     expect(req).not.toBeNull();
   });
+
+  test('low_confidence=true — "Limited data" pill renders on card (vmt-t#646)', async ({ page }) => {
+    await injectSignedIn(page);
+    await injectFlag(page, true);
+
+    // Override active sessions stub
+    await page.route('**/api/v1/draft/sessions/active', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            ID: 'session-lc-1',
+            EventName: 'QuickDraft',
+            SetCode: 'ONE',
+            DraftType: 'PremierDraft',
+            StartTime: '2026-06-01T00:00:00Z',
+            Status: 'active',
+            TotalPicks: 45,
+            CreatedAt: '2026-06-01T00:00:00Z',
+            UpdatedAt: '2026-06-01T00:00:00Z',
+          },
+        ]),
+      });
+    });
+
+    // Other Draft.tsx endpoints
+    await page.route('**/api/v1/draft/sessions/session-lc-1/picks', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await page.route('**/api/v1/draft/sessions/session-lc-1/pool', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await page.route('**/api/v1/cards/set/ONE', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await page.route('**/api/v1/cards/ratings/ONE/**', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await page.route('**/api/v1/cards/ratings/staleness/**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ cachedAt: new Date().toISOString(), isStale: false, cardCount: 0 }),
+      });
+    });
+    await page.route('**/api/v1/draft-ratings/**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ card_ratings: [], color_ratings: [] }),
+      });
+    });
+
+    // Serve a pack that contains a low_confidence card
+    await page.route('**/api/v1/draft/sessions/session-lc-1/current-pack', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          session_id: 'session-lc-1',
+          pack_number: 0,
+          pick_number: 0,
+          pack_label: 'Pack 1, Pick 1',
+          cards: [
+            {
+              arena_id: '999',
+              name: 'Sparse Sample Card',
+              image_url: '',
+              rarity: 'common',
+              colors: ['R'],
+              mana_cost: '{R}',
+              cmc: 1,
+              type_line: 'Creature',
+              gihwr: 52.1,
+              alsa: 4.5,
+              tier: 'C',
+              is_recommended: false,
+              score: 0.4,
+              reasoning: 'Limited sample',
+              low_confidence: true,
+            },
+          ],
+          recommended_card: null,
+          pool_colors: [],
+          pool_size: 0,
+        }),
+      });
+    });
+
+    await page.goto('/draft');
+    await expect(page.getByText('Draft Assistant')).toBeVisible({ timeout: 10_000 });
+
+    // The "Limited data" pill must be visible for arena_id=999
+    await expect(page.locator('[data-testid="low-confidence-999"]')).toBeVisible({ timeout: 8_000 });
+    await expect(page.locator('[data-testid="low-confidence-999"]')).toHaveText('Limited data');
+  });
 });
 
 // ---------------------------------------------------------------------------

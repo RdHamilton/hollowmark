@@ -695,11 +695,14 @@ export namespace gui {
 	    is_recommended: boolean;
 	    score: number;
 	    reasoning: string;
-	
+	    // Phase B (ADR-047 §2): true when GIH sample size < 500 games.
+	    // Daemon emits this field since PR #2880; SPA renders a "Limited data" pill.
+	    low_confidence?: boolean;
+
 	    static createFrom(source: any = {}) {
 	        return new PackCardWithRating(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.arena_id = source["arena_id"];
@@ -716,6 +719,7 @@ export namespace gui {
 	        this.is_recommended = source["is_recommended"];
 	        this.score = source["score"];
 	        this.reasoning = source["reasoning"];
+	        this.low_confidence = source["low_confidence"];
 	    }
 	}
 	export class CurrentPackResponse {
