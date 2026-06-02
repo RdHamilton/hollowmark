@@ -167,10 +167,47 @@ func TestColorFit_LandsExcludedFromPenalty(t *testing.T) {
 	for _, r := range all {
 		if r.CardID == "mountain" {
 			lower := strings.ToLower(r.Reason)
-			if strings.Contains(lower, "off-color") || strings.Contains(lower, "penalty") || strings.Contains(lower, "weaker in your") {
+			if strings.Contains(lower, "off-color") || strings.Contains(lower, "penalty") || strings.Contains(lower, "not your colors") {
 				t.Errorf("land 'mountain' must not receive a color-fit penalty reason, got %q", r.Reason)
 			}
 		}
+	}
+}
+
+// TestColorFit_OffColorPenaltyString — an off-color, non-splash card must
+// receive the reason string "Not your colors" (Prof copy nit — vmt-t#648).
+// ADR-047 §5.
+func TestColorFit_OffColorPenaltyString(t *testing.T) {
+	// G/B committed pool, off-color R card with modest GIHWR (no splash path).
+	pool := poolWithColors(t, 4, "G", 3, "B", 0, "")
+	pack := []string{"red-card"}
+	count := 1000
+	ratings := stubRatings{"red-card": 58.0} // below splashHighGIHWRFloor (≥72)
+	names := stubCards{"red-card": "Red Card"}
+	meta := stubCardMeta{
+		"red-card": {Colors: []string{"R"}, ALSA: 4.5, GIHCount: &count},
+	}
+	for id, m := range pool {
+		meta[id] = m
+	}
+
+	recs := recommend.Recommend("PremierDraft", poolKeys(pool), pack, ratings, names, meta)
+
+	all := append(recs.TopPicks, recs.Alternatives...)
+	if len(all) == 0 {
+		t.Fatal("expected at least one recommendation")
+	}
+	found := false
+	for _, r := range all {
+		if r.CardID == "red-card" {
+			found = true
+			if r.Reason != "Not your colors" {
+				t.Errorf("off-color non-splash card: expected Reason %q, got %q", "Not your colors", r.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Error("red-card not found in recommendations")
 	}
 }
 
@@ -424,6 +461,41 @@ func TestWhyNotPick2_OnlyOnMeaningfulGap(t *testing.T) {
 	if lower != "" {
 		// Marginal-gap reasons should be empty
 		t.Logf("pick 2 WhyNotTopReason = %q (marginal gap — should ideally be empty)", pick2.WhyNotTopReason)
+	}
+}
+
+// TestWhyNotPick2_OffColorComparativeString — when pick 2 is off-color and
+// the top pick is on-color, WhyNotTopReason must be exactly
+// "Off-color vs. the top pick" (grammatical color-fit comparative — vmt-t#648).
+// This exercises the buildWhyNotTop comparative branch (topOnColor && !cardOnColor).
+func TestWhyNotPick2_OffColorComparativeString(t *testing.T) {
+	// G/B committed pool; top pick is on-color (G), pick 2 is off-color (R).
+	pool := poolWithColors(t, 4, "G", 3, "B", 0, "")
+	pack := []string{"green-bomb", "red-card"}
+	count := 1000
+	ratings := stubRatings{"green-bomb": 68.0, "red-card": 66.0}
+	names := stubCards{"green-bomb": "Green Bomb", "red-card": "Red Card"}
+	meta := stubCardMeta{
+		"green-bomb": {Colors: []string{"G"}, ALSA: 2.0, GIHCount: &count},
+		"red-card":   {Colors: []string{"R"}, ALSA: 3.0, GIHCount: &count},
+	}
+	for id, m := range pool {
+		meta[id] = m
+	}
+
+	recs := recommend.Recommend("PremierDraft", poolKeys(pool), pack, ratings, names, meta)
+
+	if len(recs.TopPicks) < 2 {
+		t.Skip("not enough top picks")
+	}
+	// TopPick[0] must be the on-color green-bomb; TopPick[1] the off-color red-card.
+	if recs.TopPicks[0].CardID != "green-bomb" {
+		t.Fatalf("expected green-bomb as top pick, got %q", recs.TopPicks[0].CardID)
+	}
+	pick2 := recs.TopPicks[1]
+	const want = "Off-color vs. the top pick"
+	if pick2.WhyNotTopReason != want {
+		t.Errorf("off-color pick 2 WhyNotTopReason = %q, want %q", pick2.WhyNotTopReason, want)
 	}
 }
 
