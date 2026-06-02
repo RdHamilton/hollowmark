@@ -50,17 +50,17 @@ func NewHistoryHandler(accounts AccountLookup, matches MatchHistoryReader, draft
 
 // matchResponse is the JSON shape for a single match in the history list.
 type matchResponse struct {
-	ID              string  `json:"id"`
-	Format          string  `json:"format"`
-	Result          string  `json:"result"`
+	ID              string    `json:"id"`
+	Format          string    `json:"format"`
+	Result          string    `json:"result"`
 	Timestamp       time.Time `json:"timestamp"`
-	DurationSeconds *int    `json:"duration_seconds"`
-	DeckID          *string `json:"deck_id"`
-	RankBefore      *string `json:"rank_before"`
-	RankAfter       *string `json:"rank_after"`
-	OpponentRank    *string `json:"opponent_rank"`
-	PlayerWins      int     `json:"player_wins"`
-	OpponentWins    int     `json:"opponent_wins"`
+	DurationSeconds *int      `json:"duration_seconds"`
+	DeckID          *string   `json:"deck_id"`
+	RankBefore      *string   `json:"rank_before"`
+	RankAfter       *string   `json:"rank_after"`
+	OpponentRank    *string   `json:"opponent_rank"`
+	PlayerWins      int       `json:"player_wins"`
+	OpponentWins    int       `json:"opponent_wins"`
 	// OpponentName is the display name of the opponent in MTGA.
 	// Omitted (omitempty) when not captured (bots, pre-#003 events).
 	OpponentName *string `json:"opponent_name,omitempty"`

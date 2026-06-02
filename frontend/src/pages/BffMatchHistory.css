@@ -72,7 +72,7 @@
 }
 
 .play-draw-badge.on-draw {
-  background-color: rgba(148, 163, 184, 0.15);
+  background-color: rgba(var(--vault-fg-secondary-rgb), 0.15);
   color: var(--fg-secondary);
 }
 
