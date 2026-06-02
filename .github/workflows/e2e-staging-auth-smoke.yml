@@ -1,0 +1,176 @@
+name: E2E Staging Auth Smoke (vmt-t#678)
+
+# Runs the authenticated staging smoke suites after every successful staging
+# SPA deploy. Exercises every auth-gated SPA surface and BFF API endpoint using
+# a real Clerk session minted from the staging CLERK_SECRET_KEY in SSM.
+#
+# Auth-enforcement contract (vmt-t#678):
+#   - CLERK_SECRET_KEY is read from the GitHub Actions secret (sourced from SSM
+#     at /vaultmtg/staging/clerk-secret-key). The secret is never echoed to logs.
+#   - If CLERK_SECRET_KEY is absent the suite FAILs with INCONCLUSIVE — it does
+#     NOT skip and report PASS. A smoke that skips all authenticated surfaces is
+#     worse than no test (2026-06-02 false-PASS incident).
+#   - STAGING_SMOKE_TOKEN is a pre-issued static BFF JWT for the BFF API smoke.
+#     Also sourced from SSM; its absence produces the same hard failure.
+#
+# Surfaces exercised (authenticated):
+#   SPA: /home, /match-history, /quests, /draft, /draft-analytics, /decks,
+#        /collection, /meta, /charts/*, /settings, /history/drafts, /draft/live,
+#        /api-keys
+#   BFF: GET /api/v1/matches, GET /api/v1/events (SSE), GET /healthz
+#
+# Verdict interpretation:
+#   PASS     = all authenticated surfaces exercised without error
+#   FAIL     = at least one surface errored, or auth was unavailable (INCONCLUSIVE)
+#
+# Triggered by:
+#   - workflow_call: from deploy-spa-staging.yml post-deploy
+#   - workflow_dispatch: manual trigger for ad-hoc re-runs
+
+on:
+  workflow_call:
+    inputs:
+      staging_spa_url:
+        description: 'Staging SPA URL (e.g. https://stg-app.vaultmtg.app)'
+        required: false
+        type: string
+        default: 'https://stg-app.vaultmtg.app'
+      staging_api_url:
+        description: 'Staging BFF URL (e.g. https://staging-api.vaultmtg.app)'
+        required: false
+        type: string
+        default: 'https://staging-api.vaultmtg.app'
+
+  workflow_dispatch:
+    inputs:
+      staging_spa_url:
+        description: 'Staging SPA URL'
+        required: false
+        type: string
+        default: 'https://stg-app.vaultmtg.app'
+      staging_api_url:
+        description: 'Staging BFF URL'
+        required: false
+        type: string
+        default: 'https://staging-api.vaultmtg.app'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  staging-auth-smoke:
+    name: Staging Authenticated E2E Smoke
+    runs-on: ubuntu-latest
+    environment: staging
+    # 15 min: SPA routes (17 × ~20s) + BFF smoke + setup headroom.
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout vault-mtg
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-staging-auth-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            playwright-staging-auth-${{ runner.os }}-
+            playwright-staging-${{ runner.os }}-
+            playwright-${{ runner.os }}-
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      # Read Clerk secret key and staging smoke token from SSM.
+      # The CLERK_SECRET_KEY (sk_*) is used by staging-spa-smoke.spec.ts to
+      # mint Clerk testing tokens via the Backend API pattern (never via FAPI,
+      # which is bot-protected). STAGING_SMOKE_TOKEN is a pre-issued BFF JWT
+      # used by staging-smoke.spec.ts for raw API assertions.
+      # Both values are injected as env vars and are NEVER written to logs.
+      - name: Read SSM secrets
+        id: ssm
+        run: |
+          CLERK_SECRET_KEY=$(aws ssm get-parameter \
+            --name /vaultmtg/staging/clerk-secret-key \
+            --with-decryption \
+            --region us-east-1 \
+            --query Parameter.Value \
+            --output text)
+          STAGING_SMOKE_TOKEN=$(aws ssm get-parameter \
+            --name /vaultmtg/staging/ci-smoke-token \
+            --with-decryption \
+            --region us-east-1 \
+            --query Parameter.Value \
+            --output text)
+          # Mask both values immediately so they never appear in log output.
+          echo "::add-mask::${CLERK_SECRET_KEY}"
+          echo "::add-mask::${STAGING_SMOKE_TOKEN}"
+          echo "clerk_secret_key=${CLERK_SECRET_KEY}" >> "$GITHUB_OUTPUT"
+          echo "staging_smoke_token=${STAGING_SMOKE_TOKEN}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Playwright browsers (cache miss — full install)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: frontend
+        run: npx playwright install chromium --with-deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - name: Install Playwright system dependencies (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: frontend
+        run: npx playwright install-deps chromium
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      # ── SPA authenticated smoke ────────────────────────────────────────────
+      # Exercises every protected SPA route via Clerk testing token injection.
+      # If CLERK_SECRET_KEY is absent or invalid, this step FAILS — not skips.
+      - name: Run SPA authenticated smoke (staging-spa-smoke.spec.ts)
+        working-directory: frontend
+        run: npx playwright test --config=playwright.staging-spa.config.ts
+        env:
+          CI: true
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url }}
+          # CLERK_SECRET_KEY is injected from SSM — never from a static secret.
+          # The spec uses this to call Clerk's Backend API testing_tokens endpoint
+          # and inject the token into the browser (not via FAPI, which is bot-protected).
+          CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
+
+      # ── BFF API authenticated smoke ───────────────────────────────────────
+      # Exercises auth-gated BFF endpoints (matches, SSE) with a pre-issued token.
+      # If STAGING_SMOKE_TOKEN is absent, this step FAILS — not skips.
+      - name: Run BFF API authenticated smoke (staging-smoke.spec.ts)
+        working-directory: frontend
+        run: npx playwright test --config=playwright.staging.config.ts
+        env:
+          CI: true
+          STAGING_API_URL: ${{ inputs.staging_api_url }}
+          # STAGING_SMOKE_TOKEN is injected from SSM — never hardcoded or echoed.
+          STAGING_SMOKE_TOKEN: ${{ steps.ssm.outputs.staging_smoke_token }}
+
+      - name: Upload Playwright report (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-staging-auth-smoke-report
+          path: |
+            frontend/playwright-report-staging-spa/
+            frontend/playwright-report-staging/
+          retention-days: 7

@@ -56,8 +56,13 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
-      # Read S3 bucket name, CloudFront distribution ID, and Sentry DSN from SSM at deploy
-      # time. Canonical SSM-as-source-of-truth pattern (vault-mtg-tickets#16).
+      # Read S3 bucket name, CloudFront distribution ID, Sentry DSN, and CI smoke
+      # credentials from SSM at deploy time. Canonical SSM-as-source-of-truth
+      # pattern (vault-mtg-tickets#16).
+      #
+      # Auth-enforcement (#678): ci-smoke-token is the pre-issued BFF JWT used by
+      # staging-smoke.spec.ts for BFF API assertions. Its absence causes the BFF
+      # smoke to FAIL with INCONCLUSIVE — not silently skip.
       - name: Read SSM parameters
         id: ssm
         run: |
@@ -77,10 +82,19 @@ jobs:
             --region us-east-1 \
             --query Parameter.Value \
             --output text)
+          STAGING_SMOKE_TOKEN=$(aws ssm get-parameter \
+            --name /vaultmtg/staging/ci-smoke-token \
+            --with-decryption \
+            --region us-east-1 \
+            --query Parameter.Value \
+            --output text)
+          # Mask the smoke token immediately so it never appears in log output.
+          echo "::add-mask::${STAGING_SMOKE_TOKEN}"
           {
             echo "bucket=$BUCKET"
             echo "dist_id=$DIST_ID"
             echo "sentry_dsn=$SENTRY_DSN"
+            echo "staging_smoke_token=${STAGING_SMOKE_TOKEN}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build React SPA (staging)
@@ -148,6 +162,11 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
 
+      # ── SPA authenticated smoke (#678) ──────────────────────────────────────
+      # Exercises every protected SPA route via Clerk testing token injection.
+      # CLERK_SECRET_KEY is sourced from GitHub Actions secrets (provisioned from
+      # SSM /vaultmtg/staging/clerk-secret-key at environment setup time).
+      # If absent, the suite FAILS with INCONCLUSIVE — it does NOT skip.
       - name: Run SPA browser smoke suite
         working-directory: frontend
         run: npm run test:e2e:staging-spa
@@ -155,10 +174,23 @@ jobs:
           STAGING_SPA_URL: ${{ vars.STAGING_SPA_URL }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
 
+      # ── BFF API authenticated smoke (#678) ──────────────────────────────────
+      # Exercises auth-gated BFF endpoints (matches, SSE) with a pre-issued
+      # staging Clerk JWT read from SSM /vaultmtg/staging/ci-smoke-token.
+      # If STAGING_SMOKE_TOKEN is absent, the suite FAILS with INCONCLUSIVE.
+      - name: Run BFF API authenticated smoke suite
+        working-directory: frontend
+        run: npm run test:staging
+        env:
+          STAGING_API_URL: ${{ vars.STAGING_API_URL || 'https://staging-api.vaultmtg.app' }}
+          STAGING_SMOKE_TOKEN: ${{ steps.ssm.outputs.staging_smoke_token }}
+
       - name: Upload Playwright SPA smoke report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-staging-spa-report
-          path: frontend/playwright-report-staging-spa/
+          path: |
+            frontend/playwright-report-staging-spa/
+            frontend/playwright-report-staging/
           retention-days: 7
