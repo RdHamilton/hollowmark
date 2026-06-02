@@ -9,6 +9,7 @@ import (
 type GREGameStateMessage struct {
 	MatchID       string
 	GameNumber    int
+	Stage         string // gameInfo.stage, e.g. "GameStage_Play", "GameStage_GameOver"
 	TurnInfo      *GRETurnInfo
 	Players       []GREPlayerState
 	GameObjects   []GREGameObject
@@ -319,6 +320,9 @@ func parseGameStateMessage(msgMap map[string]interface{}, timestamp time.Time) *
 		}
 		if gameNumber, ok := gameInfo["gameNumber"].(float64); ok {
 			msg.GameNumber = int(gameNumber)
+		}
+		if stage, ok := gameInfo["stage"].(string); ok {
+			msg.Stage = stage
 		}
 	}
 
@@ -1246,6 +1250,11 @@ type GamePlaysResult struct {
 	OpponentCards  []OpponentCard
 	CounterChanges []CounterChangeEvent
 	Mulligan       *MulliganData
+	// FirstTurnActivePlayerSeatID is the systemSeatNumber of the player whose
+	// turn it is at the start of the first turn of game play (turnNumber == 1,
+	// stage == "GameStage_Play"). Zero means no such message was observed in
+	// this buffer window.
+	FirstTurnActivePlayerSeatID int
 }
 
 // ParseGamePlaysResult parses a GRE session buffer and returns all detected
@@ -1274,11 +1283,17 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 	}
 	opponentCards := extractOpponentCardsFromMessages(messages, playerConn)
 
+	// Detect which player seat went first (on-the-play). The first
+	// GameStateMessage with stage "GameStage_Play" and turnNumber == 1 carries
+	// turnInfo.activePlayer set to the seat playing first.
+	firstTurnActivePlayer := detectFirstTurnActivePlayer(messages)
+
 	if len(messages) < 2 {
 		return GamePlaysResult{
-			Snapshots:     snapshots,
-			OpponentCards: opponentCards,
-			Mulligan:      mulligan,
+			Snapshots:                   snapshots,
+			OpponentCards:               opponentCards,
+			Mulligan:                    mulligan,
+			FirstTurnActivePlayerSeatID: firstTurnActivePlayer,
 		}, nil
 	}
 
@@ -1407,12 +1422,35 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 	}
 
 	return GamePlaysResult{
-		Plays:          plays,
-		Snapshots:      snapshots,
-		OpponentCards:  opponentCards,
-		CounterChanges: counterChanges,
-		Mulligan:       mulligan,
+		Plays:                       plays,
+		Snapshots:                   snapshots,
+		OpponentCards:               opponentCards,
+		CounterChanges:              counterChanges,
+		Mulligan:                    mulligan,
+		FirstTurnActivePlayerSeatID: firstTurnActivePlayer,
 	}, nil
+}
+
+// detectFirstTurnActivePlayer scans messages for the first GameStateMessage
+// with stage "GameStage_Play" and turnNumber == 1 that carries
+// turnInfo.activePlayer. Returns the seat ID of the active player (the player
+// on the play), or 0 when no such message is found.
+func detectFirstTurnActivePlayer(messages []*GREGameStateMessage) int {
+	for _, msg := range messages {
+		if msg.Stage != "GameStage_Play" {
+			continue
+		}
+		if msg.TurnInfo == nil {
+			continue
+		}
+		if msg.TurnInfo.TurnNumber != 1 {
+			continue
+		}
+		if msg.TurnInfo.ActivePlayer > 0 {
+			return msg.TurnInfo.ActivePlayer
+		}
+	}
+	return 0
 }
 
 // detectCounterChanges compares the counter maps of game objects between two
