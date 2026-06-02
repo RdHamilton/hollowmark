@@ -92,7 +92,7 @@ const WinRateTrend = () => {
   }, [dateRange, format]);
 
   // Transform data for Recharts
-  const chartData = analysis?.Periods?.map(period => ({
+  const chartData = analysis?.Trends?.map(period => ({
     name: period.Period.Label,
     winRate: Math.round(period.WinRate * 100 * 10) / 10, // Convert to percentage with 1 decimal
     matches: period.Stats?.TotalMatches || 0
@@ -199,7 +199,7 @@ const WinRateTrend = () => {
                 <div className="summary-item">
                   <span className="summary-label">Period:</span>
                   <span className="summary-value">
-                    {analysis.Periods[0]?.Period.StartDate?.toString().split('T')[0]} to {analysis.Periods[analysis.Periods.length - 1]?.Period.EndDate?.toString().split('T')[0]}
+                    {analysis.Trends[0]?.Period.StartDate?.toString().split('T')[0]} to {analysis.Trends[analysis.Trends.length - 1]?.Period.EndDate?.toString().split('T')[0]}
                   </span>
                 </div>
                 <div className="summary-item">
