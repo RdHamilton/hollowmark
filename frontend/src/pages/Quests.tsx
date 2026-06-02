@@ -418,7 +418,7 @@ const Quests = () => {
                       </div>
                       <div className="quest-card-footer">
                         <div className="quest-assigned">
-                          Assigned: {formatDate(quest.first_seen_at)}
+                          Assigned: <span data-testid="quest-date">{formatDate(quest.first_seen_at)}</span>
                         </div>
                       </div>
                     </div>

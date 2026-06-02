@@ -1,0 +1,38 @@
+{
+  "corpus_mtga_version": "2026.59.20.4846.1277160",
+  "corpus_provenance": "SYNTHETIC",
+  "expected_empty": false,
+  "assertions": [
+    {
+      "surface": "win-rate-trend",
+      "bff_endpoint": "/api/v1/matches/trends",
+      "notes": "BFF emits json:'Trends' (capital T). The SPA TrendAnalysis class reads source['Trends'] (after the fix from PR #2910). Before the fix the SPA read source['Periods'] which is absent on the wire — the chart was always empty. The seeded test-data.sql has player_stats rows for 8 dates across Standard/QuickDraft formats, enough to produce at least one trend period. A Trends/Periods key mismatch would render win-rate-trend-empty instead of win-rate-trend-chart.",
+      "fields": {
+        "response_key": "Trends",
+        "forbidden_response_key": "Periods",
+        "chart_must_render": true,
+        "empty_state_must_not_render": true,
+        "min_period_count": 1
+      }
+    },
+    {
+      "surface": "win-rate-trend-value",
+      "bff_endpoint": "/api/v1/matches/trends",
+      "notes": "Value correctness for the single-match corpus period. The committed corpus has exactly one match with result=win (QuickDraft_SOS_20260526, player_wins=1). A period containing that match must report WinRate=1.0 (1 win / 1 match). This assertion is required because a zero-filled series (divide-by-zero bug, off-by-one in match counting, or Stats.TotalMatches=0) passes the structural 'series non-empty' check but renders the wrong win-rate percentage to the player — a visible bug every session. The inverse: seeding a WinRate of 0.0 in this test must cause the assertion to fail, proving the assertion bites.",
+      "fields": {
+        "corpus_match_count": 1,
+        "corpus_match_result": "win",
+        "corpus_period_win_rate": 1.0,
+        "corpus_period_stats": {
+          "TotalMatches": 1,
+          "Wins": 1,
+          "Losses": 0
+        },
+        "win_rate_tolerance": 0.001,
+        "win_rate_assertion": "period containing the corpus match must have WinRate >= 0.999 and <= 1.001",
+        "zero_filled_series_must_fail": true,
+        "note": "If the BFF computes WinRate from a different period bucket (e.g. weekly aggregation produces TotalMatches=0 for that week), the seeded response in the spec test must still supply a period with WinRate=1.0 — the manifest records the expected truth, the spec test seeds it explicitly."
+      }
+    }
+  ]
+}
