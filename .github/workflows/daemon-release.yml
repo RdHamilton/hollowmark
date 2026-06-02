@@ -250,6 +250,47 @@ jobs:
           fi
           echo "PASS: MINISIGN_PRIVATE_KEY and MINISIGN_PASSWORD are both present."
 
+      - name: Resolve build channel (ADR-049 §2)
+        # Derive VAULTMTG_CHANNEL from the pre-release-suffix signal — the same
+        # boolean that already drives DEFAULT_CLOUD_API_URL, DEFAULT_SENTRY_DSN,
+        # and the Clerk app selection (lines 136, 154, 720, 894).  One signal,
+        # one source of truth (ADR-049 §0).
+        #
+        #   staging: any tag with -rc, -alpha, -beta, or -pre suffix
+        #   stable:  bare daemon/v* tag (no suffix)
+        #
+        # Fail-closed: if the resolved value is not one of {stable, staging},
+        # the step exits non-zero so no binary is produced with an unknown channel.
+        # Snapshot builds (workflow_dispatch without a tag) resolve to staging so
+        # they are never silently aimed at the production identity.
+        #
+        # This value is consumed downstream as:
+        #   1. VAULTMTG_CHANNEL env in the GoReleaser step (templates binary: name)
+        #   2. -X internal/install.Channel ldflag (Bob's #651 Channel var)
+        #   3. -DCHANNEL makensis flag (NSIS installer __VAULTMTG_CHANNEL__ sub)
+        #   4. __VAULTMTG_CHANNEL__ substitution in the macOS .pkg postinstall
+        id: channel
+        run: |
+          REF="${{ github.ref_name }}"
+          if [[ "$REF" == *"-rc"* || "$REF" == *"-alpha"* || "$REF" == *"-beta"* || "$REF" == *"-pre"* ]]; then
+            CHANNEL="staging"
+          elif [[ "$REF" == daemon/v* ]]; then
+            CHANNEL="stable"
+          else
+            # workflow_dispatch on a branch — never use stable identity on a snapshot.
+            CHANNEL="staging"
+          fi
+
+          # Fail-closed: guard against any future code path that produces an unknown value.
+          if [[ "$CHANNEL" != "stable" && "$CHANNEL" != "staging" ]]; then
+            echo "ERROR: resolved CHANNEL='${CHANNEL}' is not one of {stable, staging}." >&2
+            echo "Check the channel resolution logic in the 'Resolve build channel' step." >&2
+            exit 1
+          fi
+
+          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          echo "PASS: build channel resolved to '${CHANNEL}' for ref '${REF}'"
+
       - name: Resolve semver tag for GoReleaser
         # GoReleaser v2 requires GORELEASER_CURRENT_TAG to be a parseable semver
         # string -- the prefixed form `daemon/v0.3.2-rc1` fails the internal
@@ -323,6 +364,11 @@ jobs:
           # finalizes sha256sums.txt), not by this job or GoReleaser's signs: stanza.
           MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+          # Build channel (ADR-049 §1, §2) — templates binary: name in .goreleaser.yml
+          # (stable -> vaultmtg-daemon; staging -> vaultmtg-daemon-staging) AND injects
+          # -X internal/install.Channel via the ldflags line in .goreleaser.yml.
+          # Resolved by the "Resolve build channel" step above.
+          VAULTMTG_CHANNEL: ${{ steps.channel.outputs.channel }}
 
       - name: Verify Windows systray dep in binary buildinfo (CGO guard)
         # What this catches: CGO_ENABLED flipped back to 0, CC misconfigured,
@@ -358,9 +404,13 @@ jobs:
         #   survives -s -w stripping. Used as a belt-and-suspenders confirmation.
         run: |
           set -euo pipefail
-          EXE=$(find dist -name 'vaultmtg-daemon.exe' | head -1)
+          # Binary name is channel-parameterized (ADR-049 §1):
+          #   stable  -> vaultmtg-daemon.exe
+          #   staging -> vaultmtg-daemon-staging.exe
+          # Match either by pattern so the guard survives both channels.
+          EXE=$(find dist -name 'vaultmtg-daemon*.exe' | head -1)
           if [[ -z "${EXE}" ]]; then
-            echo "ERROR: vaultmtg-daemon.exe not found under dist/ — GoReleaser build failed?" >&2
+            echo "ERROR: vaultmtg-daemon*.exe not found under dist/ — GoReleaser build failed?" >&2
             find dist -type f | head -20 >&2
             exit 1
           fi
@@ -739,6 +789,27 @@ jobs:
           fi
           echo "dsn=$DSN" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve build channel (ADR-049 §2)
+        # Mirror the goreleaser job's channel resolution so the macOS binary
+        # receives the same -X internal/install.Channel ldflag as the Windows binary.
+        # Fail-closed: unknown channel value exits non-zero before any binary is built.
+        id: channel
+        run: |
+          REF="${{ github.ref_name }}"
+          if [[ "$REF" == *"-rc"* || "$REF" == *"-alpha"* || "$REF" == *"-beta"* || "$REF" == *"-pre"* ]]; then
+            CHANNEL="staging"
+          elif [[ "$REF" == daemon/v* ]]; then
+            CHANNEL="stable"
+          else
+            CHANNEL="staging"
+          fi
+          if [[ "$CHANNEL" != "stable" && "$CHANNEL" != "staging" ]]; then
+            echo "ERROR: resolved CHANNEL='${CHANNEL}' is not one of {stable, staging}." >&2
+            exit 1
+          fi
+          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          echo "PASS: build channel resolved to '${CHANNEL}' for ref '${REF}'"
+
       - name: Build darwin/arm64 (CGO_ENABLED=1)
         working-directory: services/daemon
         env:
@@ -749,7 +820,7 @@ jobs:
           GOARCH: arm64
         run: |
           go build \
-            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X main.DefaultSPAURL=${{ steps.spa_urls.outputs.spa_url }} -X main.DefaultSetupURL=${{ steps.spa_urls.outputs.setup_url }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }}" \
+            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X main.DefaultSPAURL=${{ steps.spa_urls.outputs.spa_url }} -X main.DefaultSetupURL=${{ steps.spa_urls.outputs.setup_url }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/install.Channel=${{ steps.channel.outputs.channel }}" \
             -o /tmp/vaultmtg-daemon-arm64 \
             ./cmd/daemon
 
@@ -763,7 +834,7 @@ jobs:
           GOARCH: amd64
         run: |
           go build \
-            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X main.DefaultSPAURL=${{ steps.spa_urls.outputs.spa_url }} -X main.DefaultSetupURL=${{ steps.spa_urls.outputs.setup_url }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }}" \
+            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X main.DefaultSPAURL=${{ steps.spa_urls.outputs.spa_url }} -X main.DefaultSetupURL=${{ steps.spa_urls.outputs.setup_url }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/install.Channel=${{ steps.channel.outputs.channel }}" \
             -o /tmp/vaultmtg-daemon-amd64 \
             ./cmd/daemon
 
@@ -919,6 +990,10 @@ jobs:
           CLERK_PUBLISHABLE_KEY_VALUE: ${{ contains(steps.cloud_url.outputs.url, 'staging-api') && 'pk_live_Y2xlcmsuc3RnLWFwcC52YXVsdG10Zy5hcHAk' || vars.VITE_CLERK_PUBLISHABLE_KEY }}
           CLERK_OAUTH_CLIENT_ID_VALUE: ${{ contains(steps.cloud_url.outputs.url, 'staging-api') && secrets.CLERK_STAGING_OAUTH_CLIENT_ID || secrets.CLERK_OAUTH_CLIENT_ID }}
           VAULTMTG_CLOUD_API_URL_VALUE: ${{ steps.cloud_url.outputs.url }}
+          # Build channel for __VAULTMTG_CHANNEL__ substitution (ADR-049 §1):
+          # The same staging-api URL check already drives all other placeholders —
+          # derive CHANNEL from the same expression so all values track together.
+          VAULTMTG_CHANNEL_VALUE: ${{ contains(steps.cloud_url.outputs.url, 'staging-api') && 'staging' || 'stable' }}
         run: |
           mkdir -p pkg-root/usr/local/bin
           cp bin/${{ env.BINARY }} pkg-root/usr/local/bin/vaultmtg-daemon
@@ -938,12 +1013,16 @@ jobs:
           ESC_CLERK_FRONTEND_API=$(escape_sed "$CLERK_FRONTEND_API_VALUE")
           ESC_CLERK_PUBLISHABLE_KEY=$(escape_sed "$CLERK_PUBLISHABLE_KEY_VALUE")
           ESC_CLERK_OAUTH_CLIENT_ID=$(escape_sed "$CLERK_OAUTH_CLIENT_ID_VALUE")
+          # VAULTMTG_CHANNEL_VALUE is "stable" or "staging" — no special chars,
+          # but run through escape_sed for consistency.
+          ESC_CHANNEL=$(escape_sed "$VAULTMTG_CHANNEL_VALUE")
 
           sed -i.bak \
             -e "s|__VAULTMTG_CLOUD_API_URL__|$ESC_CLOUD_API_URL|g" \
             -e "s|__CLERK_FRONTEND_API__|$ESC_CLERK_FRONTEND_API|g" \
             -e "s|__CLERK_PUBLISHABLE_KEY__|$ESC_CLERK_PUBLISHABLE_KEY|g" \
             -e "s|__CLERK_OAUTH_CLIENT_ID__|$ESC_CLERK_OAUTH_CLIENT_ID|g" \
+            -e "s|__VAULTMTG_CHANNEL__|$ESC_CHANNEL|g" \
             "$SCRIPTS_DIR/postinstall"
           rm -f "$SCRIPTS_DIR/postinstall.bak"
 

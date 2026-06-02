@@ -37,6 +37,15 @@
   !define CLOUD_API_URL ""
 !endif
 
+; CHANNEL is the build-time channel discriminator passed via /DCHANNEL= on the
+; makensis command line (ADR-049 §1).  Values: "stable" or "staging".
+; The goreleaser post hook passes -DCHANNEL=${VAULTMTG_CHANNEL} resolved by
+; daemon-release.yml (pre-release suffix -> staging; bare tag -> stable).
+; Default is "stable" so a developer build with no /D flag uses the bare identity.
+!ifndef CHANNEL
+  !define CHANNEL "stable"
+!endif
+
 ;----------------------------------------------------------------------
 ; General attributes
 ;----------------------------------------------------------------------

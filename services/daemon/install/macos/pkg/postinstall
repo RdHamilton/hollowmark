@@ -64,9 +64,15 @@ CLOUD_API_URL="__VAULTMTG_CLOUD_API_URL__"
 CLERK_FRONTEND_API="__CLERK_FRONTEND_API__"
 CLERK_PUBLISHABLE_KEY="__CLERK_PUBLISHABLE_KEY__"
 CLERK_OAUTH_CLIENT_ID="__CLERK_OAUTH_CLIENT_ID__"
+# CHANNEL is the build-time channel discriminator (ADR-049 §2).
+# Values: "stable" (bare daemon/v* tag) or "staging" (pre-release suffix).
+# Consumed by common.sh (ADR-036 I-4 source of truth) when it lands (#651).
+# For now it is recorded in the plist EnvironmentVariables so the running
+# daemon process can read VAULTMTG_DAEMON_CHANNEL from its launchd environment.
+CHANNEL="__VAULTMTG_CHANNEL__"
 
 # Fail loudly if any placeholder was not substituted at build time.
-for var in CLOUD_API_URL CLERK_FRONTEND_API CLERK_PUBLISHABLE_KEY CLERK_OAUTH_CLIENT_ID; do
+for var in CLOUD_API_URL CLERK_FRONTEND_API CLERK_PUBLISHABLE_KEY CLERK_OAUTH_CLIENT_ID CHANNEL; do
   eval "value=\${$var}"
   case "$value" in
     __*__)
@@ -232,6 +238,8 @@ cat > "${PLIST_PATH}" <<PLIST
         <string>${CLERK_OAUTH_CLIENT_ID}</string>
         <key>VAULTMTG_DAEMON_CLOUD_API_URL</key>
         <string>${CLOUD_API_URL}</string>
+        <key>VAULTMTG_DAEMON_CHANNEL</key>
+        <string>${CHANNEL}</string>
     </dict>
 
     <!-- Start automatically when the user logs in. -->
