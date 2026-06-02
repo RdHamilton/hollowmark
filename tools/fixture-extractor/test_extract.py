@@ -166,6 +166,38 @@ class TestSanitise(unittest.TestCase):
         self.assertIn("RealPlayer#99999", text)
         self.assertIn("bbbbbbbb", text)
 
+    def test_bare_player_name_replaced_in_curated_path(self):
+        # Regression: bare playerName/screenName values that lack a '#NNNNN'
+        # suffix (e.g. 'Jhixiaus') were not replaced in the curated extract()
+        # path because _sanitize_obj only called _sanitize_text (regex-only),
+        # skipping _sanitize_value_keys. Both passes are now applied.
+        bare_auth_line = (
+            '{"authenticateResponse":{"screenName":"BareHandle",'
+            '"clientId":"ABCDEFGHIJKLMNOPQRST012345","sessionId":'
+            '"dddddddd-0000-0000-0000-000000000001"}}'
+        )
+        result = _run([bare_auth_line], sanitize=True)
+        text = result["player-authenticated.log"]
+        self.assertNotIn("BareHandle", text,
+                         "bare screenName must be replaced in curated path")
+        self.assertIn("TestPlayer#", text)
+
+    def test_bare_player_name_in_match_replaced_in_curated_path(self):
+        # Validates that playerName in reservedPlayers is sanitized for
+        # MTGA handles that contain no '#NNNNN' suffix (e.g. 'qritical_').
+        bare_match_line = (
+            '{"matchGameRoomStateChangedEvent":{"gameRoomInfo":{"stateType":'
+            '"MatchGameRoomStateType_MatchCompleted","gameRoomConfig":{"matchId":'
+            '"eeeeeeee-0000-0000-0000-000000000001","reservedPlayers":[{"userId":'
+            '"ffffffff-0000-0000-0000-000000000001","playerName":"qritical_",'
+            '"teamId":1,"eventId":"Ladder"}]},"finalMatchResult":{"matchId":'
+            '"eeeeeeee-0000-0000-0000-000000000001","resultList":[]}}}}'
+        )
+        result = _run([bare_match_line], sanitize=True)
+        text = result["match-completed.log"]
+        self.assertNotIn("qritical_", text,
+                         "bare playerName must be replaced in curated path")
+
 
 class TestFirstOnly(unittest.TestCase):
     """--first-only writes only the first occurrence of each event class."""
