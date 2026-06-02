@@ -51,6 +51,17 @@ export interface MatchHistoryItem {
   rank_before: string | null;
   rank_after: string | null;
   opponent_rank: string | null;
+  /**
+   * Whether the local player was on the play (true) or draw (false) in game 1.
+   * Absent from JSON (omitempty) for pre-#687 matches or GRE-buffer misses —
+   * treat absent/null as unknown; MUST NOT render a misleading value.
+   */
+  player_on_play?: boolean | null;
+  /**
+   * Opponent MTGA display name. Absent from JSON (omitempty) for bots or
+   * pre-#003 events. Absent → show nothing.
+   */
+  opponent_name?: string;
 }
 
 /**

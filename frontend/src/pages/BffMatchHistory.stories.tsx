@@ -89,8 +89,10 @@ export const EmptyState: Story = {
 };
 
 /**
- * TableSkeleton — shows the table header row to document the column schema.
- * Win/loss row colorings are rendered to validate the semantic win/loss tokens.
+ * TableSkeleton — shows the full 6-column table schema introduced in vmt-t#687:
+ * Date, Format, Result, Score, P/D (play/draw), Opponent.
+ * Win/loss row colorings and play/draw badges validate semantic tokens.
+ * Third row demonstrates null/absent fields (pre-release match).
  */
 export const TableSkeleton: Story = {
   render: () => (
@@ -111,6 +113,8 @@ export const TableSkeleton: Story = {
               <th>Format</th>
               <th>Result</th>
               <th>Score</th>
+              <th title="On the Play (P) or On the Draw (D)">P/D</th>
+              <th>Opponent</th>
             </tr>
           </thead>
           <tbody>
@@ -121,6 +125,12 @@ export const TableSkeleton: Story = {
                 <span className="result-badge win">WIN</span>
               </td>
               <td>2–0</td>
+              <td>
+                <span className="play-draw-badge on-play">P</span>
+              </td>
+              <td>
+                <span className="opponent-name">Esper Reanimator</span>
+              </td>
             </tr>
             <tr className="result-loss clickable-row" data-testid="match-row">
               <td>Jun 1, 2026</td>
@@ -129,10 +139,55 @@ export const TableSkeleton: Story = {
                 <span className="result-badge loss">LOSS</span>
               </td>
               <td>1–2</td>
+              <td>
+                <span className="play-draw-badge on-draw">D</span>
+              </td>
+              <td>
+                <span className="opponent-name">Sultai Ramp</span>
+              </td>
+            </tr>
+            <tr className="result-win clickable-row" data-testid="match-row">
+              <td>May 31, 2026</td>
+              <td>Ranked</td>
+              <td>
+                <span className="result-badge win">WIN</span>
+              </td>
+              <td>2–1</td>
+              {/* Pre-release row: player_on_play and opponent_name absent — blank cells */}
+              <td />
+              <td />
             </tr>
           </tbody>
         </table>
       </div>
+    </div>
+  ),
+};
+
+/**
+ * PlayDrawBadges — isolated view of the on-the-play / on-the-draw pip badges.
+ * Chromatic gate for vmt-t#687: validates badge appearance, font weight,
+ * and semantic token colors (--info for on-play; --fg-secondary for on-draw).
+ */
+export const PlayDrawBadges: Story = {
+  render: () => (
+    <div
+      style={{
+        background: 'var(--vault-bg, #0D1117)',
+        padding: '1.5rem',
+        display: 'flex',
+        gap: '1rem',
+        alignItems: 'center',
+      }}
+    >
+      <span className="play-draw-badge on-play">P</span>
+      <span style={{ color: 'var(--vault-fg-secondary, #94A3B8)', fontSize: '0.8rem' }}>
+        On the Play
+      </span>
+      <span className="play-draw-badge on-draw" style={{ marginLeft: '1.5rem' }}>D</span>
+      <span style={{ color: 'var(--vault-fg-secondary, #94A3B8)', fontSize: '0.8rem' }}>
+        On the Draw
+      </span>
     </div>
   ),
 };

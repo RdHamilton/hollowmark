@@ -54,9 +54,9 @@ func (r *MatchesRepository) ListByAccountIDCursorFiltered(
 	fetch := limit + 1 // fetch one extra to detect has_more
 
 	// Build the WHERE clause from the filter (ignores Page/Limit).
-	// Use the aliased variant since the query joins matches (alias m) with
+	// Pass alias "m" because the query joins matches (alias m) with
 	// match_game_results (alias g1) — both tables have account_id.
-	where, args := buildMatchWhereAliased(accountID, f, "m")
+	where, args := buildMatchWhere(accountID, f, "m")
 	next := len(args) + 1 // next positional placeholder index
 
 	// Append keyset predicate when a cursor is supplied.
@@ -382,90 +382,61 @@ func (r *MatchesRepository) DistinctFormats(ctx context.Context, accountID int64
 	return out, rows.Err()
 }
 
-// buildMatchWhere assembles the WHERE clause + args for ListByAccountIDFiltered
-// and the matching count query.  Returns "WHERE ..." with $1..$N placeholders
-// in the same order as the args slice.
-func buildMatchWhere(accountID int64, f MatchFilter) (string, []any) {
-	clauses := []string{"account_id = $1"}
+// buildMatchWhere assembles the WHERE clause + args for match queries.
+// Returns "WHERE ..." with $1..$N positional placeholders in the same order
+// as the returned args slice.
+//
+// alias qualifies every column reference with a table alias prefix (e.g. "m"
+// produces "m.account_id", "m.timestamp", etc.). Pass "" when the matches
+// table is queried without a JOIN so that unqualified column names are emitted
+// and existing single-table query plans are unchanged. Pass a non-empty alias
+// whenever matches is joined with another table that shares any of these column
+// names (e.g. match_game_results has account_id) to prevent ambiguity errors
+// both now and as the schema evolves.
+func buildMatchWhere(accountID int64, f MatchFilter, alias string) (string, []any) {
+	// col returns "alias.name" when alias is non-empty, otherwise just "name".
+	col := func(name string) string {
+		if alias == "" {
+			return name
+		}
+		return alias + "." + name
+	}
+
+	clauses := []string{col("account_id") + " = $1"}
 	args := []any{accountID}
 	next := 2
 
 	if f.StartDate != nil {
-		clauses = append(clauses, "timestamp >= $"+itoa(next))
+		clauses = append(clauses, col("timestamp")+" >= $"+itoa(next))
 		args = append(args, *f.StartDate)
 		next++
 	}
 	if f.EndDate != nil {
-		clauses = append(clauses, "timestamp <= $"+itoa(next))
+		clauses = append(clauses, col("timestamp")+" <= $"+itoa(next))
 		args = append(args, *f.EndDate)
 		next++
 	}
 	switch {
 	case f.Format != "" && len(f.Formats) > 0:
-		clauses = append(clauses, "(lower(format) = lower($"+itoa(next)+") OR lower(format) = ANY($"+itoa(next+1)+"))")
+		clauses = append(clauses, "(lower("+col("format")+") = lower($"+itoa(next)+") OR lower("+col("format")+") = ANY($"+itoa(next+1)+"))")
 		args = append(args, f.Format, lowerSlice(f.Formats))
 		next += 2
 	case f.Format != "":
-		clauses = append(clauses, "lower(format) = lower($"+itoa(next)+")")
+		clauses = append(clauses, "lower("+col("format")+") = lower($"+itoa(next)+")")
 		args = append(args, f.Format)
 		next++
 	case len(f.Formats) > 0:
-		clauses = append(clauses, "lower(format) = ANY($"+itoa(next)+")")
+		clauses = append(clauses, "lower("+col("format")+") = ANY($"+itoa(next)+")")
 		args = append(args, lowerSlice(f.Formats))
 		next++
 	}
 	if f.DeckID != "" {
-		clauses = append(clauses, "deck_id = $"+itoa(next))
+		clauses = append(clauses, col("deck_id")+" = $"+itoa(next))
 		args = append(args, f.DeckID)
 		next++
 	}
 	if f.Result != "" {
-		clauses = append(clauses, "lower(result) = lower($"+itoa(next)+")")
-		args = append(args, f.Result)
-	}
-
-	return "WHERE " + strings.Join(clauses, " AND "), args
-}
-
-// buildMatchWhereAliased is like buildMatchWhere but qualifies account_id
-// with the given table alias. Used when the matches table is joined with
-// another table that also has an account_id column (e.g. match_game_results).
-func buildMatchWhereAliased(accountID int64, f MatchFilter, alias string) (string, []any) {
-	clauses := []string{alias + ".account_id = $1"}
-	args := []any{accountID}
-	next := 2
-
-	if f.StartDate != nil {
-		clauses = append(clauses, "timestamp >= $"+itoa(next))
-		args = append(args, *f.StartDate)
-		next++
-	}
-	if f.EndDate != nil {
-		clauses = append(clauses, "timestamp <= $"+itoa(next))
-		args = append(args, *f.EndDate)
-		next++
-	}
-	switch {
-	case f.Format != "" && len(f.Formats) > 0:
-		clauses = append(clauses, "(lower(format) = lower($"+itoa(next)+") OR lower(format) = ANY($"+itoa(next+1)+"))")
-		args = append(args, f.Format, lowerSlice(f.Formats))
-		next += 2
-	case f.Format != "":
-		clauses = append(clauses, "lower(format) = lower($"+itoa(next)+")")
-		args = append(args, f.Format)
-		next++
-	case len(f.Formats) > 0:
-		clauses = append(clauses, "lower(format) = ANY($"+itoa(next)+")")
-		args = append(args, lowerSlice(f.Formats))
-		next++
-	}
-	if f.DeckID != "" {
-		clauses = append(clauses, "deck_id = $"+itoa(next))
-		args = append(args, f.DeckID)
-		next++
-	}
-	if f.Result != "" {
-		clauses = append(clauses, "lower(result) = lower($"+itoa(next)+")")
+		clauses = append(clauses, "lower("+col("result")+") = lower($"+itoa(next)+")")
 		args = append(args, f.Result)
 	}
 
@@ -543,7 +514,7 @@ type StatsAggregate struct {
 // account. Empty filter returns whole-account stats. Used by /matches/stats
 // and as a building block for compare endpoints.
 func (r *MatchesRepository) AggregateStats(ctx context.Context, accountID int64, f MatchFilter) (StatsAggregate, error) {
-	where, args := buildMatchWhere(accountID, f)
+	where, args := buildMatchWhere(accountID, f, "")
 	q := `
 		SELECT
 			COUNT(*)                                           AS total_matches,
@@ -580,7 +551,7 @@ func (r *MatchesRepository) FormatDistribution(ctx context.Context, accountID in
 	scoped := f
 	scoped.Format = ""
 	scoped.Formats = nil
-	where, args := buildMatchWhere(accountID, scoped)
+	where, args := buildMatchWhere(accountID, scoped, "")
 	q := `
 		SELECT
 			format,
@@ -627,7 +598,7 @@ type HourBucket struct {
 // duration aggregates. Hours with no matches are not emitted (handler fills
 // gaps if it needs a complete 24-bucket array). Honors the inbound filter.
 func (r *MatchesRepository) PerformanceByHour(ctx context.Context, accountID int64, f MatchFilter) ([]HourBucket, error) {
-	where, args := buildMatchWhere(accountID, f)
+	where, args := buildMatchWhere(accountID, f, "")
 	q := `
 		SELECT
 			EXTRACT(HOUR FROM timestamp)::int AS hour,
@@ -667,7 +638,7 @@ type MatchupRow struct {
 // Honors the inbound filter; rows with empty opponent_name are bucketed under
 // "Unknown" so the SPA always has a usable label.
 func (r *MatchesRepository) MatchupMatrix(ctx context.Context, accountID int64, f MatchFilter) ([]MatchupRow, error) {
-	where, args := buildMatchWhere(accountID, f)
+	where, args := buildMatchWhere(accountID, f, "")
 	q := `
 		SELECT
 			COALESCE(NULLIF(opponent_name, ''), 'Unknown') AS label,
@@ -739,7 +710,7 @@ func (r *MatchesRepository) Trends(ctx context.Context, accountID int64, period 
 	if period != "day" && period != "week" && period != "month" {
 		return nil, ErrInvalidTrendPeriod
 	}
-	where, args := buildMatchWhere(accountID, f)
+	where, args := buildMatchWhere(accountID, f, "")
 	q := `
 		SELECT
 			date_trunc('` + period + `', timestamp) AS bucket,
