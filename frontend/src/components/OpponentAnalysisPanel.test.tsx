@@ -302,16 +302,15 @@ describe('OpponentAnalysisPanel', () => {
     });
   });
 
-  it('renders color identity symbols', async () => {
+  it('renders color identity symbols as mana pips', async () => {
     vi.mocked(opponents.getOpponentAnalysis).mockResolvedValueOnce(mockAnalysis);
 
     render(<OpponentAnalysisPanel matchId="test-match-123" isExpanded={true} />);
 
     await waitFor(() => {
       expect(screen.getByText('Colors:')).toBeInTheDocument();
-      // Should render R as a mana symbol
-      const colorSymbol = screen.getByText('R');
-      expect(colorSymbol).toBeInTheDocument();
+      expect(screen.getByTestId('mana-pip-r')).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: 'Red' })).toBeInTheDocument();
     });
   });
 

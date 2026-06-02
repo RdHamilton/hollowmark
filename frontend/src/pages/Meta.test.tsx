@@ -665,21 +665,21 @@ describe('Meta', () => {
   });
 
   describe('color badges', () => {
-    it('renders color pips for archetypes', async () => {
+    it('renders mana pips for archetypes', async () => {
       mockGetMetaArchetypes.mockResolvedValue(createMockArchetypes());
 
       renderMeta();
 
       await waitFor(() => {
-        // Should have R for Mono Red Aggro
-        expect(screen.getByText('R')).toBeInTheDocument();
+        // ManaPip renders <i role="img" aria-label="Red" data-testid="mana-pip-r">
+        expect(screen.getByTestId('mana-pip-r')).toBeInTheDocument();
       });
 
-      // Should have W and U for Azorius Control
-      const whitePips = screen.getAllByText('W');
+      // Should have W and U pips for Azorius Control
+      const whitePips = screen.getAllByTestId('mana-pip-w');
       expect(whitePips.length).toBeGreaterThan(0);
 
-      const bluePips = screen.getAllByText('U');
+      const bluePips = screen.getAllByTestId('mana-pip-u');
       expect(bluePips.length).toBeGreaterThan(0);
     });
   });

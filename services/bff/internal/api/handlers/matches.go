@@ -81,6 +81,13 @@ type matchListItem struct {
 	RankAfter       *string   `json:"RankAfter,omitempty"`
 	PlayerWins      int       `json:"PlayerWins"`
 	OpponentWins    int       `json:"OpponentWins"`
+	// OpponentName is the display name of the opponent in MTGA. Omitted when
+	// not captured (bots, pre-#003 events).
+	OpponentName *string `json:"OpponentName,omitempty"`
+	// PlayerOnPlay is true when the local player went first in game 1 of this
+	// match. Omitted when not captured (pre-#687 events or no GRE buffer for
+	// game 1).
+	PlayerOnPlay *bool `json:"PlayerOnPlay,omitempty"`
 }
 
 // matchListResponse wraps a page of matches using keyset (cursor) pagination.
@@ -383,6 +390,8 @@ func matchRowToListItem(m repository.MatchRow) matchListItem {
 		RankAfter:       m.RankAfter,
 		PlayerWins:      m.PlayerWins,
 		OpponentWins:    m.OpponentWins,
+		OpponentName:    m.OpponentName,
+		PlayerOnPlay:    m.PlayerOnPlay,
 	}
 }
 

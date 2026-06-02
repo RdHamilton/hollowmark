@@ -75,6 +75,46 @@ describe('CurrentPackPicker CSS — design token compliance (#312)', () => {
 });
 // ——————————————————————————————————————————————————————————————————————————
 
+// ── Tier badge CSS token compliance (#686) ─────────────────────────────────
+describe('CurrentPackPicker CSS — tier badge design tokens (#686)', () => {
+  const css = readFileSync(CSS_PATH, 'utf8');
+
+  it('tier badge uses design-system tier tokens, not raw hex (#686)', () => {
+    expect(css).toContain('var(--vault-tier-a)');
+    expect(css).toContain('var(--vault-tier-b)');
+    expect(css).toContain('var(--vault-tier-c)');
+    expect(css).toContain('var(--vault-tier-d)');
+    expect(css).toContain('var(--vault-tier-f)');
+    // Must not use the old raw hex values from the pre-#686 getTierColor function.
+    expect(css).not.toContain('#ffd700');
+    expect(css).not.toContain('#c0c0c0');
+    expect(css).not.toContain('#cd7f32');
+    expect(css).not.toContain('#4a9eff');
+    expect(css).not.toContain('#888888');
+    expect(css).not.toContain('#ff4444');
+  });
+
+  it('tier badge is 28px wide and 22px tall per §7.3', () => {
+    expect(css).toContain('width: 28px');
+    expect(css).toContain('height: 22px');
+  });
+
+  it('tier badge is positioned bottom-right (not top-right) per §7.3', () => {
+    // The badge block must contain "bottom:" and NOT use top positioning.
+    // We check the .tier-badge rule contains bottom, not top.
+    const tierBadgeBlock = css.slice(css.indexOf('.tier-badge {'), css.indexOf('.tier-badge--a'));
+    expect(tierBadgeBlock).toContain('bottom:');
+    expect(tierBadgeBlock).not.toContain('top:');
+  });
+
+  it('tier badge uses --radius-sm border-radius (not 50%)', () => {
+    const tierBadgeBlock = css.slice(css.indexOf('.tier-badge {'), css.indexOf('.tier-badge--a'));
+    expect(tierBadgeBlock).toContain('var(--radius-sm)');
+    expect(tierBadgeBlock).not.toContain('border-radius: 50%');
+  });
+});
+// ——————————————————————————————————————————————————————————————————————————
+
 function createMockPackCard(overrides: Partial<gui.PackCardWithRating> = {}): gui.PackCardWithRating {
   return new gui.PackCardWithRating({
     arena_id: '12345',
@@ -246,6 +286,145 @@ describe('CurrentPackPicker Component', () => {
     });
   });
 
+  // ── Tier badge design-system compliance (#686) ───────────────────────────
+  describe('Tier badge inline — design-system §7.3 (#686)', () => {
+    it('renders tier badge with correct CSS class for tier A (sapphire)', async () => {
+      const packData = createMockPackResponse({
+        cards: [createMockPackCard({ arena_id: '10', name: 'Tier A Card', tier: 'A' })],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const badge = container.querySelector('[data-testid="tier-badge-10"]');
+        expect(badge).toBeInTheDocument();
+        expect(badge).toHaveClass('tier-badge--a');
+        expect(badge).not.toHaveClass('tier-badge--b');
+      });
+    });
+
+    it('renders tier badge with correct CSS class for tier B (success-green)', async () => {
+      const packData = createMockPackResponse({
+        cards: [createMockPackCard({ arena_id: '11', name: 'Tier B Card', tier: 'B' })],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const badge = container.querySelector('[data-testid="tier-badge-11"]');
+        expect(badge).toBeInTheDocument();
+        expect(badge).toHaveClass('tier-badge--b');
+      });
+    });
+
+    it('renders tier badge with correct CSS class for tier C (slate)', async () => {
+      const packData = createMockPackResponse({
+        cards: [createMockPackCard({ arena_id: '12', name: 'Tier C Card', tier: 'C' })],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const badge = container.querySelector('[data-testid="tier-badge-12"]');
+        expect(badge).toBeInTheDocument();
+        expect(badge).toHaveClass('tier-badge--c');
+      });
+    });
+
+    it('renders tier badge with correct CSS class for tier D (yellow)', async () => {
+      const packData = createMockPackResponse({
+        cards: [createMockPackCard({ arena_id: '13', name: 'Tier D Card', tier: 'D' })],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const badge = container.querySelector('[data-testid="tier-badge-13"]');
+        expect(badge).toBeInTheDocument();
+        expect(badge).toHaveClass('tier-badge--d');
+      });
+    });
+
+    it('renders tier badge with correct CSS class for tier F (danger-red)', async () => {
+      const packData = createMockPackResponse({
+        cards: [createMockPackCard({ arena_id: '14', name: 'Tier F Card', tier: 'F' })],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const badge = container.querySelector('[data-testid="tier-badge-14"]');
+        expect(badge).toBeInTheDocument();
+        expect(badge).toHaveClass('tier-badge--f');
+      });
+    });
+
+    it('does NOT render a tier badge when tier is empty string', async () => {
+      const packData = createMockPackResponse({
+        cards: [createMockPackCard({ arena_id: '20', name: 'No Grade Card', tier: '' })],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('No Grade Card')).toBeInTheDocument();
+        expect(container.querySelector('[data-testid="tier-badge-20"]')).not.toBeInTheDocument();
+      });
+    });
+
+    it('does NOT render a tier badge when tier is undefined/falsy', async () => {
+      const packData = createMockPackResponse({
+        cards: [createMockPackCard({ arena_id: '21', name: 'Ungraded Card', tier: '' })],
+      });
+      // Explicitly drop the tier field.
+      (packData.cards[0] as unknown as Record<string, unknown>)['tier'] = undefined;
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Ungraded Card')).toBeInTheDocument();
+        expect(container.querySelector('[data-testid="tier-badge-21"]')).not.toBeInTheDocument();
+      });
+    });
+
+    it('tier badge has aria-label="Tier <X>" for accessibility', async () => {
+      const packData = createMockPackResponse({
+        cards: [createMockPackCard({ arena_id: '30', name: 'Aria Card', tier: 'A' })],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const badge = container.querySelector('[data-testid="tier-badge-30"]');
+        expect(badge).toHaveAttribute('aria-label', 'Tier A');
+      });
+    });
+
+    it('tier badge has data-testid="tier-badge-{arenaId}" for E2E selection', async () => {
+      const packData = createMockPackResponse({
+        cards: [createMockPackCard({ arena_id: 'xyz99', name: 'E2E Card', tier: 'B' })],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const badge = container.querySelector('[data-testid="tier-badge-xyz99"]');
+        expect(badge).toBeInTheDocument();
+        expect(badge?.textContent).toBe('B');
+      });
+    });
+  });
+  // ─────────────────────────────────────────────────────────────────────────
+
   describe('Recommended Pick', () => {
     it('should display recommended card banner', async () => {
       const packData = createMockPackResponse();
@@ -367,7 +546,7 @@ describe('CurrentPackPicker Component', () => {
   });
 
   describe('Color Indicators', () => {
-    it('should display color indicators for colored cards', async () => {
+    it('should display mana pip indicators for colored cards', async () => {
       const packData = createMockPackResponse({
         cards: [
           createMockPackCard({ arena_id: '1', name: 'Card A', colors: ['R', 'U'] }),
@@ -375,15 +554,15 @@ describe('CurrentPackPicker Component', () => {
       });
       mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
 
-      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+      render(<CurrentPackPicker sessionID="test-session" />);
 
       await waitFor(() => {
-        const colorIndicators = container.querySelectorAll('.color-indicator');
-        expect(colorIndicators.length).toBeGreaterThan(0);
+        expect(screen.getByTestId('mana-pip-r')).toBeInTheDocument();
+        expect(screen.getByTestId('mana-pip-u')).toBeInTheDocument();
       });
     });
 
-    it('should display colorless indicator for colorless cards', async () => {
+    it('should display colorless pip for colorless cards', async () => {
       const packData = createMockPackResponse({
         cards: [
           createMockPackCard({ arena_id: '1', name: 'Artifact', colors: [] }),
@@ -391,11 +570,10 @@ describe('CurrentPackPicker Component', () => {
       });
       mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
 
-      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+      render(<CurrentPackPicker sessionID="test-session" />);
 
       await waitFor(() => {
-        const colorlessIndicator = container.querySelector('.color-indicator.colorless');
-        expect(colorlessIndicator).toBeInTheDocument();
+        expect(screen.getByTestId('mana-pip-c')).toBeInTheDocument();
       });
     });
   });

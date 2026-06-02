@@ -27,6 +27,9 @@ vi.mock('recharts', () => ({
   CartesianGrid: () => <div data-testid="cartesian-grid" />,
   Tooltip: () => <div data-testid="tooltip" />,
   Legend: () => <div data-testid="legend" />,
+  ReferenceLine: ({ 'data-testid': testId }: { 'data-testid'?: string }) => (
+    <div data-testid={testId ?? 'reference-line'} />
+  ),
 }));
 
 // Helper function to create mock trend analysis data.
@@ -549,6 +552,130 @@ describe('WinRateTrend', () => {
       await waitFor(() => {
         expect(screen.getByText('stable')).toBeInTheDocument();
       });
+    });
+  });
+
+  // ─── Set-Release Annotation Tests ─────────────────────────────────────────
+  describe('Set-release annotations', () => {
+    /**
+     * Build a mock TrendAnalysis whose periods span a known set-release date so
+     * we can assert annotation presence/absence without coupling to the real
+     * ARENA_SET_RELEASES constant. We test the constant independently in
+     * setReleaseAnnotations.test.ts; here we verify the component wires the
+     * utility output into ReferenceLine elements and the legend.
+     */
+    function createAnalysisAroundDSK() {
+      // DSK released 2024-09-24. Three weekly periods bridging that date.
+      return {
+        Trends: [
+          {
+            Period: { Label: 'Week of Sep 17', StartDate: '2024-09-17', EndDate: '2024-09-23' },
+            Stats: { TotalMatches: 10, MatchesWon: 6, MatchesLost: 4, TotalGames: 20, GamesWon: 12, GamesLost: 8, WinRate: 0.6 },
+            WinRate: 0.6,
+          },
+          {
+            Period: { Label: 'Week of Sep 24', StartDate: '2024-09-24', EndDate: '2024-09-30' },
+            Stats: { TotalMatches: 8, MatchesWon: 4, MatchesLost: 4, TotalGames: 16, GamesWon: 8, GamesLost: 8, WinRate: 0.5 },
+            WinRate: 0.5,
+          },
+          {
+            Period: { Label: 'Week of Oct 1', StartDate: '2024-10-01', EndDate: '2024-10-07' },
+            Stats: { TotalMatches: 12, MatchesWon: 7, MatchesLost: 5, TotalGames: 24, GamesWon: 14, GamesLost: 10, WinRate: 0.583 },
+            WinRate: 0.583,
+          },
+        ],
+        Overall: { TotalMatches: 30, MatchesWon: 17, MatchesLost: 13, TotalGames: 60, GamesWon: 34, GamesLost: 26, WinRate: 0.567 },
+        Trend: 'stable',
+        TrendValue: 0,
+      };
+    }
+
+    function createAnalysisOutsideSetWindow() {
+      // A chart window entirely in 2025 — no Arena sets released in this window
+      // from the ARENA_SET_RELEASES constant that have dates after 2025-05-01.
+      return {
+        Trends: [
+          {
+            Period: { Label: 'May 1', StartDate: '2025-05-01', EndDate: '2025-05-01' },
+            Stats: { TotalMatches: 5, MatchesWon: 3, MatchesLost: 2, TotalGames: 10, GamesWon: 6, GamesLost: 4, WinRate: 0.6 },
+            WinRate: 0.6,
+          },
+          {
+            Period: { Label: 'May 2', StartDate: '2025-05-02', EndDate: '2025-05-02' },
+            Stats: { TotalMatches: 5, MatchesWon: 3, MatchesLost: 2, TotalGames: 10, GamesWon: 6, GamesLost: 4, WinRate: 0.6 },
+            WinRate: 0.6,
+          },
+        ],
+        Overall: { TotalMatches: 10, MatchesWon: 6, MatchesLost: 4, TotalGames: 20, GamesWon: 12, GamesLost: 8, WinRate: 0.6 },
+        Trend: 'stable',
+        TrendValue: 0,
+      };
+    }
+
+    it('renders a ReferenceLine for DSK when chart window spans the DSK release date', async () => {
+      mockMatches.getTrendAnalysis.mockResolvedValue(createAnalysisAroundDSK());
+      renderWithProvider(<WinRateTrend />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('line-chart')).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId('set-annotation-DSK')).toBeInTheDocument();
+    });
+
+    it('renders the annotation legend when annotations are present', async () => {
+      mockMatches.getTrendAnalysis.mockResolvedValue(createAnalysisAroundDSK());
+      renderWithProvider(<WinRateTrend />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('set-annotation-legend')).toBeInTheDocument();
+      });
+
+      expect(screen.getByText(/DSK/)).toBeInTheDocument();
+      expect(screen.getByText(/Duskmourn/)).toBeInTheDocument();
+    });
+
+    it('does NOT render annotation legend when no set releases fall in the chart window', async () => {
+      mockMatches.getTrendAnalysis.mockResolvedValue(createAnalysisOutsideSetWindow());
+      renderWithProvider(<WinRateTrend />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('line-chart')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByTestId('set-annotation-legend')).not.toBeInTheDocument();
+    });
+
+    it('does NOT render annotation legend when no analysis data', async () => {
+      mockMatches.getTrendAnalysis.mockResolvedValue(null);
+      renderWithProvider(<WinRateTrend />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Not enough data')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByTestId('set-annotation-legend')).not.toBeInTheDocument();
+    });
+
+    it('renders DSK annotation in bar chart mode as well', async () => {
+      mockMatches.getTrendAnalysis.mockResolvedValue(createAnalysisAroundDSK());
+      renderWithProvider(<WinRateTrend />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('line-chart')).toBeInTheDocument();
+      });
+
+      // Switch to bar chart.
+      const chartTypeSelect = (
+        screen.getByText('Chart Type').closest('.filter-group') as HTMLElement
+      )?.querySelector('select') as HTMLSelectElement;
+      fireEvent.change(chartTypeSelect, { target: { value: 'bar' } });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('bar-chart')).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId('set-annotation-DSK')).toBeInTheDocument();
     });
   });
 

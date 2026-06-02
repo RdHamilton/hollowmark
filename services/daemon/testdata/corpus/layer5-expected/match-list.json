@@ -10,14 +10,19 @@
       "fields": {
         "response_shape": "cursor_paginated",
         "data_key": "data",
-        "min_row_count": 1,
+        "min_row_count": 12,
         "first_row": {
           "format": "QuickDraft_SOS_20260526",
           "result": "win",
           "player_wins": 1,
           "opponent_wins": 0
-        }
+        },
+        "corpus_match_count": 12
       }
     }
-  ]
+  ],
+  "corpus_promotion": {
+    "promoted_at": "2026-06-02",
+    "note": "test"
+  }
 }

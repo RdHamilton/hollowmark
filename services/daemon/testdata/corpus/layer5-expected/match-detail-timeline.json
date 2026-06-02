@@ -6,14 +6,25 @@
     {
       "surface": "match-detail-timeline",
       "bff_endpoint": "/api/v1/matches/{match_id}/plays/timeline",
-      "notes": "The corpus GRE session log (gre-game-session.log) captures 5 GRE boundary lines but the daemon does not yet write per-turn game_plays rows from GRE parse output. The game_plays table exists (migration 000101) and PlaysByMatch works correctly after the ADR-050 fix (PR #659), but there are no rows for the corpus match_id because the daemon's GRE ingest path does not emit game_plays events yet. expected_empty: true — the timeline container renders as empty state (data-testid='game-timeline-empty'), not as a 500 error. A 500 from PlaysByMatch (the ADR-050 regression) would cause the timeline panel to show data-testid='game-timeline-error' instead — FAIL. When the GRE write path lands, regenerate with expected_empty: false and per-turn play assertions.",
+      "notes": "12 matches project; 0 game_plays (GRE path not built). PlaysByMatch returns empty not 500.",
       "fields": {
         "must_not_500": true,
         "error_element_must_not_render": true,
         "error_testid": "game-timeline-error",
         "empty_element_may_render": true,
-        "empty_testid": "game-timeline-empty"
+        "empty_testid": "game-timeline-empty",
+        "corpus_match_count": 12
       }
     }
-  ]
+  ],
+  "corpus_promotion": {
+    "promoted_at": "2026-06-02",
+    "pr": "feat/696-697-layer5-corpus-promotion",
+    "injector_run": {
+      "files_scanned": 36,
+      "matches_projected": 12,
+      "game_plays_projected": 0
+    },
+    "note": "12 match rows project; 0 game_plays \u2014 GRE ingest path not yet built."
+  }
 }

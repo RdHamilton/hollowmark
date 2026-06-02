@@ -86,6 +86,8 @@ jobs:
             --with-decryption \
             --query Parameter.Value \
             --output text)
+          # Mask the Sentry DSN immediately so it never appears in log output.
+          echo "::add-mask::${SENTRY_DSN}"
           {
             echo "bucket=$BUCKET"
             echo "dist_id=$DIST_ID"
