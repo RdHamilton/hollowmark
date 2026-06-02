@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { drafts } from '@/services/api';
 import { gui } from '@/types/models';
 import { trackEvent } from '@/services/analytics';
+import ColorIdentity from './ColorIdentity';
 import './CurrentPackPicker.css';
 
 interface CurrentPackPickerProps {
@@ -70,30 +71,8 @@ const CurrentPackPicker: React.FC<CurrentPackPickerProps> = ({ sessionID, onRefr
         return 'tier-badge--s';
     };
 
-    const getColorSymbol = (color: string): string => {
-        switch (color) {
-            case 'W': return 'W';
-            case 'U': return 'U';
-            case 'B': return 'B';
-            case 'R': return 'R';
-            case 'G': return 'G';
-            default: return 'C'; // Colorless
-        }
-    };
-
     const renderColorIndicator = (colors: string[] | undefined) => {
-        if (!colors || colors.length === 0) {
-            return <span className="color-indicator colorless">C</span>;
-        }
-        return (
-            <div className="color-indicators">
-                {colors.map((color, idx) => (
-                    <span key={idx} className={`color-indicator color-${color.toLowerCase()}`}>
-                        {getColorSymbol(color)}
-                    </span>
-                ))}
-            </div>
-        );
+        return <ColorIdentity colors={colors} size="sm" />;
     };
 
     if (loading) {

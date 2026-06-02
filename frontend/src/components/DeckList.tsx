@@ -32,14 +32,16 @@ interface GroupedCards {
   other: CardWithMetadata[];
 }
 
+// MTG color values aligned with --vault-mtg-* design tokens for the Recharts PieChart fill.
+// CSS custom properties cannot be used as Recharts inline fill — mirror frozen token values.
 const COLOR_MAP: { [key: string]: string } = {
-  white: '#fffbd5',
-  blue: '#0e68ab',
-  black: '#150b00',
-  red: '#d3202a',
-  green: '#00733e',
-  colorless: '#ccc',
-  multicolor: '#888',
+  white:      '#FFFBD5',  // --vault-mtg-white
+  blue:       '#AAE0FA',  // --vault-mtg-blue
+  black:      '#CBC2BF',  // --vault-mtg-black
+  red:        '#F9AA8F',  // --vault-mtg-red
+  green:      '#9BD3AE',  // --vault-mtg-green
+  colorless:  '#8B9BB4',  // --vault-mtg-colorless
+  multicolor: '#F5A623',  // primary-500 for multicolor
 };
 
 // Basic land names as fallback for when metadata is missing
