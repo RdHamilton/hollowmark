@@ -200,3 +200,98 @@ jobs:
           echo "PASS (app/v* check): No app/v* release is the repository 'latest'."
           echo ""
           echo "All ADR-023 Fitness #4 assertions passed."
+
+  # ---------------------------------------------------------------------------
+  # PC-13 — Component release-lag check (vmt-t#629)
+  #
+  # Detects components that have new commits on main since their last release
+  # tag but no new tag has been cut. A lagging component is not automatically
+  # a blocker (it may be intentional mid-wave), but it surfaces the gap daily
+  # so it doesn't go unnoticed across multiple waves (the gap that allowed
+  # daemon/v0.3.5 to fall 18 commits behind main).
+  #
+  # continue-on-error: true per RULE-INFRA-01 — new CI checks start as
+  # warnings; flip to false once the invariant is confirmed stable.
+  #
+  # Component tag namespaces (ADR-023):
+  #   SPA + BFF  →  app/v*
+  #   daemon     →  daemon/v*
+  # Lambda and infra have no release tags and are excluded from this check.
+  # ---------------------------------------------------------------------------
+  pc13-component-release-lag:
+    name: "PC-13 — Component release-lag check (vmt-t#629)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true  # RULE-INFRA-01: warning until invariant confirmed stable
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # need full history to diff against release tags
+
+      - name: Check for unreleased component changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          echo "=== PC-13 Component Release-Lag Check ==="
+          echo "Detects components with commits on main since their last release tag."
+          echo ""
+
+          FAIL=0
+
+          # --- SPA + BFF: app/v* ---
+          PREV_APP_TAG=$(git tag --list 'app/v*' --sort=-version:refname | head -1)
+          if [[ -z "$PREV_APP_TAG" ]]; then
+            echo "SKIP (app): no app/v* tags found — skipping SPA/BFF check."
+          else
+            echo "Latest app/v* tag: ${PREV_APP_TAG}"
+            APP_CHANGES=$(git diff --name-only "${PREV_APP_TAG}"..HEAD -- frontend/ services/bff/ pkg/ | wc -l | tr -d ' ')
+            if [[ "$APP_CHANGES" -gt 0 ]]; then
+              echo ""
+              echo "WARN: ${APP_CHANGES} file(s) in SPA/BFF changed since ${PREV_APP_TAG} with no new app/v* tag."
+              echo "Changed paths (first 20):"
+              git diff --name-only "${PREV_APP_TAG}"..HEAD -- frontend/ services/bff/ pkg/ | head -20
+              echo ""
+              echo "This may be intentional mid-wave. If the wave has closed, file a PC-13"
+              echo "violation: cut app/v* and deploy before declaring the wave Done."
+              FAIL=1
+            else
+              echo "PASS (app): SPA/BFF — no unreleased changes since ${PREV_APP_TAG}."
+            fi
+          fi
+
+          echo ""
+
+          # --- daemon: daemon/v* ---
+          PREV_DAEMON_TAG=$(git tag --list 'daemon/v*' --sort=-version:refname | head -1)
+          if [[ -z "$PREV_DAEMON_TAG" ]]; then
+            echo "SKIP (daemon): no daemon/v* tags found — skipping daemon check."
+          else
+            echo "Latest daemon/v* tag: ${PREV_DAEMON_TAG}"
+            DAEMON_CHANGES=$(git diff --name-only "${PREV_DAEMON_TAG}"..HEAD -- services/daemon/ | wc -l | tr -d ' ')
+            if [[ "$DAEMON_CHANGES" -gt 0 ]]; then
+              echo ""
+              echo "WARN: ${DAEMON_CHANGES} file(s) in daemon changed since ${PREV_DAEMON_TAG} with no new daemon/v* tag."
+              echo "Changed paths (first 20):"
+              git diff --name-only "${PREV_DAEMON_TAG}"..HEAD -- services/daemon/ | head -20
+              echo ""
+              echo "This may be intentional mid-wave. If the wave has closed, file a PC-13"
+              echo "violation: cut daemon/v* and deploy before declaring the wave Done."
+              FAIL=1
+            else
+              echo "PASS (daemon): daemon — no unreleased changes since ${PREV_DAEMON_TAG}."
+            fi
+          fi
+
+          echo ""
+          if [[ "$FAIL" -eq 0 ]]; then
+            echo "PC-13 PASS: all components are current with their release tags."
+          else
+            echo "PC-13 WARN: one or more components have unreleased commits (see above)."
+            echo "If a wave recently closed without cutting these tags, file a PC-13 violation"
+            echo "via the wave-close skill (Step 4a). See BROADCAST.md §Standing Orders PC-13."
+            exit 1
+          fi
