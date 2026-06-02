@@ -98,6 +98,11 @@ func TestIdentity_Staging_ConfigDir(t *testing.T) {
 
 func TestIdentity_Stable_LogPath(t *testing.T) {
 	id := install.Identity(install.ChannelStable)
+	if id.LogPath == "" {
+		// LogPath is only populated on Darwin (macOS); Linux/Windows use the OS
+		// service manager for logging. Skip this assertion on non-Darwin.
+		t.Skip("LogPath is empty on non-Darwin platform — skipping")
+	}
 	if !strings.Contains(id.LogPath, "vaultmtg-daemon") {
 		t.Errorf("stable log path %q does not contain 'vaultmtg-daemon'", id.LogPath)
 	}
@@ -108,6 +113,9 @@ func TestIdentity_Stable_LogPath(t *testing.T) {
 
 func TestIdentity_Staging_LogPath(t *testing.T) {
 	id := install.Identity(install.ChannelStaging)
+	if id.LogPath == "" {
+		t.Skip("LogPath is empty on non-Darwin platform — skipping")
+	}
 	if !strings.Contains(id.LogPath, "staging") {
 		t.Errorf("staging log path %q must contain 'staging'", id.LogPath)
 	}
@@ -160,6 +168,10 @@ func TestIdentity_NoCollision_ConfigDir(t *testing.T) {
 func TestIdentity_NoCollision_LogPath(t *testing.T) {
 	stable := install.Identity(install.ChannelStable)
 	staging := install.Identity(install.ChannelStaging)
+	if stable.LogPath == "" && staging.LogPath == "" {
+		// Both empty on non-Darwin (Linux/Windows) — no collision possible; skip.
+		t.Skip("LogPath is empty on non-Darwin platform — no collision check needed")
+	}
 	assert.NotEqual(t, stable.LogPath, staging.LogPath)
 }
 
