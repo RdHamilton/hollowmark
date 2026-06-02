@@ -215,6 +215,7 @@ func main() {
 		clerkUserResolver                 func(http.Handler) http.Handler
 		draftRatingsHandler               *handlers.DraftRatingsHandler
 		historyHandler                    *handlers.HistoryHandler
+		historySummaryHandler             *handlers.HistorySummaryHandler
 		listV2Handler                     *handlers.ListV2Handler
 		statsHandler                      *handlers.StatsHandler
 		daemonHealthHandler               *handlers.DaemonHealthHandler
@@ -273,6 +274,7 @@ func main() {
 		deckListRepo := repository.NewDeckListRepository(sqlDB)
 
 		historyHandler = handlers.NewHistoryHandler(accountRepo, matchesRepo, draftSessionsRepo)
+		historySummaryHandler = handlers.NewHistorySummaryHandler(accountRepo, repository.NewHistorySummaryRepository(sqlDB))
 
 		// Phase 2 PR #1 — new /api/v1/matches surface (camelCase, full filter
 		// support).  Replaces the SPA's daemonClient /matches calls.  See
@@ -505,6 +507,7 @@ func main() {
 		APIKeysHandler:                    apiKeysHandler,
 		DraftRatingsHandler:               draftRatingsHandler,
 		HistoryHandler:                    historyHandler,
+		HistorySummaryHandler:             historySummaryHandler,
 		ListV2Handler:                     listV2Handler,
 		StatsHandler:                      statsHandler,
 		DaemonHealthHandler:               daemonHealthHandler,
@@ -580,7 +583,11 @@ type RouterDeps struct {
 	IngestHandler       *handlers.IngestHandler
 	APIKeysHandler      *handlers.APIKeysHandler
 	DraftRatingsHandler *handlers.DraftRatingsHandler
-	HistoryHandler      *handlers.HistoryHandler
+	HistoryHandler        *handlers.HistoryHandler
+	// HistorySummaryHandler serves GET /api/v1/history/summary — the HomePage
+	// summary card (today/this_week/all_time stats + streak + last_match).
+	// Protected by Clerk auth. See ticket #689.
+	HistorySummaryHandler *handlers.HistorySummaryHandler
 	// ListV2Handler serves the cursor-paginated v2 list endpoints (ADR-018).
 	ListV2Handler *handlers.ListV2Handler
 	// StatsHandler serves the analytics stats endpoints (issue #1513).
@@ -1322,6 +1329,9 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 				r.Get("/api/v1/history/matches", deps.HistoryHandler.GetMatches)
 				r.Get("/api/v1/history/drafts", deps.HistoryHandler.GetDrafts)
 			}
+			if deps.HistorySummaryHandler != nil {
+				r.Get("/api/v1/history/summary", deps.HistorySummaryHandler.GetSummary)
+			}
 
 			// ── v2 cursor-paginated list endpoints (ADR-018) ─────────────────
 			// These replace the v1 offset-paginated list endpoints.  v1 routes
@@ -1372,6 +1382,9 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 		if deps.HistoryHandler != nil {
 			r.With(deps.APIKeyAuthMiddl).Get("/api/v1/history/matches", deps.HistoryHandler.GetMatches)
 			r.With(deps.APIKeyAuthMiddl).Get("/api/v1/history/drafts", deps.HistoryHandler.GetDrafts)
+		}
+		if deps.HistorySummaryHandler != nil {
+			r.With(deps.APIKeyAuthMiddl).Get("/api/v1/history/summary", deps.HistorySummaryHandler.GetSummary)
 		}
 
 		if deps.ListV2Handler != nil {
