@@ -426,7 +426,7 @@ func TestRunInProcessReauth_DeadlineExpiresBeforeBFF(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	err = runInProcessReauth(ctx, cfg, cfgPath)
+	err = runInProcessReauth(ctx, cfg, cfgPath, "com.vaultmtg.daemon")
 
 	// The function must return an error — either a context error (deadline) or
 	// a pkce.Run error caused by the fake endpoint. Either way it must NOT block.
@@ -439,7 +439,7 @@ func TestRunPKCEAuth_MissingClerkFrontendAPI(t *testing.T) {
 	t.Setenv("CLERK_FRONTEND_API", "")
 	t.Setenv("CLERK_OAUTH_CLIENT_ID", "some-client-id")
 
-	err := runPKCEAuth(nil, "")
+	err := runPKCEAuth(nil, "", "com.vaultmtg.daemon")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "CLERK_FRONTEND_API")
 }
@@ -450,7 +450,7 @@ func TestRunPKCEAuth_MissingClientID(t *testing.T) {
 	t.Setenv("CLERK_FRONTEND_API", "https://accounts.example.clerk.dev")
 	t.Setenv("CLERK_OAUTH_CLIENT_ID", "")
 
-	err := runPKCEAuth(nil, "")
+	err := runPKCEAuth(nil, "", "com.vaultmtg.daemon")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "CLERK_OAUTH_CLIENT_ID")
 }
@@ -461,7 +461,7 @@ func TestRunPKCEAuth_BothMissing(t *testing.T) {
 	t.Setenv("CLERK_FRONTEND_API", "")
 	t.Setenv("CLERK_OAUTH_CLIENT_ID", "")
 
-	err := runPKCEAuth(nil, "")
+	err := runPKCEAuth(nil, "", "com.vaultmtg.daemon")
 	require.Error(t, err,
 		"both env vars missing must produce an error")
 }
