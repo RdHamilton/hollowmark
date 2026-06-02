@@ -83,7 +83,7 @@ type Service struct {
 	// with the dispatcher via SetToken on each JWT rotation.
 	ratings *ratingsclient.Client
 	// mtgaUserID is the local player's MTGA Arena client ID (e.g.
-	// "KHG3YQDSS5ERNLKNFBFV2DCHJI", 26-char crockford-base32-style) extracted
+	// "TESTACCOUNT000000000000001", 26-char crockford-base32-style) extracted
 	// from the authenticateResponse["clientId"] log entry. It equals the
 	// reservedPlayers[].userId field in matchGameRoomStateChangedEvent, which
 	// is the join key used to identify the local player's team so win/loss can
