@@ -7,11 +7,9 @@
 // modules by Go's internal-package rule.
 //
 // The public surface is intentionally minimal: ParseLogFile is the only
-// entry point. It replicates the classifier+dispatcher pipeline from
-// daemon/service.go (handleEntry + classifyEntry) without any network
-// I/O or live-daemon state. The output is a slice of ParsedEvent values
-// ready to be wrapped in contract.DaemonEvent and inserted into
-// daemon_events for BFF projection.
+// entry point. It uses classify.ClassifyEntry — the single source of
+// truth for log-entry classification — so the replay injector and the
+// live daemon pipeline always agree on event types.
 package replay
 
 import (
@@ -22,6 +20,7 @@ import (
 	"time"
 
 	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/classify"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
 )
 
@@ -85,7 +84,7 @@ func ParseLogFile(path string) (*ParseResult, error) {
 			continue
 		}
 
-		eventType := classifyEntry(entry)
+		eventType := classify.ClassifyEntry(entry)
 		if eventType == "" {
 			continue
 		}
@@ -144,85 +143,6 @@ func ParseLogFile(path string) (*ParseResult, error) {
 	}
 
 	return result, nil
-}
-
-// classifyEntry maps a log entry to a semantic event type string.
-// This is a faithful copy of the classifyEntry function in
-// daemon/internal/daemon/service.go — kept in sync manually.
-// Returns "" if the entry is not a tracked event.
-func classifyEntry(entry *logreader.LogEntry) string {
-	// Premier draft pack: Draft.Notify carries draftId + PackCards.
-	if _, hasDraftID := entry.JSON["draftId"]; hasDraftID {
-		if _, hasPackCards := entry.JSON["PackCards"]; hasPackCards {
-			return "draft.pack"
-		}
-	}
-	// Premier draft pick: EventPlayerDraftMakePick request with DraftId.
-	if _, hasID := entry.JSON["id"]; hasID {
-		if req, ok := entry.JSON["request"].(string); ok && req != "" {
-			if strings.Contains(req, `"DraftId"`) {
-				return "draft.pick"
-			}
-		}
-	}
-	// BotDraft pack.
-	if mod, ok := entry.JSON["CurrentModule"].(string); ok && mod == "BotDraft" {
-		if _, hasPayload := entry.JSON["Payload"].(string); hasPayload {
-			return "draft.pack"
-		}
-	}
-	// BotDraft pick.
-	if req, ok := entry.JSON["request"].(string); ok && strings.Contains(req, `"PickInfo"`) {
-		return "draft.pick"
-	}
-
-	// Match completed.
-	if logreader.IsMatchCompletedEntry(entry) {
-		return "match.completed"
-	}
-	if state, ok := entry.JSON["CurrentEventState"].(string); ok {
-		switch state {
-		case "MatchCompleted":
-			return "match.completed"
-		case "MatchInProgress":
-			return "match.started"
-		}
-	}
-
-	// Player authentication.
-	if _, ok := entry.JSON["authenticateResponse"]; ok {
-		return "player.authenticated"
-	}
-
-	// Inventory.
-	if logreader.IsInventoryEntry(entry) {
-		return "inventory.updated"
-	}
-
-	// Quest events — completed before progress (more specific first).
-	if logreader.IsQuestCompletedEntry(entry) {
-		return "quest.completed"
-	}
-	if logreader.IsQuestProgressEntry(entry) {
-		return "quest.progress"
-	}
-
-	// Collection snapshot.
-	if logreader.IsCollectionEntry(entry) {
-		return "collection.updated"
-	}
-
-	// Deck update.
-	if logreader.IsDeckEntry(entry) {
-		return "deck.updated"
-	}
-
-	// GRE events.
-	if _, ok := entry.JSON["greToClientEvent"]; ok {
-		return "greToClientEvent"
-	}
-
-	return ""
 }
 
 // buildPayload parses the log entry into a typed payload struct.
