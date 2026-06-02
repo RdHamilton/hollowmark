@@ -72,6 +72,72 @@ async function setClerkSignedIn(page: Page): Promise<void> {
  */
 const SEEDED_DECK_ID = 'deck-004';
 
+/** Full corpus match count (2026-06-02 snapshot, 36 files). Manifest: match-list.json. */
+const CORPUS_MATCH_COUNT = 12;
+/** Full corpus quest count (2026-06-02 snapshot, 36 files). Manifest: quest-list.json. */
+const CORPUS_QUEST_COUNT = 5;
+
+// ── Full-corpus count assertions (promoted 2026-06-02) ────────────────────────
+
+test.describe('Layer 5 — Full corpus: match-list row count (12 matches from 36-log snapshot)', () => {
+  test('@smoke match history table renders full corpus of 12 matches', async ({ page }) => {
+    await setClerkSignedIn(page);
+    const C0 = '11111111-0000-4000-8000-000000000122';
+    const rows = Array.from({ length: CORPUS_MATCH_COUNT }, (_, i) => ({
+      id: i === 0 ? C0 : `11111111-0000-4000-8000-${(0x122 + i).toString(16).padStart(12, '0')}`,
+      format: 'QuickDraft_SOS_20260526', result: i % 3 === 1 ? 'loss' : 'win',
+      player_wins: i % 3 === 1 ? 0 : 1, opponent_wins: i % 3 === 1 ? 1 : 0,
+      timestamp: '2026-06-01T20:14:47Z', duration_seconds: null, deck_id: null,
+      rank_before: null, rank_after: null, opponent_rank: null,
+    }));
+    await page.route('**/api/v1/history/matches**', (route) => {
+      void route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: rows, has_more: false, limit: 20 }) });
+    });
+    await page.goto('/match-history', { waitUntil: 'domcontentloaded' });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 30_000 });
+    const table = page.locator('[data-testid="match-history-table"]');
+    await expect(table).toBeVisible({ timeout: 20_000 });
+    const tableRows = table.locator('tbody tr');
+    await expect(tableRows.first()).toBeVisible({ timeout: 10_000 });
+    const rowCount = await tableRows.count();
+    expect(rowCount, `Must render all ${CORPUS_MATCH_COUNT} corpus matches — got ${rowCount}. Manifest: match-list.json → corpus_match_count: ${CORPUS_MATCH_COUNT}.`).toBe(CORPUS_MATCH_COUNT);
+    await expect(page.locator('[data-testid="match-history-empty"]'), 'Empty state must NOT be visible').not.toBeVisible();
+  });
+});
+
+test.describe('Layer 5 — Full corpus: quest count (5 quests from 36-log snapshot)', () => {
+  test('@smoke quests page renders full corpus of 5 quests with valid dates', async ({ page }) => {
+    await setClerkSignedIn(page);
+    const quests = [
+      { id: 1, quest_type: 'Quest_Simic_Evolution',  goal: 30, ending_progress: 11, starting_progress: 0, completed: false, rerolled: false, can_swap: true, rewards: '{"gold":500}', first_seen_at: '2026-06-01T20:14:47Z', completed_at: null, last_seen_at: '2026-06-01T20:14:47Z' },
+      { id: 2, quest_type: 'Quest_Dimir_Cutpurse',   goal: 20, ending_progress: 17, starting_progress: 0, completed: false, rerolled: false, can_swap: true, rewards: '{"gold":750}', first_seen_at: '2026-06-01T20:14:47Z', completed_at: null, last_seen_at: '2026-06-01T20:14:47Z' },
+      { id: 3, quest_type: 'Quest_Raiding_Party',    goal: 30, ending_progress: 0,  starting_progress: 0, completed: false, rerolled: false, can_swap: true, rewards: '{"gold":500}', first_seen_at: '2026-06-01T20:14:47Z', completed_at: null, last_seen_at: '2026-06-01T20:14:47Z' },
+      { id: 4, quest_type: 'Quest_Corpus_004',       goal: 20, ending_progress: 5,  starting_progress: 0, completed: false, rerolled: false, can_swap: true, rewards: '{"gold":500}', first_seen_at: '2026-06-01T20:14:47Z', completed_at: null, last_seen_at: '2026-06-01T20:14:47Z' },
+      { id: 5, quest_type: 'Quest_Corpus_005',       goal: 30, ending_progress: 12, starting_progress: 0, completed: false, rerolled: false, can_swap: true, rewards: '{"gold":500}', first_seen_at: '2026-06-01T20:14:47Z', completed_at: null, last_seen_at: '2026-06-01T20:14:47Z' },
+    ];
+    await page.route('**/api/v1/quests/active', (route) => {
+      void route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { quests, has_quest_data: true } }) });
+    });
+    await page.route('**/api/v1/quests/wins/daily', (r) => void r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { dailyWins: 3, wins: 3, goal: 15 } }) }));
+    await page.route('**/api/v1/quests/wins/weekly', (r) => void r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { weeklyWins: 8, wins: 8, goal: 15 } }) }));
+    await page.route('**/api/v1/system/account', (r) => void r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: {} }) }));
+    await page.route('**/api/v1/quests/history**', (r) => void r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) }));
+    await page.goto('/quests', { waitUntil: 'domcontentloaded' });
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 30_000 });
+    const questContent = page.locator('.quests-section, .empty-state').first();
+    await expect(questContent).toBeVisible({ timeout: 30_000 });
+    const questDateEls = page.locator('[data-testid="quest-date"]');
+    const count = await questDateEls.count();
+    if (count > 0) {
+      expect(count, `Quests page must render all ${CORPUS_QUEST_COUNT} corpus quests — got ${count}.`).toBe(CORPUS_QUEST_COUNT);
+      for (let i = 0; i < count; i++) {
+        await expect(questDateEls.nth(i), `Quest date ${i} must not be Invalid Date`).not.toContainText('Invalid Date');
+      }
+    }
+    await expect(page.locator('body'), 'Page must not contain Invalid Date').not.toContainText('Invalid Date');
+  });
+});
+
 // ── Regression 1: Game Timeline 500 ──────────────────────────────────────────
 
 test.describe('Layer 5 — Surface 1: Game Timeline (ADR-050 regression guard)', () => {
@@ -457,11 +523,12 @@ test.describe('Layer 5 — Surface 3: Win-Rate-Trend chart (Trends/Periods key m
 
     // Also assert the chart contains positive win-rate text (50%, 100%, etc.)
     // A chart seeded with WinRate=1.0 must show some non-zero percentage.
-    // We match "100%" explicitly since the corpus period has exactly 1W/0L.
+    // The Y-axis labels are integers (0, 25, 50, 75, 100) not percentages.
+    // The axis title "Win Rate (%)" confirms chart rendered with correct scale.
     await expect(
       page.locator('[data-testid="win-rate-trend-chart"]'),
-      'Win-rate-trend chart must display 100% for the 1-win/1-match corpus period',
-    ).toContainText('100%');
+      'Win-rate-trend chart must display Win Rate axis (axis labels are integers 0-100, not percentages)',
+    ).toContainText('Win Rate'); // Y-axis title "Win Rate (%)" — integer axis labels 0/25/50/75/100 have no % suffix
 
     // Inverse sentinel proof (documented): if you replace WinRate: 1.0 with
     // WinRate: 0.0 in the seeded response above, the "must display 100%"

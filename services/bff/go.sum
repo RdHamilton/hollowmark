@@ -4,6 +4,8 @@ github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERo
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/RdHamilton/vault-mtg/services/contract v0.1.5 h1:cdzNkPIoQgrKCXQ/W/8YYm2A8IsgOL3LIf8/PL0le6k=
 github.com/RdHamilton/vault-mtg/services/contract v0.1.5/go.mod h1:f84Hk7ST8G9WDHzVzP7E/gjiyvadgfyao/uB9m2Wb/w=
+github.com/RdHamilton/vault-mtg/services/daemon v0.0.0-20260602181331-948b3cc4c250 h1:frKttkVsRa2538Eu0opVlhRYFAU4noTWJ2Sy0jufCnE=
+github.com/RdHamilton/vault-mtg/services/daemon v0.0.0-20260602181331-948b3cc4c250/go.mod h1:dNb98MigkS/2ED9LJ1pZRUfH+z2rikOaK+a+WFfcW10=
 github.com/aws/aws-sdk-go-v2 v1.41.7 h1:DWpAJt66FmnnaRIOT/8ASTucrvuDPZASqhhLey6tLY8=
 github.com/aws/aws-sdk-go-v2 v1.41.7/go.mod h1:4LAfZOPHNVNQEckOACQx60Y8pSRjIkNZQz1w92xpMJc=
 github.com/aws/aws-sdk-go-v2/config v1.32.18 h1:Hcia46bxhGgF3BaSnG8nSNCWmqTK6bj9xN9/FJ3WK6Q=

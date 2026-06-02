@@ -702,3 +702,196 @@ func TestGamePlayRepository_GameIDByMatchAndNumber_NotFound(t *testing.T) {
 		t.Fatal("expected error for nonexistent (match_id, game_number), got nil")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Ticket #687: player_on_play column
+// ---------------------------------------------------------------------------
+
+func TestGamePlayRepository_InsertAndRead_PlayerOnPlay(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+
+	accountID := insertTestAccountForGamePlay(t, db, "player-on-play")
+	matchID := fmt.Sprintf("gp-onplay-%d", accountID)
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+	cleanupMatchGameResults(t, db, accountID)
+
+	onPlay := true
+	ins := repository.GamePlayInsert{
+		AccountID:     accountID,
+		MatchID:       matchID,
+		GameNumber:    1,
+		WinningTeamID: 1,
+		TurnCount:     8,
+		DurationSecs:  120,
+		Sequence:      1,
+		OccurredAt:    time.Now().UTC(),
+		Partial:       false,
+		PlayerOnPlay:  &onPlay,
+	}
+
+	id, err := repo.InsertGamePlay(context.Background(), ins)
+	if err != nil {
+		t.Fatalf("InsertGamePlay: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("InsertGamePlay returned id 0")
+	}
+
+	row, err := repo.GetGamePlay(context.Background(), accountID, matchID, 1)
+	if err != nil {
+		t.Fatalf("GetGamePlay: %v", err)
+	}
+
+	if row.PlayerOnPlay == nil {
+		t.Fatal("PlayerOnPlay is nil after insert, want non-nil")
+	}
+	if !*row.PlayerOnPlay {
+		t.Errorf("PlayerOnPlay = false, want true")
+	}
+}
+
+func TestGamePlayRepository_InsertAndRead_PlayerOnPlay_Draw(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+
+	accountID := insertTestAccountForGamePlay(t, db, "player-on-draw")
+	matchID := fmt.Sprintf("gp-ondraw-%d", accountID)
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+	cleanupMatchGameResults(t, db, accountID)
+
+	onPlay := false
+	ins := repository.GamePlayInsert{
+		AccountID:     accountID,
+		MatchID:       matchID,
+		GameNumber:    1,
+		WinningTeamID: 2,
+		TurnCount:     12,
+		DurationSecs:  180,
+		Sequence:      1,
+		OccurredAt:    time.Now().UTC(),
+		Partial:       false,
+		PlayerOnPlay:  &onPlay,
+	}
+
+	id, err := repo.InsertGamePlay(context.Background(), ins)
+	if err != nil {
+		t.Fatalf("InsertGamePlay: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("InsertGamePlay returned id 0")
+	}
+
+	row, err := repo.GetGamePlay(context.Background(), accountID, matchID, 1)
+	if err != nil {
+		t.Fatalf("GetGamePlay: %v", err)
+	}
+
+	if row.PlayerOnPlay == nil {
+		t.Fatal("PlayerOnPlay is nil after insert, want non-nil")
+	}
+	if *row.PlayerOnPlay {
+		t.Errorf("PlayerOnPlay = true, want false (player was on draw)")
+	}
+}
+
+func TestGamePlayRepository_InsertAndRead_PlayerOnPlay_NilPreserved(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+
+	accountID := insertTestAccountForGamePlay(t, db, "player-on-play-nil")
+	matchID := fmt.Sprintf("gp-onplay-nil-%d", accountID)
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+	cleanupMatchGameResults(t, db, accountID)
+
+	// Insert without player_on_play (nil = unknown).
+	ins := repository.GamePlayInsert{
+		AccountID:     accountID,
+		MatchID:       matchID,
+		GameNumber:    1,
+		WinningTeamID: 1,
+		TurnCount:     5,
+		DurationSecs:  90,
+		Sequence:      1,
+		OccurredAt:    time.Now().UTC(),
+		Partial:       false,
+		PlayerOnPlay:  nil,
+	}
+
+	id, err := repo.InsertGamePlay(context.Background(), ins)
+	if err != nil {
+		t.Fatalf("InsertGamePlay: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("InsertGamePlay returned id 0")
+	}
+
+	row, err := repo.GetGamePlay(context.Background(), accountID, matchID, 1)
+	if err != nil {
+		t.Fatalf("GetGamePlay: %v", err)
+	}
+
+	if row.PlayerOnPlay != nil {
+		t.Errorf("PlayerOnPlay = %v, want nil when not captured", *row.PlayerOnPlay)
+	}
+}
+
+// TestGamePlayRepository_InsertGamePlay_PlayerOnPlay_COALESCEPreservesKnown
+// verifies the COALESCE in the ON CONFLICT DO UPDATE: a second insert with
+// nil PlayerOnPlay must NOT overwrite an existing known value.
+func TestGamePlayRepository_InsertGamePlay_PlayerOnPlay_COALESCEPreservesKnown(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+
+	accountID := insertTestAccountForGamePlay(t, db, "player-on-play-coalesce")
+	matchID := fmt.Sprintf("gp-coalesce-%d", accountID)
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+	cleanupMatchGameResults(t, db, accountID)
+
+	onPlay := true
+	first := repository.GamePlayInsert{
+		AccountID:     accountID,
+		MatchID:       matchID,
+		GameNumber:    1,
+		WinningTeamID: 1,
+		TurnCount:     6,
+		DurationSecs:  100,
+		Sequence:      1,
+		OccurredAt:    time.Now().UTC(),
+		Partial:       false,
+		PlayerOnPlay:  &onPlay,
+	}
+	if _, err := repo.InsertGamePlay(context.Background(), first); err != nil {
+		t.Fatalf("first InsertGamePlay: %v", err)
+	}
+
+	// Second insert (higher sequence) with nil PlayerOnPlay.
+	second := repository.GamePlayInsert{
+		AccountID:     accountID,
+		MatchID:       matchID,
+		GameNumber:    1,
+		WinningTeamID: 1,
+		TurnCount:     7,
+		DurationSecs:  105,
+		Sequence:      2,
+		OccurredAt:    time.Now().UTC(),
+		Partial:       false,
+		PlayerOnPlay:  nil,
+	}
+	if _, err := repo.InsertGamePlay(context.Background(), second); err != nil {
+		t.Fatalf("second InsertGamePlay: %v", err)
+	}
+
+	row, err := repo.GetGamePlay(context.Background(), accountID, matchID, 1)
+	if err != nil {
+		t.Fatalf("GetGamePlay: %v", err)
+	}
+
+	// The known value (true) must survive the nil update via COALESCE.
+	if row.PlayerOnPlay == nil {
+		t.Fatal("PlayerOnPlay is nil after COALESCE update, want non-nil")
+	}
+	if !*row.PlayerOnPlay {
+		t.Errorf("PlayerOnPlay = false, want true (COALESCE must preserve known value)")
+	}
+}

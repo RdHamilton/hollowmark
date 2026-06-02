@@ -23,6 +23,10 @@ type GamePlayInsert struct {
 	// complete — the GRE buffer hit its flush threshold or the stale sweep
 	// evicted it.  Maps to the partial column added in migration 000074.
 	Partial bool
+	// PlayerOnPlay is true when the local player went first in this game
+	// (on the play), false when on the draw. Nil when the daemon could not
+	// determine the starting player (stale-sweep partial, pre-#687 events).
+	PlayerOnPlay *bool
 }
 
 // LifeChangeInsert holds one life-change row to be written to
@@ -48,6 +52,9 @@ type GamePlayRow struct {
 	Sequence      uint64
 	OccurredAt    time.Time
 	Partial       bool
+	// PlayerOnPlay is nil for rows written before migration 000103 or when the
+	// daemon could not determine the starting player.
+	PlayerOnPlay *bool
 }
 
 // GamePlayRepository provides write and read access to match_game_results and
@@ -74,8 +81,8 @@ func (r *GamePlayRepository) InsertGamePlay(ctx context.Context, ins GamePlayIns
 	const q = `
 		INSERT INTO match_game_results
 			(account_id, match_id, game_number, winning_team_id, turn_count,
-			 duration_secs, sequence, occurred_at, partial)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			 duration_secs, sequence, occurred_at, partial, player_on_play)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT ON CONSTRAINT uq_match_game_results_account_match_game
 		DO UPDATE SET
 			winning_team_id = EXCLUDED.winning_team_id,
@@ -83,7 +90,8 @@ func (r *GamePlayRepository) InsertGamePlay(ctx context.Context, ins GamePlayIns
 			duration_secs   = EXCLUDED.duration_secs,
 			sequence        = EXCLUDED.sequence,
 			occurred_at     = EXCLUDED.occurred_at,
-			partial         = EXCLUDED.partial
+			partial         = EXCLUDED.partial,
+			player_on_play  = COALESCE(EXCLUDED.player_on_play, match_game_results.player_on_play)
 		WHERE match_game_results.sequence < EXCLUDED.sequence
 		RETURNING id`
 
@@ -99,6 +107,7 @@ func (r *GamePlayRepository) InsertGamePlay(ctx context.Context, ins GamePlayIns
 		ins.Sequence,
 		ins.OccurredAt,
 		ins.Partial,
+		ins.PlayerOnPlay,
 	).Scan(&id)
 
 	if err == sql.ErrNoRows {
@@ -206,7 +215,7 @@ func (r *GamePlayRepository) InsertCardPlays(ctx context.Context, gameID int64, 
 func (r *GamePlayRepository) GetGamePlay(ctx context.Context, accountID int64, matchID string, gameNumber int) (GamePlayRow, error) {
 	const q = `
 		SELECT id, account_id, match_id, game_number, winning_team_id,
-		       turn_count, duration_secs, sequence, occurred_at, partial
+		       turn_count, duration_secs, sequence, occurred_at, partial, player_on_play
 		FROM match_game_results
 		WHERE account_id = $1 AND match_id = $2 AND game_number = $3 AND partial = false`
 
@@ -222,6 +231,7 @@ func (r *GamePlayRepository) GetGamePlay(ctx context.Context, accountID int64, m
 		&row.Sequence,
 		&row.OccurredAt,
 		&row.Partial,
+		&row.PlayerOnPlay,
 	)
 
 	return row, err
@@ -235,7 +245,7 @@ func (r *GamePlayRepository) GetGamePlay(ctx context.Context, accountID int64, m
 func (r *GamePlayRepository) ListGamePlaysByMatch(ctx context.Context, accountID int64, matchID string) ([]GamePlayRow, error) {
 	const q = `
 		SELECT id, account_id, match_id, game_number, winning_team_id,
-		       turn_count, duration_secs, sequence, occurred_at, partial
+		       turn_count, duration_secs, sequence, occurred_at, partial, player_on_play
 		FROM match_game_results
 		WHERE account_id = $1 AND match_id = $2 AND partial = false
 		ORDER BY occurred_at, sequence`
@@ -260,6 +270,7 @@ func (r *GamePlayRepository) ListGamePlaysByMatch(ctx context.Context, accountID
 			&row.Sequence,
 			&row.OccurredAt,
 			&row.Partial,
+			&row.PlayerOnPlay,
 		); err != nil {
 			return nil, err
 		}
