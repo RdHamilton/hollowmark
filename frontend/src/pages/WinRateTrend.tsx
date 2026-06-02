@@ -143,18 +143,20 @@ const WinRateTrend = () => {
       )}
 
       {!loading && !error && (!analysis || chartData.length === 0) && (
-        <EmptyState
-          icon="📈"
-          heading="Not enough data"
-          subtext="Play at least 5 matches to see your win rate trends over time."
-          variant="no-data"
-        />
+        <div data-testid="win-rate-trend-empty">
+          <EmptyState
+            icon="📈"
+            heading="Not enough data"
+            subtext="Play at least 5 matches to see your win rate trends over time."
+            variant="no-data"
+          />
+        </div>
       )}
 
       {!loading && !error && analysis && chartData.length > 0 && (
         <>
           {/* Chart */}
-          <div className="chart-container">
+          <div className="chart-container" data-testid="win-rate-trend-chart">
             <ResponsiveContainer width="100%" height={500}>
               {chartType === 'line' ? (
                 <LineChart data={chartData}>

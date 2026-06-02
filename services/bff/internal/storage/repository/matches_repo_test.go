@@ -407,3 +407,141 @@ func TestMatchesRepository_Interface(t *testing.T) {
 		t.Fatal("NewMatchesRepository returned nil")
 	}
 }
+
+// ─── ADR-051 match DraftSessionID tests ───────────────────────────────────────
+
+// TestUpsertMatch_WithDraftSessionID verifies that UpsertMatch stores a
+// draft_session_id when provided. Requires DATABASE_URL (integration test).
+func TestUpsertMatch_WithDraftSessionID(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+	dsRepo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "upsert-draft-session-id-acct")
+	now := time.Now().UTC().Truncate(time.Second)
+	sessionID := fmt.Sprintf("ds-um-sid-%d", accountID)
+	matchID := fmt.Sprintf("match-um-sid-%d", accountID)
+
+	// Create the draft session first (FK constraint).
+	if err := dsRepo.UpsertDraftSession(context.Background(), repository.DraftSessionUpsert{
+		ID:        sessionID,
+		AccountID: accountID,
+		EventName: "QuickDraft_SOS_20260526",
+		SetCode:   "SOS",
+		DraftType: "PremierDraft",
+		StartTime: now.Add(-2 * time.Hour),
+		Status:    "completed",
+	}); err != nil {
+		t.Fatalf("UpsertDraftSession: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_match_results WHERE match_id = $1`, matchID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM matches WHERE id = $1`, matchID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, sessionID)
+	})
+
+	if err := repo.UpsertMatch(context.Background(), repository.MatchUpsert{
+		ID:             matchID,
+		AccountID:      accountID,
+		EventID:        "evt-um-sid",
+		EventName:      "QuickDraft_SOS_20260526",
+		Timestamp:      now,
+		PlayerWins:     2,
+		OpponentWins:   1,
+		PlayerTeamID:   1,
+		Format:         "QuickDraft_SOS_20260526",
+		Result:         "win",
+		DraftSessionID: &sessionID,
+	}); err != nil {
+		t.Fatalf("UpsertMatch: %v", err)
+	}
+
+	var storedSessionID *string
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT draft_session_id FROM matches WHERE id = $1`,
+		matchID,
+	).Scan(&storedSessionID); err != nil {
+		t.Fatalf("SELECT draft_session_id: %v", err)
+	}
+	if storedSessionID == nil || *storedSessionID != sessionID {
+		t.Errorf("stored DraftSessionID: want %q, got %v", sessionID, storedSessionID)
+	}
+}
+
+// TestUpsertMatch_DraftSessionIDNotOverwrittenByNil verifies the COALESCE
+// behaviour: re-projecting a match with DraftSessionID=nil does not overwrite
+// an existing non-nil draft_session_id.
+func TestUpsertMatch_DraftSessionIDNotOverwrittenByNil(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+	dsRepo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "upsert-coalesce-acct")
+	now := time.Now().UTC().Truncate(time.Second)
+	sessionID := fmt.Sprintf("ds-coalesce-%d", accountID)
+	matchID := fmt.Sprintf("match-coalesce-%d", accountID)
+
+	if err := dsRepo.UpsertDraftSession(context.Background(), repository.DraftSessionUpsert{
+		ID:        sessionID,
+		AccountID: accountID,
+		EventName: "QuickDraft_SOS_20260526",
+		SetCode:   "SOS",
+		DraftType: "PremierDraft",
+		StartTime: now.Add(-3 * time.Hour),
+		Status:    "completed",
+	}); err != nil {
+		t.Fatalf("UpsertDraftSession: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_match_results WHERE match_id = $1`, matchID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM matches WHERE id = $1`, matchID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, sessionID)
+	})
+
+	// First upsert with sessionID set.
+	if err := repo.UpsertMatch(context.Background(), repository.MatchUpsert{
+		ID:             matchID,
+		AccountID:      accountID,
+		EventID:        "evt-coalesce",
+		EventName:      "QuickDraft_SOS_20260526",
+		Timestamp:      now,
+		PlayerWins:     2,
+		OpponentWins:   1,
+		PlayerTeamID:   1,
+		Format:         "QuickDraft_SOS_20260526",
+		Result:         "win",
+		DraftSessionID: &sessionID,
+	}); err != nil {
+		t.Fatalf("first UpsertMatch: %v", err)
+	}
+
+	// Second upsert with DraftSessionID=nil — should NOT clear the existing value.
+	if err := repo.UpsertMatch(context.Background(), repository.MatchUpsert{
+		ID:             matchID,
+		AccountID:      accountID,
+		EventID:        "evt-coalesce",
+		EventName:      "QuickDraft_SOS_20260526",
+		Timestamp:      now,
+		PlayerWins:     2,
+		OpponentWins:   1,
+		PlayerTeamID:   1,
+		Format:         "QuickDraft_SOS_20260526",
+		Result:         "win",
+		DraftSessionID: nil, // should be COALESCE'd away
+	}); err != nil {
+		t.Fatalf("second UpsertMatch: %v", err)
+	}
+
+	var storedSessionID *string
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT draft_session_id FROM matches WHERE id = $1`,
+		matchID,
+	).Scan(&storedSessionID); err != nil {
+		t.Fatalf("SELECT draft_session_id: %v", err)
+	}
+	if storedSessionID == nil || *storedSessionID != sessionID {
+		t.Errorf("COALESCE should preserve existing DraftSessionID; want %q, got %v", sessionID, storedSessionID)
+	}
+}

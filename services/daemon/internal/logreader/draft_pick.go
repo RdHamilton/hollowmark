@@ -66,6 +66,11 @@ type DraftPickPayload struct {
 	// DraftID is the stable per-draft UUID. Premier drafts set it; BotDraft
 	// (#337) leaves it empty. Additive, non-breaking BFF field.
 	DraftID string `json:"draft_id,omitempty"`
+	// SessionID is the draftstate.Session.ID for the active draft session.
+	// Set by the daemon after HandlePick; empty when no session is active
+	// (e.g. daemon restarted mid-draft). The BFF soft-skips draft.pick
+	// events where SessionID is empty rather than dead-lettering them.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
