@@ -1,0 +1,90 @@
+name: Layer-5 Replay Reconcile (ADR-052 Mode A)
+
+# Triggered on PRs touching the BFF, daemon, contract, or API service layer.
+# This is the Layer-5 Mode A gate: mines a corpus snapshot (when available),
+# replays it through the real daemon→BFF→projection pipeline, and asserts the
+# projected BFF API responses against the expected-truth manifest.
+#
+# RULE-INFRA-01 (ADR-052): starts continue-on-error: true.
+# Flip to continue-on-error: false after two consecutive clean runs.
+#
+# Local run:
+#   export DATABASE_URL="postgres://mtga:mtga@localhost:5432/mtga_test?sslmode=disable"
+#   export LAYER5_CORPUS_SNAPSHOT_DIR="$HOME/mtga-log-backups/corpus-snapshot-20260602T170441Z/daemon-archives"
+#   go test -v -tags layer5 -run TestLayer5 ./services/bff/
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'services/bff/**'
+      - 'services/daemon/**'
+      - 'services/contract/**'
+      - 'frontend/src/services/api/**'
+
+permissions:
+  contents: read
+
+jobs:
+  layer5-api-reconcile:
+    name: Layer-5 API Reconciliation
+    runs-on: ubuntu-latest
+    # RULE-INFRA-01: start continue-on-error until two consecutive clean runs.
+    continue-on-error: true
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: mtga
+          POSTGRES_PASSWORD: mtga
+          POSTGRES_DB: mtga_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Download daemon module dependencies
+        working-directory: services/daemon
+        env:
+          GONOSUMDB: github.com/RdHamilton/vault-mtg
+          GOPRIVATE: github.com/RdHamilton/vault-mtg
+        run: go mod download
+
+      - name: Download BFF module dependencies
+        working-directory: services/bff
+        env:
+          GONOSUMDB: github.com/RdHamilton/vault-mtg
+          GOPRIVATE: github.com/RdHamilton/vault-mtg
+        run: go mod download
+
+      - name: Run Layer-5 replay injector tests
+        # DATABASE_URL is set; LAYER5_CORPUS_SNAPSHOT_DIR is NOT set in CI
+        # (the raw snapshot is a local-only artifact per ADR-041 PII protocol).
+        # Both tests skip gracefully when the corpus dir is absent.
+        # The CI job serves as a compile+infrastructure gate; full corpus
+        # replay runs locally and in the staging-replay-gate.
+        working-directory: services/bff
+        env:
+          DATABASE_URL: postgres://mtga:mtga@localhost:5432/mtga_test?sslmode=disable
+          GONOSUMDB: github.com/RdHamilton/vault-mtg
+          GOPRIVATE: github.com/RdHamilton/vault-mtg
+        run: go test -v -race -tags layer5 -run TestLayer5 -timeout 300s ./...
+
+      - name: Run daemon replay package unit tests
+        working-directory: services/daemon
+        env:
+          GONOSUMDB: github.com/RdHamilton/vault-mtg
+          GOPRIVATE: github.com/RdHamilton/vault-mtg
+        run: go test -v -race ./replay/...
