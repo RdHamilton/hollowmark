@@ -61,6 +61,12 @@ type matchResponse struct {
 	OpponentRank    *string   `json:"opponent_rank"`
 	PlayerWins      int       `json:"player_wins"`
 	OpponentWins    int       `json:"opponent_wins"`
+	// OpponentName is the display name of the opponent in MTGA.
+	// Omitted (omitempty) when not captured (bots, pre-#003 events).
+	OpponentName *string `json:"opponent_name,omitempty"`
+	// PlayerOnPlay is true when the local player went first in game 1.
+	// Omitted (omitempty) when not captured (pre-#687 events).
+	PlayerOnPlay *bool `json:"player_on_play,omitempty"`
 }
 
 // draftResponse is the JSON shape for a single draft session in the history list.
@@ -185,6 +191,8 @@ func (h *HistoryHandler) GetMatches(w http.ResponseWriter, r *http.Request) {
 			OpponentRank:    nil, // v0.2.0: not available
 			PlayerWins:      m.PlayerWins,
 			OpponentWins:    m.OpponentWins,
+			OpponentName:    m.OpponentName,
+			PlayerOnPlay:    m.PlayerOnPlay,
 		})
 	}
 

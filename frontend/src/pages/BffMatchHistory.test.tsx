@@ -1108,4 +1108,328 @@ describe('BffMatchHistory', () => {
       expect(h1.textContent).not.toMatch(/§|Chapter|Ledger|Compendium/);
     });
   });
+
+  // --------------------------------------------------------------------------
+  // vmt-t#687 — On-the-play / on-the-draw indicator
+  //
+  // Prof requirement: "every player asks 'was I on the play?' after a loss."
+  // Null must NEVER render a misleading badge — blank cell only.
+  // --------------------------------------------------------------------------
+
+  describe('On-the-play / on-the-draw indicator (#687)', () => {
+    it('renders "P" badge when player_on_play is true', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ player_on_play: true })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('play-draw-badge')).toBeInTheDocument();
+      });
+      expect(screen.getByTestId('play-draw-badge')).toHaveTextContent('P');
+    });
+
+    it('renders "D" badge when player_on_play is false', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ player_on_play: false })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('play-draw-badge')).toBeInTheDocument();
+      });
+      expect(screen.getByTestId('play-draw-badge')).toHaveTextContent('D');
+    });
+
+    it('renders no play-draw badge when player_on_play is null', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ player_on_play: null })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      // Row must render (it is still eligible) but badge must be absent.
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('play-draw-badge')).not.toBeInTheDocument();
+      // Must not render 'P' or 'D' as loose text.
+      expect(screen.queryByText('P')).not.toBeInTheDocument();
+      expect(screen.queryByText('D')).not.toBeInTheDocument();
+    });
+
+    it('renders no play-draw badge when player_on_play is absent (undefined)', async () => {
+      // Simulates pre-#687 match rows where the field is omitted from JSON.
+      const item = makeItem();
+      // delete the field to simulate omitempty absence
+      delete (item as Partial<MatchHistoryItem>).player_on_play;
+
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [item],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('play-draw-badge')).not.toBeInTheDocument();
+    });
+
+    it('P/D column header is present in the table', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({ data: [makeItem()], has_more: false })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('table')).toBeInTheDocument();
+      });
+
+      const headers = screen.getAllByRole('columnheader');
+      const headerTexts = headers.map((h) => h.textContent);
+      expect(headerTexts).toContain('P/D');
+    });
+
+    it('play-draw cell is present with testid even when no badge rendered', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ player_on_play: null })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-play-draw')).toBeInTheDocument();
+      });
+      // Cell must be present but empty (no badge).
+      expect(screen.getByTestId('match-play-draw').children).toHaveLength(0);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // vmt-t#687 — Game score column
+  //
+  // Score was already rendered (player_wins–opponent_wins) but now has an
+  // explicit data-testid="match-score" and is verified here.
+  // --------------------------------------------------------------------------
+
+  describe('Game score column (#687)', () => {
+    it('renders score as "2-1" from player_wins=2, opponent_wins=1', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ player_wins: 2, opponent_wins: 1 })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-score')).toBeInTheDocument();
+      });
+      expect(screen.getByTestId('match-score')).toHaveTextContent('2–1');
+    });
+
+    it('renders score as "2-0" from player_wins=2, opponent_wins=0', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ player_wins: 2, opponent_wins: 0 })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-score')).toHaveTextContent('2–0');
+      });
+    });
+
+    it('renders score as "0-2" from player_wins=0, opponent_wins=2', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ result: 'loss', player_wins: 0, opponent_wins: 2 })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-score')).toHaveTextContent('0–2');
+      });
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // vmt-t#687 — Opponent archetype / name column
+  //
+  // Render the opponent name when present; render nothing when absent.
+  // Bot matches and pre-#003 events have no opponent_name.
+  // --------------------------------------------------------------------------
+
+  describe('Opponent archetype column (#687)', () => {
+    it('renders opponent name when opponent_name is present', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ opponent_name: 'Grixis Midrange' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-opponent')).toBeInTheDocument();
+      });
+      expect(screen.getByText('Grixis Midrange')).toBeInTheDocument();
+    });
+
+    it('renders empty opponent cell when opponent_name is absent (undefined)', async () => {
+      const item = makeItem();
+      // Ensure no opponent_name key (as it would be from omitempty JSON)
+      delete (item as Partial<MatchHistoryItem>).opponent_name;
+
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({ data: [item], has_more: false })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-opponent')).toBeInTheDocument();
+      });
+      // Cell present but no text content inside it.
+      expect(screen.getByTestId('match-opponent').children).toHaveLength(0);
+    });
+
+    it('renders empty opponent cell when opponent_name is empty string', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ opponent_name: '' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-opponent')).toBeInTheDocument();
+      });
+      // Empty string is falsy — no inner span should render.
+      expect(screen.getByTestId('match-opponent').children).toHaveLength(0);
+    });
+
+    it('renders Opponent column header in the table', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({ data: [makeItem()], has_more: false })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('table')).toBeInTheDocument();
+      });
+
+      const headers = screen.getAllByRole('columnheader');
+      const headerTexts = headers.map((h) => h.textContent);
+      expect(headerTexts).toContain('Opponent');
+    });
+
+    it('multiple rows with different opponent names each render their own', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [
+            makeItem({ id: 'a', opponent_name: 'Esper Reanimator' }),
+            makeItem({ id: 'b', result: 'loss', opponent_name: 'Azorius Soldiers' }),
+          ],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Esper Reanimator')).toBeInTheDocument();
+      });
+      expect(screen.getByText('Azorius Soldiers')).toBeInTheDocument();
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // vmt-t#687 — Combined new fields rendering
+  // --------------------------------------------------------------------------
+
+  describe('Combined new fields — play/draw + score + opponent (#687)', () => {
+    it('renders all three fields in a single row', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [
+            makeItem({
+              player_wins: 2,
+              opponent_wins: 1,
+              player_on_play: true,
+              opponent_name: 'Sultai Ramp',
+            }),
+          ],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('play-draw-badge')).toBeInTheDocument();
+      });
+      expect(screen.getByTestId('play-draw-badge')).toHaveTextContent('P');
+      expect(screen.getByTestId('match-score')).toHaveTextContent('2–1');
+      expect(screen.getByText('Sultai Ramp')).toBeInTheDocument();
+    });
+
+    it('renders row with null play/draw and no opponent (pre-release row)', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [
+            makeItem({
+              player_wins: 1,
+              opponent_wins: 2,
+              result: 'loss',
+              player_on_play: null,
+            }),
+          ],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+      });
+      // No badge for null play/draw.
+      expect(screen.queryByTestId('play-draw-badge')).not.toBeInTheDocument();
+      // Score still renders.
+      expect(screen.getByTestId('match-score')).toHaveTextContent('1–2');
+      // No opponent text.
+      expect(screen.getByTestId('match-opponent').children).toHaveLength(0);
+    });
+  });
 });
