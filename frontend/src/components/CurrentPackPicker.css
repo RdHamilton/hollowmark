@@ -132,21 +132,43 @@
     object-fit: cover;
 }
 
+/* Tier badge — design-system §7.3: 28×22px, bottom-right corner of card image.
+   Sits above the "Best Pick" bar (which is ~20px tall at the absolute bottom). */
 .tier-badge {
     position: absolute;
-    top: 4px;
+    bottom: 28px;
     right: 4px;
     width: 28px;
-    height: 28px;
+    height: 22px;
     display: flex;
     align-items: center;
     justify-content: center;
     font-weight: 700;
-    font-size: 0.875rem;
+    font-size: var(--text-xs);
+    font-family: var(--font-display-vault);
     color: var(--vault-fg-inverse);
-    border-radius: 50%;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
 }
+
+/* Tier-color modifiers — §Tier Rating Colors tokens from index.css */
+.tier-badge--a { background-color: var(--vault-tier-a); }
+.tier-badge--b { background-color: var(--vault-tier-b); }
+.tier-badge--c { background-color: var(--vault-tier-c); }
+.tier-badge--d { background-color: var(--vault-tier-d); }
+.tier-badge--f { background-color: var(--vault-tier-f); }
+/* S-tier: gold/mythic accent — kept for any card with tier="S" in the
+   draft-advisor response (not in A/B/C/D/F per §7.3 but backward-compat) */
+.tier-badge--s { background-color: var(--vault-rarity-rare); }
+
+/* Recommended banner tier pill — matches pack-grid badge colors */
+.rec-tier--a { color: var(--vault-tier-a); }
+.rec-tier--b { color: var(--vault-tier-b); }
+.rec-tier--c { color: var(--vault-tier-c); }
+.rec-tier--d { color: var(--vault-tier-d); }
+.rec-tier--f { color: var(--vault-tier-f); }
+.rec-tier--s { color: var(--vault-rarity-rare); }
 
 .recommended-indicator {
     position: absolute;
