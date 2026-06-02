@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/vault-mtg/services/contract"
 )
 
 // insertTestAccountForGamePlay inserts a minimal accounts row and returns its
@@ -33,13 +34,57 @@ func insertTestAccountForGamePlay(t *testing.T, db *sql.DB, suffix string) int64
 	return id
 }
 
-// cleanupGamePlays deletes game_plays (and cascaded life_change_tracking) rows
-// for the given account.
-func cleanupGamePlays(t *testing.T, db *sql.DB, accountID int64) {
+// cleanupMatchGameResults deletes match_game_results (and cascaded
+// life_change_tracking / game_event_counters) rows for the given account.
+func cleanupMatchGameResults(t *testing.T, db *sql.DB, accountID int64) {
 	t.Helper()
 	t.Cleanup(func() {
-		_, _ = db.ExecContext(context.Background(), `DELETE FROM game_plays WHERE account_id = $1`, accountID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM match_game_results WHERE account_id = $1`, accountID)
 	})
+}
+
+// insertTestMatchForCardPlays inserts a minimal matches row for use in
+// InsertCardPlays tests (card plays require a games row, which requires a match).
+func insertTestMatchForCardPlays(t *testing.T, db *sql.DB, matchID string, accountID int64) {
+	t.Helper()
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO matches
+			(id, account_id, event_id, event_name, timestamp, player_wins, opponent_wins,
+			 player_team_id, format, result)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		 ON CONFLICT (id) DO NOTHING`,
+		matchID, accountID, "evt-"+matchID, "event-"+matchID, time.Now().UTC(),
+		1, 0, 1, "Standard", "win",
+	)
+	if err != nil {
+		t.Fatalf("insertTestMatchForCardPlays %q: %v", matchID, err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM matches WHERE id = $1`, matchID)
+	})
+}
+
+// insertTestGameForCardPlays inserts a minimal games row and returns its id.
+// Requires the match to exist first.
+func insertTestGameForCardPlays(t *testing.T, db *sql.DB, matchID string, gameNumber int) int64 {
+	t.Helper()
+	var id int64
+	err := db.QueryRowContext(
+		context.Background(),
+		`INSERT INTO games (match_id, game_number, result)
+		 VALUES ($1, $2, 'win')
+		 ON CONFLICT (match_id, game_number) DO UPDATE SET result = EXCLUDED.result
+		 RETURNING id`,
+		matchID, gameNumber,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("insertTestGameForCardPlays match=%q game=%d: %v", matchID, gameNumber, err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE id = $1`, id)
+	})
+	return id
 }
 
 func TestGamePlayRepository_SingleInsert(t *testing.T) {
@@ -48,7 +93,7 @@ func TestGamePlayRepository_SingleInsert(t *testing.T) {
 	ctx := context.Background()
 
 	accountID := insertTestAccountForGamePlay(t, db, "single-insert")
-	cleanupGamePlays(t, db, accountID)
+	cleanupMatchGameResults(t, db, accountID)
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
@@ -103,7 +148,7 @@ func TestGamePlayRepository_MultiGameSession(t *testing.T) {
 	ctx := context.Background()
 
 	accountID := insertTestAccountForGamePlay(t, db, "multi-game")
-	cleanupGamePlays(t, db, accountID)
+	cleanupMatchGameResults(t, db, accountID)
 
 	base := time.Now().UTC().Truncate(time.Microsecond)
 
@@ -145,7 +190,7 @@ func TestGamePlayRepository_OutOfOrderSequenceReordering(t *testing.T) {
 	ctx := context.Background()
 
 	accountID := insertTestAccountForGamePlay(t, db, "ooo-seq")
-	cleanupGamePlays(t, db, accountID)
+	cleanupMatchGameResults(t, db, accountID)
 
 	base := time.Now().UTC().Truncate(time.Microsecond)
 
@@ -198,9 +243,9 @@ func TestGamePlayRepository_LifeChanges_InsertAndCount(t *testing.T) {
 	ctx := context.Background()
 
 	accountID := insertTestAccountForGamePlay(t, db, "life-changes")
-	cleanupGamePlays(t, db, accountID)
+	cleanupMatchGameResults(t, db, accountID)
 
-	gamePlayID, err := repo.InsertGamePlay(ctx, repository.GamePlayInsert{
+	matchGameResultID, err := repo.InsertGamePlay(ctx, repository.GamePlayInsert{
 		AccountID:  accountID,
 		MatchID:    "match-lc-001",
 		GameNumber: 1,
@@ -212,16 +257,16 @@ func TestGamePlayRepository_LifeChanges_InsertAndCount(t *testing.T) {
 	}
 
 	changes := []repository.LifeChangeInsert{
-		{AccountID: accountID, GamePlayID: gamePlayID, TeamID: 1, LifeTotal: 20, Delta: 0, TurnNumber: 1},
-		{AccountID: accountID, GamePlayID: gamePlayID, TeamID: 2, LifeTotal: 17, Delta: -3, TurnNumber: 2},
-		{AccountID: accountID, GamePlayID: gamePlayID, TeamID: 1, LifeTotal: 23, Delta: 3, TurnNumber: 3},
+		{AccountID: accountID, MatchGameResultID: matchGameResultID, TeamID: 1, LifeTotal: 20, Delta: 0, TurnNumber: 1},
+		{AccountID: accountID, MatchGameResultID: matchGameResultID, TeamID: 2, LifeTotal: 17, Delta: -3, TurnNumber: 2},
+		{AccountID: accountID, MatchGameResultID: matchGameResultID, TeamID: 1, LifeTotal: 23, Delta: 3, TurnNumber: 3},
 	}
 
 	if err := repo.InsertLifeChanges(ctx, changes); err != nil {
 		t.Fatalf("InsertLifeChanges: %v", err)
 	}
 
-	n, err := repo.CountLifeChangesByGame(ctx, gamePlayID)
+	n, err := repo.CountLifeChangesByGame(ctx, matchGameResultID)
 	if err != nil {
 		t.Fatalf("CountLifeChangesByGame: %v", err)
 	}
@@ -237,8 +282,8 @@ func TestGamePlayRepository_AccountIsolation(t *testing.T) {
 
 	accountA := insertTestAccountForGamePlay(t, db, "isolation-a")
 	accountB := insertTestAccountForGamePlay(t, db, "isolation-b")
-	cleanupGamePlays(t, db, accountA)
-	cleanupGamePlays(t, db, accountB)
+	cleanupMatchGameResults(t, db, accountA)
+	cleanupMatchGameResults(t, db, accountB)
 
 	const matchID = "match-iso-001"
 	now := time.Now().UTC()
@@ -282,7 +327,7 @@ func TestGamePlayRepository_ListGamePlaysByMatch_OrderedByOccurredAtSequence(t *
 	ctx := context.Background()
 
 	accountID := insertTestAccountForGamePlay(t, db, "ordering")
-	cleanupGamePlays(t, db, accountID)
+	cleanupMatchGameResults(t, db, accountID)
 
 	// Insert game 3, then game 1, then game 2 to verify ORDER BY works.
 	base := time.Now().UTC().Truncate(time.Microsecond)
@@ -352,7 +397,7 @@ func TestGamePlayRepository_PartialTrue(t *testing.T) {
 	ctx := context.Background()
 
 	accountID := insertTestAccountForGamePlay(t, db, "partial-true")
-	cleanupGamePlays(t, db, accountID)
+	cleanupMatchGameResults(t, db, accountID)
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
@@ -384,7 +429,7 @@ func TestGamePlayRepository_GetGamePlay_ExcludesPartial(t *testing.T) {
 	ctx := context.Background()
 
 	accountID := insertTestAccountForGamePlay(t, db, "gp-excl-partial")
-	cleanupGamePlays(t, db, accountID)
+	cleanupMatchGameResults(t, db, accountID)
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
@@ -414,7 +459,7 @@ func TestGamePlayRepository_ListGamePlaysByMatch_ExcludesPartial(t *testing.T) {
 	ctx := context.Background()
 
 	accountID := insertTestAccountForGamePlay(t, db, "list-excl-partial")
-	cleanupGamePlays(t, db, accountID)
+	cleanupMatchGameResults(t, db, accountID)
 
 	base := time.Now().UTC().Truncate(time.Microsecond)
 
@@ -473,7 +518,7 @@ func TestGamePlayRepository_PartialFalse(t *testing.T) {
 	ctx := context.Background()
 
 	accountID := insertTestAccountForGamePlay(t, db, "partial-false")
-	cleanupGamePlays(t, db, accountID)
+	cleanupMatchGameResults(t, db, accountID)
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
@@ -495,5 +540,165 @@ func TestGamePlayRepository_PartialFalse(t *testing.T) {
 	}
 	if row.Partial {
 		t.Errorf("Partial: want false, got true")
+	}
+}
+
+// --- InsertCardPlays integration tests (ADR-050) ---
+
+// TestGamePlayRepository_InsertCardPlays_WritesToGamePlays verifies that
+// InsertCardPlays writes per-turn rows into game_plays (the per-turn table).
+// AC: InsertCardPlays writes to game_plays (per-turn).
+func TestGamePlayRepository_InsertCardPlays_WritesToGamePlays(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccountForGamePlay(t, db, "card-plays-write")
+	cleanupMatchGameResults(t, db, accountID)
+
+	const matchID = "match-cp-write-001"
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+	gameID := insertTestGameForCardPlays(t, db, matchID, 1)
+
+	entries := []contract.CardPlayEntry{
+		{GameNumber: 1, TurnNumber: 1, Phase: "main1", ArenaID: 80001, PlayerType: "player", ActionType: "play_card", ZoneFrom: "hand", ZoneTo: "battlefield"},
+		{GameNumber: 1, TurnNumber: 2, Phase: "main1", ArenaID: 80002, PlayerType: "opponent", ActionType: "cast_spell", ZoneFrom: "hand", ZoneTo: "stack"},
+		{GameNumber: 1, TurnNumber: 3, Phase: "combat", ArenaID: 80003, PlayerType: "player", ActionType: "attack", ZoneFrom: "battlefield", ZoneTo: "battlefield"},
+	}
+
+	now := time.Now().UTC()
+	if err := repo.InsertCardPlays(ctx, gameID, matchID, entries, now); err != nil {
+		t.Fatalf("InsertCardPlays: %v", err)
+	}
+
+	n, err := repo.CountCardPlaysByGame(ctx, gameID)
+	if err != nil {
+		t.Fatalf("CountCardPlaysByGame: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("game_plays count: want 3, got %d", n)
+	}
+}
+
+// TestGamePlayRepository_InsertCardPlays_Idempotent verifies that replaying
+// InsertCardPlays for the same (game_id, sequence_number) does not produce
+// duplicate rows (ON CONFLICT DO NOTHING).
+func TestGamePlayRepository_InsertCardPlays_Idempotent(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccountForGamePlay(t, db, "card-plays-idem")
+	cleanupMatchGameResults(t, db, accountID)
+
+	const matchID = "match-cp-idem-001"
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+	gameID := insertTestGameForCardPlays(t, db, matchID, 1)
+
+	entry := contract.CardPlayEntry{
+		GameNumber: 1, TurnNumber: 1, Phase: "main1", ArenaID: 80001,
+		PlayerType: "player", ActionType: "play_card", ZoneFrom: "hand", ZoneTo: "battlefield",
+	}
+	now := time.Now().UTC()
+
+	if err := repo.InsertCardPlays(ctx, gameID, matchID, []contract.CardPlayEntry{entry}, now); err != nil {
+		t.Fatalf("InsertCardPlays first: %v", err)
+	}
+	// Replay — must not error or produce a duplicate.
+	if err := repo.InsertCardPlays(ctx, gameID, matchID, []contract.CardPlayEntry{entry}, now); err != nil {
+		t.Fatalf("InsertCardPlays replay: %v", err)
+	}
+
+	n, err := repo.CountCardPlaysByGame(ctx, gameID)
+	if err != nil {
+		t.Fatalf("CountCardPlaysByGame: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("game_plays count after replay: want 1, got %d", n)
+	}
+}
+
+// TestGamePlayRepository_InsertCardPlays_Empty verifies that InsertCardPlays
+// on an empty slice is a no-op.
+func TestGamePlayRepository_InsertCardPlays_Empty(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	if err := repo.InsertCardPlays(ctx, 0, "", nil, time.Now().UTC()); err != nil {
+		t.Errorf("InsertCardPlays(nil): want no error, got %v", err)
+	}
+	if err := repo.InsertCardPlays(ctx, 0, "", []contract.CardPlayEntry{}, time.Now().UTC()); err != nil {
+		t.Errorf("InsertCardPlays(empty): want no error, got %v", err)
+	}
+}
+
+// TestGamePlayRepository_InsertGamePlay_WritesToMatchGameResults verifies that
+// InsertGamePlay rows land in match_game_results, not game_plays.
+// AC: InsertGamePlay writes to match_game_results (per-game).
+func TestGamePlayRepository_InsertGamePlay_WritesToMatchGameResults(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccountForGamePlay(t, db, "mgr-target")
+	cleanupMatchGameResults(t, db, accountID)
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	id, err := repo.InsertGamePlay(ctx, repository.GamePlayInsert{
+		AccountID:     accountID,
+		MatchID:       "match-mgr-target-001",
+		GameNumber:    1,
+		WinningTeamID: 2,
+		TurnCount:     15,
+		DurationSecs:  600,
+		Sequence:      7,
+		OccurredAt:    now,
+	})
+	if err != nil {
+		t.Fatalf("InsertGamePlay: %v", err)
+	}
+
+	// Verify the row landed in match_game_results (not game_plays).
+	var count int
+	err = db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM match_game_results WHERE id = $1 AND account_id = $2`,
+		id, accountID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("verify match_game_results: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("match_game_results count for inserted id: want 1, got %d", count)
+	}
+
+	// Verify game_plays was NOT written to by InsertGamePlay.
+	var gpCount int
+	err = db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM game_plays WHERE match_id = $1`,
+		"match-mgr-target-001",
+	).Scan(&gpCount)
+	if err != nil {
+		t.Fatalf("verify game_plays not written: %v", err)
+	}
+	if gpCount != 0 {
+		t.Errorf("game_plays must not be written by InsertGamePlay: want 0, got %d", gpCount)
+	}
+}
+
+// TestGamePlayRepository_GameIDByMatchAndNumber_NotFound verifies that
+// GameIDByMatchAndNumber returns an error wrapping sql.ErrNoRows when no
+// games row exists.
+func TestGamePlayRepository_GameIDByMatchAndNumber_NotFound(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	_, err := repo.GameIDByMatchAndNumber(ctx, "no-such-match-xyz", 1)
+	if err == nil {
+		t.Fatal("expected error for nonexistent (match_id, game_number), got nil")
 	}
 }
