@@ -1017,6 +1017,7 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 		Sequence:      row.Sequence,
 		OccurredAt:    row.OccurredAt,
 		Partial:       p.Partial,
+		PlayerOnPlay:  p.PlayerOnPlay,
 	})
 	if err != nil {
 		return fmt.Errorf("InsertGamePlay: %w", err)
