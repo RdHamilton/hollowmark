@@ -747,7 +747,15 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	}
 
 	// GET /api/v1/daemon/version — latest daemon version (no auth required).
+	// The handler uses a live GitHub Releases API fetch (5-minute in-memory cache)
+	// to return the latest daemon/v* release. Falls back to the static BFF config
+	// (BFF_DAEMON_LATEST_VERSION) when the GitHub API is unreachable.
 	daemonVersionHandler := handlers.NewDaemonVersionHandler(cfg)
+	daemonVersionHandler.WithFetcher(handlers.NewReleaseFetcher(
+		"https://api.github.com/repos/RdHamilton/vault-mtg/releases",
+		5*time.Minute,
+		nil, // use default http.Client with 10s timeout
+	))
 	r.Get("/api/v1/daemon/version", daemonVersionHandler.GetDaemonVersion)
 
 	// POST /api/v1/waitlist — Phase 1 waitlist signup (ticket #121).
