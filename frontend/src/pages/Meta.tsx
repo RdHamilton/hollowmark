@@ -3,6 +3,7 @@ import { trackEvent } from '@/services/analytics';
 import { meta } from '@/services/api';
 import { gui } from '@/types/models';
 import { useDownload } from '@/context/DownloadContext';
+import ColorIdentity from '@/components/ColorIdentity';
 import './Meta.css';
 
 /**
@@ -253,15 +254,7 @@ export default function Meta() {
 
   const getColorBadge = (colors: string[]) => {
     if (!colors || colors.length === 0) return null;
-    return (
-      <span className="color-badge">
-        {colors.map((c) => (
-          <span key={c} className={`color-pip color-${c.toLowerCase()}`} title={c}>
-            {c}
-          </span>
-        ))}
-      </span>
-    );
+    return <ColorIdentity colors={colors} size="sm" />;
   };
 
   const getTierLabel = (tier: number) => {

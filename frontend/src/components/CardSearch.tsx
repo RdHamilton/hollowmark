@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { cards as cardsApi } from '@/services/api';
 import { gui } from '@/types/models';
 import SetSymbol from './SetSymbol';
+import ManaPip, { type ManaColor } from './ManaPip';
 import './CardSearch.css';
 
 interface CardSearchProps {
@@ -376,20 +377,25 @@ export default function CardSearch({
         <div className="filter-group">
           <label>Colors:</label>
           <div className="color-filters">
-            {(['white', 'blue', 'black', 'red', 'green', 'colorless', 'multicolor'] as const).map((color) => (
+            {(
+              [
+                ['white', 'W'],
+                ['blue', 'U'],
+                ['black', 'B'],
+                ['red', 'R'],
+                ['green', 'G'],
+                ['colorless', 'C'],
+                ['multicolor', 'M'],
+              ] as const
+            ).map(([color, manaKey]) => (
               <button
                 key={color}
-                className={`color-button ${color} ${colorFilter[color] ? 'active' : ''}`}
+                className={`color-button ${colorFilter[color] ? 'active' : ''}`}
                 onClick={() => setColorFilter({ ...colorFilter, [color]: !colorFilter[color] })}
                 title={color.charAt(0).toUpperCase() + color.slice(1)}
+                aria-pressed={colorFilter[color]}
               >
-                {color === 'white' && 'W'}
-                {color === 'blue' && 'U'}
-                {color === 'black' && 'B'}
-                {color === 'red' && 'R'}
-                {color === 'green' && 'G'}
-                {color === 'colorless' && 'C'}
-                {color === 'multicolor' && 'M'}
+                <ManaPip color={manaKey as ManaColor} size="sm" />
               </button>
             ))}
           </div>
