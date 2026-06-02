@@ -79,6 +79,11 @@ type draftSessionResponse struct {
 	PredictedAt          *time.Time `json:"PredictedAt,omitempty"`
 	CreatedAt            time.Time  `json:"CreatedAt"`
 	UpdatedAt            time.Time  `json:"UpdatedAt"`
+	// Draft history fields — aggregated from draft_match_results.
+	Wins       int    `json:"Wins"`
+	Losses     int    `json:"Losses"`
+	IsTrophy   bool   `json:"IsTrophy"`
+	FormatType string `json:"FormatType"`
 }
 
 // draftPickResponse mirrors models.DraftPickSession.
@@ -845,6 +850,7 @@ func draftSessionRowToResponse(s repository.DraftSessionDetailRow) draftSessionR
 		PredictedWinRateMax: s.PredictedWinRateMax, PredictionFactors: s.PredictionFactors,
 		PredictedAt: s.PredictedAt,
 		CreatedAt:   s.CreatedAt, UpdatedAt: s.UpdatedAt,
+		Wins: s.Wins, Losses: s.Losses, IsTrophy: s.IsTrophy, FormatType: s.FormatType,
 	}
 }
 
