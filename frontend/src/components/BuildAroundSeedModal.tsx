@@ -13,6 +13,7 @@ import { models } from '@/types/models';
 import ProgressModal from './ProgressModal';
 import ProgressBar from './ProgressBar';
 import HelpIcon from './HelpIcon';
+import ColorIdentity from './ColorIdentity';
 import './BuildAroundSeedModal.css';
 
 type ArchetypeKey = 'aggro' | 'midrange' | 'control' | 'tempo' | 'ramp' | 'combo' | 'tokens' | 'aristocrats';
@@ -649,15 +650,7 @@ export default function BuildAroundSeedModal({
 
   const renderColorPips = (colors: string[] | undefined) => {
     if (!colors || colors.length === 0) return null;
-    return (
-      <div className="color-pips">
-        {colors.map((color, i) => (
-          <span key={i} className={`mana-pip mana-${color.toLowerCase()}`}>
-            {color}
-          </span>
-        ))}
-      </div>
-    );
+    return <ColorIdentity colors={colors} size="md" />;
   };
 
   const renderOwnershipBadge = (card: CardWithOwnership) => {

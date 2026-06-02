@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiAdapter } from '@/services/adapter';
 import type { CommunityComparisonResponse, ArchetypeComparisonEntry } from '@/services/api/drafts';
+import ColorIdentity from './ColorIdentity';
 import './CommunityComparison.css';
 
 interface CommunityComparisonProps {
@@ -182,14 +183,7 @@ const ArchetypeRow: React.FC<ArchetypeRowProps> = ({ archetype }) => {
   return (
     <div className="community-comparison__archetype-row">
       <div className="community-comparison__archetype-colors">
-        {archetype.colorCombination.split('').map((color, idx) => (
-          <span
-            key={idx}
-            className={`community-comparison__color community-comparison__color--${color.toLowerCase()}`}
-          >
-            {color}
-          </span>
-        ))}
+        <ColorIdentity colors={archetype.colorCombination} size="sm" />
       </div>
       <div className="community-comparison__archetype-name">
         {archetype.archetypeName || archetype.colorCombination}

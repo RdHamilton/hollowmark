@@ -3,6 +3,7 @@ import { opponents } from '@/services/api';
 import type { OpponentAnalysis, ObservedCard, ExpectedCard, StrategicInsight } from '@/services/api';
 import { reportError } from '@/lib/sentry';
 import LoadingSpinner from './LoadingSpinner';
+import ColorIdentity from './ColorIdentity';
 import './OpponentAnalysisPanel.css';
 
 interface OpponentAnalysisPanelProps {
@@ -39,23 +40,7 @@ const OpponentAnalysisPanel = ({ matchId, isExpanded = false, onToggle }: Oppone
   }, [isExpanded, matchId, analysis, loading, loadAnalysis]);
 
   const renderColorIdentity = (colors: string) => {
-    const colorMap: Record<string, string> = {
-      W: 'white',
-      U: 'blue',
-      B: 'black',
-      R: 'red',
-      G: 'green',
-    };
-
-    return (
-      <span className="color-identity">
-        {colors.split('').map((color, index) => (
-          <span key={index} className={`mana-symbol mana-${colorMap[color] || 'colorless'}`}>
-            {color}
-          </span>
-        ))}
-      </span>
-    );
+    return <ColorIdentity colors={colors} size="md" />;
   };
 
   const renderDeckStyle = (style: string | null) => {
