@@ -142,6 +142,27 @@ jobs:
             echo "url=https://staging-api.vaultmtg.app/api/v1" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve build-time DefaultSPAURL and DefaultSetupURL
+        # Pick the SPA and setup-page URLs baked into the binary via
+        # `-X main.DefaultSPAURL=<url>` and `-X main.DefaultSetupURL=<url>` (#637).
+        # Pre-release tags ship the staging SPA/setup URLs; stable tags ship
+        # production; workflow_dispatch defaults to staging (same split as
+        # DefaultCloudAPIURL to keep all four env targets consistent).
+        id: spa_urls
+        run: |
+          REF="${{ github.ref_name }}"
+          if [[ "$REF" == *"-rc"* || "$REF" == *"-alpha"* || "$REF" == *"-beta"* || "$REF" == *"-pre"* ]]; then
+            echo "spa_url=https://stg-app.vaultmtg.app" >> "$GITHUB_OUTPUT"
+            echo "setup_url=https://stg.vaultmtg.app/setup" >> "$GITHUB_OUTPUT"
+          elif [[ "$REF" == daemon/v* ]]; then
+            echo "spa_url=https://app.vaultmtg.app" >> "$GITHUB_OUTPUT"
+            echo "setup_url=https://vaultmtg.app/setup" >> "$GITHUB_OUTPUT"
+          else
+            # workflow_dispatch on a branch — never touch prod from a snapshot.
+            echo "spa_url=https://stg-app.vaultmtg.app" >> "$GITHUB_OUTPUT"
+            echo "setup_url=https://stg.vaultmtg.app/setup" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Resolve build-time Sentry DSN
         # Pick the Sentry DSN baked into the binary via `-X main.DefaultSentryDSN`.
         # Pre-release tags ship the staging DSN; stable tags ship the production
@@ -273,6 +294,15 @@ jobs:
           # for daemon-side crash capture. Empty for snapshot builds — leaves
           # Sentry disabled at runtime per sentryhook.Init contract. #1832.
           DEFAULT_SENTRY_DSN: ${{ steps.sentry_dsn.outputs.dsn }}
+          # SPA URL baked into the binary via `-X main.DefaultSPAURL=` so the
+          # tray "Open VaultMTG" menu item opens the correct SPA environment.
+          # Pre-release builds get stg-app.vaultmtg.app; stable builds get
+          # app.vaultmtg.app. #637.
+          DEFAULT_SPA_URL: ${{ steps.spa_urls.outputs.spa_url }}
+          # Setup page URL baked into the binary via `-X main.DefaultSetupURL=`
+          # so handleMissingConfig and the retry-setup loop open the correct
+          # environment. #637.
+          DEFAULT_SETUP_URL: ${{ steps.spa_urls.outputs.setup_url }}
           # Minisign public key baked into the binary via:
           #   -X .../updatecheck.EmbeddedPublicKey=<key>
           # This is the trust anchor for SHA256SUMS.minisig verification at
@@ -644,6 +674,23 @@ jobs:
             echo "url=https://staging-api.vaultmtg.app/api/v1" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve build-time DefaultSPAURL and DefaultSetupURL
+        # Mirror the goreleaser job's spa_urls step so the macOS binary receives
+        # the same DefaultSPAURL/DefaultSetupURL ldflags as the Windows binary. #637.
+        id: spa_urls
+        run: |
+          REF="${{ github.ref_name }}"
+          if [[ "$REF" == *"-rc"* || "$REF" == *"-alpha"* || "$REF" == *"-beta"* || "$REF" == *"-pre"* ]]; then
+            echo "spa_url=https://stg-app.vaultmtg.app" >> "$GITHUB_OUTPUT"
+            echo "setup_url=https://stg.vaultmtg.app/setup" >> "$GITHUB_OUTPUT"
+          elif [[ "$REF" == daemon/v* ]]; then
+            echo "spa_url=https://app.vaultmtg.app" >> "$GITHUB_OUTPUT"
+            echo "setup_url=https://vaultmtg.app/setup" >> "$GITHUB_OUTPUT"
+          else
+            echo "spa_url=https://stg-app.vaultmtg.app" >> "$GITHUB_OUTPUT"
+            echo "setup_url=https://stg.vaultmtg.app/setup" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Resolve minisign public key (for EmbeddedPublicKey ldflag)
         # Mirror the goreleaser job's minisign_key step so the macOS binary
         # receives the same EmbeddedPublicKey ldflag as the Windows binary.
@@ -692,7 +739,7 @@ jobs:
           GOARCH: arm64
         run: |
           go build \
-            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }}" \
+            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X main.DefaultSPAURL=${{ steps.spa_urls.outputs.spa_url }} -X main.DefaultSetupURL=${{ steps.spa_urls.outputs.setup_url }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }}" \
             -o /tmp/vaultmtg-daemon-arm64 \
             ./cmd/daemon
 
@@ -706,7 +753,7 @@ jobs:
           GOARCH: amd64
         run: |
           go build \
-            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }}" \
+            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X main.DefaultSPAURL=${{ steps.spa_urls.outputs.spa_url }} -X main.DefaultSetupURL=${{ steps.spa_urls.outputs.setup_url }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }}" \
             -o /tmp/vaultmtg-daemon-amd64 \
             ./cmd/daemon
 
