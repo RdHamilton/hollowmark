@@ -152,6 +152,12 @@ launchctl enable "${TARGET}" 2>/dev/null || true
 # Failure is non-fatal — the job may already be bootstrapped (e.g. first launch
 # before any Quit, or if the user double-clicks the app while already running).
 launchctl bootstrap "${USER_DOMAIN}" "${PLIST_PATH}" 2>/dev/null || true
+
+# Step 3: notify the user that VaultMTG is running (#636).
+# Fires whether the daemon was just started or was already running — the user
+# learns the daemon is active either way. osascript is always present on macOS.
+# This does NOT introduce a persistent process; osascript exits after posting.
+osascript -e 'display notification "VaultMTG is running" with title "VaultMTG"' 2>/dev/null || true
 LAUNCHER
 chmod 755 "${APP_MACOS}/vaultmtg-launcher"
 
