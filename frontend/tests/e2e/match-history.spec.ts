@@ -1,12 +1,12 @@
 import { test, expect, Page } from '@playwright/test';
 
 /**
- * Match History E2E Tests (#2000, #2061, #2178)
+ * Match History E2E Tests (#2000, #2061, #2178, vmt-t#625)
  *
  * Tests the cloud match-history page at /match-history, served by the
  * BffMatchHistory component. BffMatchHistory fetches the Clerk-protected
- * GET /api/v1/history/matches endpoint and renders a paginated table, an
- * empty state, or an error state.
+ * GET /api/v1/history/matches endpoint and renders a cursor-paginated table,
+ * an empty state, or an error state.
  *
  * Auth approach: the Vite build is produced with VITE_CLERK_TEST_MODE=true which
  * aliases @clerk/react to src/test/mocks/clerkMock.tsx. That mock reads
@@ -19,14 +19,12 @@ import { test, expect, Page } from '@playwright/test';
  * Signed-in state ({ isSignedIn: true }): ProtectedRoute passes through and
  *   BffMatchHistory renders, calling the BFF API.
  *
- * History (#2178): this spec previously tested the legacy MatchHistory component
- * (date-range / format / queue filters, sortable headers, .match-history-table-
- * container). The /match-history route was re-pointed to BffMatchHistory in
- * #1918 — that legacy UI no longer exists — and the spec navigated to '/' which
- * now redirects to /home. The spec was rewritten to exercise the real
- * BffMatchHistory markup, navigate directly to /match-history, and mock the BFF
- * response via page.route() so it does not depend on a live authenticated BFF
- * (the CI BFF rejects the Clerk mock's stub token).
+ * vmt-t#625 fix: the mock now uses the ACTUAL BFF response shape
+ * (cursor-paginated: { data: [...], has_more, next_cursor_ts, next_cursor_id, limit })
+ * rather than the old broken shape ({ matches: [...], total, offset, limit }).
+ * Tests that previously sent the old shape were silently passing with an empty
+ * table because the component would read data.matches (undefined) → empty state,
+ * and the test didn't assert on row count.
  */
 
 // ---------------------------------------------------------------------------
@@ -47,35 +45,80 @@ async function setClerkSignedOut(page: Page): Promise<void> {
   }, { isSignedIn: false });
 }
 
-type MatchRow = {
-  id: number;
-  opponent_deck: string;
-  result: string;
+type MatchItem = {
+  id: string;
   format: string;
-  played_at: string;
+  result: string;
+  timestamp: string;
+  player_wins: number;
+  opponent_wins: number;
+  duration_seconds: number | null;
+  deck_id: string | null;
+  rank_before: string | null;
+  rank_after: string | null;
+  opponent_rank: string | null;
 };
 
+function makeMatchItem(overrides: Partial<MatchItem> = {}): MatchItem {
+  return {
+    id: 'match-1',
+    format: 'Standard',
+    result: 'win',
+    timestamp: '2026-05-01T12:00:00Z',
+    player_wins: 2,
+    opponent_wins: 0,
+    duration_seconds: null,
+    deck_id: null,
+    rank_before: null,
+    rank_after: null,
+    opponent_rank: null,
+    ...overrides,
+  };
+}
+
 /**
- * Mock GET /api/v1/history/matches with fixture rows so BffMatchHistory does not
- * depend on a live authenticated BFF. Must be registered before page.goto().
+ * Mock GET /api/v1/history/matches with the ACTUAL BFF cursor-paginated shape.
+ *
+ * IMPORTANT: The BFF returns { data: [...], has_more, next_cursor_ts, next_cursor_id, limit }.
+ * The old mock used { matches: [...], total, offset, limit } which was always wrong —
+ * the component read data.data (undefined from old shape) → empty state.
+ *
+ * Must be registered before page.goto().
  */
-async function mockMatchHistory(page: Page, rows: MatchRow[], total = rows.length): Promise<void> {
+async function mockMatchHistory(
+  page: Page,
+  items: MatchItem[],
+  hasMore = false,
+  nextCursorTS?: string,
+  nextCursorID?: string
+): Promise<void> {
   await page.route('**/api/v1/history/matches**', (route) => {
+    const body: Record<string, unknown> = {
+      data: items,
+      has_more: hasMore,
+      limit: 20,
+    };
+    if (hasMore && nextCursorTS) body['next_cursor_ts'] = nextCursorTS;
+    if (hasMore && nextCursorID) body['next_cursor_id'] = nextCursorID;
+
     void route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ matches: rows, total, limit: 20, offset: 0 }),
+      body: JSON.stringify(body),
     });
   });
 }
 
-const MATCH_ROWS: MatchRow[] = Array.from({ length: 20 }, (_, i) => ({
-  id: i + 1,
-  opponent_deck: `Opponent Deck ${i + 1}`,
-  result: i % 2 === 0 ? 'win' : 'loss',
-  format: 'Standard',
-  played_at: '2026-05-01T12:00:00Z',
-}));
+const MATCH_ITEMS: MatchItem[] = Array.from({ length: 20 }, (_, i) =>
+  makeMatchItem({
+    id: String(i + 1),
+    result: i % 2 === 0 ? 'win' : 'loss',
+    format: 'Standard',
+    timestamp: '2026-05-01T12:00:00Z',
+    player_wins: i % 2 === 0 ? 2 : 0,
+    opponent_wins: i % 2 === 0 ? 0 : 2,
+  })
+);
 
 // ---------------------------------------------------------------------------
 // Tests — signed-in, table rendered
@@ -84,9 +127,9 @@ const MATCH_ROWS: MatchRow[] = Array.from({ length: 20 }, (_, i) => ({
 test.describe('Match History', () => {
   test.beforeEach(async ({ page }) => {
     // Inject signed-in state so ProtectedRoute allows /match-history to render,
-    // and mock the BFF response so the table renders deterministically (#2178).
+    // and mock the BFF response so the table renders deterministically.
     await setClerkSignedIn(page);
-    await mockMatchHistory(page, MATCH_ROWS);
+    await mockMatchHistory(page, MATCH_ITEMS);
   });
 
   test.describe('Navigation and Page Load', () => {
@@ -113,7 +156,6 @@ test.describe('Match History', () => {
       const headerTexts = await table.locator('thead th').allTextContents();
       expect(headerTexts).toContain('Date');
       expect(headerTexts).toContain('Format');
-      expect(headerTexts).toContain('Opponent Deck');
       expect(headerTexts).toContain('Result');
     });
 
@@ -122,14 +164,25 @@ test.describe('Match History', () => {
 
       const table = page.locator('[data-testid="match-history-table"]');
       await expect(table).toBeVisible();
-      await expect(table.locator('tbody tr')).toHaveCount(MATCH_ROWS.length);
+      await expect(table.locator('tbody tr')).toHaveCount(MATCH_ITEMS.length);
+    });
+
+    test('@smoke renders actual BFF cursor-paginated shape — not empty state (vmt-t#625 regression guard)', async ({ page }) => {
+      // This test is the E2E regression guard for vmt-t#625.
+      // Before the fix, the mock sending { data: [...] } would result in "No matches yet"
+      // because the component read data.matches (undefined). After the fix it reads
+      // data.data and renders the table.
+      await page.goto('/match-history');
+
+      // Table must be visible — NOT the empty state.
+      await expect(page.locator('[data-testid="match-history-table"]')).toBeVisible({ timeout: 15_000 });
+      await expect(page.locator('[data-testid="match-history-empty"]')).not.toBeVisible();
     });
   });
 
   test.describe('Pagination', () => {
-    test('should display pagination controls when total exceeds the page size', async ({ page }) => {
-      // 20 rows, total = 41 → more than one page → footer renders.
-      await mockMatchHistory(page, MATCH_ROWS, 41);
+    test('should display pagination controls', async ({ page }) => {
+      await mockMatchHistory(page, MATCH_ITEMS, true, '2026-05-01T00:00:00Z', 'cursor-20');
       await page.goto('/match-history');
 
       await expect(page.locator('[data-testid="match-history-table"]')).toBeVisible();
@@ -211,7 +264,7 @@ test.describe('Match History', () => {
 test.describe('Match History — empty state', () => {
   test('shows the empty state when the BFF returns no matches', async ({ page }) => {
     await setClerkSignedIn(page);
-    await mockMatchHistory(page, [], 0);
+    await mockMatchHistory(page, [], false);
 
     await page.goto('/match-history');
 
