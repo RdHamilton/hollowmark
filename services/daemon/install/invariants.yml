@@ -1,0 +1,187 @@
+# invariants.yml — Daemon Install Lifecycle Invariant Specification
+#
+# Source of truth for the invariant suite (ADR-036 I-1..I-12, extended by ADR-049 §3
+# to add the channel dimension and cross-channel non-interference assertions).
+#
+# Structure: every invariant has an `id`, a `description`, a list of `platforms`
+# (macos / windows), a `channel_sensitive` flag (true = must run per channel;
+# false = channel-independent), and a list of `test_ids` naming the test(s) in the
+# per-platform suite that assert it.
+#
+# CI sanity check: a CI step asserts that every invariant whose channel_sensitive=true
+# has at least two test_ids (one per channel) in the per-platform suite. A YAML
+# invariant without a corresponding test = CI red.
+#
+# Usage:
+#   - macOS suite: services/daemon/install/macos/postinstall_test.bats
+#                  services/daemon/install/macos/uninstall_test.bats
+#                  services/daemon/install/macos/channel_test.bats   ← ADR-049 addition
+#   - Windows suite: services/daemon/install/windows/nsis/lifecycle_test.go
+#
+# Legend:
+#   channel_sensitive: true  → ADR-049 §3: must hold per CHANNEL (stable + staging)
+#   channel_sensitive: false → channel-independent; run once
+
+version: "1.1"   # bumped from 1.0 to reflect ADR-049 channel dimension
+
+invariants:
+
+  - id: I-1
+    name: Idempotence on install
+    description: >
+      Running install twice in succession (same input, same channel) produces the
+      same end state as running it once.  No duplicated LaunchAgent entries,
+      scheduled tasks, plist files, or daemon.json entries.  Keychain entry is not
+      rotated by a second install.
+    platforms: [macos, windows]
+    channel_sensitive: true
+    test_ids:
+      - macos/postinstall_test.bats::reinstall-bootout-before-bootstrap
+      - macos/channel_test.bats::I-1-stable-idempotent-install
+      - macos/channel_test.bats::I-1-staging-idempotent-install
+    references: [ADR-036, ADR-049-3]
+
+  - id: I-2
+    name: No-op uninstall on absent state
+    description: >
+      Running uninstall against a machine with no daemon installed (including the
+      cross-channel case: running staging uninstall while only prod is installed)
+      exits 0 with informative output.  No errors, no "command not found" failures.
+      LOAD-BEARING per ADR-049: uninstalling the staging channel MUST NEVER touch
+      any prod artifact (binary, LaunchAgent, config dir, .app bundle, keychain
+      entry) — and vice versa.
+    platforms: [macos, windows]
+    channel_sensitive: true
+    test_ids:
+      - macos/uninstall_test.bats::no-op-exits-0-cleanly
+      - macos/channel_test.bats::I-2-cross-channel-staging-uninstall-leaves-prod-untouched
+      - macos/channel_test.bats::I-2-cross-channel-prod-uninstall-leaves-staging-untouched
+      - macos/channel_test.bats::I-2-stable-no-op-uninstall-absent-state
+      - macos/channel_test.bats::I-2-staging-no-op-uninstall-absent-state
+    references: [ADR-036, ADR-049-3, ADR-049-I2-cross-channel]
+
+  - id: I-3
+    name: Partial-install recovery without root / manual intervention
+    description: >
+      If install fails mid-flight, the partial state is fully cleanable by a
+      subsequent uninstall run, without requiring manual file removal or reboot.
+    platforms: [macos, windows]
+    channel_sensitive: false
+    test_ids:
+      - macos/postinstall_test.bats::placeholder-check-exits-1
+    references: [ADR-036]
+
+  - id: I-4
+    name: Single source of truth for install constants
+    description: >
+      Per ADR-049 §2: common.sh / common.ps1 is the ONE file per platform that
+      defines identity constants.  Every constant is a derivation (BASE + SUFFIX
+      from CHANNEL), never a per-channel literal copy.  A divergent literal in any
+      install script outside common.sh/common.ps1 = CI red.  The I-4 grep CI check
+      is STRENGTHENED: no install script outside common.sh/common.ps1 may contain
+      either the base literal (vaultmtg-daemon) or any -staging/-staging suffixed
+      literal.  Go-side constants in internal/install/ are also single-source-of-truth
+      (no bare -staging or .staging literals outside internal/install/).
+    platforms: [macos, windows]
+    channel_sensitive: false
+    test_ids:
+      - macos/channel_test.bats::I-4-no-literal-outside-common-sh
+    references: [ADR-036-I4, ADR-049-2]
+
+  - id: I-5
+    name: Verifiable post-install state and channel-correct health surface
+    description: >
+      Per ADR-049 §3 + Risks: each channel daemon binds a distinct local-API port
+      (stable=9001, staging=9011, offset=10 matching install.stagingPortOffset in Go).
+      With both daemons running, curl localhost:9001/health (stable) and
+      curl localhost:9011/health (staging) both return 200 independently.
+      install-state.json is written per channel to the channel-appropriate config dir.
+    platforms: [macos, windows]
+    channel_sensitive: true
+    test_ids:
+      - macos/postinstall_test.bats::liveness-check-exits-0-account-id
+      - macos/channel_test.bats::I-5-stable-health-surface-reachable
+      - macos/channel_test.bats::I-5-staging-health-surface-reachable
+    references: [ADR-036-I5, ADR-049-risks-port-collision]
+
+  - id: I-6
+    name: No silent state machines
+    description: >
+      Every install or uninstall failure mode surfaces to the user via a tray
+      notification, a structured log line (INSTALL_* failure code), or a non-zero
+      exit code.  No failure may exit 0 and leave the daemon in an unrecoverable state.
+    platforms: [macos, windows]
+    channel_sensitive: false
+    test_ids:
+      - macos/postinstall_test.bats::placeholder-check-exits-1
+    references: [ADR-036-I6]
+
+  - id: I-7
+    name: No platform divergence beyond the platform-specific layer
+    description: >
+      ADR-049 §3: the channel parameterization is identical macOS / Windows —
+      CHANNEL=stable produces the same identity on both; CHANNEL=staging produces
+      the same -staging-suffixed identity on both.  invariants.yml runs both channels
+      on both platforms.
+    platforms: [macos, windows]
+    channel_sensitive: true
+    test_ids:
+      - macos/channel_test.bats::I-7-channel-param-identical-across-platforms-macos-stable
+      - macos/channel_test.bats::I-7-channel-param-identical-across-platforms-macos-staging
+    references: [ADR-036-I7, ADR-049-3]
+
+  - id: I-8
+    name: VaultMTG.app launcher bundle present in /Applications after stable install
+    description: >
+      After a successful macOS .pkg stable-channel install, /Applications/VaultMTG.app
+      exists with a valid Contents/Info.plist and an executable launcher.
+      The staging channel installs /Applications/VaultMTG Staging.app (per ADR-049 §1).
+    platforms: [macos]
+    channel_sensitive: true
+    test_ids:
+      - macos/channel_test.bats::I-8-staging-install-creates-VaultMTG-Staging-app
+      - macos/channel_test.bats::I-8-stable-install-creates-VaultMTG-app
+    references: [ADR-036-I8, ADR-049-1]
+
+  - id: I-9
+    name: VaultMTG.app launcher bundle absent after uninstall (per-channel)
+    description: >
+      Per ADR-049: staging uninstall removes /Applications/VaultMTG Staging.app and
+      LEAVES /Applications/VaultMTG.app (prod) untouched.  Stable uninstall removes
+      /Applications/VaultMTG.app and leaves /Applications/VaultMTG Staging.app untouched.
+    platforms: [macos]
+    channel_sensitive: true
+    test_ids:
+      - macos/channel_test.bats::I-9-staging-uninstall-removes-staging-app-leaves-prod-app
+      - macos/channel_test.bats::I-9-stable-uninstall-removes-prod-app-leaves-staging-app
+    references: [ADR-036-I9, ADR-049-3-I8-I9]
+
+  - id: I-10
+    name: Artifact integrity verified before installer launch (auto-update)
+    description: >
+      The auto-updater verifies cryptographic signature + SHA-256 checksum before
+      handing an artifact to the OS native installer.  Fail-closed on placeholder key.
+    platforms: [macos, windows]
+    channel_sensitive: false
+    test_ids: []   # Covered by updatecheck unit tests in services/daemon/internal/updatecheck/
+    references: [ADR-036-I10]
+
+  - id: I-11
+    name: No downgrade on auto-update
+    description: >
+      The auto-updater does not install a version less than or equal to the current
+      running version.
+    platforms: [macos, windows]
+    channel_sensitive: false
+    test_ids: []   # Covered by updatecheck unit tests
+    references: [ADR-036-I11]
+
+  - id: I-12
+    name: Allow-listed download source only (auto-update)
+    description: >
+      Every URL the auto-updater fetches resolves to an allow-listed host.
+      Validation re-applied on every redirect hop.
+    platforms: [macos, windows]
+    channel_sensitive: false
+    test_ids: []   # Covered by updatecheck unit tests
+    references: [ADR-036-I12]

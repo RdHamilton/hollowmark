@@ -4,20 +4,28 @@
 # Usage:
 #   bash uninstall.sh [--purge]
 #
+#   Set CHANNEL=stable (default) or CHANNEL=staging before invoking to target
+#   a specific channel's install artifacts.  When CHANNEL is unset, defaults to
+#   stable (backward-compatible).
+#
 # Options:
 #   --purge   Also delete the daemon's API key from the macOS Keychain.
-#             By default the keychain entry (service: com.vaultmtg.daemon,
-#             account: api-key) is retained for downgrade safety so that a
-#             reinstall does not require re-authenticating.
+#             By default the keychain entry is retained for downgrade safety.
+#
+# Channel behaviour (ADR-049 §2 + I-2 cross-channel non-interference):
+#   CHANNEL=stable  removes vaultmtg-daemon, com.vaultmtg.daemon plist, VaultMTG.app
+#   CHANNEL=staging removes vaultmtg-daemon-staging, com.vaultmtg.daemon-staging plist,
+#                   "VaultMTG Staging.app" — NEVER touches stable channel artifacts.
 #
 # Steps (ADR-022 Phase 2):
-#   1. Unloads and disables the new launchd job (com.vaultmtg.daemon).
-#   2. Unloads and disables the legacy launchd job (com.mtga-companion.daemon)
-#      if still present — handles the upgrade-then-uninstall scenario.
-#   3. Removes both plists from ~/Library/LaunchAgents/.
-#   4. Removes the binary from /usr/local/bin/.
-#   5. Removes the legacy binary (mtga-companion-daemon) if present (upgrader path).
-#   6. (--purge only) Deletes the API key from the macOS Keychain.
+#   1. Unloads and disables the channel-appropriate launchd job.
+#   2. Unloads the legacy launchd job (com.mtga-companion.daemon) if present —
+#      upgrader path (stable channel only; staging never uses the legacy label).
+#   3. Removes the channel-appropriate plist from ~/Library/LaunchAgents/.
+#   4. Removes the channel-appropriate binary from INSTALL_DIR.
+#   5. Removes the legacy binary (mtga-companion-daemon) if present (stable only).
+#   6. Removes the channel-appropriate .app bundle from /Applications.
+#   7. (--purge only) Deletes the API key from the macOS Keychain.
 
 set -euo pipefail
 
@@ -32,20 +40,37 @@ for arg in "$@"; do
   esac
 done
 
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
-BINARY_NAME="vaultmtg-daemon"
-# ADR-022 Phase 2: legacy binary name — removed on the upgrader path.
-BINARY_NAME_LEGACY="mtga-companion-daemon"
+# ---------------------------------------------------------------------------
+# Channel-aware identity constants (ADR-049 §2, ADR-036 I-4).
+# Source common.sh when it exists and CHANNEL is set; fall back to stable
+# defaults for backward-compatibility with callers that do not set CHANNEL.
+# ---------------------------------------------------------------------------
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_COMMON_SH="${_SCRIPT_DIR}/common.sh"
 
-# ADR-036 I-4 / I-9: single source of truth for the launcher app bundle path.
-# Must stay in sync with APP_BUNDLE_PATH in build-pkg.sh and appBundlePath in
-# launchagent_darwin.go.  Never copy-paste this path.
-APP_BUNDLE_PATH="/Applications/VaultMTG.app"
-
-# ADR-022 Phase 2: new label.
-PLIST_LABEL="com.vaultmtg.daemon"
-# Legacy label — also unloaded when present.
-PLIST_LABEL_LEGACY="com.mtga-companion.daemon"
+if [[ -f "${_COMMON_SH}" ]]; then
+  # common.sh sets CHANNEL=stable as the default when CHANNEL is unset.
+  CHANNEL="${CHANNEL:-stable}"
+  # shellcheck source=services/daemon/install/macos/common.sh
+  source "${_COMMON_SH}"
+  # common.sh (Bob's canonical version) already exports PLIST_LABEL directly.
+  # Set BINARY_NAME_LEGACY and PLIST_LABEL_LEGACY for the legacy-cleanup path.
+  BINARY_NAME_LEGACY="mtga-companion-daemon"
+  PLIST_LABEL_LEGACY="${PLIST_LABEL_LEGACY:-com.mtga-companion.daemon}"
+else
+  # Fallback: pre-common.sh stable defaults (ADR-036 original behavior).
+  # This branch is only reached when common.sh has not yet been introduced
+  # (i.e., before ticket #650 lands in CI).  Production environments always
+  # have common.sh present once the channel cluster is deployed.
+  INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+  BINARY_NAME="vaultmtg-daemon"
+  BINARY_NAME_LEGACY="mtga-companion-daemon"
+  APP_BUNDLE_PATH="/Applications/VaultMTG.app"
+  PLIST_LABEL="com.vaultmtg.daemon"
+  PLIST_LABEL_LEGACY="com.mtga-companion.daemon"
+  KEYCHAIN_SERVICE="com.vaultmtg.daemon"
+  KEYCHAIN_ACCOUNT="api-key"
+fi
 
 PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
 PLIST_PATH_LEGACY="${HOME}/Library/LaunchAgents/${PLIST_LABEL_LEGACY}.plist"
@@ -125,14 +150,14 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Keychain entry (com.vaultmtg.daemon / api-key).
+# Keychain entry — service and account from common.sh (if sourced) or defaults.
 # Default behaviour: RETAIN the entry for downgrade safety — a user who
 # reinstalls the daemon will not need to re-authenticate.
 # --purge: delete the entry via security(1) so no credential remains on disk.
 # Failure (entry already absent) is non-fatal — security exits 44 in that case.
 # ---------------------------------------------------------------------------
-KEYCHAIN_SERVICE="com.vaultmtg.daemon"
-KEYCHAIN_ACCOUNT="api-key"
+# KEYCHAIN_SERVICE and KEYCHAIN_ACCOUNT are set by common.sh above.
+# The default values below are only reached in the pre-common.sh fallback path.
 
 if [[ "${PURGE}" -eq 1 ]]; then
   echo "Removing keychain entry (${KEYCHAIN_SERVICE} / ${KEYCHAIN_ACCOUNT})..."
@@ -144,8 +169,8 @@ fi
 
 echo ""
 echo "VaultMTG daemon uninstalled."
-echo "Log file (${HOME}/Library/Logs/vaultmtg-daemon.log) was NOT removed."
-echo "Config file (~/.vaultmtg/daemon.json) was NOT removed."
+echo "Log file (${LOG_FILE:-${HOME}/Library/Logs/vaultmtg-daemon.log}) was NOT removed."
+echo "Config file (${CONFIG_DIR:-~/.vaultmtg}/daemon.json) was NOT removed."
 echo "Remove those manually if desired."
 if [[ "${PURGE}" -eq 0 ]]; then
   echo "API key retained in keychain for downgrade safety. Run with --purge to remove all data."
