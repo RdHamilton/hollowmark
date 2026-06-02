@@ -25,31 +25,6 @@ function sseData(payload: object): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
-/**
- * Intercept the SSE endpoint and serve the given event bodies one per
- * connection (in order). After the list is exhausted, reconnections are
- * aborted so the EventSource backs off.
- */
-async function mockSse(page: Page, bodies: string[]): Promise<void> {
-  let index = 0;
-  await page.route('**/api/v1/events*', async (route) => {
-    if (index >= bodies.length) {
-      await route.abort();
-      return;
-    }
-    const body = bodies[index];
-    index += 1;
-    await route.fulfill({
-      status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-      },
-      body,
-    });
-  });
-}
-
 function injectSignedIn(page: Page) {
   return page.addInitScript(() => {
     (window as unknown as Record<string, unknown>).__CLERK_TEST_STATE__ = { isSignedIn: true };
