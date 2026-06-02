@@ -23,7 +23,10 @@ vi.mock('recharts', () => ({
   Legend: () => <div data-testid="legend" />,
 }));
 
-// Helper function to create mock timeline entry
+// Helper function to create mock timeline entry.
+// rank_class / rank_level are present on the SPA model but are NOT emitted by
+// the BFF wire format (which only sends occurred_at, rank, result, match_id).
+// rank is the only field the chart uses for Y-axis placement — see parseRankString.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function createMockTimelineEntry(overrides: Record<string, any> = {}): storage.RankTimelineEntry {
   return new storage.RankTimelineEntry({
@@ -584,6 +587,89 @@ describe('RankProgression', () => {
 
       await waitFor(() => {
         expect(screen.getByTestId('line-chart')).toBeInTheDocument();
+      });
+    });
+  });
+
+  // ─── BFF Contract Tests ────────────────────────────────────────────────────
+  // The BFF rankTimelineEntryResponse only emits { occurred_at, rank, result,
+  // match_id }. rank_class and rank_level are NOT present on the wire.
+  // These tests verify that the chart Y-axis is non-zero when only "rank" is
+  // provided, catching any regression that re-introduces rank_class/rank_level
+  // dependency in the chart transform.
+  describe('BFF field contract — rank string parsed client-side (not rank_class/rank_level)', () => {
+    it('chart produces non-zero Y values from rank string when rank_class/rank_level absent', async () => {
+      // Entries use only the real BFF wire fields — no rank_class, no rank_level
+      const bffEntries = [
+        new storage.RankTimelineEntry({
+          timestamp: new Date('2024-01-10T10:00:00').toISOString(),
+          rank: 'Silver 1',
+          is_change: true,
+        }),
+        new storage.RankTimelineEntry({
+          timestamp: new Date('2024-01-15T10:00:00').toISOString(),
+          rank: 'Gold 3',
+          is_change: true,
+        }),
+      ];
+
+      mockMatches.getRankProgressionTimeline.mockResolvedValue({ entries: bffEntries });
+
+      renderWithProvider(<RankProgression />);
+
+      await waitFor(() => {
+        const lineChart = screen.getByTestId('line-chart');
+        const chartData = JSON.parse(lineChart.getAttribute('data-chart-data') || '[]');
+        expect(chartData).toHaveLength(2);
+        // Silver 1 → rankToNumeric('Silver', 1) = 1*4 + (4-1) = 7
+        // Gold 3   → rankToNumeric('Gold', 3)   = 2*4 + (4-3) = 9
+        // Both must be non-zero; if rank_class/rank_level dependency remained they'd be 0
+        expect(chartData[0].rankValue).toBeGreaterThan(0);
+        expect(chartData[1].rankValue).toBeGreaterThan(0);
+      });
+    });
+
+    it('chart Y-axis flat-lines at 0 only when rank string is empty (regression sentinel)', async () => {
+      // Mimics the pre-fix behavior: rank_class/rank_level absent AND rank empty → 0
+      const bffEntries = [
+        new storage.RankTimelineEntry({
+          timestamp: new Date('2024-01-10T10:00:00').toISOString(),
+          rank: '',
+          is_change: false,
+        }),
+      ];
+
+      mockMatches.getRankProgressionTimeline.mockResolvedValue({ entries: bffEntries });
+
+      renderWithProvider(<RankProgression />);
+
+      await waitFor(() => {
+        const lineChart = screen.getByTestId('line-chart');
+        const chartData = JSON.parse(lineChart.getAttribute('data-chart-data') || '[]');
+        expect(chartData).toHaveLength(1);
+        expect(chartData[0].rankValue).toBe(0);
+      });
+    });
+
+    it('Mythic rank string parses to non-zero chart value', async () => {
+      const bffEntries = [
+        new storage.RankTimelineEntry({
+          timestamp: new Date('2024-01-20T10:00:00').toISOString(),
+          rank: 'Mythic',
+          is_change: true,
+        }),
+      ];
+
+      mockMatches.getRankProgressionTimeline.mockResolvedValue({ entries: bffEntries });
+
+      renderWithProvider(<RankProgression />);
+
+      await waitFor(() => {
+        const lineChart = screen.getByTestId('line-chart');
+        const chartData = JSON.parse(lineChart.getAttribute('data-chart-data') || '[]');
+        expect(chartData).toHaveLength(1);
+        // Mythic → rankToNumeric('Mythic', 1) = 5*4 + 4 = 24
+        expect(chartData[0].rankValue).toBe(24);
       });
     });
   });

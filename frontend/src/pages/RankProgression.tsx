@@ -73,6 +73,23 @@ const RankProgression = () => {
     loadTimeline();
   }, [dateRange, format]);
 
+  // Parse a flat rank string (e.g. "Gold 2") into class + level components.
+  // The BFF emits only { occurred_at, rank, result, match_id } — rank_class and
+  // rank_level are NOT present on the wire. This is the client-side parser that
+  // reconstructs them from the rank string so rankToNumeric can produce a valid
+  // Y-axis value.
+  const parseRankString = (rank: string): { rankClass: string; rankLevel: number } => {
+    if (!rank) return { rankClass: '', rankLevel: 0 };
+    const parts = rank.trim().split(/\s+/);
+    if (parts.length === 1) {
+      // e.g. "Mythic"
+      return { rankClass: parts[0], rankLevel: 1 };
+    }
+    const level = parseInt(parts[parts.length - 1], 10);
+    const rankClass = parts.slice(0, parts.length - 1).join(' ');
+    return { rankClass, rankLevel: isNaN(level) ? 0 : level };
+  };
+
   // Convert rank to numeric value for charting
   const rankToNumeric = (rankClass: string | null | undefined, rankLevel: number | null | undefined): number => {
     if (!rankClass || rankLevel == null) return 0;
@@ -109,13 +126,20 @@ const RankProgression = () => {
     return `${rankClass} ${level}`;
   };
 
-  // Transform data for Recharts
-  const chartData = timeline.map(point => ({
-    timestamp: new Date(point.timestamp as unknown as string).toLocaleDateString(),
-    rankValue: rankToNumeric(point.rank_class || null, point.rank_level || null),
-    rankDisplay: point.rank,
-    isChange: point.is_change
-  }));
+  // Transform data for Recharts.
+  // The BFF wire format for rank-timeline entries only emits { occurred_at, rank,
+  // result, match_id } — rank_class and rank_level are NOT present. Use
+  // parseRankString to derive class+level from the flat rank string so the Y-axis
+  // can plot a real numeric value instead of 0.
+  const chartData = timeline.map(point => {
+    const { rankClass, rankLevel } = parseRankString(point.rank);
+    return {
+      timestamp: new Date(point.timestamp as unknown as string).toLocaleDateString(),
+      rankValue: rankToNumeric(rankClass || null, rankLevel || null),
+      rankDisplay: point.rank,
+      isChange: point.is_change,
+    };
+  });
 
   // Calculate statistics
   const getProgressionStats = () => {
@@ -124,8 +148,10 @@ const RankProgression = () => {
     const first = timeline[0];
     const last = timeline[timeline.length - 1];
 
-    const firstRank = rankToNumeric(first.rank_class || null, first.rank_level || null);
-    const lastRank = rankToNumeric(last.rank_class || null, last.rank_level || null);
+    const { rankClass: firstClass, rankLevel: firstLevel } = parseRankString(first.rank);
+    const { rankClass: lastClass, rankLevel: lastLevel } = parseRankString(last.rank);
+    const firstRank = rankToNumeric(firstClass || null, firstLevel || null);
+    const lastRank = rankToNumeric(lastClass || null, lastLevel || null);
 
     const change = lastRank - firstRank;
     const direction = change > 0 ? 'up' : change < 0 ? 'down' : 'stable';

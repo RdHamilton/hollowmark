@@ -418,7 +418,7 @@ const Quests = () => {
                       </div>
                       <div className="quest-card-footer">
                         <div className="quest-assigned">
-                          Assigned: {formatDate(quest.assigned_at)}
+                          Assigned: {formatDate(quest.first_seen_at)}
                         </div>
                       </div>
                     </div>
@@ -582,9 +582,9 @@ const Quests = () => {
                                 {status.text}
                               </span>
                             </td>
-                            <td>{formatDate(quest.assigned_at)}</td>
+                            <td>{formatDate(quest.first_seen_at)}</td>
                             <td>{quest.completed_at ? formatDate(quest.completed_at) : '-'}</td>
-                            <td>{formatCompletionTime(quest.assigned_at, quest.completed_at)}</td>
+                            <td>{formatCompletionTime(quest.first_seen_at, quest.completed_at)}</td>
                           </tr>
                         );
                       })}
