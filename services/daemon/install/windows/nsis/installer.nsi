@@ -41,8 +41,9 @@
 ; General attributes
 ;----------------------------------------------------------------------
 Name              "VaultMTG Daemon ${VERSION}"
-; Output is written to the current directory (repo root when invoked via GoReleaser CI).
-; GoReleaser extra_files glob uses vaultmtg-daemon-setup-*.exe at repo root.
+; makensis changes CWD to the .nsi file's directory before processing OutFile.
+; Output is therefore written to install/windows/nsis/ relative to the repo root.
+; GoReleaser extra_files uses glob services/daemon/install/windows/nsis/vaultmtg-daemon-setup-*.exe.
 OutFile           "vaultmtg-daemon-setup-${VERSION}.exe"
 
 ; Per-user install — no UAC prompt (RequestExecutionLevel user)
