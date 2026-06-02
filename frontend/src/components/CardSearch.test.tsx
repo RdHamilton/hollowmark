@@ -551,8 +551,8 @@ describe('CardSearch Component', () => {
         expect(screen.getByText('Red Card')).toBeInTheDocument();
       });
 
-      // Click blue color filter (button has text "U" with title "Blue")
-      const blueButton = screen.getByRole('button', { name: 'U' });
+      // Click blue color filter -- the button's accessible name is its title "Blue"
+      const blueButton = screen.getByRole('button', { name: 'Blue' });
       await userEvent.click(blueButton);
 
       // Only blue card should be visible
@@ -587,8 +587,8 @@ describe('CardSearch Component', () => {
         expect(screen.getByText('Blue Card')).toBeInTheDocument();
       });
 
-      // Click colorless filter (button has text "C" with title "Colorless")
-      const colorlessButton = screen.getByRole('button', { name: 'C' });
+      // Click colorless filter -- the button's accessible name is its title "Colorless"
+      const colorlessButton = screen.getByRole('button', { name: 'Colorless' });
       await userEvent.click(colorlessButton);
 
       // Only colorless card should be visible
@@ -623,8 +623,8 @@ describe('CardSearch Component', () => {
         expect(screen.getByText('Mono Blue')).toBeInTheDocument();
       });
 
-      // Click multicolor filter (button has text "M" with title "Multicolor")
-      const multicolorButton = screen.getByRole('button', { name: 'M' });
+      // Click multicolor filter -- the button's accessible name is its title "Multicolor"
+      const multicolorButton = screen.getByRole('button', { name: 'Multicolor' });
       await userEvent.click(multicolorButton);
 
       // Only multicolor card should be visible

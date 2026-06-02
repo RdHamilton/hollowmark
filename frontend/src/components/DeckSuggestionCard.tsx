@@ -1,4 +1,5 @@
 import { gui } from '@/types/models';
+import ColorIdentity from './ColorIdentity';
 import './SuggestDecksModal.css';
 
 interface DeckSuggestionCardProps {
@@ -12,14 +13,6 @@ interface DeckSuggestionCardProps {
   rank: number;
 }
 
-// Color name to mana symbol mapping
-const colorSymbols: Record<string, string> = {
-  W: 'W',
-  U: 'U',
-  B: 'B',
-  R: 'R',
-  G: 'G',
-};
 
 // Viability badge styling — uses design-system CSS custom properties
 // so the palette resolves from the token layer (no raw hex).
@@ -60,11 +53,7 @@ export default function DeckSuggestionCard({
       <div className="suggestion-header" onClick={onToggleExpand}>
         <div className="suggestion-rank">#{rank}</div>
         <div className="suggestion-colors">
-          {suggestion.colorCombo.colors.map((color) => (
-            <span key={color} className={`mana-pip mana-${color.toLowerCase()}`}>
-              {colorSymbols[color]}
-            </span>
-          ))}
+          <ColorIdentity colors={suggestion.colorCombo.colors} size="md" />
         </div>
         <div className="suggestion-name">{suggestion.colorCombo.name}</div>
         <div className="suggestion-score">
