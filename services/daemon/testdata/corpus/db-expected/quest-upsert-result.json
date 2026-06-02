@@ -1,8 +1,8 @@
 {
   "AccountID": 1,
-  "QuestID": "00000001-0000-4000-8000-000000000001",
-  "QuestName": "Simic Evolution",
-  "Progress": 5,
+  "QuestID": "11111111-0000-4000-8000-000000000001",
+  "QuestName": "Cast 30 blue or green spells",
+  "Progress": 13,
   "Goal": 30,
   "CanSwap": true
 }
