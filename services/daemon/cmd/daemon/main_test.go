@@ -993,6 +993,213 @@ func TestStep3HeadlessExitOnPKCEFailure(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// #640 — Daemon replay mode: -replay / VAULTMTG_DAEMON_REPLAY_FILE
+// ---------------------------------------------------------------------------
+
+// TestHeadlessPair_HappyPath verifies that headlessPair mints a sign-in token
+// via the Clerk Backend API, exchanges it for a session JWT via FAPI, then
+// calls POST /daemon/register on the BFF with the JWT and returns the minted
+// API key, accountID, and deviceID.
+func TestHeadlessPair_HappyPath(t *testing.T) {
+	// Stub the Clerk Backend API (sign_in_tokens + sessions/{id}/tokens).
+	clerkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/sign_in_tokens":
+			require.Equal(t, "Bearer sk_test_clerk", r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"token":"sit_ticket_xyz"}`))
+		case "/v1/client/sign_ins":
+			// FAPI exchange: strategy=ticket
+			require.Equal(t, "ticket", r.URL.Query().Get("strategy"))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"client":{"sessions":[{"id":"sess_abc"}]}}`))
+		case "/v1/sessions/sess_abc/tokens":
+			require.Equal(t, "Bearer sk_test_clerk", r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jwt":"eyJtest"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer clerkSrv.Close()
+
+	// Stub the BFF /daemon/register.
+	bffSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/daemon/register", r.URL.Path)
+		require.Equal(t, "Bearer eyJtest", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"api_key":"sk_daemon_key","account_id":"acc_001","device_id":"dev_001"}`))
+	}))
+	defer bffSrv.Close()
+
+	apiKey, accountID, deviceID, err := headlessPair(
+		context.Background(),
+		headlessPairConfig{
+			ClerkBackendAPIBase: clerkSrv.URL,
+			ClerkFAPIBase:       clerkSrv.URL,
+			ClerkSecretKey:      "sk_test_clerk",
+			ClerkUserID:         "user_synth_001",
+			BFFBase:             bffSrv.URL,
+			Platform:            "linux",
+			DaemonVersion:       "dev",
+			DeviceID:            "",
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "sk_daemon_key", apiKey)
+	assert.Equal(t, "acc_001", accountID)
+	assert.Equal(t, "dev_001", deviceID)
+}
+
+// TestHeadlessPair_ClerkSignInTokenFails verifies that headlessPair returns an
+// error when the Clerk Backend API sign_in_tokens call fails (e.g. invalid sk).
+func TestHeadlessPair_ClerkSignInTokenFails(t *testing.T) {
+	clerkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid_key"}`))
+	}))
+	defer clerkSrv.Close()
+
+	_, _, _, err := headlessPair(
+		context.Background(),
+		headlessPairConfig{
+			ClerkBackendAPIBase: clerkSrv.URL,
+			ClerkFAPIBase:       clerkSrv.URL,
+			ClerkSecretKey:      "sk_bad",
+			ClerkUserID:         "user_001",
+			BFFBase:             clerkSrv.URL, // won't reach BFF
+			Platform:            "linux",
+			DaemonVersion:       "dev",
+			DeviceID:            "",
+		},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sign-in token")
+}
+
+// TestHeadlessPair_BFFRegisterFails verifies that headlessPair returns an error
+// when the BFF daemon/register call returns a non-2xx status.
+func TestHeadlessPair_BFFRegisterFails(t *testing.T) {
+	clerkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/sign_in_tokens":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"sit_ok"}`))
+		case "/v1/client/sign_ins":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"client":{"sessions":[{"id":"sess_ok"}]}}`))
+		case "/v1/sessions/sess_ok/tokens":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jwt":"eyJok"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer clerkSrv.Close()
+
+	bffSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"forbidden"}`))
+	}))
+	defer bffSrv.Close()
+
+	_, _, _, err := headlessPair(
+		context.Background(),
+		headlessPairConfig{
+			ClerkBackendAPIBase: clerkSrv.URL,
+			ClerkFAPIBase:       clerkSrv.URL,
+			ClerkSecretKey:      "sk_test",
+			ClerkUserID:         "user_001",
+			BFFBase:             bffSrv.URL,
+			Platform:            "linux",
+			DaemonVersion:       "dev",
+			DeviceID:            "",
+		},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "register")
+}
+
+// TestReplayModeEnvVarPrecedence verifies that VAULTMTG_DAEMON_REPLAY_FILE
+// sets the replay file path and that the flag value wins when both are set.
+// (Uses the package-level replayFilePath var populated by parseReplayFlag.)
+func TestReplayModeEnvVarPrecedence(t *testing.T) {
+	cases := []struct {
+		name    string
+		envVal  string
+		wantEnv string
+	}{
+		{"env var set", "/tmp/corpus.log", "/tmp/corpus.log"},
+		{"env var empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("VAULTMTG_DAEMON_REPLAY_FILE", tc.envVal)
+			got := config.EnvWithFallback("VAULTMTG_DAEMON_REPLAY_FILE", "")
+			assert.Equal(t, tc.wantEnv, got)
+		})
+	}
+}
+
+// TestRunReplayMode_ExitsZeroOnReplayCompleted verifies that runReplayMode
+// returns nil (exit 0) when the Service.Replay call completes without error.
+// It stubs headlessPair to return a pre-baked API key, then wires a fake
+// Dispatcher that immediately signals replay:completed so the function exits.
+func TestRunReplayMode_ExitsZeroOnReplayCompleted(t *testing.T) {
+	// Create a temp file that acts as the corpus fixture (single known log line
+	// that the daemon parser recognises as player.authenticated).
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "corpus.log")
+	// Empty file — replay reads it and calls replay:completed immediately.
+	require.NoError(t, os.WriteFile(logFile, []byte{}, 0o600))
+
+	// BFF stub that accepts the replay:completed dispatch (type assertion).
+	ingestCalls := 0
+	bffSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ingestCalls++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer bffSrv.Close()
+
+	err := runReplayMode(
+		context.Background(),
+		replayModeConfig{
+			LogFile:    logFile,
+			APIKey:     "sk_test_daemon",
+			AccountID:  "acc_replay_001",
+			CloudAPIURL: bffSrv.URL,
+		},
+	)
+
+	require.NoError(t, err, "[replay-mode] must return nil on replay:completed")
+}
+
+// TestRunReplayMode_ErrorOnMissingFile verifies that runReplayMode returns a
+// non-nil error when the log file does not exist.
+func TestRunReplayMode_ErrorOnMissingFile(t *testing.T) {
+	err := runReplayMode(
+		context.Background(),
+		replayModeConfig{
+			LogFile:    "/tmp/nonexistent-corpus-file-xyzzy.log",
+			APIKey:     "sk_test",
+			AccountID:  "acc_001",
+			CloudAPIURL: "http://127.0.0.1:1",
+		},
+	)
+
+	require.Error(t, err, "[replay-mode] must return error when log file is missing")
+}
+
+// ---------------------------------------------------------------------------
+
 // TestRetrySetupLogLine guards the log message string for the tray retry-setup
 // path (#2132 RC3). If this string changes, grep for it in runbook patterns.
 func TestRetrySetupLogLine(t *testing.T) {

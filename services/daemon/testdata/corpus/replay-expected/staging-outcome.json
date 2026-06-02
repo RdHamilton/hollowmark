@@ -1,0 +1,34 @@
+{
+  "matches": [
+    {
+      "format": "QuickDraft_SOS_20260526",
+      "result": "win",
+      "player_wins": 1,
+      "opponent_wins": 0
+    }
+  ],
+  "quests": [
+    {
+      "quest_id": "11111111-0000-4000-8000-000000000001",
+      "progress": 11,
+      "goal": 30
+    },
+    {
+      "quest_id": "11111111-0000-4000-8000-000000000004",
+      "progress": 17,
+      "goal": 20
+    },
+    {
+      "quest_id": "11111111-0000-4000-8000-000000000007",
+      "progress": 0,
+      "goal": 30
+    }
+  ],
+  "decks": [
+    {
+      "deck_id": "11111111-0000-4000-8000-000000000007",
+      "format": "Standard"
+    }
+  ],
+  "projection_error_count": 0
+}
