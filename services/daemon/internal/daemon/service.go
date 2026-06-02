@@ -22,6 +22,7 @@ import (
 
 	"github.com/RdHamilton/vault-mtg/pkg/logparse"
 	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/classify"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/config"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/dispatch"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/draftstate"
@@ -1631,106 +1632,9 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 
 // classifyEntry maps a log entry to a semantic event type string.
 // Returns "" if the entry is not a tracked event.
+//
+// This is a package-level shim so tests in package daemon can call
+// classifyEntry without change. All logic lives in internal/classify.
 func classifyEntry(entry *logreader.LogEntry) string {
-	// Draft events — format-dispatch. Premier probes run FIRST; the BotDraft
-	// branches below (CurrentModule=BotDraft pack / PickInfo pick, #337) only
-	// match QuickDraft / bot-draft lines.
-	//
-	// Premier pack: Draft.Notify line carries draftId + PackCards (comma string).
-	if _, hasDraftID := entry.JSON["draftId"]; hasDraftID {
-		if _, hasPackCards := entry.JSON["PackCards"]; hasPackCards {
-			return "draft.pack" // Premier format
-		}
-	}
-	// Premier pick: EventPlayerDraftMakePick request carries id + a "request"
-	// JSON string with DraftId inside. The Contains shortcut is fine in the
-	// classifier; ParsePremierDraftMakePick re-validates strictly.
-	if _, hasID := entry.JSON["id"]; hasID {
-		if req, hasReq := entry.JSON["request"].(string); hasReq && req != "" {
-			if strings.Contains(req, `"DraftId"`) {
-				return "draft.pick" // Premier format
-			}
-		}
-	}
-
-	// BotDraft pack: CurrentModule=BotDraft with a stringified Payload envelope
-	// (QuickDraft / bot drafts, #337). The Premier probes above short-circuit
-	// first, so a Premier line never reaches here.
-	if mod, ok := entry.JSON["CurrentModule"].(string); ok && mod == "BotDraft" {
-		if _, hasPayload := entry.JSON["Payload"].(string); hasPayload {
-			return "draft.pack"
-		}
-	}
-	// BotDraft pick: BotDraftDraftPick request carries a "request" JSON string
-	// containing a PickInfo block (#337). PickInfo is the distinguisher from the
-	// Premier EventPlayerDraftMakePick request (which carries DraftId).
-	if req, ok := entry.JSON["request"].(string); ok && strings.Contains(req, `"PickInfo"`) {
-		return "draft.pick"
-	}
-
-	// Scene change (draft start/end)
-	if toScene, ok := entry.JSON["toSceneName"].(string); ok {
-		if toScene == "Draft" {
-			return "draft.started"
-		}
-		if fromScene, ok2 := entry.JSON["fromSceneName"].(string); ok2 && fromScene == "Draft" {
-			return "draft.completed"
-		}
-	}
-
-	// Match events — prefer the matchGameRoomStateChangedEvent path (single
-	// log line with full result data) over the legacy CurrentEventState path.
-	if logreader.IsMatchCompletedEntry(entry) {
-		return "match.completed"
-	}
-	if state, ok := entry.JSON["CurrentEventState"].(string); ok {
-		switch state {
-		case "MatchCompleted":
-			return "match.completed"
-		case "MatchInProgress":
-			return "match.started"
-		}
-	}
-
-	// Player authentication / profile
-	if _, ok := entry.JSON["authenticateResponse"]; ok {
-		return "player.authenticated"
-	}
-
-	// Rank update
-	if _, ok := entry.JSON["rankClass"]; ok {
-		return "player.rank_updated"
-	}
-
-	// Inventory update (Arena 2026.58+: wrapped under "InventoryInfo" key)
-	if logreader.IsInventoryEntry(entry) {
-		return "inventory.updated"
-	}
-
-	// Quest events — check completed before progress (more specific).
-	if logreader.IsQuestCompletedEntry(entry) {
-		return "quest.completed"
-	}
-	if logreader.IsQuestProgressEntry(entry) {
-		return "quest.progress"
-	}
-
-	// Collection snapshot (PlayerInventoryGetPlayerCardsV3).
-	if logreader.IsCollectionEntry(entry) {
-		return "collection.updated"
-	}
-
-	// Deck update (DeckUpsertDeckV2).
-	if logreader.IsDeckEntry(entry) {
-		return "deck.updated"
-	}
-
-	// GRE game state messages — buffered into the GRE session manager for batch
-	// dispatch. greToClientEvent lines are never dispatched individually; they
-	// accumulate until a threshold/stale-sweep/shutdown flush fires.
-	if _, ok := entry.JSON["greToClientEvent"]; ok {
-		return "greToClientEvent"
-	}
-
-	return ""
+	return classify.ClassifyEntry(entry)
 }
