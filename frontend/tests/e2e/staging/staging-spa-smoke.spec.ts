@@ -111,7 +111,7 @@ function requireAuthOrFail(): void {
       'Verdict: INCONCLUSIVE (unauthenticated) — treat as FAIL.\n' +
       '\n' +
       'To run locally: export CLERK_SECRET_KEY=<staging sk_test_*> before running\n' +
-      'this suite. The key is in SSM at /vaultmtg/staging/clerk-secret-key.',
+      'this suite. The key is in SSM at /vaultmtg/staging/CLERK_SECRET_KEY.',
     );
   }
 }
