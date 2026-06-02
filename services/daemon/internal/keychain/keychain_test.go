@@ -197,3 +197,112 @@ func TestDelete_DoesNotRemoveLegacy(t *testing.T) {
 	require.NoError(t, err, "legacy entry must survive Delete()")
 	assert.Equal(t, legacyKey, legacyVal)
 }
+
+// ── GetForService / SetForService (ADR-049 Ticket 2) ─────────────────────────
+
+// TestSetForService_UsesPassedServiceName verifies that SetForService writes to
+// the service name passed in rather than the package-default ServiceNameNew.
+func TestSetForService_UsesPassedServiceName(t *testing.T) {
+	useMemoryKeyring(t)
+
+	const service = "com.vaultmtg.daemon.staging"
+	const wantKey = "sk_live_staging_key"
+
+	require.NoError(t, keychain.SetForService(service, wantKey))
+
+	// The value must be readable under the passed service name.
+	got, err := keyring.Get(service, keychain.AccountKey)
+	require.NoError(t, err)
+	assert.Equal(t, wantKey, got)
+
+	// ServiceNameNew must be untouched.
+	_, newErr := keyring.Get(keychain.ServiceNameNew, keychain.AccountKey)
+	assert.ErrorIs(t, newErr, keyring.ErrNotFound,
+		"SetForService must not write to ServiceNameNew when a different service is passed")
+}
+
+// TestGetForService_UsesPassedServiceName verifies that GetForService reads from
+// the service name passed in and not the package-default ServiceNameNew.
+func TestGetForService_UsesPassedServiceName(t *testing.T) {
+	useMemoryKeyring(t)
+
+	const service = "com.vaultmtg.daemon.staging"
+	const wantKey = "sk_live_staging_read"
+
+	// Seed the staging slot, leaving ServiceNameNew empty.
+	require.NoError(t, keyring.Set(service, keychain.AccountKey, wantKey))
+
+	got, err := keychain.GetForService(service)
+	require.NoError(t, err)
+	assert.Equal(t, wantKey, got)
+}
+
+// TestGetForService_NotFound verifies that GetForService returns ErrNotFound when
+// the named service has no entry.
+func TestGetForService_NotFound(t *testing.T) {
+	useMemoryKeyring(t)
+	_, err := keychain.GetForService("com.vaultmtg.daemon.staging")
+	assert.ErrorIs(t, err, keychain.ErrNotFound)
+}
+
+// TestGetForService_RoundTrip verifies that SetForService + GetForService
+// constitutes a correct round-trip for an arbitrary service name.
+func TestGetForService_RoundTrip(t *testing.T) {
+	useMemoryKeyring(t)
+
+	const service = "com.vaultmtg.daemon.staging"
+	const key = "sk_live_roundtrip"
+
+	require.NoError(t, keychain.SetForService(service, key))
+	got, err := keychain.GetForService(service)
+	require.NoError(t, err)
+	assert.Equal(t, key, got)
+}
+
+// TestSetForService_Overwrite verifies that a second SetForService call with the
+// same service name replaces the first entry.
+func TestSetForService_Overwrite(t *testing.T) {
+	useMemoryKeyring(t)
+
+	const service = "com.vaultmtg.daemon.staging"
+	require.NoError(t, keychain.SetForService(service, "sk_live_first"))
+	require.NoError(t, keychain.SetForService(service, "sk_live_second"))
+
+	got, err := keychain.GetForService(service)
+	require.NoError(t, err)
+	assert.Equal(t, "sk_live_second", got)
+}
+
+// TestChannelSlotIsolation is the FF-7 unit-level assertion: stable and staging
+// keychain service names must be distinct (ADR-049 §concurrent dual-run invariant).
+// With both daemons running simultaneously, each daemon reads/writes its own
+// slot and cannot overwrite the other's API key.
+func TestChannelSlotIsolation(t *testing.T) {
+	useMemoryKeyring(t)
+
+	const stableService = keychain.ServiceNameNew // "com.vaultmtg.daemon"
+	const stagingService = "com.vaultmtg.daemon.staging"
+
+	const stableKey = "sk_live_stable_key"
+	const stagingKey = "sk_live_staging_key"
+
+	// Write distinct keys to each slot.
+	require.NoError(t, keychain.SetForService(stableService, stableKey))
+	require.NoError(t, keychain.SetForService(stagingService, stagingKey))
+
+	// FF-7 assertion: each slot holds its own key — no cross-contamination.
+	gotStable, err := keychain.GetForService(stableService)
+	require.NoError(t, err)
+	assert.Equal(t, stableKey, gotStable, "FF-7: stable slot must not be overwritten by staging write")
+
+	gotStaging, err := keychain.GetForService(stagingService)
+	require.NoError(t, err)
+	assert.Equal(t, stagingKey, gotStaging, "FF-7: staging slot must not be overwritten by stable write")
+
+	// A write to the staging slot must not affect the stable slot.
+	require.NoError(t, keychain.SetForService(stagingService, "sk_live_staging_updated"))
+	gotStableAfterUpdate, err := keychain.GetForService(stableService)
+	require.NoError(t, err)
+	assert.Equal(t, stableKey, gotStableAfterUpdate,
+		"FF-7: staging write must not modify the stable keychain slot")
+}

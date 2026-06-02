@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
 )
 
 // Config holds all daemon configuration.
@@ -249,7 +251,15 @@ func defaults() *Config {
 	}
 }
 
+// defaultArchiveDir returns the channel-appropriate archive directory derived
+// from the install identity (ADR-049 Ticket 2). The archive dir is always
+// "<channel-config-dir>/archives" so staging and prod archives never collide.
 func defaultArchiveDir() string {
+	id := install.Identity(install.Channel)
+	if id.ConfigDir != "" {
+		return id.ConfigDir + "/archives"
+	}
+	// Fallback: should never be reached since Identity always populates ConfigDir.
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return os.TempDir() + "/vaultmtg/archives"
