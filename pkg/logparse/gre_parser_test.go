@@ -1620,3 +1620,150 @@ func BenchmarkParseGREMessages(b *testing.B) {
 		_, _ = ParseGREMessages(entries)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// detectFirstTurnActivePlayer (ticket #687)
+// ---------------------------------------------------------------------------
+
+// makeGSMWithStageAndTurn returns a minimal GREGameStateMessage with the
+// given stage, turnNumber, and activePlayer.
+func makeGSMWithStageAndTurn(stage string, turnNumber, activePlayer int) *GREGameStateMessage {
+	ti := &GRETurnInfo{
+		TurnNumber:   turnNumber,
+		ActivePlayer: activePlayer,
+	}
+	return &GREGameStateMessage{
+		Stage:    stage,
+		TurnInfo: ti,
+	}
+}
+
+func TestDetectFirstTurnActivePlayer_OnPlay(t *testing.T) {
+	msgs := []*GREGameStateMessage{
+		makeGSMWithStageAndTurn("GameStage_Start", 0, 0),
+		makeGSMWithStageAndTurn("GameStage_Play", 1, 2), // seat 2 is active on turn 1
+	}
+	got := detectFirstTurnActivePlayer(msgs)
+	if got != 2 {
+		t.Errorf("detectFirstTurnActivePlayer = %d, want 2", got)
+	}
+}
+
+func TestDetectFirstTurnActivePlayer_NoPlayStageMessage(t *testing.T) {
+	// Buffer only contains pre-play messages — no GameStage_Play entry.
+	msgs := []*GREGameStateMessage{
+		makeGSMWithStageAndTurn("GameStage_Start", 0, 0),
+		makeGSMWithStageAndTurn("GameStage_Start", 0, 1),
+	}
+	got := detectFirstTurnActivePlayer(msgs)
+	if got != 0 {
+		t.Errorf("detectFirstTurnActivePlayer = %d, want 0", got)
+	}
+}
+
+func TestDetectFirstTurnActivePlayer_NoTurnInfo(t *testing.T) {
+	// GameStage_Play message with no TurnInfo — should be skipped.
+	msgs := []*GREGameStateMessage{
+		{Stage: "GameStage_Play", TurnInfo: nil},
+	}
+	got := detectFirstTurnActivePlayer(msgs)
+	if got != 0 {
+		t.Errorf("detectFirstTurnActivePlayer = %d, want 0", got)
+	}
+}
+
+func TestDetectFirstTurnActivePlayer_WrongTurnNumber(t *testing.T) {
+	// GameStage_Play message but turnNumber != 1.
+	msgs := []*GREGameStateMessage{
+		makeGSMWithStageAndTurn("GameStage_Play", 3, 1),
+	}
+	got := detectFirstTurnActivePlayer(msgs)
+	if got != 0 {
+		t.Errorf("detectFirstTurnActivePlayer = %d, want 0", got)
+	}
+}
+
+func TestDetectFirstTurnActivePlayer_EmptyMessages(t *testing.T) {
+	got := detectFirstTurnActivePlayer(nil)
+	if got != 0 {
+		t.Errorf("detectFirstTurnActivePlayer(nil) = %d, want 0", got)
+	}
+}
+
+func TestParseGamePlaysResult_FirstTurnActivePlayer(t *testing.T) {
+	// Build a minimal log entry that contains a GREMessageType_GameStateMessage
+	// with stage GameStage_Play, turnNumber 1, and activePlayer 1.
+	greEvent := map[string]interface{}{
+		"greToClientEvent": map[string]interface{}{
+			"greToClientMessages": []interface{}{
+				map[string]interface{}{
+					"type": "GREMessageType_GameStateMessage",
+					"gameStateMessage": map[string]interface{}{
+						"gameInfo": map[string]interface{}{
+							"matchID":    "test-match-001",
+							"gameNumber": float64(1),
+							"stage":      "GameStage_Play",
+						},
+						"turnInfo": map[string]interface{}{
+							"turnNumber":   float64(1),
+							"activePlayer": float64(1),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	entry := &LogEntry{
+		IsJSON: true,
+		JSON:   greEvent,
+	}
+
+	// Player seat 1 is the local player.
+	playerConn := &GREConnection{SeatID: 1, SystemSeatID: 1}
+
+	result, err := ParseGamePlaysResult([]*LogEntry{entry}, playerConn)
+	if err != nil {
+		t.Fatalf("ParseGamePlaysResult: %v", err)
+	}
+
+	if result.FirstTurnActivePlayerSeatID != 1 {
+		t.Errorf("FirstTurnActivePlayerSeatID = %d, want 1", result.FirstTurnActivePlayerSeatID)
+	}
+}
+
+// TestParseGameStage_CapturedInMessage verifies that Stage is captured in
+// GREGameStateMessage during parsing.
+func TestParseGameStage_CapturedInMessage(t *testing.T) {
+	greEvent := map[string]interface{}{
+		"greToClientEvent": map[string]interface{}{
+			"greToClientMessages": []interface{}{
+				map[string]interface{}{
+					"type": "GREMessageType_GameStateMessage",
+					"gameStateMessage": map[string]interface{}{
+						"gameInfo": map[string]interface{}{
+							"matchID":    "test-match-002",
+							"gameNumber": float64(1),
+							"stage":      "GameStage_Play",
+						},
+						"turnInfo": map[string]interface{}{
+							"turnNumber": float64(1),
+						},
+					},
+				},
+			},
+		},
+	}
+	entry := &LogEntry{IsJSON: true, JSON: greEvent}
+
+	messages, err := ParseGREMessages([]*LogEntry{entry})
+	if err != nil {
+		t.Fatalf("ParseGREMessages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	if messages[0].Stage != "GameStage_Play" {
+		t.Errorf("Stage = %q, want %q", messages[0].Stage, "GameStage_Play")
+	}
+}
