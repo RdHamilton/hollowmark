@@ -6,11 +6,11 @@
     {
       "surface": "quest-list",
       "bff_endpoint": "/api/v1/quests/active",
-      "notes": "The BFF emits first_seen_at (not assigned_at). The SPA must read first_seen_at and render a valid date. A field rename that produces 'Invalid Date' would fail data-testid='quest-date' assertion.",
+      "notes": "Full corpus replay (36 log files) projects 5 unique quest rows.",
       "fields": {
         "date_field_name": "first_seen_at",
         "forbidden_field_name": "assigned_at",
-        "min_quest_count": 1,
+        "min_quest_count": 5,
         "rendered_date_must_not_be": "Invalid Date",
         "quests": [
           {
@@ -31,8 +31,21 @@
             "goal": 30,
             "first_seen_at_present": true
           }
-        ]
+        ],
+        "corpus_quest_count": 5
       }
     }
-  ]
+  ],
+  "corpus_promotion": {
+    "promoted_at": "2026-06-02",
+    "pr": "feat/696-697-layer5-corpus-promotion",
+    "injector_run": {
+      "files_scanned": 36,
+      "quests_parsed": 119,
+      "quests_projected": 5,
+      "projection_errors": 0,
+      "determinism": "run-1==run-2 PASS"
+    },
+    "note": "119 quest events collapse to 5 unique quest IDs via ON CONFLICT upsert."
+  }
 }

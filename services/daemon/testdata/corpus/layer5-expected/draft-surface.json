@@ -6,7 +6,7 @@
     {
       "surface": "draft-surface",
       "bff_endpoint": "/api/v1/history/drafts",
-      "notes": "ADR-051 draft_match_results / draft_picks write paths are not yet built. The premier-draft-pack.log and premier-draft-pick.log player-log fixtures ARE promoted to REAL in the corpus MANIFEST, but the daemon does not yet write to draft_match_results or draft_picks tables. The BFF returns empty draft history. expected_empty: true means the harness asserts the empty-state component renders (data-testid='draft-history-empty') rather than asserting row data. A 0/0 rendering without the empty-state indicator is still a FAIL. Once ADR-051 write paths land and corpus draft fixtures are promoted, regenerate this manifest with expected_empty: false and the actual draft result values.",
+      "notes": "Draft corpus requires NEW drafts on fixed daemon. 1142 packs + 1136 picks parse; 0 project.",
       "fields": {
         "empty_state_must_render": true,
         "empty_state_testid": "draft-history-empty",
@@ -14,5 +14,17 @@
         "table_testid": "draft-history-table"
       }
     }
-  ]
+  ],
+  "corpus_promotion": {
+    "promoted_at": "2026-06-02",
+    "pr": "feat/696-697-layer5-corpus-promotion",
+    "injector_run": {
+      "files_scanned": 36,
+      "draft_packs_parsed": 1142,
+      "draft_picks_parsed": 1136,
+      "draft_sessions_projected": 0,
+      "projection_errors": 0
+    },
+    "note": "1142 packs + 1136 picks parse but 0 project. Historical logs predate session_id. Needs new daemon-captured drafts."
+  }
 }
