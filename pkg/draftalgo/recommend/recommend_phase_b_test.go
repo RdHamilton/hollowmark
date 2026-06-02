@@ -167,10 +167,47 @@ func TestColorFit_LandsExcludedFromPenalty(t *testing.T) {
 	for _, r := range all {
 		if r.CardID == "mountain" {
 			lower := strings.ToLower(r.Reason)
-			if strings.Contains(lower, "off-color") || strings.Contains(lower, "penalty") || strings.Contains(lower, "weaker in your") {
+			if strings.Contains(lower, "off-color") || strings.Contains(lower, "penalty") || strings.Contains(lower, "not your colors") {
 				t.Errorf("land 'mountain' must not receive a color-fit penalty reason, got %q", r.Reason)
 			}
 		}
+	}
+}
+
+// TestColorFit_OffColorPenaltyString — an off-color, non-splash card must
+// receive the reason string "Not your colors" (Prof copy nit — vmt-t#648).
+// ADR-047 §5.
+func TestColorFit_OffColorPenaltyString(t *testing.T) {
+	// G/B committed pool, off-color R card with modest GIHWR (no splash path).
+	pool := poolWithColors(t, 4, "G", 3, "B", 0, "")
+	pack := []string{"red-card"}
+	count := 1000
+	ratings := stubRatings{"red-card": 58.0} // below splashHighGIHWRFloor (≥72)
+	names := stubCards{"red-card": "Red Card"}
+	meta := stubCardMeta{
+		"red-card": {Colors: []string{"R"}, ALSA: 4.5, GIHCount: &count},
+	}
+	for id, m := range pool {
+		meta[id] = m
+	}
+
+	recs := recommend.Recommend("PremierDraft", poolKeys(pool), pack, ratings, names, meta)
+
+	all := append(recs.TopPicks, recs.Alternatives...)
+	if len(all) == 0 {
+		t.Fatal("expected at least one recommendation")
+	}
+	found := false
+	for _, r := range all {
+		if r.CardID == "red-card" {
+			found = true
+			if r.Reason != "Not your colors" {
+				t.Errorf("off-color non-splash card: expected Reason %q, got %q", "Not your colors", r.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Error("red-card not found in recommendations")
 	}
 }
 
