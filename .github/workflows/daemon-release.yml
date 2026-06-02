@@ -9,6 +9,22 @@
 #   goreleaser   — runs on ubuntu-latest; tests, cross-compiles Windows targets,
 #                  builds NSIS installer (via makensis), creates GitHub Release.
 #                  darwin is NOT built here — see build-macos below.
+#   build-macos  — runs on macos-latest; builds darwin/arm64 and darwin/amd64
+#                  natively with CGO_ENABLED=1 (required for systray/Cocoa tray
+#                  icon), runs lipo to produce a universal binary, then uploads
+#                  the artifact so sign-macos can sign and notarize it.
+#   sign-macos   — runs on macos-latest; needs [goreleaser, build-macos];
+#                  downloads darwin universal binary from build-macos, code-signs,
+#                  notarizes, wraps in .pkg, uploads signed artifacts to the
+#                  existing GitHub Release, then appends the .pkg SHA256 to
+#                  sha256sums.txt. Tag-guarded to avoid burning Apple quota.
+#   sign-minisig — runs on ubuntu-latest; needs [goreleaser, sign-macos].
+#                  Downloads the finalized sha256sums.txt (which sign-macos has
+#                  already updated with the macOS .pkg hash), signs it with
+#                  minisign, and uploads sha256sums.txt.minisig. Must run AFTER
+#                  sign-macos so the .minisig covers the complete checksum file.
+#                  TODO (#255): extend needs to [sign-windows] once Azure Trusted
+#                  Signing is unblocked so the post-signing Windows hash is covered.
 #   sign-windows — runs on windows-latest; needs [goreleaser, sign-macos].
 #                  Downloads the Windows .exe from the GitHub Release, signs via
 #                  Azure Trusted Signing, asserts Authenticode validity,
@@ -20,14 +36,6 @@
 #                  the same file; last writer wins without ordering). Tag-guarded
 #                  to avoid burning Azure signing quota. Separate from goreleaser
 #                  because azure/trusted-signing-action requires a Windows runner.
-#   build-macos  — runs on macos-latest; builds darwin/arm64 and darwin/amd64
-#                  natively with CGO_ENABLED=1 (required for systray/Cocoa tray
-#                  icon), runs lipo to produce a universal binary, then uploads
-#                  the artifact so sign-macos can sign and notarize it.
-#   sign-macos   — runs on macos-latest; downloads darwin universal binary from
-#                  build-macos, code-signs, notarizes, wraps in .pkg, uploads
-#                  signed artifacts to the existing GitHub Release. Tag-guarded
-#                  to avoid burning Apple quota.
 
 name: Daemon Release
 
@@ -89,9 +97,10 @@ jobs:
         # gcc-mingw-w64-x86-64: mingw-w64 cross-compiler required for CGO_ENABLED=1
         # Windows/amd64 build. Without it, CGO falls back to the system gcc which
         # cannot produce PE (Windows) object files.  vault-mtg-tickets#199.
-        # minisign: required by the .goreleaser.yml signs: stanza to produce
-        # sha256sums.txt.minisig. The signs: cmd is a bash wrapper that decodes
-        # MINISIGN_PRIVATE_KEY and pipes MINISIGN_PASSWORD.
+        # minisign: installed here but signing of sha256sums.txt is handled by
+        # the sign-minisig job (which runs after sign-macos finalizes the file).
+        # signs: was removed from .goreleaser.yml in PR #2895 (GoReleaser subprocess
+        # could not inherit GHA step env vars containing the key material).
         run: sudo apt-get update -qq && sudo apt-get install -y nsis libayatana-appindicator3-dev gcc-mingw-w64-x86-64 minisign
 
       - name: Install goversioninfo (Windows .exe icon embed, #307)
@@ -308,34 +317,12 @@ jobs:
           # This is the trust anchor for SHA256SUMS.minisig verification at
           # update-install time. Sourced from CI variable (public key only).
           MINISIGN_PUBLIC_KEY: ${{ steps.minisign_key.outputs.pub }}
-          # Minisign private key (base64-encoded) and password -- passed here for
-          # ldflag injection of MINISIGN_PUBLIC_KEY. Signing of sha256sums.txt is
-          # handled by the "Sign sha256sums.txt with minisign" step below, not by
-          # GoReleaser's signs: stanza (which cannot access GHA secrets).
+          # Minisign private key (base64-encoded) and password -- passed here only
+          # for ldflag injection of MINISIGN_PUBLIC_KEY into the binary. Signing of
+          # sha256sums.txt is handled by the sign-minisig job (runs after sign-macos
+          # finalizes sha256sums.txt), not by this job or GoReleaser's signs: stanza.
           MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
-
-      - name: Sign sha256sums.txt with minisign
-        # Root cause of all prior rc2 signing failures: GoReleaser's signs: stanza
-        # spawns bash in a subprocess that does NOT inherit the GHA step env — so
-        # MINISIGN_PRIVATE_KEY and MINISIGN_PASSWORD are always empty there.
-        #
-        # Fix: remove signs: from .goreleaser.yml entirely and sign here in a
-        # direct run: step where GHA env: vars ARE available to the bash process.
-        # The resulting sha256sums.txt.minisig is uploaded by the next step.
-        env:
-          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
-          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          TMPKEY=$(mktemp)
-          trap 'rm -f "${TMPKEY}"' EXIT
-          echo "${MINISIGN_PRIVATE_KEY}" | base64 --decode > "${TMPKEY}"
-          echo "${MINISIGN_PASSWORD}" | minisign -S -s "${TMPKEY}" \
-            -x dist/sha256sums.txt.minisig \
-            -m dist/sha256sums.txt
-          echo "PASS: sha256sums.txt signed — dist/sha256sums.txt.minisig created"
-          ls -lh dist/sha256sums.txt dist/sha256sums.txt.minisig
 
       - name: Verify Windows systray dep in binary buildinfo (CGO guard)
         # What this catches: CGO_ENABLED flipped back to 0, CC misconfigured,
@@ -436,22 +423,6 @@ jobs:
             "repos/${REPO}/releases/${RELEASE_ID}" \
             -f "tag_name=${PREFIXED_TAG}" \
             --jq '"renamed: \(.tag_name) at \(.html_url)"'
-
-      - name: Upload sha256sums.txt.minisig to GitHub Release
-        # Upload the .minisig produced by the "Sign sha256sums.txt" step above.
-        # This step runs after the Rename step so the release is already at the
-        # daemon/v* tag before we upload (avoids an asset landing on the wrong tag).
-        # GoReleaser no longer handles signing (signs: removed from .goreleaser.yml).
-        if: startsWith(github.ref, 'refs/tags/daemon/v')
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh release upload "${{ github.ref_name }}" \
-            dist/sha256sums.txt.minisig \
-            --repo "${{ github.repository }}" \
-            --clobber
-          echo "PASS: sha256sums.txt.minisig uploaded to ${{ github.ref_name }}"
 
       - name: Delete orphan bare v* git ref
         # Run even on earlier step failure so a bare v* tag never persists on
@@ -1219,6 +1190,70 @@ jobs:
             echo "PASS: updated /vaultmtg/app/${ENV}/ BFF_DAEMON_LATEST_VERSION=${VERSION} BFF_DAEMON_RELEASED_AT=${RELEASED_AT}"
           done
 
+
+  # ---------------------------------------------------------------------------
+  # SIGN-MINISIG — final sha256sums.txt signing after all platform jobs complete
+  #
+  # Root cause of rc2 verification failure: the goreleaser job signed
+  # sha256sums.txt BEFORE sign-macos appended the macOS .pkg hash to it.
+  # The .minisig was therefore stale the moment sign-macos re-uploaded
+  # sha256sums.txt with the macOS entry appended (06:41:07Z vs 06:38:43Z).
+  # Fix: move signing here, after sign-macos (and sign-windows once unblocked)
+  # have finalized sha256sums.txt.
+  #
+  # TODO (#255): extend needs to [sign-windows] once Azure Trusted Signing is
+  # unblocked so the post-signing Windows .exe hash is also covered.
+  # ---------------------------------------------------------------------------
+
+  sign-minisig:
+    name: Sign final sha256sums.txt with minisign
+    runs-on: ubuntu-latest
+    needs: [goreleaser, sign-macos]
+    if: startsWith(github.ref, 'refs/tags/daemon/v')
+
+    steps:
+      - name: Install minisign
+        run: sudo apt-get update -qq && sudo apt-get install -y minisign
+
+      - name: Sign final sha256sums.txt with minisign
+        # Downloads the authoritative sha256sums.txt (which sign-macos has already
+        # updated with the .pkg hash) and signs it. Uploads with --clobber to
+        # replace any stale .minisig left by the goreleaser job (none expected
+        # now that the goreleaser signing steps are removed, but --clobber is
+        # safe and idempotent).
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+
+          # Download the finalized sha256sums.txt from the release.
+          gh release download "$TAG" \
+            --pattern sha256sums.txt \
+            --repo "${{ github.repository }}"
+
+          echo "=== sha256sums.txt to sign ==="
+          cat sha256sums.txt
+          echo "=============================="
+
+          # Decode private key, sign, clean up key material.
+          TMPKEY=$(mktemp)
+          trap 'rm -f "${TMPKEY}"' EXIT
+          echo "${MINISIGN_PRIVATE_KEY}" | base64 --decode > "${TMPKEY}"
+          echo "${MINISIGN_PASSWORD}" | minisign -S -s "${TMPKEY}" \
+            -x sha256sums.txt.minisig \
+            -m sha256sums.txt
+          echo "PASS: sha256sums.txt signed"
+          ls -lh sha256sums.txt sha256sums.txt.minisig
+
+          # Upload, replacing any prior .minisig.
+          gh release upload "$TAG" \
+            sha256sums.txt.minisig \
+            --repo "${{ github.repository }}" \
+            --clobber
+          echo "PASS: sha256sums.txt.minisig uploaded to $TAG"
 
   # ---------------------------------------------------------------------------
   # DRY-RUN JOBS (vault-mtg-tickets#256)
