@@ -34,6 +34,7 @@ export * as bffHealth from './bffHealth';
 export * as bffMatchHistory from './bffMatchHistory';
 export * as bffDraftHistory from './bffDraftHistory';
 export * as bffDaemons from './bffDaemons';
+export * as bffHomeSummary from './bffHomeSummary';
 
 // Re-export commonly used types
 export type {
@@ -145,6 +146,14 @@ export type {
   DaemonDevice,
   ListDaemonsResponse,
 } from './bffDaemons';
+
+export type {
+  HomeSummaryResponse,
+  TodayRecord,
+  WeekRecord,
+  AllTimeRecord,
+  LastMatch,
+} from './bffHomeSummary';
 
 export type {
   OpponentDeckProfile,
