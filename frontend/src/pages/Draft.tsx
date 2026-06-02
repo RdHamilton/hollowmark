@@ -29,6 +29,7 @@ import CurrentPackPicker from '../components/CurrentPackPicker';
 import { analyzeSynergies, shouldHighlightCard } from '../utils/synergy';
 import { useDownload } from '@/context/DownloadContext';
 import { useSettings } from '@/hooks/useSettings';
+import { useFeatureFlag } from '@/hooks/useFeatureFlag';
 import EmptyState from '../components/EmptyState';
 import './Draft.css';
 
@@ -96,6 +97,11 @@ const Draft: React.FC = () => {
     const [pickAlternatives, setPickAlternatives] = useState<Map<string, pickquality.PickQuality>>(new Map());
     const [showCurrentPack, setShowCurrentPack] = useState(true);
     const [isExporting, setIsExporting] = useState(false);
+
+    // Feature flag gate: live_draft_advisor_enabled
+    // Optimistic-show default: treat null (loading) as enabled (!== false)
+    const { enabled: advisorEnabled } = useFeatureFlag('live_draft_advisor_enabled');
+    const showAdvisor = advisorEnabled !== false;
 
     const { startDownload, updateProgress, completeDownload, failDownload } = useDownload();
 
@@ -897,8 +903,8 @@ const Draft: React.FC = () => {
                         </button>
                     </div>
 
-                    {/* Current Pack Picker View */}
-                    {showCurrentPack && state.session && (
+                    {/* Current Pack Picker View — gated by live_draft_advisor_enabled */}
+                    {showCurrentPack && state.session && showAdvisor && (
                         <CurrentPackPicker
                             sessionID={state.session.ID}
                             onRefresh={loadActiveDraft}
