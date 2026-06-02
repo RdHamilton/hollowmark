@@ -223,6 +223,7 @@ func main() {
 		daemonsRevokeHandler              *handlers.DaemonsRevokeHandler
 		adminFleetHealthHandler           *handlers.AdminFleetHealthHandler
 		adminProjectionErrorsCountHandler *handlers.AdminProjectionErrorsCountHandler
+		adminDataFreshnessHandler         *handlers.AdminDataFreshnessHandler
 		matchesHandler                    *handlers.MatchesHandler
 		collectionHandler                 *handlers.CollectionHandler
 		questsHandler                     *handlers.QuestsHandler
@@ -404,6 +405,15 @@ func main() {
 		projectionErrorsRepo := repository.NewProjectionErrorsRepository(sqlDB)
 		adminProjectionErrorsCountHandler = handlers.NewAdminProjectionErrorsCountHandler(projectionErrorsRepo)
 
+		// #402 data-freshness admin endpoint — confirms draft_card_ratings
+		// (17Lands sync output) is current before ML feature flag flips.
+		// Protected by AdminTokenAuth. Uses the same threshold as the
+		// draft-ratings handler (DraftRatingsStalenessThresholdHours).
+		adminDataFreshnessHandler = handlers.NewAdminDataFreshnessHandler(
+			draftRatingsRepo,
+			cfg.DraftRatingsStalenessThresholdHours,
+		)
+
 		// StatsHandler provides deck performance, win-rate trend, and format
 		// distribution analytics endpoints (issue #1513).
 		statsRepo := repository.NewStatsRepository(sqlDB)
@@ -501,6 +511,7 @@ func main() {
 		DaemonsRevokeHandler:              daemonsRevokeHandler,
 		AdminFleetHealthHandler:           adminFleetHealthHandler,
 		AdminProjectionErrorsCountHandler: adminProjectionErrorsCountHandler,
+		AdminDataFreshnessHandler:         adminDataFreshnessHandler,
 		MatchesHandler:                    matchesHandler,
 		CollectionHandler:                 collectionHandler,
 		QuestsHandler:                     questsHandler,
@@ -594,6 +605,11 @@ type RouterDeps struct {
 	// GET /api/v1/admin/projection-errors/count — total DLQ row count.
 	// Protected by AdminTokenMiddl. Requires a non-nil DB.
 	AdminProjectionErrorsCountHandler *handlers.AdminProjectionErrorsCountHandler
+	// AdminDataFreshnessHandler serves GET /api/v1/admin/data-freshness —
+	// reports whether draft_card_ratings (the 17Lands sync output) is current.
+	// Returns "fresh", "stale", or "no_data" with age_hours and threshold_hours.
+	// Protected by AdminTokenMiddl. Satisfies ticket #402 data-freshness AC.
+	AdminDataFreshnessHandler *handlers.AdminDataFreshnessHandler
 	// MatchesHandler serves the Phase 2 /api/v1/matches/* surface that the
 	// SPA's daemonClient previously hit. Protected by DaemonAPIKeyAuth.
 	MatchesHandler *handlers.MatchesHandler
@@ -847,6 +863,14 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// Protected by the same static Bearer token middleware as fleet-health.
 	if deps.AdminProjectionErrorsCountHandler != nil {
 		r.With(adminMiddl).Get("/api/v1/admin/projection-errors/count", deps.AdminProjectionErrorsCountHandler.ServeHTTP)
+	}
+
+	// GET /api/v1/admin/data-freshness — 17Lands sync freshness check (#402).
+	// Returns status ("fresh"/"stale"/"no_data"), max_cached_at, age_hours, and
+	// threshold_hours so operators can confirm ML inputs are current before a
+	// feature flag flip. Protected by the same AdminTokenMiddl.
+	if deps.AdminDataFreshnessHandler != nil {
+		r.With(adminMiddl).Get("/api/v1/admin/data-freshness", deps.AdminDataFreshnessHandler.ServeHTTP)
 	}
 
 	// ── Phase 2 — /api/v1/matches/* (camelCase API, full filter support) ─────
