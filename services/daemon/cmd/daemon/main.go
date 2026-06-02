@@ -81,6 +81,27 @@ var DefaultCloudAPIURL = "http://localhost:8080/api/v1"
 // snapshot build). The DSN itself is never logged. Issue #1832.
 var DefaultSentryDSN = ""
 
+// DefaultSPAURL is the build-time default URL for the VaultMTG SPA, injected
+// via -ldflags -X main.DefaultSPAURL=<url>. The release workflow picks the value:
+//
+//	stable tags (daemon/v0.3.1)           -> https://app.vaultmtg.app
+//	pre-release tags (-rc/-alpha/-beta/-pre) -> https://stg-app.vaultmtg.app
+//
+// Used by tray.New(...) so the tray "Open VaultMTG" menu item opens the
+// correct SPA environment. Local builds default to the production URL — release
+// workflow always overrides via -ldflags. Issue #637.
+var DefaultSPAURL = "https://app.vaultmtg.app"
+
+// DefaultSetupURL is the build-time default URL for the first-run setup page,
+// injected via -ldflags -X main.DefaultSetupURL=<url>. The release workflow
+// picks the value:
+//
+//	stable tags (daemon/v0.3.1)           -> https://vaultmtg.app/setup
+//	pre-release tags (-rc/-alpha/-beta/-pre) -> https://stg.vaultmtg.app/setup
+//
+// Used by handleMissingConfig and the retry-setup loop. Issue #637.
+var DefaultSetupURL = "https://vaultmtg.app/setup"
+
 func main() {
 	defaultCfgPath := defaultConfigPath()
 	cfgPath := flag.String("config", defaultCfgPath, "path to JSON config file")
@@ -252,7 +273,7 @@ func main() {
 
 	// systray.Run must own the main OS thread (macOS Cocoa requirement).
 	// onReady starts the daemon service in a goroutine; onQuit cancels the context.
-	app := tray.New("https://app.vaultmtg.app", Version, pkce.OpenBrowser, func() {
+	app := tray.New(DefaultSPAURL, Version, pkce.OpenBrowser, func() {
 		// Tell launchd the stop was intentional so it does not immediately
 		// respawn the process per KeepAlive=true in the plist. On non-macOS
 		// platforms stopLaunchAgent is a no-op.
@@ -332,7 +353,7 @@ func main() {
 				svc.ClearAuthPaused()
 
 				// Open the setup page in the browser.
-				if err := pkce.OpenBrowser("https://vaultmtg.app/setup"); err != nil {
+				if err := pkce.OpenBrowser(DefaultSetupURL); err != nil {
 					log.Printf("[mtga-daemon] retry setup: could not open browser: %v", err)
 				}
 
@@ -402,7 +423,7 @@ func main() {
 // It prints (or opens) the setup URL so the user knows where to go.
 // A stub config is NOT written here — the full config is written after PKCE completes.
 func handleMissingConfig(cfgPath string) {
-	setupURL := "https://vaultmtg.app/setup"
+	setupURL := DefaultSetupURL
 	headless := config.EnvWithFallback("VAULTMTG_DAEMON_HEADLESS", "MTGA_DAEMON_HEADLESS") == "1"
 
 	if headless {

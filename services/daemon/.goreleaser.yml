@@ -138,6 +138,11 @@ builds:
       # Resolved by daemon-release.yml: production tags use the prod DSN, pre-
       # release tags use the staging DSN, snapshot builds get an empty value
       # which leaves Sentry disabled at runtime.
+      # main.DefaultSPAURL is the build-time SPA URL for tray "Open VaultMTG" (#637).
+      # main.DefaultSetupURL is the build-time first-run setup page URL (#637).
+      # Both mirror the DefaultCloudAPIURL staging/prod split:
+      #   stable tags   -> app.vaultmtg.app / vaultmtg.app/setup
+      #   pre-release   -> stg-app.vaultmtg.app / stg.vaultmtg.app/setup
       #
       # updatecheck.EmbeddedPublicKey is the minisign public key used to verify
       # SHA256SUMS.minisig at update-install time. Injected from MINISIGN_PUBLIC_KEY
@@ -145,7 +150,7 @@ builds:
       # The placeholder default in trustanchor.go causes VerifyMinisignature to
       # return an error on any real signature (fail-closed). daemon-release.yml
       # resolves MINISIGN_PUBLIC_KEY and passes it here at build time.
-      - -s -w -X main.Version={{ .Env.PLAIN_VERSION }} -X main.DefaultCloudAPIURL={{ .Env.DEFAULT_CLOUD_API_URL }} -X main.DefaultSentryDSN={{ .Env.DEFAULT_SENTRY_DSN }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey={{ .Env.MINISIGN_PUBLIC_KEY }}
+      - -s -w -X main.Version={{ .Env.PLAIN_VERSION }} -X main.DefaultCloudAPIURL={{ .Env.DEFAULT_CLOUD_API_URL }} -X main.DefaultSentryDSN={{ .Env.DEFAULT_SENTRY_DSN }} -X main.DefaultSPAURL={{ .Env.DEFAULT_SPA_URL }} -X main.DefaultSetupURL={{ .Env.DEFAULT_SETUP_URL }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey={{ .Env.MINISIGN_PUBLIC_KEY }}
     mod_timestamp: "{{ .CommitTimestamp }}"
     # Windows NSIS installer -- compiled after the Windows amd64 binary is built.
     # makensis is available on ubuntu runners via apt; skipped in snapshot mode.
