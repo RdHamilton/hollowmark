@@ -545,3 +545,161 @@ func TestUpsertMatch_DraftSessionIDNotOverwrittenByNil(t *testing.T) {
 		t.Errorf("COALESCE should preserve existing DraftSessionID; want %q, got %v", sessionID, storedSessionID)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Ticket #687: OpponentName + PlayerOnPlay fields in history list
+// ---------------------------------------------------------------------------
+
+// insertTestMatchWithOpponent inserts a matches row that includes opponent_name.
+func insertTestMatchWithOpponent(t *testing.T, db *sql.DB, matchID string, accountID int64, opponentName string, ts time.Time) {
+	t.Helper()
+
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO matches
+			(id, account_id, event_id, event_name, timestamp, player_wins, opponent_wins,
+			 player_team_id, format, result, opponent_name)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		matchID, accountID, "evt-"+matchID, "event-"+matchID, ts,
+		2, 1, 1, "Standard", "win", opponentName,
+	)
+	if err != nil {
+		t.Fatalf("insertTestMatchWithOpponent %q: %v", matchID, err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM matches WHERE id = $1`, matchID)
+	})
+}
+
+// insertTestMatchGameResult inserts a match_game_results row for the given match.
+func insertTestMatchGameResult(t *testing.T, db *sql.DB, matchID string, accountID int64, gameNumber int, playerOnPlay *bool) {
+	t.Helper()
+
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO match_game_results
+			(account_id, match_id, game_number, winning_team_id, turn_count,
+			 duration_secs, sequence, occurred_at, partial, player_on_play)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		 ON CONFLICT ON CONSTRAINT uq_match_game_results_account_match_game DO NOTHING`,
+		accountID, matchID, gameNumber, 1, 8,
+		120, 1, time.Now().UTC(), false, playerOnPlay,
+	)
+	if err != nil {
+		t.Fatalf("insertTestMatchGameResult match=%q game=%d: %v", matchID, gameNumber, err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM match_game_results WHERE match_id = $1 AND game_number = $2 AND account_id = $3`,
+			matchID, gameNumber, accountID)
+	})
+}
+
+// TestMatchesRepository_ListCursor_OpponentNameAndPlayerOnPlay verifies that
+// ListByAccountIDCursorFiltered surfaces opponent_name from matches and
+// player_on_play (game 1) from match_game_results.
+func TestMatchesRepository_ListCursor_OpponentNameAndPlayerOnPlay(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+
+	accountID := insertTestAccount(t, db, "match-687-account")
+	now := time.Now().UTC().Truncate(time.Second)
+	matchID := fmt.Sprintf("match-687-%d", accountID)
+
+	insertTestMatchWithOpponent(t, db, matchID, accountID, "OpponentAlpha", now)
+	onPlay := true
+	insertTestMatchGameResult(t, db, matchID, accountID, 1, &onPlay)
+
+	rows, err := repo.ListByAccountIDCursorFiltered(context.Background(), accountID, repository.MatchFilter{}, nil, "", 10)
+	if err != nil {
+		t.Fatalf("ListByAccountIDCursorFiltered: %v", err)
+	}
+
+	var found *repository.MatchRow
+	for i := range rows {
+		if rows[i].ID == matchID {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("match %q not found in result", matchID)
+	}
+
+	if found.OpponentName == nil || *found.OpponentName != "OpponentAlpha" {
+		t.Errorf("OpponentName = %v, want %q", found.OpponentName, "OpponentAlpha")
+	}
+	if found.PlayerOnPlay == nil {
+		t.Error("PlayerOnPlay is nil, want non-nil")
+	} else if !*found.PlayerOnPlay {
+		t.Errorf("PlayerOnPlay = false, want true")
+	}
+}
+
+// TestMatchesRepository_ListCursor_PlayerOnPlay_NilWhenNoGameResult verifies
+// that PlayerOnPlay is nil when no match_game_results row exists for game 1.
+func TestMatchesRepository_ListCursor_PlayerOnPlay_NilWhenNoGameResult(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+
+	accountID := insertTestAccount(t, db, "match-687-noresult-account")
+	now := time.Now().UTC().Truncate(time.Second)
+	matchID := fmt.Sprintf("match-687-noresult-%d", accountID)
+
+	insertTestMatch(t, db, matchID, accountID, "Standard", now)
+	// Deliberately do NOT insert a match_game_results row.
+
+	rows, err := repo.ListByAccountIDCursorFiltered(context.Background(), accountID, repository.MatchFilter{}, nil, "", 10)
+	if err != nil {
+		t.Fatalf("ListByAccountIDCursorFiltered: %v", err)
+	}
+
+	var found *repository.MatchRow
+	for i := range rows {
+		if rows[i].ID == matchID {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("match %q not found", matchID)
+	}
+
+	if found.PlayerOnPlay != nil {
+		t.Errorf("PlayerOnPlay = %v, want nil when no game result row exists", *found.PlayerOnPlay)
+	}
+}
+
+// TestMatchesRepository_GetByID_OpponentNameAndPlayerOnPlay verifies the
+// single-match GetByID read path.
+func TestMatchesRepository_GetByID_OpponentNameAndPlayerOnPlay(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+
+	accountID := insertTestAccount(t, db, "match-687-getbyid-account")
+	now := time.Now().UTC().Truncate(time.Second)
+	matchID := fmt.Sprintf("match-687-getbyid-%d", accountID)
+
+	insertTestMatchWithOpponent(t, db, matchID, accountID, "OpponentBeta", now)
+	onPlay := false
+	insertTestMatchGameResult(t, db, matchID, accountID, 1, &onPlay)
+
+	row, err := repo.GetByID(context.Background(), accountID, matchID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if row == nil {
+		t.Fatal("GetByID returned nil")
+	}
+
+	if row.OpponentName == nil || *row.OpponentName != "OpponentBeta" {
+		t.Errorf("OpponentName = %v, want %q", row.OpponentName, "OpponentBeta")
+	}
+	if row.PlayerOnPlay == nil {
+		t.Error("PlayerOnPlay is nil, want non-nil")
+	} else if *row.PlayerOnPlay {
+		t.Errorf("PlayerOnPlay = true, want false (player was on draw)")
+	}
+}
