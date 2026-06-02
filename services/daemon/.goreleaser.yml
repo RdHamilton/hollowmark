@@ -286,9 +286,16 @@ signs:
     # output: true surfaces minisign stdout/stderr in GoReleaser logs so any
     # signing failure is immediately visible rather than silently swallowed.
     output: true
-    env:
-      - MINISIGN_PRIVATE_KEY={{ .Env.MINISIGN_PRIVATE_KEY }}
-      - MINISIGN_PASSWORD={{ .Env.MINISIGN_PASSWORD }}
+    # No signs.env needed: MINISIGN_PRIVATE_KEY and MINISIGN_PASSWORD are
+    # already in the GoReleaser process environment (set in the workflow step's
+    # env: block). The bash args script above references them directly as
+    # ${MINISIGN_PRIVATE_KEY} / ${MINISIGN_PASSWORD} shell variables, which are
+    # inherited from the process environment by the bash subprocess.
+    # GoReleaser's signs.env uses {{ .Env.X }} template expansion which fails
+    # for GitHub Actions secrets because the GHA runner does not expose
+    # secret values to GoReleaser's .Env context map (only CI variables and
+    # explicitly declared goreleaser.yml env: entries populate that map).
+    # Passing a secret through signs.env is both unnecessary and broken.
 
 # ---------------------------------------------------------------------------
 # GitHub Release
