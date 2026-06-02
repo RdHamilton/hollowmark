@@ -124,6 +124,7 @@ _make_test_script() {
     -e "s|__CLERK_FRONTEND_API__|${clerk_api}|g" \
     -e "s|__CLERK_PUBLISHABLE_KEY__|${clerk_key}|g" \
     -e "s|__CLERK_OAUTH_CLIENT_ID__|${clerk_client}|g" \
+    -e "s|__VAULTMTG_CHANNEL__|stable|g" \
     -e "s|PLIST_DIR=\"\${REAL_HOME}/Library/LaunchAgents\"|PLIST_DIR=\"${plist_dir}\"|g" \
     -e "s|CONFIG_DIR=\"\${REAL_HOME}/.vaultmtg\"|CONFIG_DIR=\"${config_dir}\"|g" \
     "${POSTINSTALL_SCRIPT}" > "${dest}"
