@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/RdHamilton/vault-mtg/services/contract"
@@ -39,9 +40,22 @@ type matchStore interface {
 	UpsertMatch(ctx context.Context, m repository.MatchUpsert) error
 }
 
-// draftStore writes to the draft_sessions table.
+// draftStore writes to the draft_sessions and draft_match_results tables.
 type draftStore interface {
 	UpsertDraftSession(ctx context.Context, s repository.DraftSessionUpsert) error
+	// SessionExists returns true if a draft_sessions row with the given ID is
+	// owned by accountID. Used to validate daemon-supplied DraftSessionID.
+	SessionExists(ctx context.Context, accountID int64, sessionID string) (bool, error)
+	// InferSessionForMatch returns the draft_sessions.id for the single
+	// completed session matching eventName within 48 hours before matchTime.
+	// Returns ("", nil) when zero or multiple sessions match.
+	InferSessionForMatch(ctx context.Context, accountID int64, eventName string, matchTime time.Time) (string, error)
+	// InsertDraftMatchResult writes one row to draft_match_results.
+	// ON CONFLICT (session_id, match_id) DO NOTHING — idempotent.
+	InsertDraftMatchResult(ctx context.Context, r repository.DraftMatchResultInsert) error
+	// InsertDraftPick writes one row to draft_picks.
+	// ON CONFLICT (session_id, pack_number, pick_number) DO NOTHING — idempotent.
+	InsertDraftPick(ctx context.Context, p repository.DraftPickInsert) error
 }
 
 // collectionStore writes card counts to the card_inventory table.
@@ -472,6 +486,9 @@ type matchPayload struct {
 	// WinningTeamID is included so the projection can derive Result when the
 	// daemon did not pre-compute it (e.g. player.authenticated not yet seen).
 	WinningTeamID int `json:"winning_team_id"`
+	// DraftSessionID is set by the daemon when the match was played using a
+	// deck from an active draft session. Nil for non-draft matches.
+	DraftSessionID *string `json:"draft_session_id"`
 }
 
 type draftPayload struct {
@@ -541,7 +558,30 @@ func (w *Worker) projectMatch(ctx context.Context, row *repository.DaemonEventRo
 		eventID = *row.EventID
 	}
 
-	return w.matches.UpsertMatch(ctx, repository.MatchUpsert{
+	// Resolve the draft session ID for this match (ADR-051).
+	// Path 1: daemon supplied it directly — validate ownership.
+	// Path 2: attempt time-window inference when the event_name looks like a draft.
+	// Path 3: leave nil (non-draft match or ambiguous inference).
+	var draftSessionID *string
+	if p.DraftSessionID != nil {
+		exists, existsErr := w.drafts.SessionExists(ctx, accountID, *p.DraftSessionID)
+		if existsErr != nil {
+			log.Printf("[projection] projectMatch id=%d: SessionExists: %v — ignoring DraftSessionID", row.ID, existsErr)
+		} else if !exists {
+			log.Printf("[projection] projectMatch id=%d: DraftSessionID %q not found for account — ignoring", row.ID, *p.DraftSessionID)
+		} else {
+			draftSessionID = p.DraftSessionID
+		}
+	} else if isDraftEventName(p.EventName) {
+		inferred, inferErr := w.drafts.InferSessionForMatch(ctx, accountID, p.EventName, row.OccurredAt)
+		if inferErr != nil {
+			log.Printf("[projection] projectMatch id=%d: InferSessionForMatch: %v", row.ID, inferErr)
+		} else if inferred != "" {
+			draftSessionID = &inferred
+		}
+	}
+
+	if err := w.matches.UpsertMatch(ctx, repository.MatchUpsert{
 		ID:              p.MatchID,
 		AccountID:       accountID,
 		EventID:         eventID,
@@ -559,7 +599,35 @@ func (w *Worker) projectMatch(ctx context.Context, row *repository.DaemonEventRo
 		ResultReason:    p.ResultReason,
 		OpponentName:    p.OpponentName,
 		OpponentID:      p.OpponentID,
-	})
+		DraftSessionID:  draftSessionID,
+	}); err != nil {
+		return err
+	}
+
+	// Write draft_match_results when we have a resolved session ID.
+	if draftSessionID != nil {
+		if dmrErr := w.drafts.InsertDraftMatchResult(ctx, repository.DraftMatchResultInsert{
+			SessionID:      *draftSessionID,
+			MatchID:        p.MatchID,
+			Result:         result,
+			OpponentColors: nil, // v0.3.7: not derived; future enhancement
+			GameWins:       p.PlayerWins,
+			GameLosses:     p.OpponentWins,
+			MatchTimestamp: row.OccurredAt,
+		}); dmrErr != nil {
+			// Soft failure — the match itself was projected; log and continue.
+			log.Printf("[projection] projectMatch id=%d: InsertDraftMatchResult: %v — match projected without draft result", row.ID, dmrErr)
+		}
+	}
+
+	return nil
+}
+
+// isDraftEventName returns true when the event_name heuristically identifies a
+// draft event (contains "Draft" or "draft"). Used by the BFF inference fallback
+// to avoid unnecessary DB queries on constructed/ladder matches.
+func isDraftEventName(eventName string) bool {
+	return strings.Contains(eventName, "Draft") || strings.Contains(eventName, "draft")
 }
 
 func (w *Worker) projectDraftSession(ctx context.Context, row *repository.DaemonEventRow) error {
@@ -605,7 +673,12 @@ func (w *Worker) projectDraftSession(ctx context.Context, row *repository.Daemon
 }
 
 type draftPickPayload struct {
-	SessionID string `json:"session_id"`
+	SessionID  string `json:"session_id"`
+	PackNumber int    `json:"PackNumber"`
+	PickNumber int    `json:"PickNumber"`
+	// PickedCards is the raw JSON array of arena IDs. We take index 0 as the
+	// single picked card for draft_picks.card_id (TEXT).
+	PickedCards []int `json:"pickedCards"`
 }
 
 func (w *Worker) projectDraftPick(ctx context.Context, row *repository.DaemonEventRow) error {
@@ -614,8 +687,11 @@ func (w *Worker) projectDraftPick(ctx context.Context, row *repository.DaemonEve
 		return fmt.Errorf("unmarshal draft pick payload: %w", err)
 	}
 
+	// Soft skip when session_id is absent — the daemon may have restarted
+	// mid-draft. Do NOT dead-letter; ADR-051 / ADR-039 soft-skip pattern.
 	if p.SessionID == "" {
-		return permanent(fmt.Errorf("draft.pick payload missing session_id"))
+		log.Printf("[projection] projectDraftPick id=%d: missing session_id — skipping (daemon restart?)", row.ID)
+		return nil
 	}
 
 	accountID, err := w.accounts.GetOrCreateByClientID(ctx, row.AccountID, row.UserID)
@@ -624,13 +700,33 @@ func (w *Worker) projectDraftPick(ctx context.Context, row *repository.DaemonEve
 	}
 
 	// Upsert the session with a bumped total_picks counter via GREATEST.
-	return w.drafts.UpsertDraftSession(ctx, repository.DraftSessionUpsert{
+	if err := w.drafts.UpsertDraftSession(ctx, repository.DraftSessionUpsert{
 		ID:         p.SessionID,
 		AccountID:  accountID,
 		StartTime:  row.OccurredAt,
 		Status:     "in_progress",
-		TotalPicks: 1, // GREATEST(1, current) effectively increments when used in the ON CONFLICT clause
-	})
+		TotalPicks: 1, // GREATEST(1, current) effectively increments
+	}); err != nil {
+		return err
+	}
+
+	// Write the individual pick row when card data is present.
+	if len(p.PickedCards) > 0 {
+		cardID := fmt.Sprintf("%d", p.PickedCards[0])
+		if pickErr := w.drafts.InsertDraftPick(ctx, repository.DraftPickInsert{
+			SessionID:  p.SessionID,
+			PackNumber: p.PackNumber,
+			PickNumber: p.PickNumber,
+			CardID:     cardID,
+			Timestamp:  row.OccurredAt,
+		}); pickErr != nil {
+			// Soft failure — total_picks was bumped; individual pick row is
+			// best-effort. Log and continue.
+			log.Printf("[projection] projectDraftPick id=%d: InsertDraftPick: %v", row.ID, pickErr)
+		}
+	}
+
+	return nil
 }
 
 // projectCollectionUpdated applies the delta from a collection.updated event

@@ -6,6 +6,29 @@ import (
 	"time"
 )
 
+// DraftMatchResultInsert holds the fields needed to write one row to
+// draft_match_results. Used by the projection worker after a match.completed
+// event is linked to a draft session.
+type DraftMatchResultInsert struct {
+	SessionID      string
+	MatchID        string
+	Result         string // "win" or "loss"
+	OpponentColors *string
+	GameWins       int
+	GameLosses     int
+	MatchTimestamp time.Time
+}
+
+// DraftPickInsert holds the fields needed to write one row to draft_picks.
+// Used by the projection worker for each draft.pick event.
+type DraftPickInsert struct {
+	SessionID  string
+	PackNumber int
+	PickNumber int
+	CardID     string
+	Timestamp  time.Time
+}
+
 // DraftSessionRow is a row returned from draft_sessions for history reads.
 type DraftSessionRow struct {
 	ID        string
@@ -263,4 +286,90 @@ type DraftSessionUpsert struct {
 	EndTime    *time.Time
 	Status     string
 	TotalPicks int
+}
+
+// SessionExists returns true if a draft_sessions row with the given sessionID
+// exists and is owned by accountID. Used by the projection worker to validate
+// a daemon-supplied DraftSessionID before writing to draft_match_results.
+func (r *DraftSessionsRepository) SessionExists(ctx context.Context, accountID int64, sessionID string) (bool, error) {
+	const q = `SELECT EXISTS(SELECT 1 FROM draft_sessions WHERE id = $1 AND account_id = $2)`
+	var exists bool
+	if err := r.db.QueryRowContext(ctx, q, sessionID, accountID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// InferSessionForMatch returns the draft_sessions.id for the completed session
+// that matches eventName within 48 hours before matchTime for the given
+// accountID. Returns ("", nil) when zero or more than one session matches —
+// ambiguous results are not guessed, the match is left without a session link.
+func (r *DraftSessionsRepository) InferSessionForMatch(ctx context.Context, accountID int64, eventName string, matchTime time.Time) (string, error) {
+	const q = `
+		SELECT id FROM draft_sessions
+		WHERE account_id = $1
+		  AND event_name = $2
+		  AND start_time >= $3 - INTERVAL '48 hours'
+		  AND start_time <= $3
+		  AND status = 'completed'
+		LIMIT 2`
+
+	rows, err := r.db.QueryContext(ctx, q, accountID, eventName, matchTime)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+
+	if len(ids) != 1 {
+		// Zero or multiple candidates — leave NULL.
+		return "", nil
+	}
+	return ids[0], nil
+}
+
+// InsertDraftMatchResult writes one row to draft_match_results.
+// Uses ON CONFLICT (session_id, match_id) DO NOTHING so re-projection is
+// idempotent. A soft failure here must not abort the match projection.
+func (r *DraftSessionsRepository) InsertDraftMatchResult(ctx context.Context, ins DraftMatchResultInsert) error {
+	const q = `
+		INSERT INTO draft_match_results
+			(session_id, match_id, result, opponent_colors, game_wins, game_losses, match_timestamp)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (session_id, match_id) DO NOTHING`
+
+	_, err := r.db.ExecContext(
+		ctx, q,
+		ins.SessionID, ins.MatchID, ins.Result, ins.OpponentColors,
+		ins.GameWins, ins.GameLosses, ins.MatchTimestamp,
+	)
+	return err
+}
+
+// InsertDraftPick writes one row to draft_picks.
+// Uses ON CONFLICT (session_id, pack_number, pick_number) DO NOTHING so
+// replay is idempotent.
+func (r *DraftSessionsRepository) InsertDraftPick(ctx context.Context, ins DraftPickInsert) error {
+	const q = `
+		INSERT INTO draft_picks
+			(session_id, pack_number, pick_number, card_id, timestamp)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (session_id, pack_number, pick_number) DO NOTHING`
+
+	_, err := r.db.ExecContext(
+		ctx, q,
+		ins.SessionID, ins.PackNumber, ins.PickNumber, ins.CardID, ins.Timestamp,
+	)
+	return err
 }

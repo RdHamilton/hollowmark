@@ -167,6 +167,12 @@ type MatchCompletedPayload struct {
 	PlayerTeamID int    `json:"player_team_id"` // 0 when indeterminate
 	PlayerWins   int    `json:"player_wins"`
 	OpponentWins int    `json:"opponent_wins"`
+	// DraftSessionID is the draft_sessions.id that produced the deck used in
+	// this match. Non-nil when the daemon has an active in-memory draft session
+	// whose CourseName matches the match's Format (event_name). Nil for all
+	// constructed/ladder/other non-draft matches, and nil when the daemon
+	// restarted between draft and match play.
+	DraftSessionID *string `json:"draft_session_id,omitempty"`
 }
 
 // LifeChangeEntry records a single life-total mutation observed in a game.
