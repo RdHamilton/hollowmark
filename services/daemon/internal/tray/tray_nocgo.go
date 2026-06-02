@@ -51,20 +51,25 @@ type App struct {
 	// RetrySetup is signalled when the user requests setup retry. Always
 	// buffered cap=1 so callers can send without blocking even in headless mode.
 	RetrySetup chan struct{}
+	// InstallUpdate is signalled when the user requests an update install.
+	// Present on the stub so cmd/daemon/main.go can wire it into TrayHooks
+	// without a build tag — buffered cap=1.
+	InstallUpdate chan struct{}
 }
 
 // New creates a no-op App. version is stored but not rendered (headless stub).
 func New(appURL, version string, openURL func(string) error, onQuit func()) *App {
 	return &App{
-		appURL:      appURL,
-		version:     version,
-		onQuit:      onQuit,
-		status:      StatusStarting,
-		quit:        make(chan struct{}),
-		SyncNow:     make(chan struct{}, 1),
-		GrantAccess: make(chan struct{}, 1),
-		TryAgain:    make(chan struct{}, 1),
-		RetrySetup:  make(chan struct{}, 1),
+		appURL:        appURL,
+		version:       version,
+		onQuit:        onQuit,
+		status:        StatusStarting,
+		quit:          make(chan struct{}),
+		SyncNow:       make(chan struct{}, 1),
+		GrantAccess:   make(chan struct{}, 1),
+		TryAgain:      make(chan struct{}, 1),
+		RetrySetup:    make(chan struct{}, 1),
+		InstallUpdate: make(chan struct{}, 1),
 	}
 }
 
@@ -102,5 +107,6 @@ func (a *App) SetSetupRequired(show bool) {
 		a.status = StatusSetupRequired
 	}
 }
-func (a *App) SetWaitingForArena(_ bool) {}
-func (a *App) NotifySyncResult(_ error)  {} // headless stub — no tray label to update
+func (a *App) SetWaitingForArena(_ bool)         {}
+func (a *App) NotifySyncResult(_ error)          {} // headless stub — no tray label to update
+func (a *App) NotifyUpdateAvailable(_, _ string) {} // headless stub — no tray item to show

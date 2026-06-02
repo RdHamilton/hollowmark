@@ -5,9 +5,10 @@ go 1.25.0
 toolchain go1.25.10
 
 require (
+	aead.dev/minisign v0.3.0
 	github.com/RdHamilton/vault-mtg/pkg/draftalgo v0.1.2
 	github.com/RdHamilton/vault-mtg/pkg/logparse v0.1.4
-	github.com/RdHamilton/vault-mtg/services/contract v0.1.4
+	github.com/RdHamilton/vault-mtg/services/contract v0.1.5
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/getlantern/systray v1.2.2
 	github.com/getsentry/sentry-go v0.46.2
@@ -33,6 +34,7 @@ require (
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
+	golang.org/x/crypto v0.13.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
