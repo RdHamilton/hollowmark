@@ -19,13 +19,16 @@ Two modes:
 Stdlib only: json, pathlib, argparse, re, sys.
 
 Usage:
+    # macOS log capture (note capital "Of The" — filesystem is case-sensitive):
+    cp ~/Library/Logs/"Wizards Of The Coast"/MTGA/Player.log /tmp/Player.log
+
     # Curated (legacy):
-    python3 extract.py --input Player.log --output-dir ./corpus-raw --sanitize --first-only
-    python3 extract.py --input Player.log --output-dir ./corpus-raw --sanitize --variant empty-format
-    python3 extract.py --input Player.log --output-dir ./corpus-raw --sanitize --variant missing-id
+    python3 extract.py --input /tmp/Player.log --output-dir ./corpus-raw --sanitize --first-only
+    python3 extract.py --input /tmp/Player.log --output-dir ./corpus-raw --sanitize --variant empty-format
+    python3 extract.py --input /tmp/Player.log --output-dir ./corpus-raw --sanitize --variant missing-id
 
     # Catalog (event-discovery audit, #262):
-    python3 extract.py --input Player.log --output-dir ./catalog --catalog --sanitize
+    python3 extract.py --input /tmp/Player.log --output-dir ./catalog --catalog --sanitize
 """
 
 import argparse
@@ -225,7 +228,17 @@ def _replace_screen_name(raw: str) -> str:
 
 
 def _sanitize_obj(obj: dict, sanitize: bool) -> str:
-    """Serialise obj to a JSON string and optionally sanitise PII."""
+    """Serialise obj to a JSON string and optionally sanitise PII.
+
+    Applies both the recursive key-walk (_sanitize_value_keys) AND the
+    text-level regex pass (_sanitize_text) so that playerName/screenName
+    values that lack the '#digits' screen-name suffix are still replaced.
+    Previously only _sanitize_text was called here, allowing bare handles
+    like 'Jhixiaus' to survive the curated-extraction path (the catalog
+    path via _sanitize_catalog_obj was already correct).
+    """
+    if sanitize:
+        _sanitize_value_keys(obj)
     text = json.dumps(obj, separators=(",", ":"))
     if sanitize:
         text = _sanitize_text(text)

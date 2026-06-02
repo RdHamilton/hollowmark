@@ -45,7 +45,7 @@ func getLogDirectories() []string {
 	case "darwin":
 		return []string{
 			filepath.Join(home, "Library", "Application Support", "com.wizards.mtga", "Logs", "Logs"),
-			filepath.Join(home, "Library", "Logs", "Wizards of the Coast", "MTGA"),
+			filepath.Join(home, "Library", "Logs", "Wizards Of The Coast", "MTGA"),
 		}
 	case "windows":
 		return []string{
