@@ -1182,6 +1182,42 @@ func TestRunReplayMode_ExitsZeroOnReplayCompleted(t *testing.T) {
 	require.NoError(t, err, "[replay-mode] must return nil on replay:completed")
 }
 
+// TestRunReplayMode_UsesIngestEventsPath verifies that runReplayMode dispatches
+// to /ingest/events (not the bare cloud_api_url root). A missing IngestPath in
+// the daemonCfg struct literal caused every replay dispatch to POST to
+// https://bff.example.com/api/v1 (no path), returning 404 silently.
+// This is the regression that caused the staging match-data heal to fail.
+func TestRunReplayMode_UsesIngestEventsPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "corpus.log")
+	require.NoError(t, os.WriteFile(logFile, []byte{}, 0o600))
+
+	// Capture the request paths that the replay dispatcher POSTs to.
+	var requestPaths []string
+	bffSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths = append(requestPaths, r.URL.Path)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer bffSrv.Close()
+
+	err := runReplayMode(
+		context.Background(),
+		replayModeConfig{
+			LogFile:     logFile,
+			APIKey:      "sk_test_daemon",
+			AccountID:   "acc_replay_ingest_path_check",
+			CloudAPIURL: bffSrv.URL + "/api/v1",
+		},
+	)
+	require.NoError(t, err, "runReplayMode must succeed")
+
+	// Every dispatch must target /api/v1/ingest/events — not the root /api/v1.
+	for _, p := range requestPaths {
+		assert.Equal(t, "/api/v1/ingest/events", p,
+			"replay dispatch must target /ingest/events — bare cloud_api_url root is a 404 on staging nginx")
+	}
+}
+
 // TestRunReplayMode_ErrorOnMissingFile verifies that runReplayMode returns a
 // non-nil error when the log file does not exist.
 func TestRunReplayMode_ErrorOnMissingFile(t *testing.T) {

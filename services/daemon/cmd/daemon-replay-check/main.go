@@ -348,6 +348,22 @@ func fetchStagingOutcome(bffBase, apiKey, accountID string) (goldenOutcome, erro
 
 // ─── diffOutcome ─────────────────────────────────────────────────────────────
 
+// isEmptyProjectionFormat reports whether f is a sentinel format value that
+// the BFF projection worker writes when the daemon dispatched a match event
+// with player_team_id=0 (the accountId→clientId bug, fixed in c2fa895d).
+// These are never valid projected values — they indicate a broken daemon session.
+func isEmptyProjectionFormat(f string) bool {
+	return f == "" || f == "Unknown"
+}
+
+// isEmptyProjectionResult reports whether r is a sentinel result value that
+// the BFF projection worker writes when it cannot derive win/loss from the
+// match payload (player_team_id=0 or winning_team_id=0).
+// These are never valid projected values for a completed match.
+func isEmptyProjectionResult(r string) bool {
+	return r == "" || r == "unknown"
+}
+
 // diffOutcome compares actual against golden and returns a slice of field-level
 // diffs. The comparison is on stable projected fields only — never OccurredAt,
 // Sequence, or any other non-deterministic field (ADR-042 Amendment 1 §1).
@@ -355,6 +371,11 @@ func fetchStagingOutcome(bffBase, apiKey, accountID string) (goldenOutcome, erro
 // The diff is MANIFEST-promotion-aware: only fields present in the golden
 // artifact are asserted. An empty golden slice means "no assertion" (not
 // "assert zero rows"), so un-promoted event classes do not fail the gate.
+//
+// Sentinel check (unconditional): any actual match with Format in {"","Unknown"}
+// or Result in {"","unknown"} is always a hard failure regardless of golden.
+// These values indicate empty-projection (player_team_id=0 bug) and must never
+// appear in a healthy staging state (ADR-042 Amendment 1 §4).
 func diffOutcome(golden, actual goldenOutcome) []outcomeDiff {
 	var diffs []outcomeDiff
 
@@ -367,6 +388,22 @@ func diffOutcome(golden, actual goldenOutcome) []outcomeDiff {
 			Expected:   fmt.Sprintf("%d", golden.ProjectionErrorCount),
 			Actual:     fmt.Sprintf("%d", actual.ProjectionErrorCount),
 		})
+	}
+
+	// ── Empty-projection sentinel check (always asserted, ADR-042 A1 §4) ─────
+	// Format in {"","Unknown"} or Result in {"","unknown"} are BFF-default
+	// values written when the daemon dispatched player_team_id=0 (the
+	// clientId→accountId bug, c2fa895d).  A match in this state means the
+	// daemon replay failed to wire the player identity — always a regression.
+	for i, am := range actual.Matches {
+		if isEmptyProjectionFormat(am.Format) || isEmptyProjectionResult(am.Result) {
+			diffs = append(diffs, outcomeDiff{
+				EventClass: fmt.Sprintf("match[%d]", i),
+				Field:      "EmptyProjection",
+				Expected:   "non-empty format and result (win|loss)",
+				Actual:     fmt.Sprintf("format=%q result=%q player_wins=%d opponent_wins=%d", am.Format, am.Result, am.PlayerWins, am.OpponentWins),
+			})
+		}
 	}
 
 	// ── Matches ───────────────────────────────────────────────────────────────
