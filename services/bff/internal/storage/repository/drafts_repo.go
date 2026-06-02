@@ -27,7 +27,8 @@ func NewDraftsRepository(db DB) *DraftsRepository {
 	return &DraftsRepository{db: db}
 }
 
-// DraftSessionDetailRow mirrors a draft_sessions row + grade fields.
+// DraftSessionDetailRow mirrors a draft_sessions row + grade fields +
+// aggregated match results.
 type DraftSessionDetailRow struct {
 	ID                   string
 	AccountID            *int64
@@ -51,6 +52,13 @@ type DraftSessionDetailRow struct {
 	PredictedAt          *time.Time
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+	// Aggregated from draft_match_results via LEFT JOIN.
+	Wins     int
+	Losses   int
+	IsTrophy bool
+	// FormatType is the normalised draft format (quick_draft | premier_draft |
+	// traditional_draft | contender_draft), read from draft_sessions.format_type.
+	FormatType string
 }
 
 // DraftFilter narrows ListSessions queries.
@@ -64,32 +72,34 @@ type DraftFilter struct {
 }
 
 // ListSessions returns draft_sessions for the account, newest first.
+// Wins/Losses are aggregated via a LEFT JOIN on draft_match_results so
+// the SPA draft-history view receives correct W/L without a separate round trip.
 func (r *DraftsRepository) ListSessions(ctx context.Context, accountID int64, f DraftFilter) ([]DraftSessionDetailRow, error) {
-	clauses := []string{"account_id = $1"}
+	clauses := []string{"ds.account_id = $1"}
 	args := []any{accountID}
 	next := 2
 	if f.SetCode != "" {
-		clauses = append(clauses, "lower(set_code) = lower($"+strconv.Itoa(next)+")")
+		clauses = append(clauses, "lower(ds.set_code) = lower($"+strconv.Itoa(next)+")")
 		args = append(args, f.SetCode)
 		next++
 	}
 	if f.Format != "" {
-		clauses = append(clauses, "lower(draft_type) = lower($"+strconv.Itoa(next)+")")
+		clauses = append(clauses, "lower(ds.draft_type) = lower($"+strconv.Itoa(next)+")")
 		args = append(args, f.Format)
 		next++
 	}
 	if f.Status != "" {
-		clauses = append(clauses, "lower(status) = lower($"+strconv.Itoa(next)+")")
+		clauses = append(clauses, "lower(ds.status) = lower($"+strconv.Itoa(next)+")")
 		args = append(args, f.Status)
 		next++
 	}
 	if f.StartDate != nil {
-		clauses = append(clauses, "start_time >= $"+strconv.Itoa(next))
+		clauses = append(clauses, "ds.start_time >= $"+strconv.Itoa(next))
 		args = append(args, *f.StartDate)
 		next++
 	}
 	if f.EndDate != nil {
-		clauses = append(clauses, "start_time <= $"+strconv.Itoa(next))
+		clauses = append(clauses, "ds.start_time <= $"+strconv.Itoa(next))
 		args = append(args, *f.EndDate)
 		next++
 	}
@@ -100,28 +110,51 @@ func (r *DraftsRepository) ListSessions(ctx context.Context, accountID int64, f 
 	if limit > 500 {
 		limit = 500
 	}
-	q := `SELECT id, account_id, event_name, set_code, draft_type, start_time, end_time,
-	             status, total_picks, overall_grade, overall_score, pick_quality_score,
-	             color_discipline_score, deck_composition_score, strategic_score,
-	             predicted_win_rate, predicted_win_rate_min, predicted_win_rate_max,
-	             prediction_factors, predicted_at, created_at, updated_at
-	      FROM draft_sessions
+	q := `SELECT ds.id, ds.account_id, ds.event_name, ds.set_code, ds.draft_type, ds.start_time, ds.end_time,
+	             ds.status, ds.total_picks, ds.overall_grade, ds.overall_score, ds.pick_quality_score,
+	             ds.color_discipline_score, ds.deck_composition_score, ds.strategic_score,
+	             ds.predicted_win_rate, ds.predicted_win_rate_min, ds.predicted_win_rate_max,
+	             ds.prediction_factors, ds.predicted_at, ds.created_at, ds.updated_at,
+	             COALESCE(SUM(CASE WHEN dmr.result = 'win'  THEN 1 ELSE 0 END), 0) AS wins,
+	             COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses,
+	             ds.is_trophy, ds.format_type
+	      FROM draft_sessions ds
+	      LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
 	      WHERE ` + strings.Join(clauses, " AND ") + `
-	      ORDER BY start_time DESC
+	      GROUP BY ds.id, ds.account_id, ds.event_name, ds.set_code, ds.draft_type,
+	               ds.start_time, ds.end_time, ds.status, ds.total_picks,
+	               ds.overall_grade, ds.overall_score, ds.pick_quality_score,
+	               ds.color_discipline_score, ds.deck_composition_score, ds.strategic_score,
+	               ds.predicted_win_rate, ds.predicted_win_rate_min, ds.predicted_win_rate_max,
+	               ds.prediction_factors, ds.predicted_at, ds.created_at, ds.updated_at,
+	               ds.is_trophy, ds.format_type
+	      ORDER BY ds.start_time DESC
 	      LIMIT $` + strconv.Itoa(next)
 	args = append(args, limit)
 	return r.scanSessions(ctx, q, args...)
 }
 
 // GetSession returns the session by id, scoped to account.
+// Includes W/L aggregation from draft_match_results via LEFT JOIN.
 func (r *DraftsRepository) GetSession(ctx context.Context, accountID int64, sessionID string) (*DraftSessionDetailRow, error) {
-	const q = `SELECT id, account_id, event_name, set_code, draft_type, start_time, end_time,
-	                  status, total_picks, overall_grade, overall_score, pick_quality_score,
-	                  color_discipline_score, deck_composition_score, strategic_score,
-	                  predicted_win_rate, predicted_win_rate_min, predicted_win_rate_max,
-	                  prediction_factors, predicted_at, created_at, updated_at
-	           FROM draft_sessions
-	           WHERE account_id = $1 AND id = $2
+	const q = `SELECT ds.id, ds.account_id, ds.event_name, ds.set_code, ds.draft_type, ds.start_time, ds.end_time,
+	                  ds.status, ds.total_picks, ds.overall_grade, ds.overall_score, ds.pick_quality_score,
+	                  ds.color_discipline_score, ds.deck_composition_score, ds.strategic_score,
+	                  ds.predicted_win_rate, ds.predicted_win_rate_min, ds.predicted_win_rate_max,
+	                  ds.prediction_factors, ds.predicted_at, ds.created_at, ds.updated_at,
+	                  COALESCE(SUM(CASE WHEN dmr.result = 'win'  THEN 1 ELSE 0 END), 0) AS wins,
+	                  COALESCE(SUM(CASE WHEN dmr.result = 'loss' THEN 1 ELSE 0 END), 0) AS losses,
+	                  ds.is_trophy, ds.format_type
+	           FROM draft_sessions ds
+	           LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
+	           WHERE ds.account_id = $1 AND ds.id = $2
+	           GROUP BY ds.id, ds.account_id, ds.event_name, ds.set_code, ds.draft_type,
+	                    ds.start_time, ds.end_time, ds.status, ds.total_picks,
+	                    ds.overall_grade, ds.overall_score, ds.pick_quality_score,
+	                    ds.color_discipline_score, ds.deck_composition_score, ds.strategic_score,
+	                    ds.predicted_win_rate, ds.predicted_win_rate_min, ds.predicted_win_rate_max,
+	                    ds.prediction_factors, ds.predicted_at, ds.created_at, ds.updated_at,
+	                    ds.is_trophy, ds.format_type
 	           LIMIT 1`
 	rows, err := r.scanSessions(ctx, q, accountID, sessionID)
 	if err != nil {
@@ -449,6 +482,13 @@ func (r *DraftsRepository) RecommendationFeedbackStats(ctx context.Context, acco
 }
 
 // scanSessions centralises draft_sessions row decoding.
+// Every query routed through scanSessions MUST select the full column list:
+// id, account_id, event_name, set_code, draft_type, start_time, end_time,
+// status, total_picks, overall_grade, overall_score, pick_quality_score,
+// color_discipline_score, deck_composition_score, strategic_score,
+// predicted_win_rate, predicted_win_rate_min, predicted_win_rate_max,
+// prediction_factors, predicted_at, created_at, updated_at,
+// wins, losses, is_trophy, format_type
 func (r *DraftsRepository) scanSessions(ctx context.Context, q string, args ...any) ([]DraftSessionDetailRow, error) {
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -465,6 +505,7 @@ func (r *DraftsRepository) scanSessions(ctx context.Context, q string, args ...a
 			&s.ColorDisciplineScore, &s.DeckCompositionScore, &s.StrategicScore,
 			&s.PredictedWinRate, &s.PredictedWinRateMin, &s.PredictedWinRateMax,
 			&s.PredictionFactors, &s.PredictedAt, &s.CreatedAt, &s.UpdatedAt,
+			&s.Wins, &s.Losses, &s.IsTrophy, &s.FormatType,
 		); err != nil {
 			return nil, err
 		}
