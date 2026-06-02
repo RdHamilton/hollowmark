@@ -38,11 +38,14 @@ const (
 	testAccountID = "test-account-001"
 	testSessionID = "22222222-0000-0000-0000-000000000001"
 	// localPlayerID is the stable fake MTGA userId of the local player in the
-	// match-completed corpus fixture (#262 promotion: the fixture is now REAL,
-	// and the local player's account token is keyed to the same stable fake as
-	// the corrected player-authenticated fixture's clientId == reservedPlayers[].userId).
-	// ParseMatchCompletedEntry requires it to derive win/loss and identify the opponent.
-	localPlayerID = "TESTACCOUNT000000000000003"
+	// match-completed corpus fixture. The value must equal both:
+	//   (a) player-authenticated.log authenticateResponse.clientId, AND
+	//   (b) match-completed.log reservedPlayers[seatId=1].userId
+	// These are both set by the fixture extractor's stable account-token map;
+	// the current 2026-06-01 SOS session corpus produces TESTACCOUNT000000000000002
+	// as the first fake account token seen in a single-pass extraction.
+	// ParseMatchCompletedEntry requires this to derive win/loss and identify the opponent.
+	localPlayerID = "TESTACCOUNT000000000000002"
 )
 
 // ---------------------------------------------------------------------------

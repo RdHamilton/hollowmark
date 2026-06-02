@@ -81,6 +81,16 @@ func TestQuestNameFromMap_KnownKeys(t *testing.T) {
 			locKey: "Quests/Quest_Boros_Legion",
 			want:   "Cast 20 white or red spells",
 		},
+		// Entries from real 2026-06-01 SOS session capture
+		// (services/daemon/testdata/corpus/player-log/quest-progress.log).
+		{
+			locKey: "Quests/Quest_Dimir_Cutpurse",
+			want:   "Cast 20 blue or black spells",
+		},
+		{
+			locKey: "Quests/Quest_Raiding_Party",
+			want:   "Attack with 30 creatures",
+		},
 	}
 
 	for _, tc := range cases {
