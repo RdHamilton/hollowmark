@@ -38,8 +38,8 @@ func (s Status) label() string {
 
 // App is a no-op tray stub for headless builds.
 type App struct {
-	appURL   string
-	version  string
+	appURL  string
+	version string
 	// appLabel is the user-visible title shown next to the tray icon and in
 	// the tooltip. "VaultMTG" for the stable channel; "VaultMTG (Staging)"
 	// for the staging channel. Set via NewWithLabel; defaults to "VaultMTG".
