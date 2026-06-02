@@ -57,8 +57,16 @@ func (f *fakeMatchStore) UpsertMatch(_ context.Context, m repository.MatchUpsert
 }
 
 type fakeDraftStore struct {
-	upserts []repository.DraftSessionUpsert
-	err     error
+	upserts          []repository.DraftSessionUpsert
+	matchResults     []repository.DraftMatchResultInsert
+	picks            []repository.DraftPickInsert
+	err              error
+	sessionExistsVal bool
+	sessionExistsErr error
+	inferredID       string
+	inferErr         error
+	winsForSession   int
+	winsErr          error
 }
 
 func (f *fakeDraftStore) UpsertDraftSession(_ context.Context, s repository.DraftSessionUpsert) error {
@@ -66,6 +74,34 @@ func (f *fakeDraftStore) UpsertDraftSession(_ context.Context, s repository.Draf
 		return f.err
 	}
 	f.upserts = append(f.upserts, s)
+	return nil
+}
+
+func (f *fakeDraftStore) SessionExists(_ context.Context, _ int64, _ string) (bool, error) {
+	return f.sessionExistsVal, f.sessionExistsErr
+}
+
+func (f *fakeDraftStore) InferSessionForMatch(_ context.Context, _ int64, _ string, _ time.Time) (string, error) {
+	return f.inferredID, f.inferErr
+}
+
+func (f *fakeDraftStore) GetWinsForSession(_ context.Context, _ string) (int, error) {
+	return f.winsForSession, f.winsErr
+}
+
+func (f *fakeDraftStore) InsertDraftMatchResult(_ context.Context, r repository.DraftMatchResultInsert) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.matchResults = append(f.matchResults, r)
+	return nil
+}
+
+func (f *fakeDraftStore) InsertDraftPick(_ context.Context, p repository.DraftPickInsert) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.picks = append(f.picks, p)
 	return nil
 }
 
@@ -1973,5 +2009,410 @@ func TestRunOnce_CrossTenantAccount_MatchGameEnded(t *testing.T) {
 	// No game_plays row must have been written.
 	if len(gp.gamePlayInserts) != 0 {
 		t.Errorf("cross-tenant event must not write a game_plays row; got %d inserts", len(gp.gamePlayInserts))
+	}
+}
+
+// ─── ADR-051: draft match pipeline tests ──────────────────────────────────────
+
+// TestProjectMatch_WithDraftSessionID verifies that when the daemon supplies a
+// valid DraftSessionID (SessionExists returns true), the match is upserted with
+// that ID and InsertDraftMatchResult is called.
+func TestProjectMatch_WithDraftSessionID(t *testing.T) {
+	sessionID := "QuickDraft_SOS:2026-05-26T14:23:07Z"
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":         "draft-match-001",
+		"event_name":       "QuickDraft_SOS_20260526",
+		"format":           "QuickDraft_SOS_20260526",
+		"result":           "win",
+		"player_wins":      2,
+		"opponent_wins":    1,
+		"player_team_id":   1,
+		"draft_session_id": sessionID,
+	})
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 400, UserID: 1, AccountID: "acct-draft", EventType: "match.completed", Payload: payload, OccurredAt: time.Now()},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 42}
+	matches := &fakeMatchStore{}
+	drafts := &fakeDraftStore{
+		sessionExistsVal: true,
+	}
+
+	w := newWorker(events, accounts, matches, drafts)
+	w.RunOnce(context.Background())
+
+	if len(matches.upserts) != 1 {
+		t.Fatalf("expected 1 match upsert, got %d", len(matches.upserts))
+	}
+	if matches.upserts[0].DraftSessionID == nil || *matches.upserts[0].DraftSessionID != sessionID {
+		t.Errorf("match upsert DraftSessionID: want %q, got %v", sessionID, matches.upserts[0].DraftSessionID)
+	}
+	if len(drafts.matchResults) != 1 {
+		t.Fatalf("expected 1 draft_match_result insert, got %d", len(drafts.matchResults))
+	}
+	if drafts.matchResults[0].SessionID != sessionID {
+		t.Errorf("InsertDraftMatchResult SessionID: want %q, got %q", sessionID, drafts.matchResults[0].SessionID)
+	}
+	if drafts.matchResults[0].Result != "win" {
+		t.Errorf("InsertDraftMatchResult Result: want %q, got %q", "win", drafts.matchResults[0].Result)
+	}
+}
+
+// TestProjectMatch_InferenceFallback verifies that when DraftSessionID is nil
+// but the event_name contains "Draft", the BFF attempts inference and links the
+// match when exactly one session is returned.
+func TestProjectMatch_InferenceFallback(t *testing.T) {
+	inferredID := "QuickDraft_SOS:2026-05-26T14:23:07Z"
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":       "draft-match-002",
+		"event_name":     "QuickDraft_SOS_20260526",
+		"format":         "QuickDraft_SOS_20260526",
+		"result":         "loss",
+		"player_wins":    1,
+		"opponent_wins":  2,
+		"player_team_id": 1,
+	})
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 401, UserID: 1, AccountID: "acct-draft2", EventType: "match.completed", Payload: payload, OccurredAt: time.Now()},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 43}
+	matches := &fakeMatchStore{}
+	drafts := &fakeDraftStore{
+		inferredID: inferredID,
+	}
+
+	w := newWorker(events, accounts, matches, drafts)
+	w.RunOnce(context.Background())
+
+	if len(matches.upserts) != 1 {
+		t.Fatalf("expected 1 match upsert, got %d", len(matches.upserts))
+	}
+	if matches.upserts[0].DraftSessionID == nil || *matches.upserts[0].DraftSessionID != inferredID {
+		t.Errorf("inferred DraftSessionID: want %q, got %v", inferredID, matches.upserts[0].DraftSessionID)
+	}
+	if len(drafts.matchResults) != 1 {
+		t.Fatalf("expected 1 draft_match_result from inference, got %d", len(drafts.matchResults))
+	}
+}
+
+// TestProjectMatch_NilDraftSessionID verifies that non-draft matches (format
+// does not contain "draft"/"Draft") are projected without a session ID and
+// InsertDraftMatchResult is not called.
+func TestProjectMatch_NilDraftSessionID(t *testing.T) {
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":       "ladder-match-001",
+		"event_name":     "Ladder",
+		"format":         "Ladder",
+		"result":         "win",
+		"player_wins":    2,
+		"opponent_wins":  0,
+		"player_team_id": 1,
+	})
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 402, UserID: 1, AccountID: "acct-ladder", EventType: "match.completed", Payload: payload, OccurredAt: time.Now()},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 44}
+	matches := &fakeMatchStore{}
+	drafts := &fakeDraftStore{}
+
+	w := newWorker(events, accounts, matches, drafts)
+	w.RunOnce(context.Background())
+
+	if len(matches.upserts) != 1 {
+		t.Fatalf("expected 1 match upsert, got %d", len(matches.upserts))
+	}
+	if matches.upserts[0].DraftSessionID != nil {
+		t.Errorf("non-draft match should have nil DraftSessionID, got %q", *matches.upserts[0].DraftSessionID)
+	}
+	if len(drafts.matchResults) != 0 {
+		t.Errorf("non-draft match must not insert draft_match_result, got %d", len(drafts.matchResults))
+	}
+}
+
+// TestProjectDraftPick_WithSessionID verifies that draft.pick events with a
+// session_id write both the total_picks upsert and the InsertDraftPick row.
+func TestProjectDraftPick_WithSessionID(t *testing.T) {
+	sessionID := "QuickDraft_SOS:2026-05-26T14:23:07Z"
+	payload := makePayload(t, map[string]interface{}{
+		"session_id":  sessionID,
+		"PackNumber":  0,
+		"PickNumber":  0,
+		"pickedCards": []int{102704},
+	})
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 500, UserID: 1, AccountID: "acct-pick", EventType: "draft.pick", Payload: payload, OccurredAt: time.Now()},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 45}
+	drafts := &fakeDraftStore{sessionExistsVal: true}
+
+	w := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	w.RunOnce(context.Background())
+
+	if len(drafts.upserts) != 1 {
+		t.Fatalf("expected 1 draft session upsert for total_picks, got %d", len(drafts.upserts))
+	}
+	if drafts.upserts[0].ID != sessionID {
+		t.Errorf("upsert session ID: want %q, got %q", sessionID, drafts.upserts[0].ID)
+	}
+	if len(drafts.picks) != 1 {
+		t.Fatalf("expected 1 draft_picks insert, got %d", len(drafts.picks))
+	}
+	if drafts.picks[0].CardID != fmt.Sprintf("%d", 102704) {
+		t.Errorf("pick card ID: want %q, got %q", fmt.Sprintf("%d", 102704), drafts.picks[0].CardID)
+	}
+	if drafts.picks[0].PackNumber != 0 || drafts.picks[0].PickNumber != 0 {
+		t.Errorf("pick coordinates wrong: pack=%d pick=%d", drafts.picks[0].PackNumber, drafts.picks[0].PickNumber)
+	}
+}
+
+// TestProjectDraftPick_MissingSessionID_SoftSkip verifies that draft.pick
+// events with an empty session_id are soft-skipped (nil return, row projected)
+// and NOT dead-lettered. This covers the daemon-restart scenario.
+func TestProjectDraftPick_MissingSessionID_SoftSkip(t *testing.T) {
+	payload := makePayload(t, map[string]interface{}{
+		"PackNumber":  1,
+		"PickNumber":  3,
+		"pickedCards": []int{102705},
+		// no session_id
+	})
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 501, UserID: 1, AccountID: "acct-pick-restart", EventType: "draft.pick", Payload: payload, OccurredAt: time.Now()},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 46}
+	drafts := &fakeDraftStore{}
+
+	w := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	w.RunOnce(context.Background())
+
+	// Row must be marked projected (not stuck in queue).
+	if len(events.projected) != 1 || events.projected[0] != 501 {
+		t.Errorf("soft-skip must mark row projected; got %v", events.projected)
+	}
+	// No session upsert, no pick insert — soft skip.
+	if len(drafts.upserts) != 0 {
+		t.Errorf("soft-skip must not upsert session, got %d upserts", len(drafts.upserts))
+	}
+	if len(drafts.picks) != 0 {
+		t.Errorf("soft-skip must not insert pick, got %d picks", len(drafts.picks))
+	}
+}
+
+// TestIsDraftEventName verifies the event_name heuristic used for inference fallback.
+func TestIsDraftEventName(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"quickdraft", "QuickDraft_SOS_20260526", true},
+		{"premierdraft", "PremierDraft_BLB", true},
+		{"ladder", "Ladder", false},
+		{"standard", "Standard_BO1", false},
+		{"empty", "", false},
+		{"draft_lower", "quickdraft_sos", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isDraftEventName(tc.input)
+			if got != tc.want {
+				t.Errorf("isDraftEventName(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// --- format_type derivation tests (Prof additions) ---
+
+// TestDeriveDraftFormatType verifies CourseName → format_type mapping across
+// all four recognised patterns and the unknown fallback.
+func TestDeriveDraftFormatType(t *testing.T) {
+	cases := []struct {
+		name      string
+		eventName string
+		want      string
+	}{
+		{"quick_draft_plain", "QuickDraft", "quick_draft"},
+		{"quick_draft_with_set", "QuickDraft_SOS_20260526", "quick_draft"},
+		{"premier_draft_plain", "PremierDraft", "premier_draft"},
+		{"premier_draft_with_set", "PremierDraft_BLB", "premier_draft"},
+		{"trad_draft_plain", "TradDraft", "traditional_draft"},
+		{"trad_draft_with_set", "TradDraft_ONE", "traditional_draft"},
+		{"contender_draft_plain", "ContenderDraft", "contender_draft"},
+		{"contender_draft_with_set", "ContenderDraft_MOM", "contender_draft"},
+		{"unknown_falls_back", "Ladder", "quick_draft"},
+		{"empty_falls_back", "", "quick_draft"},
+		{"standard_falls_back", "Standard_BO1", "quick_draft"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveDraftFormatType(tc.eventName)
+			if got != tc.want {
+				t.Errorf("deriveDraftFormatType(%q) = %q, want %q", tc.eventName, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestProjectDraftSession_FormatTypeDerived verifies that projectDraftSession
+// sets FormatType correctly in the DraftSessionUpsert from the event_name.
+func TestProjectDraftSession_FormatTypeDerived(t *testing.T) {
+	cases := []struct {
+		name       string
+		eventName  string
+		wantFormat string
+	}{
+		{"quick", "QuickDraft_SOS", "quick_draft"},
+		{"premier", "PremierDraft_BLB", "premier_draft"},
+		{"trad", "TradDraft_SOS", "traditional_draft"},
+		{"contender", "ContenderDraft_MOM", "contender_draft"},
+		{"unknown", "SomeUnknownEvent", "quick_draft"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := makePayload(t, map[string]interface{}{
+				"session_id": "ds-fmt-" + tc.name,
+				"event_name": tc.eventName,
+				"set_code":   "SOS",
+				"draft_type": "quick_draft",
+				"status":     "in_progress",
+			})
+
+			events := &fakeEventStore{
+				pending: []repository.DaemonEventRow{
+					{ID: 600, UserID: 1, AccountID: "acct-fmt", EventType: "draft.started", Payload: payload, OccurredAt: time.Now()},
+				},
+			}
+			accounts := &fakeAccountStore{accountID: 50}
+			drafts := &fakeDraftStore{}
+
+			w := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+			w.RunOnce(context.Background())
+
+			if len(drafts.upserts) != 1 {
+				t.Fatalf("expected 1 upsert, got %d", len(drafts.upserts))
+			}
+			if drafts.upserts[0].FormatType != tc.wantFormat {
+				t.Errorf("FormatType: want %q, got %q", tc.wantFormat, drafts.upserts[0].FormatType)
+			}
+		})
+	}
+}
+
+// --- is_trophy tests (Prof additions) ---
+
+// TestProjectDraftSession_IsTrophy_SevenWins verifies that projectDraftSession
+// sets IsTrophy=true when the session completes with exactly 7 wins.
+func TestProjectDraftSession_IsTrophy_SevenWins(t *testing.T) {
+	payload := makePayload(t, map[string]interface{}{
+		"session_id": "ds-trophy-7",
+		"event_name": "QuickDraft_SOS",
+		"set_code":   "SOS",
+		"draft_type": "quick_draft",
+		"status":     "completed",
+	})
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 700, UserID: 1, AccountID: "acct-trophy", EventType: "draft.completed", Payload: payload, OccurredAt: time.Now()},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 55}
+	drafts := &fakeDraftStore{winsForSession: 7}
+
+	w := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	w.RunOnce(context.Background())
+
+	if len(drafts.upserts) != 1 {
+		t.Fatalf("expected 1 upsert, got %d", len(drafts.upserts))
+	}
+	if drafts.upserts[0].IsTrophy == nil || !*drafts.upserts[0].IsTrophy {
+		t.Errorf("IsTrophy: want true for 7 wins, got %v", drafts.upserts[0].IsTrophy)
+	}
+}
+
+// TestProjectDraftSession_IsTrophy_SixWins verifies that projectDraftSession
+// does NOT set IsTrophy when the session completes with 6 wins (below trophy
+// threshold).
+func TestProjectDraftSession_IsTrophy_SixWins(t *testing.T) {
+	payload := makePayload(t, map[string]interface{}{
+		"session_id": "ds-no-trophy-6",
+		"event_name": "QuickDraft_SOS",
+		"set_code":   "SOS",
+		"draft_type": "quick_draft",
+		"status":     "completed",
+	})
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 701, UserID: 1, AccountID: "acct-no-trophy", EventType: "draft.completed", Payload: payload, OccurredAt: time.Now()},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 56}
+	drafts := &fakeDraftStore{winsForSession: 6}
+
+	w := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	w.RunOnce(context.Background())
+
+	if len(drafts.upserts) != 1 {
+		t.Fatalf("expected 1 upsert, got %d", len(drafts.upserts))
+	}
+	// IsTrophy must be nil (not set) — the DB default FALSE remains.
+	if drafts.upserts[0].IsTrophy != nil {
+		t.Errorf("IsTrophy: want nil for 6 wins, got %v", drafts.upserts[0].IsTrophy)
+	}
+}
+
+// TestProjectDraftSession_IsTrophy_DraftStarted_NotQueried verifies that
+// GetWinsForSession is NOT called for draft.started events — trophy is only
+// computed on draft.completed.
+func TestProjectDraftSession_IsTrophy_DraftStarted_NotQueried(t *testing.T) {
+	payload := makePayload(t, map[string]interface{}{
+		"session_id": "ds-started-no-trophy",
+		"event_name": "PremierDraft_BLB",
+		"set_code":   "BLB",
+		"draft_type": "premier_draft",
+		"status":     "in_progress",
+	})
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 702, UserID: 1, AccountID: "acct-started", EventType: "draft.started", Payload: payload, OccurredAt: time.Now()},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 57}
+	// winsErr would surface if GetWinsForSession were called — we want to confirm
+	// it is NOT called on draft.started.
+	drafts := &fakeDraftStore{winsErr: fmt.Errorf("GetWinsForSession must not be called on draft.started")}
+
+	w := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	w.RunOnce(context.Background())
+
+	// If GetWinsForSession were called, projectDraftSession would log and continue
+	// (soft-fail), but the upsert would still happen. We verify the upsert succeeded
+	// (no outcomeSkippedMalformed) and IsTrophy is nil (not set for started sessions).
+	if len(drafts.upserts) != 1 {
+		t.Fatalf("expected 1 upsert for draft.started, got %d", len(drafts.upserts))
+	}
+	if drafts.upserts[0].IsTrophy != nil {
+		t.Errorf("IsTrophy: want nil for draft.started, got %v", drafts.upserts[0].IsTrophy)
+	}
+	if len(events.projected) != 1 || events.projected[0] != 702 {
+		t.Errorf("expected row 702 marked projected, got %v", events.projected)
 	}
 }

@@ -173,6 +173,9 @@ func TestClassifyEntry_MatchStarted(t *testing.T) {
 	assert.Equal(t, "match.started", classifyEntry(entry))
 }
 
+// TestClassifyEntry_DraftEnded verifies that leaving the Draft scene emits
+// "draft.completed" (renamed from "draft.ended" in ADR-051 so the BFF
+// projection worker can handle it — the BFF never handled "draft.ended").
 func TestClassifyEntry_DraftEnded(t *testing.T) {
 	entry := &logreader.LogEntry{
 		IsJSON: true,
@@ -181,7 +184,7 @@ func TestClassifyEntry_DraftEnded(t *testing.T) {
 			"fromSceneName": "Draft",
 		},
 	}
-	assert.Equal(t, "draft.ended", classifyEntry(entry))
+	assert.Equal(t, "draft.completed", classifyEntry(entry))
 }
 
 func TestClassifyEntry_InventoryUpdated(t *testing.T) {
