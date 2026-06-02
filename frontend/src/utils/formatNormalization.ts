@@ -123,6 +123,29 @@ export function getDisplayFormat(match: models.Match): string {
 }
 
 /**
+ * Normalizes a raw format string from a BFF match-history row (MatchHistoryItem)
+ * to a user-friendly display name.
+ *
+ * MatchHistoryItem.format carries the same raw MTGA event IDs as
+ * models.Match.Format ('Ladder', 'Play', 'Standard', etc.) but arrives as a
+ * plain string rather than a full Match object, so it cannot be passed to the
+ * models.Match-typed getDisplayFormat() function.
+ *
+ * Behaviour mirrors normalizeQueueType plus an 'Unknown' guard:
+ *   - Empty / 'Unknown' (case-insensitive) → '' (caller shows neutral '–')
+ *   - 'Ladder' → 'Ranked'
+ *   - 'Play' → 'Play Queue'
+ *   - 'Standard' / other known formats → returned verbatim (normalizeQueueType pass-through)
+ *
+ * @param format - The raw format string from MatchHistoryItem
+ * @returns User-friendly display string, or '' when the format is genuinely unknown/empty
+ */
+export function normalizeHistoryFormat(format: string | null | undefined): string {
+  if (!format || format.toLowerCase() === 'unknown') return '';
+  return normalizeQueueType(format);
+}
+
+/**
  * Gets the display event name for a match.
  * Combines deck format with queue type for constructed matches.
  *

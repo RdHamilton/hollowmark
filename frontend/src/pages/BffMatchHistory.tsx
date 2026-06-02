@@ -2,9 +2,13 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@clerk/react';
 import { getMatchHistory } from '@/services/api/bffMatchHistory';
 import type { MatchHistoryItem } from '@/services/api/bffMatchHistory';
+import { matches as matchesApi } from '@/services/api';
+import { models } from '@/types/models';
 import { EventsOn } from '@/services/websocketClient';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import MatchDetailsModal from '../components/MatchDetailsModal';
+import { normalizeHistoryFormat } from '@/utils/formatNormalization';
 import { trackEvent } from '@/services/analytics';
 import './BffMatchHistory.css';
 
@@ -20,6 +24,20 @@ const PAGE_SIZE = 20;
 interface PageCursor {
   cursor_ts?: string;
   cursor_id?: string;
+}
+
+/**
+ * Map a raw result string from MatchHistoryItem to a display value.
+ *
+ * - 'win' → 'WIN', 'loss' → 'LOSS' (preserved as-is, uppercased)
+ * - 'unknown', empty string, or any indeterminate value → '–'
+ *
+ * This keeps the display clean for matches whose result is genuinely not
+ * yet determined or whose data has not been enriched by the daemon pipeline.
+ */
+function displayResult(result: string): string {
+  if (!result || result.toLowerCase() === 'unknown') return '–';
+  return result.toUpperCase();
 }
 
 const BffMatchHistory = () => {
@@ -38,6 +56,10 @@ const BffMatchHistory = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Detail modal state — null means closed.
+  const [selectedMatch, setSelectedMatch] = useState<models.Match | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const fetchPage = useCallback(
     async (cursor: PageCursor, page: number, newHistory: PageCursor[]) => {
@@ -115,6 +137,33 @@ const BffMatchHistory = () => {
       day: 'numeric',
     });
 
+  /**
+   * Open the detail modal for a row.
+   *
+   * Fetches the full models.Match via GET /api/v1/matches/{id} (PascalCase shape)
+   * which is the shape MatchDetailsModal already expects. The list view only has
+   * the thin MatchHistoryItem, so we need a separate fetch.
+   */
+  const handleRowClick = useCallback(async (item: MatchHistoryItem) => {
+    setDetailLoading(true);
+    try {
+      const fullMatch = await matchesApi.getMatch(item.id);
+      setSelectedMatch(new models.Match(fullMatch));
+      trackEvent({
+        name: 'feature_match_details_opened',
+        properties: {
+          match_result: item.result.toLowerCase() as 'win' | 'loss' | 'draw',
+          format: item.format ?? '',
+        },
+      });
+    } catch {
+      // Non-fatal — log silently; the row click fails gracefully.
+      console.error('Failed to load match details for', item.id);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
   const isEmpty = !loading && !error && matches.length === 0;
   const hasData = !loading && !error && matches.length > 0;
 
@@ -156,18 +205,32 @@ const BffMatchHistory = () => {
                 </tr>
               </thead>
               <tbody>
-                {matches.map((match) => (
-                  <tr key={match.id} className={`result-${match.result.toLowerCase()}`}>
-                    <td>{formatDate(match.timestamp)}</td>
-                    <td>{match.format}</td>
-                    <td>
-                      <span className={`result-badge ${match.result.toLowerCase()}`}>
-                        {match.result.toUpperCase()}
-                      </span>
-                    </td>
-                    <td>{match.player_wins}–{match.opponent_wins}</td>
-                  </tr>
-                ))}
+                {matches.map((match) => {
+                  const displayFormat = normalizeHistoryFormat(match.format);
+                  const resultLabel = displayResult(match.result);
+                  const resultClass = (match.result && match.result.toLowerCase() !== 'unknown')
+                    ? match.result.toLowerCase()
+                    : 'unknown';
+                  return (
+                    <tr
+                      key={match.id}
+                      className={`result-${resultClass} clickable-row`}
+                      onClick={() => { void handleRowClick(match); }}
+                      title="Click to view match details"
+                      style={{ cursor: 'pointer' }}
+                      data-testid="match-row"
+                    >
+                      <td>{formatDate(match.timestamp)}</td>
+                      <td>{displayFormat || '—'}</td>
+                      <td>
+                        <span className={`result-badge ${resultClass}`}>
+                          {resultLabel}
+                        </span>
+                      </td>
+                      <td>{match.player_wins}–{match.opponent_wins}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -194,6 +257,19 @@ const BffMatchHistory = () => {
             </div>
           </div>
         </>
+      )}
+
+      {/* Detail loading indicator — shown while fetching the full match on row click */}
+      {detailLoading && (
+        <div data-testid="detail-loading-indicator" style={{ display: 'none' }} aria-hidden="true" />
+      )}
+
+      {/* Match detail modal — opened when a row is clicked */}
+      {selectedMatch && (
+        <MatchDetailsModal
+          match={selectedMatch}
+          onClose={() => setSelectedMatch(null)}
+        />
       )}
     </div>
   );
