@@ -41,6 +41,23 @@ function displayResult(result: string): string {
 }
 
 /**
+ * Render the on-the-play / on-the-draw badge label.
+ *
+ * - true  → 'P' (on the play)
+ * - false → 'D' (on the draw)
+ * - null/undefined → null (render nothing — MUST NOT show a fake value)
+ *
+ * Prof requirement: null must never render a misleading value.
+ * Pre-release matches and GRE-buffer misses produce null — those rows
+ * render a blank cell, not a badge.
+ */
+function playDrawLabel(playerOnPlay: boolean | null | undefined): string | null {
+  if (playerOnPlay === true) return 'P';
+  if (playerOnPlay === false) return 'D';
+  return null;
+}
+
+/**
  * Set of result values that are considered resolved/terminal.
  * Only rows with a resolved result are eligible to render.
  */
@@ -239,6 +256,8 @@ const BffMatchHistory = () => {
                   <th>Format</th>
                   <th>Result</th>
                   <th>Score</th>
+                  <th title="On the Play (P) or On the Draw (D)">P/D</th>
+                  <th>Opponent</th>
                 </tr>
               </thead>
               <tbody>
@@ -246,6 +265,9 @@ const BffMatchHistory = () => {
                   const displayFormat = normalizeHistoryFormat(match.format);
                   const resultLabel = displayResult(match.result);
                   const resultClass = match.result.toLowerCase();
+                  const pdLabel = playDrawLabel(match.player_on_play);
+                  // Treat empty string the same as absent — only render when truthy.
+                  const opponentDisplay = match.opponent_name || null;
                   return (
                     <tr
                       key={match.id}
@@ -262,7 +284,19 @@ const BffMatchHistory = () => {
                           {resultLabel}
                         </span>
                       </td>
-                      <td>{match.player_wins}–{match.opponent_wins}</td>
+                      <td data-testid="match-score">{match.player_wins}–{match.opponent_wins}</td>
+                      <td data-testid="match-play-draw">
+                        {pdLabel !== null && (
+                          <span className={`play-draw-badge ${pdLabel === 'P' ? 'on-play' : 'on-draw'}`} data-testid="play-draw-badge">
+                            {pdLabel}
+                          </span>
+                        )}
+                      </td>
+                      <td data-testid="match-opponent">
+                        {opponentDisplay !== null && (
+                          <span className="opponent-name">{opponentDisplay}</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
