@@ -7,23 +7,21 @@ import (
 	"log"
 	"os"
 	"os/exec"
+
+	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
 )
 
-// plistLabel is the LaunchAgent label registered by the installer
-// (services/daemon/install/macos/pkg/postinstall and install/macos/uninstall.sh).
-// It must stay in sync with those scripts.
-// ADR-022 Phase 2: renamed from "com.mtga-companion.daemon" to "com.vaultmtg.daemon".
-const plistLabel = "com.vaultmtg.daemon"
-
 // plistLabelLegacy is the pre-rename LaunchAgent label.  The installer detects
-// and unloads this label before registering plistLabel so two daemon instances
-// never run simultaneously (ADR-022 Constraint 1).
+// and unloads this label before registering the current label so two daemon
+// instances never run simultaneously (ADR-022 Constraint 1).
 const plistLabelLegacy = "com.mtga-companion.daemon"
 
 // appBundlePath is the canonical path of the VaultMTG launcher app bundle
 // placed by the .pkg installer. ADR-036 I-4 / I-8: single source of truth
 // for this path — referenced here and in build-pkg.sh / uninstall.sh.
-const appBundlePath = "/Applications/VaultMTG.app"
+// ADR-049 Ticket 2: use channel-derived path so staging Quit targets the
+// correct .app bundle, not the prod one.
+var appBundlePath = install.Identity(install.Channel).AppBundlePath
 
 // launchdTarget returns the launchctl service target for the current user.
 // Format: gui/<uid>/<label>
@@ -34,8 +32,8 @@ func launchdTarget(label string) string {
 // stopLaunchAgent fully unregisters the VaultMTG daemon from launchd so the
 // process does not restart on the next user login. This implements the
 // "Quit means quit" semantic: the daemon is removed from launchd's list
-// entirely, not just stopped. The user can reopen the daemon via
-// /Applications/VaultMTG.app (ADR-036 I-8, ticket #278).
+// entirely, not just stopped. The user can reopen the daemon via the
+// channel-appropriate .app bundle (ADR-036 I-8, ticket #278, ADR-049 Ticket 2).
 //
 // Uses `launchctl bootout` instead of the former `launchctl stop` because
 // `stop` only sends SIGTERM and suppresses KeepAlive for the current session
@@ -48,8 +46,12 @@ func launchdTarget(label string) string {
 // ADR-022 Phase 2: also attempts to boot out the legacy label (plistLabelLegacy)
 // in case an upgrade scenario left the old registration active. This is a
 // best-effort no-op on machines that have already been migrated.
+//
+// ADR-049 Ticket 2: the active plist label is derived from install.Channel so
+// quitting the staging daemon does not unload the prod LaunchAgent.
 func stopLaunchAgent() {
-	target := launchdTarget(plistLabel)
+	label := install.Identity(install.Channel).PlistLabel
+	target := launchdTarget(label)
 	cmd := exec.Command("launchctl", "bootout", target)
 	if err := cmd.Run(); err != nil {
 		log.Printf("[vaultmtg-daemon] launchctl bootout %s: %v (non-fatal)", target, err)
@@ -66,6 +68,9 @@ func stopLaunchAgent() {
 // The normal relaunch path is VaultMTG.app → launchctl enable + bootstrap;
 // this function provides a programmatic alternative for the same effect.
 //
+// ADR-049 Ticket 2: the plist label and path are derived from install.Channel
+// so the staging daemon bootstraps its own plist, not the prod one.
+//
 // Steps:
 //  1. launchctl enable — clears the disabled flag that bootout may have set.
 //  2. launchctl bootstrap — re-registers the plist and starts the daemon.
@@ -73,9 +78,10 @@ func stopLaunchAgent() {
 // Both steps are best-effort. The daemon may already be bootstrapped (e.g.,
 // first launch before any Quit); errors are logged non-fatally.
 func startLaunchAgent() {
+	label := install.Identity(install.Channel).PlistLabel
 	plistPath := fmt.Sprintf("%s/Library/LaunchAgents/%s.plist",
-		os.Getenv("HOME"), plistLabel)
-	target := launchdTarget(plistLabel)
+		os.Getenv("HOME"), label)
+	target := launchdTarget(label)
 	userDomain := fmt.Sprintf("gui/%d", os.Getuid())
 
 	// Step 1: clear any disabled flag from a prior bootout.
