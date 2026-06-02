@@ -38,8 +38,12 @@ func (s Status) label() string {
 
 // App is a no-op tray stub for headless builds.
 type App struct {
-	appURL   string
-	version  string
+	appURL  string
+	version string
+	// appLabel is the user-visible title shown next to the tray icon and in
+	// the tooltip. "VaultMTG" for the stable channel; "VaultMTG (Staging)"
+	// for the staging channel. Set via NewWithLabel; defaults to "VaultMTG".
+	appLabel string
 	onQuit   func()
 	status   Status
 	lastSync time.Time
@@ -57,11 +61,20 @@ type App struct {
 	InstallUpdate chan struct{}
 }
 
-// New creates a no-op App. version is stored but not rendered (headless stub).
+// New creates a no-op App with the default "VaultMTG" label. version is stored
+// but not rendered (headless stub). For channel-aware label use NewWithLabel.
 func New(appURL, version string, openURL func(string) error, onQuit func()) *App {
+	return NewWithLabel(appURL, version, openURL, onQuit, "VaultMTG")
+}
+
+// NewWithLabel creates a no-op App with an explicit tray label (ADR-049 Ticket 4).
+// Pass install.Identity(channel).TrayLabel as the label argument so the tray
+// title reflects the channel ("VaultMTG" vs "VaultMTG (Staging)").
+func NewWithLabel(appURL, version string, openURL func(string) error, onQuit func(), label string) *App {
 	return &App{
 		appURL:        appURL,
 		version:       version,
+		appLabel:      label,
 		onQuit:        onQuit,
 		status:        StatusStarting,
 		quit:          make(chan struct{}),
