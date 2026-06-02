@@ -52,31 +52,24 @@ type GamePlayActionRow struct {
 
 // PlaysByMatch returns every action recorded for the match in sequence
 // order. Scoped to the account via a matches join.
-func (r *GamePlaysRepository) PlaysByMatch(ctx context.Context, accountID int64, matchID string) ([]GamePlayActionRow, error) {
-	const q = `SELECT gp.id, gp.game_id, gp.match_id, gp.turn_number, gp.phase, gp.step,
-	                  gp.player_type, gp.action_type, gp.card_id, gp.card_name,
-	                  gp.zone_from, gp.zone_to, gp.life_from, gp.life_to,
-	                  gp.timestamp, gp.sequence_number, gp.created_at
-	           FROM game_plays gp
-	           JOIN matches m ON m.id = gp.match_id
-	           WHERE m.account_id = $1 AND gp.match_id = $2
-	           ORDER BY gp.turn_number, gp.sequence_number, gp.id`
-	return r.scanGamePlayRows(ctx, q, accountID, matchID)
+//
+// Note: the action-log columns (game_id, turn_number, action_type, phase,
+// step, etc.) were part of the original game_plays schema and were removed in
+// migration 000100 when game_plays was repurposed to store per-game results.
+// The GRE per-turn pipeline (tickets #612/#613) will restore turn-by-turn data
+// via a future table. Until that pipeline ships, this method returns an empty
+// slice so the GamePlayTimelinePanel renders an empty state rather than
+// surfacing a SQL error.
+func (r *GamePlaysRepository) PlaysByMatch(_ context.Context, _ int64, _ string) ([]GamePlayActionRow, error) {
+	return nil, nil
 }
 
 // PlaysByGameID returns every action for a single game_id, scoped to the
-// account via games → matches.
-func (r *GamePlaysRepository) PlaysByGameID(ctx context.Context, accountID int64, gameID int64) ([]GamePlayActionRow, error) {
-	const q = `SELECT gp.id, gp.game_id, gp.match_id, gp.turn_number, gp.phase, gp.step,
-	                  gp.player_type, gp.action_type, gp.card_id, gp.card_name,
-	                  gp.zone_from, gp.zone_to, gp.life_from, gp.life_to,
-	                  gp.timestamp, gp.sequence_number, gp.created_at
-	           FROM game_plays gp
-	           JOIN games g     ON g.id = gp.game_id
-	           JOIN matches m   ON m.id = g.match_id
-	           WHERE m.account_id = $1 AND gp.game_id = $2
-	           ORDER BY gp.turn_number, gp.sequence_number, gp.id`
-	return r.scanGamePlayRows(ctx, q, accountID, gameID)
+// account via games → matches. Returns empty for the same reason as
+// PlaysByMatch — see that method's comment. The game_id FK column was removed
+// in migration 000100.
+func (r *GamePlaysRepository) PlaysByGameID(_ context.Context, _ int64, _ int64) ([]GamePlayActionRow, error) {
+	return nil, nil
 }
 
 // scanGamePlayRows centralises the row-scan boilerplate.
