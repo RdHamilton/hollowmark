@@ -289,3 +289,212 @@ func TestDraftSessionsRepository_Interface(t *testing.T) {
 		t.Fatal("NewDraftSessionsRepository returned nil")
 	}
 }
+
+// ─── ADR-051 integration tests ────────────────────────────────────────────────
+
+// TestSessionExists verifies that SessionExists returns true for a known
+// session owned by the account and false for an unknown or cross-account ID.
+func TestSessionExists(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "session-exists-acct")
+	otherAccountID := insertTestAccount(t, db, "session-exists-other-acct")
+	now := time.Now().UTC().Truncate(time.Second)
+	sessionID := fmt.Sprintf("ds-exists-%d", accountID)
+	insertTestDraftSession(t, db, sessionID, accountID, "SOS", now)
+
+	// Known session, correct account — expect true.
+	exists, err := repo.SessionExists(context.Background(), accountID, sessionID)
+	if err != nil {
+		t.Fatalf("SessionExists: %v", err)
+	}
+	if !exists {
+		t.Error("expected SessionExists=true for known session, got false")
+	}
+
+	// Known session ID but wrong account — expect false (cross-account isolation).
+	crossExists, err := repo.SessionExists(context.Background(), otherAccountID, sessionID)
+	if err != nil {
+		t.Fatalf("SessionExists cross-account: %v", err)
+	}
+	if crossExists {
+		t.Error("expected SessionExists=false for cross-account check, got true")
+	}
+
+	// Unknown session ID — expect false.
+	noExists, err := repo.SessionExists(context.Background(), accountID, "nonexistent-session")
+	if err != nil {
+		t.Fatalf("SessionExists unknown: %v", err)
+	}
+	if noExists {
+		t.Error("expected SessionExists=false for unknown session, got true")
+	}
+}
+
+// TestInferSessionForMatch_OneCandidate verifies that InferSessionForMatch
+// returns the session ID when exactly one completed session matches within the
+// 48-hour window.
+func TestInferSessionForMatch_OneCandidate(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "infer-one-acct")
+	matchTime := time.Now().UTC().Truncate(time.Second)
+	sessionStart := matchTime.Add(-1 * time.Hour)
+	sessionID := fmt.Sprintf("ds-infer-one-%d", accountID)
+	eventName := fmt.Sprintf("QuickDraft_SOS_%d", accountID)
+
+	// Insert a completed session matching event_name and time window.
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO draft_sessions
+			(id, account_id, event_name, set_code, draft_type, start_time, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, 'completed')`,
+		sessionID, accountID, eventName, "SOS", "PremierDraft", sessionStart,
+	)
+	if err != nil {
+		t.Fatalf("insert draft_sessions: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, sessionID)
+	})
+
+	got, err := repo.InferSessionForMatch(context.Background(), accountID, eventName, matchTime)
+	if err != nil {
+		t.Fatalf("InferSessionForMatch: %v", err)
+	}
+	if got != sessionID {
+		t.Errorf("InferSessionForMatch: want %q, got %q", sessionID, got)
+	}
+}
+
+// TestInferSessionForMatch_MultipleAmbiguous verifies that InferSessionForMatch
+// returns ("", nil) when multiple sessions match — ambiguity is not guessed.
+func TestInferSessionForMatch_MultipleAmbiguous(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "infer-ambig-acct")
+	matchTime := time.Now().UTC().Truncate(time.Second)
+	eventName := fmt.Sprintf("QuickDraft_AMB_%d", accountID)
+
+	for i := 0; i < 2; i++ {
+		sessID := fmt.Sprintf("ds-infer-ambig-%d-%d", accountID, i)
+		sessStart := matchTime.Add(-time.Duration(i+1) * time.Hour)
+		_, err := db.ExecContext(
+			context.Background(),
+			`INSERT INTO draft_sessions
+				(id, account_id, event_name, set_code, draft_type, start_time, status)
+			 VALUES ($1, $2, $3, $4, $5, $6, 'completed')`,
+			sessID, accountID, eventName, "AMB", "PremierDraft", sessStart,
+		)
+		if err != nil {
+			t.Fatalf("insert draft_sessions[%d]: %v", i, err)
+		}
+		iCopy := i
+		t.Cleanup(func() {
+			_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`,
+				fmt.Sprintf("ds-infer-ambig-%d-%d", accountID, iCopy))
+		})
+	}
+
+	got, err := repo.InferSessionForMatch(context.Background(), accountID, eventName, matchTime)
+	if err != nil {
+		t.Fatalf("InferSessionForMatch ambiguous: %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty string for ambiguous inference, got %q", got)
+	}
+}
+
+// TestInsertDraftMatchResult_Idempotent verifies that calling InsertDraftMatchResult
+// twice with the same (session_id, match_id) does not return an error (ON CONFLICT
+// DO NOTHING).
+func TestInsertDraftMatchResult_Idempotent(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "dmr-idempotent-acct")
+	now := time.Now().UTC().Truncate(time.Second)
+	sessionID := fmt.Sprintf("ds-dmr-%d", accountID)
+	matchID := fmt.Sprintf("match-dmr-%d", accountID)
+
+	insertTestDraftSession(t, db, sessionID, accountID, "SOS", now)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_match_results WHERE match_id = $1`, matchID)
+	})
+
+	ins := repository.DraftMatchResultInsert{
+		SessionID:      sessionID,
+		MatchID:        matchID,
+		Result:         "win",
+		GameWins:       2,
+		GameLosses:     1,
+		MatchTimestamp: now,
+	}
+
+	if err := repo.InsertDraftMatchResult(context.Background(), ins); err != nil {
+		t.Fatalf("first InsertDraftMatchResult: %v", err)
+	}
+	// Second call must succeed (ON CONFLICT DO NOTHING).
+	if err := repo.InsertDraftMatchResult(context.Background(), ins); err != nil {
+		t.Fatalf("second InsertDraftMatchResult (idempotency): %v", err)
+	}
+
+	var count int
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM draft_match_results WHERE session_id = $1 AND match_id = $2`,
+		sessionID, matchID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 row after idempotent insert, got %d", count)
+	}
+}
+
+// TestInsertDraftPick_Idempotent verifies that InsertDraftPick with the same
+// (session_id, pack_number, pick_number) twice does not return an error.
+func TestInsertDraftPick_Idempotent(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "dp-idempotent-acct")
+	now := time.Now().UTC().Truncate(time.Second)
+	sessionID := fmt.Sprintf("ds-dp-%d", accountID)
+
+	insertTestDraftSession(t, db, sessionID, accountID, "SOS", now)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_picks WHERE session_id = $1`, sessionID)
+	})
+
+	ins := repository.DraftPickInsert{
+		SessionID:  sessionID,
+		PackNumber: 0,
+		PickNumber: 0,
+		CardID:     "102704",
+		Timestamp:  now,
+	}
+
+	if err := repo.InsertDraftPick(context.Background(), ins); err != nil {
+		t.Fatalf("first InsertDraftPick: %v", err)
+	}
+	// Second call must succeed (ON CONFLICT DO NOTHING).
+	if err := repo.InsertDraftPick(context.Background(), ins); err != nil {
+		t.Fatalf("second InsertDraftPick (idempotency): %v", err)
+	}
+
+	var count int
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM draft_picks WHERE session_id = $1`,
+		sessionID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 pick row after idempotent insert, got %d", count)
+	}
+}
