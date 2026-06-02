@@ -1,0 +1,79 @@
+{
+  "corpus_mtga_version": "2026.59.20.4846.1277160",
+  "corpus_provenance": "REAL-DERIVED",
+  "expected_empty": false,
+  "assertions": [
+    {
+      "surface": "deck-builder-resolution",
+      "bff_endpoint": "/api/v1/cards?grp_ids=...",
+      "notes": "When the card catalog is populated (test-data.sql has 20 set_cards), DeckList resolves card names from metadata. When the catalog is empty, getCardName() falls back to 'Unknown Card {id}' and the element renders with data-testid='unknown-card'. This assertion catches the 'Unknown Card' regression: if set_cards is empty (failed ingest), every card in the deck shows 'Unknown Card'. The seeded DSK deck (deck-004) has 5 card types that exist in test-data.sql.",
+      "fields": {
+        "unknown_card_element_count_must_be": 0,
+        "seeded_deck_id": "deck-004",
+        "seeded_deck_format": "Limited",
+        "seeded_card_ids": [90002, 90003, 90006, 90005, 90009],
+        "catalog_must_resolve": ["Reluctant Role Model", "Doomsday Excruciator", "Vengeful Possession", "Haunted Screen-Wall", "Oblivion's Hunger"]
+      }
+    },
+    {
+      "surface": "deck-builder-card-field-correctness",
+      "bff_endpoint": "/api/v1/cards?grp_ids=...",
+      "notes": "Field-level correctness for the most-used card metadata. 'No Unknown Card' only catches an empty catalog; it does NOT catch a card that resolves but has a blank mana cost or a wrong rarity gem. A player sees mana cost and rarity on every card in the deck view every session — these are the highest-visibility data fields. Each card in the corpus deck must have: (1) mana_cost non-empty string (any valid mana expression including '0' or '{0}' for zero-cost cards); (2) rarity one of the four canonical values; (3) color_identity present and non-empty (colorless cards use ['C'] per Scryfall convention — a completely missing or empty color_identity means the ingest did not write the field). This assertion is driven by the actual /api/v1/cards wire response for the five seeded card IDs.",
+      "fields": {
+        "per_card_assertions": {
+          "mana_cost": {
+            "rule": "must not be empty string",
+            "applies_to": "all cards in seeded_card_ids"
+          },
+          "rarity": {
+            "rule": "must be one of: common, uncommon, rare, mythic",
+            "valid_values": ["common", "uncommon", "rare", "mythic"],
+            "applies_to": "all cards in seeded_card_ids"
+          },
+          "color_identity": {
+            "rule": "must be present and non-empty array",
+            "note": "colorless cards use ['C'] — an empty array means the ingest omitted the field",
+            "applies_to": "all cards in seeded_card_ids"
+          }
+        },
+        "expected_per_card": [
+          {
+            "grp_id": 90002,
+            "name": "Reluctant Role Model",
+            "mana_cost_must_not_be_empty": true,
+            "rarity_valid": true,
+            "color_identity_non_empty": true
+          },
+          {
+            "grp_id": 90003,
+            "name": "Doomsday Excruciator",
+            "mana_cost_must_not_be_empty": true,
+            "rarity_valid": true,
+            "color_identity_non_empty": true
+          },
+          {
+            "grp_id": 90006,
+            "name": "Vengeful Possession",
+            "mana_cost_must_not_be_empty": true,
+            "rarity_valid": true,
+            "color_identity_non_empty": true
+          },
+          {
+            "grp_id": 90005,
+            "name": "Haunted Screen-Wall",
+            "mana_cost_must_not_be_empty": true,
+            "rarity_valid": true,
+            "color_identity_non_empty": true
+          },
+          {
+            "grp_id": 90009,
+            "name": "Oblivion's Hunger",
+            "mana_cost_must_not_be_empty": true,
+            "rarity_valid": true,
+            "color_identity_non_empty": true
+          }
+        ]
+      }
+    }
+  ]
+}
