@@ -6,6 +6,8 @@
  *   - Fix/match-history-detail-drilldown: row click → MatchDetailsModal
  *   - Fix 2: format normalization ('Ladder'→'Ranked', empty→'—')
  *   - Fix 3: result badge ('unknown' → '–', WIN/LOSS preserved)
+ *   - fix/match-history-defensive-rendering: display-eligibility filter (Prof RED gate)
+ *     Ineligible rows (bad result OR unresolved format) are hidden; all-ineligible → empty-state.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -214,7 +216,7 @@ describe('BffMatchHistory', () => {
       await waitFor(() => {
         expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
       });
-      expect(screen.getByText('No matches yet')).toBeInTheDocument();
+      expect(screen.getByText('No recent matches')).toBeInTheDocument();
     });
 
     it('does not render table when data is empty', async () => {
@@ -734,7 +736,9 @@ describe('BffMatchHistory', () => {
       expect(screen.getByText('Standard')).toBeInTheDocument();
     });
 
-    it('renders neutral "—" when format is empty string', async () => {
+    it('hides row and shows empty-state when format is empty string (defensive filter)', async () => {
+      // Defensive rendering gate: a row with an unresolved format is ineligible and
+      // must be hidden entirely — not rendered as a "—" placeholder.
       mockGetMatchHistory.mockResolvedValue(
         makeResponse({
           data: [makeItem({ format: '' })],
@@ -745,14 +749,14 @@ describe('BffMatchHistory', () => {
       render(<BffMatchHistory />);
 
       await waitFor(() => {
-        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+        expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
       });
-
-      // Should show neutral dash, NOT an empty cell or a screaming "UNKNOWN"
-      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+      expect(screen.queryByTestId('match-history-table')).not.toBeInTheDocument();
     });
 
-    it('renders neutral "—" when format is "Unknown"', async () => {
+    it('hides row and shows empty-state when format is "Unknown" (defensive filter)', async () => {
+      // Defensive rendering gate: a row with an unresolved format is ineligible and
+      // must be hidden entirely.
       mockGetMatchHistory.mockResolvedValue(
         makeResponse({
           data: [makeItem({ format: 'Unknown' })],
@@ -763,11 +767,10 @@ describe('BffMatchHistory', () => {
       render(<BffMatchHistory />);
 
       await waitFor(() => {
-        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+        expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
       });
-
-      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
-      // Must NOT show the raw "Unknown" string
+      expect(screen.queryByTestId('match-history-table')).not.toBeInTheDocument();
+      // Raw "Unknown" string must never appear
       expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
     });
   });
@@ -798,7 +801,9 @@ describe('BffMatchHistory', () => {
       await waitFor(() => expect(screen.getByText('LOSS')).toBeInTheDocument());
     });
 
-    it('shows neutral "–" for result "unknown"', async () => {
+    it('hides row and shows empty-state for result "unknown" (defensive filter)', async () => {
+      // Defensive rendering gate: a row with an unresolved result is ineligible and
+      // must be hidden entirely — not rendered with a "–" placeholder badge.
       mockGetMatchHistory.mockResolvedValue(
         makeResponse({ data: [makeItem({ result: 'unknown' })], has_more: false })
       );
@@ -806,15 +811,15 @@ describe('BffMatchHistory', () => {
       render(<BffMatchHistory />);
 
       await waitFor(() => {
-        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+        expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
       });
-
-      expect(screen.getByText('–')).toBeInTheDocument();
-      // Must NOT show the screaming "UNKNOWN"
+      expect(screen.queryByTestId('match-history-table')).not.toBeInTheDocument();
+      // Must NOT show "UNKNOWN" in any form
       expect(screen.queryByText('UNKNOWN')).not.toBeInTheDocument();
     });
 
-    it('shows neutral "–" for an empty result string', async () => {
+    it('hides row and shows empty-state for empty result string (defensive filter)', async () => {
+      // Defensive rendering gate: a row with an empty result is ineligible.
       mockGetMatchHistory.mockResolvedValue(
         makeResponse({ data: [makeItem({ result: '' })], has_more: false })
       );
@@ -822,10 +827,246 @@ describe('BffMatchHistory', () => {
       render(<BffMatchHistory />);
 
       await waitFor(() => {
+        expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('match-history-table')).not.toBeInTheDocument();
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // fix/match-history-defensive-rendering — display-eligibility filter
+  //
+  // Prof RED gate: wrong/placeholder data is worse than no data.
+  // A row is eligible ONLY if it has a valid result (win/loss/draw — NOT null,
+  // empty, or "unknown") AND a resolved format (normalizeHistoryFormat returns
+  // non-empty — NOT null, empty, or "Unknown").
+  //
+  // Ineligible rows MUST be hidden (not rendered as placeholders).
+  // When ALL rows from the BFF are ineligible, the empty-state must show.
+  // A 0-0 score must never render as real match data.
+  // --------------------------------------------------------------------------
+
+  describe('Defensive rendering — display-eligibility filter (Prof RED gate)', () => {
+    // ---- Eligible rows render ---
+
+    it('renders an eligible row that has a valid result AND a resolved format', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ result: 'win', format: 'Standard', player_wins: 2, opponent_wins: 0 })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
         expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
       });
+      expect(screen.getAllByTestId('match-row')).toHaveLength(1);
+    });
 
-      expect(screen.getByText('–')).toBeInTheDocument();
+    it('renders an eligible loss row', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ result: 'loss', format: 'Historic', player_wins: 0, opponent_wins: 2 })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('match-row')).toHaveLength(1);
+      });
+    });
+
+    // ---- Ineligible: bad result ---
+
+    it('hides a row whose result is empty string', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ result: '', format: 'Standard' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        // No table rows rendered — the empty-state shows instead.
+        expect(screen.queryByTestId('match-row')).not.toBeInTheDocument();
+      });
+      expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
+    });
+
+    it('hides a row whose result is "unknown"', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ result: 'unknown', format: 'Standard' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('match-row')).not.toBeInTheDocument();
+      });
+      expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
+    });
+
+    it('hides a row whose result is "-" (single dash placeholder)', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ result: '-', format: 'Standard' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('match-row')).not.toBeInTheDocument();
+      });
+      expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
+    });
+
+    // ---- Ineligible: unresolved format ---
+
+    it('hides a row whose format is empty string', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ result: 'win', format: '' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('match-row')).not.toBeInTheDocument();
+      });
+      expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
+    });
+
+    it('hides a row whose format is "Unknown"', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ result: 'win', format: 'Unknown' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('match-row')).not.toBeInTheDocument();
+      });
+      expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
+    });
+
+    it('hides a row whose format is null', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ result: 'win', format: null as unknown as string })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('match-row')).not.toBeInTheDocument();
+      });
+      expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
+    });
+
+    // ---- Placeholder score: 0-0 must never appear ---
+
+    it('never renders a 0-0 score row — hides the ineligible row instead', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ result: 'unknown', format: 'Standard', player_wins: 0, opponent_wins: 0 })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('match-row')).not.toBeInTheDocument();
+      });
+      expect(screen.queryByText('0–0')).not.toBeInTheDocument();
+      expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
+    });
+
+    // ---- Mixed rows: only eligible rows render ---
+
+    it('renders only eligible rows when the response mixes eligible and ineligible', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [
+            makeItem({ id: 'good-1', result: 'win', format: 'Standard' }),
+            makeItem({ id: 'bad-no-result', result: '', format: 'Standard' }),
+            makeItem({ id: 'good-2', result: 'loss', format: 'Historic' }),
+            makeItem({ id: 'bad-no-format', result: 'win', format: '' }),
+            makeItem({ id: 'bad-unknown-result', result: 'unknown', format: 'Standard' }),
+          ],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        const rows = screen.getAllByTestId('match-row');
+        expect(rows).toHaveLength(2);
+      });
+      // Table still shows (there are eligible rows).
+      expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+      // The empty-state must NOT show when there are eligible rows.
+      expect(screen.queryByTestId('match-history-empty')).not.toBeInTheDocument();
+    });
+
+    // ---- All ineligible → honest empty-state ---
+
+    it('shows the honest empty-state when ALL rows from the BFF are ineligible', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [
+            makeItem({ id: 'b1', result: '', format: 'Standard' }),
+            makeItem({ id: 'b2', result: 'unknown', format: 'Standard' }),
+            makeItem({ id: 'b3', result: 'win', format: '' }),
+            makeItem({ id: 'b4', result: '-', format: 'Standard' }),
+          ],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
+      });
+      // Must show the processing-aware empty message, not "No matches yet".
+      expect(screen.getByText(/new matches usually appear/i)).toBeInTheDocument();
+      // No table rows.
+      expect(screen.queryByTestId('match-row')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('match-history-table')).not.toBeInTheDocument();
+    });
+
+    it('shows the processing-aware empty-state message for the honest empty-state', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({ data: [], has_more: false })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-empty')).toBeInTheDocument();
+      });
+      // The honest empty-state must reflect that data is still loading/processing.
+      expect(screen.getByText(/new matches usually appear/i)).toBeInTheDocument();
     });
   });
 });

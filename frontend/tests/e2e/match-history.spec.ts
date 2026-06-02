@@ -271,6 +271,101 @@ test.describe('Match History — empty state', () => {
     await expect(page.locator('[data-testid="match-history-empty"]')).toBeVisible();
     await expect(page.locator('[data-testid="match-history-table"]')).not.toBeVisible();
   });
+
+  test('empty-state shows processing-aware message, not stale "No matches yet"', async ({ page }) => {
+    await setClerkSignedIn(page);
+    await mockMatchHistory(page, [], false);
+
+    await page.goto('/match-history');
+
+    await expect(page.locator('[data-testid="match-history-empty"]')).toBeVisible();
+    // Must show the processing-aware copy introduced with the defensive rendering gate.
+    await expect(page.locator('[data-testid="match-history-empty"]')).toContainText(
+      'new matches usually appear'
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defensive rendering (Prof RED gate) — placeholder rows never appear
+// ---------------------------------------------------------------------------
+
+test.describe('Match History — defensive rendering (Prof RED gate)', () => {
+  test('placeholder rows with unknown result are hidden — never appear in the table', async ({ page }) => {
+    await setClerkSignedIn(page);
+
+    // Mix of placeholder (ineligible) rows — none should render.
+    const items: MatchItem[] = [
+      makeMatchItem({ id: 'p1', result: 'unknown', format: 'Standard' }),
+      makeMatchItem({ id: 'p2', result: '', format: 'Standard' }),
+      makeMatchItem({ id: 'p3', result: '-', format: 'Historic' }),
+    ];
+    await mockMatchHistory(page, items, false);
+
+    await page.goto('/match-history');
+
+    // Table must NOT render — all rows are ineligible.
+    await expect(page.locator('[data-testid="match-history-table"]')).not.toBeVisible();
+    // Empty-state must show instead.
+    await expect(page.locator('[data-testid="match-history-empty"]')).toBeVisible();
+    // None of the placeholder result values must appear in the DOM.
+    await expect(page.locator('body')).not.toContainText('unknown');
+    await expect(page.locator('body')).not.toContainText('UNKNOWN');
+  });
+
+  test('rows with unresolved format are hidden — "—" never appears as a rendered format cell', async ({ page }) => {
+    await setClerkSignedIn(page);
+
+    const items: MatchItem[] = [
+      makeMatchItem({ id: 'u1', result: 'win', format: '' }),
+      makeMatchItem({ id: 'u2', result: 'win', format: 'Unknown' }),
+    ];
+    await mockMatchHistory(page, items, false);
+
+    await page.goto('/match-history');
+
+    // All rows ineligible — empty-state shows.
+    await expect(page.locator('[data-testid="match-history-empty"]')).toBeVisible();
+    await expect(page.locator('[data-testid="match-history-table"]')).not.toBeVisible();
+  });
+
+  test('0-0 score placeholder row is never shown as real match data', async ({ page }) => {
+    await setClerkSignedIn(page);
+
+    // A partially-written row with 0-0 score and unknown result is ineligible.
+    const items: MatchItem[] = [
+      makeMatchItem({ id: 'zero', result: 'unknown', format: 'Standard', player_wins: 0, opponent_wins: 0 }),
+    ];
+    await mockMatchHistory(page, items, false);
+
+    await page.goto('/match-history');
+
+    await expect(page.locator('[data-testid="match-history-empty"]')).toBeVisible();
+    // "0–0" must never appear in the DOM.
+    await expect(page.locator('body')).not.toContainText('0–0');
+  });
+
+  test('only eligible rows render when the BFF mixes good and placeholder rows', async ({ page }) => {
+    await setClerkSignedIn(page);
+
+    const items: MatchItem[] = [
+      makeMatchItem({ id: 'good-1', result: 'win', format: 'Standard' }),
+      makeMatchItem({ id: 'bad-1', result: 'unknown', format: 'Standard' }),
+      makeMatchItem({ id: 'good-2', result: 'loss', format: 'Historic' }),
+      makeMatchItem({ id: 'bad-2', result: 'win', format: '' }),
+    ];
+    await mockMatchHistory(page, items, false);
+
+    await page.goto('/match-history');
+
+    // Table renders — there are 2 eligible rows.
+    const table = page.locator('[data-testid="match-history-table"]');
+    await expect(table).toBeVisible();
+    // Exactly 2 data rows in tbody.
+    await expect(table.locator('tbody tr')).toHaveCount(2);
+    // Empty-state must NOT show when there are eligible rows.
+    await expect(page.locator('[data-testid="match-history-empty"]')).not.toBeVisible();
+  });
 });
 
 // ---------------------------------------------------------------------------
