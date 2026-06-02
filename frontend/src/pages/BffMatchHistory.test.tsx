@@ -8,9 +8,14 @@
  *   - Fix 3: result badge ('unknown' → '–', WIN/LOSS preserved)
  *   - fix/match-history-defensive-rendering: display-eligibility filter (Prof RED gate)
  *     Ineligible rows (bad result OR unresolved format) are hidden; all-ineligible → empty-state.
+ *   - vmt-t#684: no Cormorant Garamond serif-italic in SPA page title (regression guard)
+ *   - vmt-t#685: no lorebook affectations (§ Chapter / The Ledger) in page heading (regression guard)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import BffMatchHistory from './BffMatchHistory';
 import type { MatchHistoryResponse, MatchHistoryItem } from '@/services/api/bffMatchHistory';
@@ -1067,6 +1072,40 @@ describe('BffMatchHistory', () => {
       });
       // The honest empty-state must reflect that data is still loading/processing.
       expect(screen.getByText(/new matches usually appear/i)).toBeInTheDocument();
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Font regression guard (#684): no Cormorant Garamond in the SPA CSS
+  // --------------------------------------------------------------------------
+
+  describe('Font regression — no Cormorant Garamond (#684)', () => {
+    const CSS_PATH = join(dirname(fileURLToPath(import.meta.url)), 'BffMatchHistory.css');
+
+    it('BffMatchHistory.css contains no Cormorant Garamond reference', () => {
+      const css = readFileSync(CSS_PATH, 'utf8');
+      expect(css.toLowerCase()).not.toContain('cormorant');
+      expect(css.toLowerCase()).not.toContain('garamond');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Heading copy regression guard (#685): no lorebook affectations
+  // --------------------------------------------------------------------------
+
+  describe('Heading copy — no lorebook affectations (#685)', () => {
+    it('page title reads "Match History" — no § Chapter / Ledger pattern', async () => {
+      mockGetMatchHistory.mockResolvedValue(makeResponse({ data: [], has_more: false }));
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading matches...')).not.toBeInTheDocument();
+      });
+
+      const h1 = screen.getByRole('heading', { level: 1 });
+      expect(h1).toHaveTextContent('Match History');
+      expect(h1.textContent).not.toMatch(/§|Chapter|Ledger|Compendium/);
     });
   });
 });

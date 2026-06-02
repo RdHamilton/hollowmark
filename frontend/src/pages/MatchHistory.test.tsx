@@ -10,6 +10,37 @@ import { models } from '@/types/models';
 
 const CSS_PATH = join(dirname(fileURLToPath(import.meta.url)), 'MatchHistory.css');
 
+// — Font regression (#684): no Cormorant Garamond in the SPA ——————————————
+describe('MatchHistory CSS — no Cormorant Garamond (#684)', () => {
+  const css = readFileSync(CSS_PATH, 'utf8');
+
+  it('MatchHistory.css contains no Cormorant Garamond reference', () => {
+    expect(css.toLowerCase()).not.toContain('cormorant');
+    expect(css.toLowerCase()).not.toContain('garamond');
+  });
+});
+
+// — Heading copy regression (#685): no lorebook affectations ——————————————
+describe('MatchHistory heading copy — no lorebook affectations (#685)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('page title reads "Match History" — no § Chapter / Ledger pattern', async () => {
+    mockMatches.getMatches.mockResolvedValue([]);
+
+    renderWithProvider(<MatchHistory />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading matches/i)).not.toBeInTheDocument();
+    });
+
+    const h1 = screen.getByRole('heading', { level: 1 });
+    expect(h1).toHaveTextContent('Match History');
+    expect(h1.textContent).not.toMatch(/§|Chapter|Ledger|Compendium/);
+  });
+});
+
 // — Design token compliance (AC2, #312) ————————————————————————————————
 describe('MatchHistory CSS — design token compliance (#312)', () => {
   const css = readFileSync(CSS_PATH, 'utf8');
