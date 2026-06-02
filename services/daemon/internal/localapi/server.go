@@ -85,12 +85,13 @@ type Server struct {
 	state         atomic.Pointer[State]
 	srv           *http.Server
 	ln            net.Listener
-	ctx           context.Context         // lifecycle context; cancelled when the daemon stops
-	uninstaller   Uninstaller             // nil → defaultUninstaller; tests override via SetUninstaller
-	draftStore    DraftStore              // nil → draft endpoints respond with empty/no-session
-	cardsLookup   draftalgo.CardLookup    // nil → noopCards; defaults applied lazily in drafts.go
-	ratingsLookup draftalgo.RatingsLookup // nil → noopRatings; defaults applied lazily in drafts.go
-	replayTrigger ReplayFunc              // nil → /api/v1/replay returns 503
+	ctx           context.Context            // lifecycle context; cancelled when the daemon stops
+	uninstaller   Uninstaller                // nil → defaultUninstaller; tests override via SetUninstaller
+	draftStore    DraftStore                 // nil → draft endpoints respond with empty/no-session
+	cardsLookup   draftalgo.CardLookup       // nil → noopCards; defaults applied lazily in drafts.go
+	ratingsLookup draftalgo.RatingsLookup    // nil → noopRatings; defaults applied lazily in drafts.go
+	metaLookup    draftalgo.CardMetaLookup   // nil → noMeta; Phase B card metadata (color, ALSA, GIHCount)
+	replayTrigger ReplayFunc                 // nil → /api/v1/replay returns 503
 }
 
 // New returns a Server bound to 127.0.0.1:port. Use DefaultPort unless tests
@@ -138,6 +139,15 @@ func (s *Server) SetDraftStore(store DraftStore) {
 func (s *Server) SetDraftLookups(cards draftalgo.CardLookup, ratings draftalgo.RatingsLookup) {
 	s.cardsLookup = cards
 	s.ratingsLookup = ratings
+}
+
+// SetCardMeta installs the Phase B card metadata lookup (color, ALSA,
+// GIHCount per card) used by the draft recommendation handler.
+// Production wires this to the ratingsclient.Client which now implements
+// draftalgo.CardMetaLookup after the Phase B widening (ADR-047 §1).
+// nil falls back to no-metadata mode (Phase A behaviour).
+func (s *Server) SetCardMeta(meta draftalgo.CardMetaLookup) {
+	s.metaLookup = meta
 }
 
 // snapshot returns a copy of the current state. Always non-nil for a Server

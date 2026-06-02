@@ -29,7 +29,7 @@ var (
 // ─── empty pack / edge cases ───────────────────────────────────────────────
 
 func TestRecommend_EmptyPackReturnsEmpty(t *testing.T) {
-	recs := recommend.Recommend("PremierDraft", nil, nil, stubRatings{}, stubCards{})
+	recs := recommend.Recommend("PremierDraft", nil, nil, stubRatings{}, stubCards{}, nil)
 	if len(recs.TopPicks) != 0 || len(recs.Alternatives) != 0 {
 		t.Errorf("expected empty recs for empty pack, got %+v", recs)
 	}
@@ -43,7 +43,7 @@ func TestRecommend_TopPicksRankedByGIHWR(t *testing.T) {
 	ratings := stubRatings{"a": 55.0, "b": 70.0, "c": 40.0, "d": 65.0, "e": 50.0}
 	names := stubCards{"a": "A", "b": "B", "c": "C", "d": "D", "e": "E"}
 
-	recs := recommend.Recommend("PremierDraft", pack, nil, ratings, names)
+	recs := recommend.Recommend("PremierDraft", nil, pack, ratings, names, nil)
 
 	// Top picks must be in descending GIHWR order.
 	for i := 1; i < len(recs.TopPicks); i++ {
@@ -61,7 +61,7 @@ func TestRecommend_TopPicksLimitedToThree(t *testing.T) {
 	pack := []string{"a", "b", "c", "d", "e", "f"}
 	ratings := stubRatings{"a": 70.0, "b": 65.0, "c": 60.0, "d": 55.0, "e": 50.0, "f": 45.0}
 
-	recs := recommend.Recommend("PremierDraft", pack, nil, ratings, stubCards{})
+	recs := recommend.Recommend("PremierDraft", nil, pack, ratings, stubCards{}, nil)
 
 	if len(recs.TopPicks) != 3 {
 		t.Errorf("TopPicks len = %d, want 3", len(recs.TopPicks))
@@ -72,7 +72,7 @@ func TestRecommend_AlternativesContainRemainder(t *testing.T) {
 	pack := []string{"a", "b", "c", "d", "e"}
 	ratings := stubRatings{"a": 70.0, "b": 65.0, "c": 60.0, "d": 55.0, "e": 50.0}
 
-	recs := recommend.Recommend("PremierDraft", pack, nil, ratings, stubCards{})
+	recs := recommend.Recommend("PremierDraft", nil, pack, ratings, stubCards{}, nil)
 
 	total := len(recs.TopPicks) + len(recs.Alternatives)
 	if total != 5 {
@@ -86,7 +86,7 @@ func TestRecommend_SmallPackNoPanic(t *testing.T) {
 	ratings := stubRatings{"a": 60.0}
 	names := stubCards{"a": "Alpha"}
 
-	recs := recommend.Recommend("PremierDraft", pack, nil, ratings, names)
+	recs := recommend.Recommend("PremierDraft", nil, pack, ratings, names, nil)
 
 	if len(recs.TopPicks) != 1 {
 		t.Errorf("TopPicks len = %d, want 1", len(recs.TopPicks))
@@ -102,7 +102,7 @@ func TestRecommend_EmptyCacheProducesNAReasons(t *testing.T) {
 	pack := []string{"a", "b", "c"}
 	// No ratings — all GIHWR = 0.
 
-	recs := recommend.Recommend("PremierDraft", pack, nil, stubRatings{}, stubCards{})
+	recs := recommend.Recommend("PremierDraft", nil, pack, stubRatings{}, stubCards{}, nil)
 
 	// Must still return entries (graceful degrade, not empty).
 	if len(recs.TopPicks)+len(recs.Alternatives) == 0 {
@@ -124,7 +124,7 @@ func TestRecommend_NoRawGIHWRPercentInPrimaryReason(t *testing.T) {
 	ratings := stubRatings{"a": 62.1, "b": 59.4, "c": 50.0}
 	names := stubCards{"a": "Alpha", "b": "Beta", "c": "Gamma"}
 
-	recs := recommend.Recommend("PremierDraft", pack, nil, ratings, names)
+	recs := recommend.Recommend("PremierDraft", nil, pack, ratings, names, nil)
 
 	for _, r := range append(recs.TopPicks, recs.Alternatives...) {
 		if strings.Contains(r.Reason, "%") {
@@ -138,7 +138,7 @@ func TestRecommend_ReasonStringsAreNonEmpty(t *testing.T) {
 	ratings := stubRatings{"a": 70.0, "b": 65.0, "c": 60.0, "d": 55.0}
 	names := stubCards{"a": "A", "b": "B", "c": "C", "d": "D"}
 
-	recs := recommend.Recommend("PremierDraft", pack, nil, ratings, names)
+	recs := recommend.Recommend("PremierDraft", nil, pack, ratings, names, nil)
 
 	for _, r := range append(recs.TopPicks, recs.Alternatives...) {
 		if r.Reason == "" {
@@ -154,7 +154,7 @@ func TestRecommend_PriorityDecreasesWithRank(t *testing.T) {
 	pack := []string{"a", "b", "c", "d", "e", "f"}
 	ratings := stubRatings{"a": 70.0, "b": 65.0, "c": 60.0, "d": 55.0, "e": 50.0, "f": 45.0}
 
-	recs := recommend.Recommend("PremierDraft", pack, nil, ratings, stubCards{})
+	recs := recommend.Recommend("PremierDraft", nil, pack, ratings, stubCards{}, nil)
 
 	if len(recs.TopPicks) < 2 {
 		t.Skip("not enough top picks to compare")
@@ -169,7 +169,7 @@ func TestRecommend_PriorityInRange(t *testing.T) {
 	pack := []string{"a", "b", "c", "d", "e", "f"}
 	ratings := stubRatings{"a": 70.0, "b": 65.0, "c": 60.0, "d": 55.0, "e": 50.0, "f": 45.0}
 
-	recs := recommend.Recommend("PremierDraft", pack, nil, ratings, stubCards{})
+	recs := recommend.Recommend("PremierDraft", nil, pack, ratings, stubCards{}, nil)
 
 	for _, r := range append(recs.TopPicks, recs.Alternatives...) {
 		if r.Priority < 1 || r.Priority > 5 {
@@ -185,7 +185,7 @@ func TestRecommend_CardIDsPreserved(t *testing.T) {
 	ratings := stubRatings{"card-1": 70.0, "card-2": 65.0, "card-3": 60.0}
 	names := stubCards{"card-1": "One", "card-2": "Two", "card-3": "Three"}
 
-	recs := recommend.Recommend("PremierDraft", pack, nil, ratings, names)
+	recs := recommend.Recommend("PremierDraft", nil, pack, ratings, names, nil)
 
 	seen := map[string]bool{}
 	for _, r := range append(recs.TopPicks, recs.Alternatives...) {
