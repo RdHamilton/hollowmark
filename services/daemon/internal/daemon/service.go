@@ -10,6 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -770,14 +773,19 @@ func (s *Service) retryKeychain(ctx context.Context) error {
 	return fmt.Errorf("keychain unavailable after %d retries", keychainMaxRetries)
 }
 
-// runUpdateCheck calls updatecheck.Check and swallows any panics. Errors are
-// already swallowed inside the updatecheck package itself; this wrapper ensures
-// the version check can never affect service health.
+// runUpdateCheck calls updatecheck.CheckWithOptions and swallows any panics.
+// When a newer version is found, the tray notification hook fires if wired.
+// All errors are already swallowed inside the updatecheck package itself; this
+// wrapper ensures the version check can never affect service health.
 func (s *Service) runUpdateCheck(ctx context.Context) {
 	if s.cfg.DisableUpdateCheck {
 		return
 	}
-	updatecheck.Check(ctx, s.cfg.CloudAPIURL, s.version)
+	opts := updatecheck.Options{}
+	if s.trayHooks.NotifyUpdateAvailable != nil {
+		opts.NotifyUpdateAvailable = s.trayHooks.NotifyUpdateAvailable
+	}
+	updatecheck.CheckWithOptions(ctx, s.cfg.CloudAPIURL, s.version, opts)
 }
 
 // idleUntilMTGADetected blocks until defaultLogPathFn succeeds or ctx is cancelled.
@@ -827,6 +835,14 @@ func (s *Service) Run(ctx context.Context) error {
 
 	// Run update check once on startup (non-blocking).
 	go s.runUpdateCheck(ctx)
+
+	// Sweep stale update-download temp dirs from any previous session that was
+	// interrupted by the installer (the installer kills the daemon via schtasks /End
+	// mid-session, so deferred cleanup never runs). maxAge=1h is conservative;
+	// a fresh installer download completes in seconds on any modern connection.
+	// Ray Q4: time.AfterFunc is wrong here because the installer kills the daemon
+	// before the timer fires — startup sweep is the correct pattern.
+	go updatecheck.CleanStaleTempDirs(os.TempDir(), "vaultmtg-update-", time.Hour)
 
 	logPath := s.cfg.LogPath
 	if logPath == "" {
@@ -1037,6 +1053,24 @@ func (s *Service) Run(ctx context.Context) error {
 				s.installCollectionHelper()
 			}()
 
+		case <-s.trayHooks.InstallUpdate:
+			// User clicked the "Update available" tray item. The download and
+			// verification happen in a goroutine so the main loop is not blocked.
+			// The daemon is the trigger, never the executor: after verification,
+			// LaunchInstaller hands off to Installer.app (macOS) or cmd /c start
+			// (Windows) and returns immediately. The installer then kills the daemon
+			// via schtasks /End mid-session (intentional — see service.go comments
+			// on Windows NSIS kill semantics; ADR-036 I-10 invariant).
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[daemon] panic in install update: %v", r)
+						sentry.CurrentHub().Recover(r)
+					}
+				}()
+				s.handleInstallUpdate(ctx)
+			}()
+
 		case err, ok := <-errs:
 			if !ok {
 				return nil
@@ -1052,6 +1086,118 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// handleInstallUpdate is the goroutine body for the InstallUpdate tray action.
+// It fetches the latest version info, downloads + verifies the installer, then
+// launches it. All errors are logged and swallowed.
+//
+// NOTE: The daemon will be killed by the installer mid-session (Windows: NSIS
+// calls schtasks /End; macOS: pkg postinstall unloads and reloads launchd).
+// This is intentional and not a bug.
+func (s *Service) handleInstallUpdate(ctx context.Context) {
+	log.Printf("[daemon] install-update: starting download and verification")
+
+	// Fetch the latest version info to get download URLs.
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, s.cfg.CloudAPIURL+"/daemon/version", nil)
+	if err != nil {
+		log.Printf("[daemon] install-update: failed to build version request: %v", err)
+		return
+	}
+	req.Header.Set("User-Agent", fmt.Sprintf("vaultmtg-daemon/%s", s.version))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[daemon] install-update: version fetch failed: %v", err)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[daemon] install-update: version check returned %d", resp.StatusCode)
+		return
+	}
+	var vr updatecheck.VersionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&vr); err != nil {
+		log.Printf("[daemon] install-update: version decode failed: %v", err)
+		return
+	}
+
+	if vr.Latest == "" {
+		log.Printf("[daemon] install-update: empty latest version from BFF")
+		return
+	}
+
+	// Downgrade protection.
+	d := updatecheck.NewDownloader(updatecheck.DownloaderConfig{})
+	if err := d.CheckDowngrade(s.version, vr.Latest); err != nil {
+		log.Printf("[daemon] install-update: %v", err)
+		return
+	}
+
+	if vr.Sha256SumsURL == "" || vr.AttestationURL == "" {
+		log.Printf("[daemon] install-update: missing SHA256SUMS/attestation URL fields in version response (BFF not updated yet)")
+		return
+	}
+
+	// Select the platform-specific installer asset URL (per-platform binary, not the
+	// HTML release page). Empty return means this OS is unsupported or the BFF has
+	// not yet been updated to expose per-platform URLs — abort cleanly.
+	installerURL := updatecheck.SelectInstallerURL(&vr, runtime.GOOS)
+	if installerURL == "" {
+		log.Printf("[daemon] install-update: no installer URL for platform %s in version response (BFF not updated yet or unsupported OS)", runtime.GOOS)
+		return
+	}
+
+	parentDir := os.TempDir()
+
+	// Download the SHA256SUMS file.
+	sumsPath, err := d.DownloadToTempDir(vr.Sha256SumsURL, parentDir)
+	if err != nil {
+		log.Printf("[daemon] install-update: download SHA256SUMS failed: %v", err)
+		return
+	}
+	sumsDir := filepath.Dir(sumsPath)
+	defer func() { _ = os.RemoveAll(sumsDir) }()
+
+	// Download the signature file.
+	sigPath, err := d.DownloadToTempDir(vr.AttestationURL, parentDir)
+	if err != nil {
+		log.Printf("[daemon] install-update: download signature failed: %v", err)
+		return
+	}
+	sigDir := filepath.Dir(sigPath)
+	defer func() { _ = os.RemoveAll(sigDir) }()
+
+	// Download the platform-specific installer binary.
+	installerPath, err := d.DownloadToTempDir(installerURL, parentDir)
+	if err != nil {
+		log.Printf("[daemon] install-update: download installer failed: %v", err)
+		return
+	}
+	installerDir := filepath.Dir(installerPath)
+	// NOTE: do NOT defer RemoveAll for the installer dir — the installer kills
+	// the daemon before any defer runs. CleanStaleTempDirs handles cleanup on
+	// the next daemon startup (Ray Q4 pattern).
+
+	// Verify both trust anchor (minisign signature) and SHA-256 checksum.
+	// Never launch unless BOTH pass (ADR-036 I-10).
+	installerFilename := filepath.Base(installerPath)
+	if err := updatecheck.VerifyBoth(d, installerPath, installerFilename, sumsPath, sigPath, ""); err != nil {
+		log.Printf("[daemon] install-update: verification failed — installer rejected: %v", err)
+		_ = os.RemoveAll(installerDir)
+		return
+	}
+
+	log.Printf("[daemon] install-update: verification passed — launching installer v%s", vr.Latest)
+	if err := updatecheck.LaunchInstaller(installerPath); err != nil {
+		log.Printf("[daemon] install-update: launch failed: %v", err)
+		_ = os.RemoveAll(installerDir)
+		return
+	}
+	// Installer launched. The daemon will be killed by the installer.
+	log.Printf("[daemon] install-update: installer launched; daemon will exit when installer takes over")
 }
 
 // heartbeatPayload is the JSON body of a daemon.heartbeat event.

@@ -63,6 +63,7 @@ type App struct {
 	miStatus          *systray.MenuItem
 	miAbout           *systray.MenuItem
 	miCheckForUpdates *systray.MenuItem
+	miUpdateAvailable *systray.MenuItem
 	miLastSync        *systray.MenuItem
 	miSyncNow         *systray.MenuItem
 	miGrantAccess     *systray.MenuItem
@@ -87,6 +88,9 @@ type App struct {
 	// opens https://vaultmtg.app/setup in the browser and re-runs the PKCE flow.
 	// Buffered cap=1 so a second click before the first is handled is dropped.
 	RetrySetup chan struct{}
+	// InstallUpdate is signalled when the user clicks "Update available: vX.Y.Z".
+	// Buffered cap=1; a second click while install is in progress is dropped.
+	InstallUpdate chan struct{}
 }
 
 // New creates an App. appURL is opened when "Open VaultMTG" is clicked.
@@ -96,15 +100,16 @@ type App struct {
 // tray exits (Quit clicked or process terminated).
 func New(appURL, version string, openURL func(string) error, onQuit func()) *App {
 	return &App{
-		appURL:      appURL,
-		version:     version,
-		openURL:     openURL,
-		onQuit:      onQuit,
-		status:      StatusStarting,
-		SyncNow:     make(chan struct{}, 1),
-		GrantAccess: make(chan struct{}, 1),
-		TryAgain:    make(chan struct{}, 1),
-		RetrySetup:  make(chan struct{}, 1),
+		appURL:        appURL,
+		version:       version,
+		openURL:       openURL,
+		onQuit:        onQuit,
+		status:        StatusStarting,
+		SyncNow:       make(chan struct{}, 1),
+		GrantAccess:   make(chan struct{}, 1),
+		TryAgain:      make(chan struct{}, 1),
+		RetrySetup:    make(chan struct{}, 1),
+		InstallUpdate: make(chan struct{}, 1),
 	}
 }
 
@@ -192,6 +197,22 @@ func (a *App) SetKeychainError(show bool) {
 	}
 }
 
+// NotifyUpdateAvailable shows the "Update available: vX.Y.Z — Click to Install"
+// menu item. On Windows the tooltip also notes the binary is unsigned (beta).
+// Safe to call from any goroutine.
+func (a *App) NotifyUpdateAvailable(version, _ string) {
+	if a.miUpdateAvailable == nil {
+		return
+	}
+	title := "Update available: v" + version + " — Click to Install"
+	// Windows: warn about unsigned binary per Sarah PR-3.
+	if isWindows() {
+		title += " (unverified by Microsoft — beta)"
+	}
+	a.miUpdateAvailable.SetTitle(title)
+	a.miUpdateAvailable.Show()
+}
+
 // SetWaitingForArena switches the tray status to StatusWaitingForArena (waiting=true)
 // or StatusConnected (waiting=false). Called by the daemon idle loop when MTGA is not
 // installed and the daemon is polling for Player.log.
@@ -231,6 +252,10 @@ func (a *App) setup() {
 
 	// Check for Updates — opens the GitHub Releases page for the daemon.
 	a.miCheckForUpdates = systray.AddMenuItem("Check for Updates", "Opens GitHub Releases page for the VaultMTG daemon")
+
+	// Update available — hidden until the update-check loop finds a newer version.
+	a.miUpdateAvailable = systray.AddMenuItem("Update available", "A new daemon version is available")
+	a.miUpdateAvailable.Hide()
 
 	systray.AddSeparator()
 
@@ -314,6 +339,11 @@ func (a *App) loop() {
 		select {
 		case <-a.miCheckForUpdates.ClickedCh:
 			a.openCheckForUpdates()
+		case <-a.miUpdateAvailable.ClickedCh:
+			select {
+			case a.InstallUpdate <- struct{}{}:
+			default:
+			}
 		case <-a.miSyncNow.ClickedCh:
 			if a.tryStartSync() {
 				a.miSyncNow.SetTitle("Syncing...")
