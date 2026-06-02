@@ -21,6 +21,7 @@ require (
 )
 
 require (
+	github.com/RdHamilton/vault-mtg/services/daemon v0.0.0-20260602181331-948b3cc4c250 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.7 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.17 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.23 // indirect

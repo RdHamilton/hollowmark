@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../test/utils/testUtils';
@@ -720,6 +723,67 @@ describe('Draft Component', () => {
       // Optimistic show: treat null as enabled so the surface is visible while PostHog loads
       await waitFor(() => {
         expect(mockDrafts.getCurrentPackWithRecommendation).toHaveBeenCalled();
+      });
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Font regression guard (#684): no Cormorant Garamond in the Draft CSS
+  // --------------------------------------------------------------------------
+
+  describe('Draft CSS — no Cormorant Garamond (#684)', () => {
+    const CSS_PATH = join(dirname(fileURLToPath(import.meta.url)), 'Draft.css');
+
+    it('Draft.css contains no Cormorant Garamond reference', () => {
+      const css = readFileSync(CSS_PATH, 'utf8');
+      expect(css.toLowerCase()).not.toContain('cormorant');
+      expect(css.toLowerCase()).not.toContain('garamond');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Heading copy regression guard (#685): no lorebook affectations
+  // --------------------------------------------------------------------------
+
+  describe('Draft headings — no lorebook affectations (#685)', () => {
+    it('no-active-draft state shows "Draft History" — no § Chapter / The Draft pattern', async () => {
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([]);
+      mockDrafts.getCompletedDraftSessions.mockResolvedValue([]);
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        const h1 = screen.getByRole('heading', { level: 1 });
+        expect(h1).toHaveTextContent('Draft History');
+        expect(h1.textContent).not.toMatch(/§|Chapter|Compendium/);
+      });
+    });
+
+    it('active-draft state shows "Draft Assistant" — no § Chapter / The Draft pattern', async () => {
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([
+        new models.DraftSession({
+          ID: 'session-heading-test',
+          EventName: 'QuickDraft',
+          SetCode: 'BLB',
+          DraftType: 'PremierDraft',
+          StartTime: new Date('2025-11-20T10:00:00Z'),
+          Status: 'active',
+          TotalPicks: 45,
+          CreatedAt: new Date('2025-11-20T10:00:00Z'),
+          UpdatedAt: new Date('2025-11-20T10:00:00Z'),
+        }),
+      ]);
+      mockDrafts.getDraftPicks.mockResolvedValue([]);
+      mockDrafts.getDraftPool.mockResolvedValue([]);
+      mockCards.getSetCards.mockResolvedValue([]);
+      mockCards.getCardRatings.mockResolvedValue([]);
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        const h1 = screen.getByRole('heading', { level: 1 });
+        expect(h1).toHaveTextContent('Draft Assistant');
+        expect(h1.textContent).not.toMatch(/§|Chapter|Compendium/);
       });
     });
   });

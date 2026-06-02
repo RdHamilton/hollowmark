@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import BffDraftHistory from './BffDraftHistory';
 import type { DraftHistoryResponse } from '@/services/api/bffDraftHistory';
@@ -253,6 +256,40 @@ describe('BffDraftHistory', () => {
       await waitFor(() => {
         expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Draft History');
       });
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Font regression guard (#684): no Cormorant Garamond in the SPA CSS
+  // --------------------------------------------------------------------------
+
+  describe('Font regression — no Cormorant Garamond (#684)', () => {
+    const CSS_PATH = join(dirname(fileURLToPath(import.meta.url)), 'BffDraftHistory.css');
+
+    it('BffDraftHistory.css contains no Cormorant Garamond reference', () => {
+      const css = readFileSync(CSS_PATH, 'utf8');
+      expect(css.toLowerCase()).not.toContain('cormorant');
+      expect(css.toLowerCase()).not.toContain('garamond');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Heading copy regression guard (#685): no lorebook affectations
+  // --------------------------------------------------------------------------
+
+  describe('Heading copy — no lorebook affectations (#685)', () => {
+    it('page title reads "Draft History" — no § Chapter / The Draft pattern', async () => {
+      mockGetDraftHistory.mockResolvedValue(makeResponse());
+
+      render(<BffDraftHistory />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Loading drafts...')).not.toBeInTheDocument();
+      });
+
+      const h1 = screen.getByRole('heading', { level: 1 });
+      expect(h1).toHaveTextContent('Draft History');
+      expect(h1.textContent).not.toMatch(/§|Chapter|Compendium/);
     });
   });
 });
