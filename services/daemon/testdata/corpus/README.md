@@ -94,6 +94,19 @@ Raw captures are never committed. Only sanitised output is committed.
 | Layer 3 (projection integration) | `daemon-emit/` + `db-expected/` + `api-expected/` | Assert projection worker + API read correctness |
 | Layer 4 (staging rehearsal) | `daemon-emit/` + `db-expected/` + `api-expected/` | Manual staging validation via SSM-authenticated psql |
 
+## Layer 5 Add-Corpus-Entry
+
+The full add-corpus-entry runbook is at `ADD-CORPUS-ENTRY.md` in this directory.
+
+Quick reference:
+
+1. **Play a new session.** Match/quest/deck data works now. For draft data: play a draft on the fixed daemon.
+2. **Copy the log.** Archive in `~/mtga-log-backups/corpus-snapshot-YYYYMMDDTHHMMSSZ/daemon-archives/`.
+3. **Run the injector.** `go test -v -tags layer5 -run TestLayer5ReplayInjector_Reconstruct ./services/bff/` — require `projection_errors: 0`.
+4. **Verify idempotency.** `go test -tags layer5 -run TestLayer5ReplayDeterminism ./services/bff/` — must PASS.
+5. **Regenerate manifests.** `./tools/layer5-manifest-gen/regenerate.sh` (requires `BFF_URL` and `BFF_TOKEN`).
+6. **Commit + PR.** Stage only `layer5-expected/*.json` — never the raw log file. Sarah S-07 gate applies.
+
 ## Related
 
 - ADR-042: `vault-mtg-docs/engineering/architecture/ADR-042-data-pipeline-regression-test-architecture.md`

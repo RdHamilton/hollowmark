@@ -546,7 +546,7 @@ describe('CurrentPackPicker Component', () => {
   });
 
   describe('Color Indicators', () => {
-    it('should display color indicators for colored cards', async () => {
+    it('should display mana pip indicators for colored cards', async () => {
       const packData = createMockPackResponse({
         cards: [
           createMockPackCard({ arena_id: '1', name: 'Card A', colors: ['R', 'U'] }),
@@ -554,15 +554,15 @@ describe('CurrentPackPicker Component', () => {
       });
       mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
 
-      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+      render(<CurrentPackPicker sessionID="test-session" />);
 
       await waitFor(() => {
-        const colorIndicators = container.querySelectorAll('.color-indicator');
-        expect(colorIndicators.length).toBeGreaterThan(0);
+        expect(screen.getByTestId('mana-pip-r')).toBeInTheDocument();
+        expect(screen.getByTestId('mana-pip-u')).toBeInTheDocument();
       });
     });
 
-    it('should display colorless indicator for colorless cards', async () => {
+    it('should display colorless pip for colorless cards', async () => {
       const packData = createMockPackResponse({
         cards: [
           createMockPackCard({ arena_id: '1', name: 'Artifact', colors: [] }),
@@ -570,11 +570,10 @@ describe('CurrentPackPicker Component', () => {
       });
       mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
 
-      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+      render(<CurrentPackPicker sessionID="test-session" />);
 
       await waitFor(() => {
-        const colorlessIndicator = container.querySelector('.color-indicator.colorless');
-        expect(colorlessIndicator).toBeInTheDocument();
+        expect(screen.getByTestId('mana-pip-c')).toBeInTheDocument();
       });
     });
   });
