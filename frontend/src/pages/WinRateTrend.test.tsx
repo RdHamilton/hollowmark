@@ -29,11 +29,14 @@ vi.mock('recharts', () => ({
   Legend: () => <div data-testid="legend" />,
 }));
 
-// Helper function to create mock trend analysis data
+// Helper function to create mock trend analysis data.
+// IMPORTANT: uses the real BFF wire-format key "Trends" (NOT "Periods").
+// storage.TrendAnalysis.constructor reads source["Trends"]; if it regresses to
+// source["Periods"] this fixture will produce an empty chart (contract test invariant).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function createMockTrendAnalysis(overrides: Record<string, unknown> = {}): any {
   return {
-    Periods: [
+    Trends: [
       {
         Period: {
           Label: 'Day 1',
@@ -157,7 +160,7 @@ describe('WinRateTrend', () => {
 
     it('should show empty state when periods array is empty', async () => {
       mockMatches.getTrendAnalysis.mockResolvedValue({
-        Periods: [],
+        Trends: [],
         Overall: null,
         Trend: '',
         TrendValue: 0,
@@ -545,6 +548,65 @@ describe('WinRateTrend', () => {
 
       await waitFor(() => {
         expect(screen.getByText('stable')).toBeInTheDocument();
+      });
+    });
+  });
+
+  // ─── BFF Contract Tests ────────────────────────────────────────────────────
+  // Fixtures use the REAL BFF wire key "Trends". If TrendAnalysis.constructor
+  // regresses to reading source["Periods"], chartData will be empty and the
+  // chart will never render — catching the contract drift.
+  describe('BFF field contract — Trends key (not Periods)', () => {
+    it('chart renders when BFF response uses "Trends" key', async () => {
+      // Raw fixture bypasses createMockTrendAnalysis to confirm the key name matters
+      const bffResponse = {
+        Trends: [
+          {
+            Period: { Label: 'Jan 1', StartDate: '2024-01-01', EndDate: '2024-01-01' },
+            Stats: { TotalMatches: 5, WinRate: 0.6 },
+            WinRate: 0.6,
+          },
+        ],
+        Overall: { TotalMatches: 5, WinRate: 0.6 },
+        Trend: 'improving',
+        TrendValue: 0.05,
+      };
+
+      mockMatches.getTrendAnalysis.mockResolvedValue(bffResponse);
+
+      renderWithProvider(<WinRateTrend />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('line-chart')).toBeInTheDocument();
+      });
+
+      // Chart receives data — not empty state
+      expect(screen.queryByText('Not enough data')).not.toBeInTheDocument();
+    });
+
+    it('chart is EMPTY when response uses wrong key "Periods" (regression sentinel)', async () => {
+      // This fixture mimics a BFF rollback that would re-emit "Periods" instead of "Trends".
+      // TrendAnalysis reads "Trends", so Periods is ignored → empty chart.
+      const wrongKeyResponse = {
+        Periods: [
+          {
+            Period: { Label: 'Jan 1', StartDate: '2024-01-01', EndDate: '2024-01-01' },
+            Stats: { TotalMatches: 5, WinRate: 0.6 },
+            WinRate: 0.6,
+          },
+        ],
+        Overall: { TotalMatches: 5, WinRate: 0.6 },
+        Trend: 'improving',
+        TrendValue: 0.05,
+      };
+
+      mockMatches.getTrendAnalysis.mockResolvedValue(wrongKeyResponse);
+
+      renderWithProvider(<WinRateTrend />);
+
+      await waitFor(() => {
+        // Empty state because Trends array is missing
+        expect(screen.getByText('Not enough data')).toBeInTheDocument();
       });
     });
   });

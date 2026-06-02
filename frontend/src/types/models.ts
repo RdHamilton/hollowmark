@@ -3090,7 +3090,7 @@ export namespace models {
 	    completed: boolean;
 	    can_swap: boolean;
 	    rewards: string;
-	    assigned_at: time.Time;
+	    first_seen_at: time.Time;
 	    completed_at?: time.Time;
 	    last_seen_at?: time.Time;
 	    rerolled: boolean;
@@ -3113,7 +3113,7 @@ export namespace models {
 	        this.completed = source["completed"];
 	        this.can_swap = source["can_swap"];
 	        this.rewards = source["rewards"];
-	        this.assigned_at = this.convertValues(source["assigned_at"], time.Time);
+	        this.first_seen_at = this.convertValues(source["first_seen_at"], time.Time);
 	        this.completed_at = this.convertValues(source["completed_at"], time.Time);
 	        this.last_seen_at = this.convertValues(source["last_seen_at"], time.Time);
 	        this.rerolled = source["rerolled"];
@@ -3862,7 +3862,7 @@ export namespace storage {
 		}
 	}
 	export class TrendAnalysis {
-	    Periods: TrendData[];
+	    Trends: TrendData[];
 	    Overall?: models.Statistics;
 	    Trend: string;
 	    TrendValue: number;
@@ -3873,7 +3873,7 @@ export namespace storage {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.Periods = this.convertValues(source["Periods"], TrendData);
+	        this.Trends = this.convertValues(source["Trends"], TrendData);
 	        this.Overall = this.convertValues(source["Overall"], models.Statistics);
 	        this.Trend = source["Trend"];
 	        this.TrendValue = source["TrendValue"];

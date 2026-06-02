@@ -6,7 +6,10 @@ import { AppProvider } from '../context/AppContext';
 import { models } from '@/types/models';
 import type { ActiveQuestsResponse } from '@/services/api/quests';
 
-// Helper function to create mock Quest
+// Helper function to create mock Quest.
+// IMPORTANT: uses real BFF wire-format field names (first_seen_at, NOT assigned_at).
+// This fixture will fail if models.Quest.constructor reads the wrong source key,
+// which is the contract-test invariant for issue #TRIAGE_INVENTORY_READY bug 1.
 function createMockQuest(overrides: Partial<models.Quest> = {}): models.Quest {
   return new models.Quest({
     id: 1,
@@ -18,7 +21,7 @@ function createMockQuest(overrides: Partial<models.Quest> = {}): models.Quest {
     completed: false,
     can_swap: true,
     rewards: '500 Gold',
-    assigned_at: new Date('2024-01-15T10:00:00').toISOString(),
+    first_seen_at: new Date('2024-01-15T10:00:00').toISOString(),
     completed_at: undefined,
     rerolled: false,
     ...overrides,
@@ -260,7 +263,7 @@ describe('Quests', () => {
     });
 
     it('should display assigned date', async () => {
-      const quest = createMockQuest({ assigned_at: new Date('2024-01-15T10:00:00').toISOString() });
+      const quest = createMockQuest({ first_seen_at: new Date('2024-01-15T10:00:00').toISOString() });
       mockQuests.getActiveQuests.mockResolvedValue(createActiveQuestsResponse([quest], true));
       mockQuests.getQuestHistory.mockResolvedValue([]);
       mockSystem.getCurrentAccount.mockResolvedValue(null);
@@ -338,7 +341,7 @@ describe('Quests', () => {
     it('should display completion duration', async () => {
       const quest = createMockQuest({
         completed: true,
-        assigned_at: new Date('2024-01-15T10:00:00').toISOString(),
+        first_seen_at: new Date('2024-01-15T10:00:00').toISOString(),
         completed_at: new Date('2024-01-15T12:30:00').toISOString(), // 2.5 hours later
       });
       mockQuests.getActiveQuests.mockResolvedValue(createActiveQuestsResponse([], false));
@@ -368,7 +371,7 @@ describe('Quests', () => {
     it('should display minutes only for short completion time', async () => {
       const quest = createMockQuest({
         completed: true,
-        assigned_at: new Date('2024-01-15T10:00:00').toISOString(),
+        first_seen_at: new Date('2024-01-15T10:00:00').toISOString(),
         completed_at: new Date('2024-01-15T10:45:00').toISOString(), // 45 minutes
       });
       mockQuests.getActiveQuests.mockResolvedValue(createActiveQuestsResponse([], false));
@@ -409,7 +412,7 @@ describe('Quests', () => {
           quest_id: 'quest_daily_001',
           quest_type: 'Quests/Quest_Play_Cards',
           completed: true,
-          assigned_at: new Date('2024-01-14T08:00:00').toISOString(),
+          first_seen_at: new Date('2024-01-14T08:00:00').toISOString(),
           completed_at: new Date('2024-01-14T10:00:00').toISOString(),
           ending_progress: 10,
           goal: 10,
@@ -419,7 +422,7 @@ describe('Quests', () => {
           quest_id: 'quest_daily_001',
           quest_type: 'Quests/Quest_Play_Cards',
           completed: false,
-          assigned_at: new Date('2024-01-15T08:00:00').toISOString(),
+          first_seen_at: new Date('2024-01-15T08:00:00').toISOString(),
           completed_at: undefined,
           ending_progress: 3,
           goal: 10,
@@ -1090,6 +1093,76 @@ describe('Quests', () => {
 
       await waitFor(() => {
         expect(screen.getByText('No matching quests')).toBeInTheDocument();
+      });
+    });
+  });
+
+  // ─── BFF Contract Tests ────────────────────────────────────────────────────
+  // These tests use REAL BFF wire-format field names.
+  // A future migration 000097-style rename will break these tests if the SPA
+  // constructor is not updated in the same change, catching the contract drift.
+  describe('BFF field contract — first_seen_at (migration 000097)', () => {
+    it('assigned date renders from first_seen_at (NOT assigned_at)', async () => {
+      // Fixture uses the real BFF wire key. If models.Quest reads "assigned_at"
+      // instead of "first_seen_at", the date cell will show "Invalid Date".
+      const quest = new models.Quest({
+        id: 1,
+        quest_id: 'q_contract',
+        quest_type: 'Quests/Quest_PlayCards',
+        goal: 10,
+        starting_progress: 0,
+        ending_progress: 5,
+        completed: false,
+        can_swap: true,
+        rewards: '500 Gold',
+        first_seen_at: new Date('2024-03-10T08:00:00Z').toISOString(),
+        rerolled: false,
+        created_at: new Date('2024-03-10T08:00:00Z').toISOString(),
+      });
+
+      mockQuests.getActiveQuests.mockResolvedValue(createActiveQuestsResponse([quest], true));
+      mockQuests.getQuestHistory.mockResolvedValue([]);
+      mockSystem.getCurrentAccount.mockResolvedValue(null);
+
+      renderWithProvider(<Quests />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Assigned:/)).toBeInTheDocument();
+      });
+
+      // The rendered date must NOT be "Invalid Date"
+      const assignedText = screen.getByText(/Assigned:/).textContent ?? '';
+      expect(assignedText).not.toContain('Invalid Date');
+    });
+
+    it('completion duration uses first_seen_at (NOT assigned_at)', async () => {
+      // Fixture uses real BFF wire keys. If models.Quest reads "assigned_at",
+      // formatCompletionTime receives undefined → NaN ms → "NaNh NaNm".
+      const quest = new models.Quest({
+        id: 2,
+        quest_id: 'q_contract_duration',
+        quest_type: 'Quests/Quest_WinGames',
+        goal: 5,
+        starting_progress: 0,
+        ending_progress: 5,
+        completed: true,
+        can_swap: false,
+        rewards: '750 Gold',
+        first_seen_at: new Date('2024-03-10T08:00:00Z').toISOString(),
+        completed_at: new Date('2024-03-10T09:30:00Z').toISOString(),
+        rerolled: false,
+        created_at: new Date('2024-03-10T08:00:00Z').toISOString(),
+      });
+
+      mockQuests.getActiveQuests.mockResolvedValue(createActiveQuestsResponse([], false));
+      mockQuests.getQuestHistory.mockResolvedValue([quest]);
+      mockSystem.getCurrentAccount.mockResolvedValue(null);
+
+      renderWithProvider(<Quests />);
+
+      await waitFor(() => {
+        // 1h 30m — only renders correctly when first_seen_at is read
+        expect(screen.getByText('1h 30m')).toBeInTheDocument();
       });
     });
   });
