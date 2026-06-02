@@ -108,7 +108,12 @@ builds:
     # ./cmd/daemon resolves correctly to services/daemon/cmd/daemon.
     dir: services/daemon
     main: ./cmd/daemon
-    binary: vaultmtg-daemon
+    # binary name is channel-parameterized (ADR-049 §1):
+    #   stable channel  (bare daemon/v* tag)      -> vaultmtg-daemon
+    #   staging channel (pre-release suffix tag)  -> vaultmtg-daemon-staging
+    # VAULTMTG_CHANNEL is resolved by daemon-release.yml and exported to the
+    # GoReleaser env before invocation (see "Resolve build channel" step).
+    binary: "vaultmtg-daemon{{ if eq .Env.VAULTMTG_CHANNEL \"staging\" }}-staging{{ end }}"
     env:
       # CGO_ENABLED=1 so the real tray.go (//go:build cgo) compiles in and the
       # Windows systray icon is present. CGO was previously 0 here (the macOS
@@ -150,7 +155,12 @@ builds:
       # The placeholder default in trustanchor.go causes VerifyMinisignature to
       # return an error on any real signature (fail-closed). daemon-release.yml
       # resolves MINISIGN_PUBLIC_KEY and passes it here at build time.
-      - -s -w -X main.Version={{ .Env.PLAIN_VERSION }} -X main.DefaultCloudAPIURL={{ .Env.DEFAULT_CLOUD_API_URL }} -X main.DefaultSentryDSN={{ .Env.DEFAULT_SENTRY_DSN }} -X main.DefaultSPAURL={{ .Env.DEFAULT_SPA_URL }} -X main.DefaultSetupURL={{ .Env.DEFAULT_SETUP_URL }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey={{ .Env.MINISIGN_PUBLIC_KEY }}
+      # install.Channel is the build-time channel discriminator (ADR-049 §2):
+      #   VAULTMTG_CHANNEL=stable  -> binary identity uses bare names
+      #   VAULTMTG_CHANNEL=staging -> binary identity uses -staging suffix names
+      # Resolved by daemon-release.yml "Resolve build channel" step; consumed by
+      # Bob's internal/install.Channel var (#651) to derive Go-side identity constants.
+      - -s -w -X main.Version={{ .Env.PLAIN_VERSION }} -X main.DefaultCloudAPIURL={{ .Env.DEFAULT_CLOUD_API_URL }} -X main.DefaultSentryDSN={{ .Env.DEFAULT_SENTRY_DSN }} -X main.DefaultSPAURL={{ .Env.DEFAULT_SPA_URL }} -X main.DefaultSetupURL={{ .Env.DEFAULT_SETUP_URL }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey={{ .Env.MINISIGN_PUBLIC_KEY }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/install.Channel={{ .Env.VAULTMTG_CHANNEL }}
     mod_timestamp: "{{ .CommitTimestamp }}"
     # Windows NSIS installer -- compiled after the Windows amd64 binary is built.
     # makensis is available on ubuntu runners via apt; skipped in snapshot mode.
@@ -187,6 +197,12 @@ builds:
         # corresponding block in installer.nsi) once the sign-windows job is green
         # (AZURE_* secrets populated).  See:
         # vault-mtg-docs/engineering/runbooks/windows-trusted-signing.md (vmt-t#394)
+        #
+        # -DCHANNEL bakes the build channel into the NSIS installer (ADR-049 §1).
+        # The installer uses it to resolve channel-specific identity constants
+        # (Task Scheduler name, install dir, config dir) at install time.
+        # VAULTMTG_CHANNEL is validated fail-closed before GoReleaser runs
+        # (see "Resolve build channel" step in daemon-release.yml).
         - cmd: >
             bash -c '[ "${IS_SNAPSHOT}" = "true" ] && exit 0;
             [ "${TARGET_GOOS}" != "windows" ] && exit 0;
@@ -195,6 +211,7 @@ builds:
             -DVERSION={{ .Env.PLAIN_VERSION }}
             "-DBINARY_PATH={{ .Path }}"
             "-DCLOUD_API_URL={{ .Env.DEFAULT_CLOUD_API_URL }}"
+            "-DCHANNEL={{ .Env.VAULTMTG_CHANNEL }}"
             -DBETA_UNSIGNED=1
             services/daemon/install/windows/nsis/installer.nsi'
           env:
