@@ -1,112 +1,339 @@
+/* ============================================================
+   Home — Command Strip layout
+   Tokens: vault-mtg-docs/../colors_and_type.css --vault-* vars
+   Spacing spec from Prof's 7 required changes:
+     - --space-3 (12px) gap between strips
+     - --space-4 (16px) horizontal padding per strip
+     - Active Draft: ~20px internal padding (heavier)
+     - Last Deck: ~12px internal padding (lighter)
+   ============================================================ */
+
+/* ── Page shell ──────────────────────────────────────────── */
 .home-page {
   display: flex;
   flex-direction: column;
-  padding: 2rem;
-  gap: 2rem;
-  max-width: 900px;
-  margin: 0 auto;
+  gap: var(--space-3);           /* 12px between strips */
+  max-width: 680px;
+  margin: var(--space-8) auto 0;  /* 32px top margin */
+  padding: 0 var(--space-4);      /* 16px horizontal gutter */
   width: 100%;
 }
 
-.home-header {
+/* ── Loading / empty / error states ─────────────────────── */
+.home-loading,
+.home-empty {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-12) 0;
+  text-align: center;
 }
 
-.home-title {
-  font-size: 2rem;
-  font-weight: 700;
-  color: var(--fg);
+.home-loading-text {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-fg-muted);
   margin: 0;
 }
 
-.home-subtitle {
-  font-size: 1rem;
-  color: rgba(255, 255, 255, 0.6);
+.home-empty-title {
+  font-family: var(--font-display-vault);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--vault-fg);
   margin: 0;
 }
 
-.home-features {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: 1rem;
+.home-empty-body {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-fg-secondary);
+  max-width: 320px;
+  margin: 0;
+  line-height: 1.6;
 }
 
-.home-feature-card {
+.home-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-12) 0;
+}
+
+.home-error-text {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-danger);
+  margin: 0;
+}
+
+.home-retry-btn {
+  background: transparent;
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-md);
+  color: var(--vault-fg-secondary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.home-retry-btn:hover {
+  border-color: var(--vault-sapphire);
+  color: var(--vault-fg);
+}
+
+/* ── Shared strip base ───────────────────────────────────── */
+.home-strip {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  padding: 1.25rem 1.5rem;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  cursor: pointer;
-  text-align: left;
-  color: var(--fg);
-  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+  gap: var(--space-3);
+  padding: 12px var(--space-4);   /* 12px v, 16px h — Last Deck base */
+  background: var(--vault-bg-raised);
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-inset-vault);
   width: 100%;
+  text-align: left;
+  cursor: default;
 }
 
-.home-feature-card:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(99, 132, 255, 0.5);
-  transform: translateY(-2px);
-}
-
-.home-feature-card:active {
-  transform: translateY(0);
-}
-
-.home-feature-icon {
-  font-size: 2rem;
+/* Strip label eyebrow */
+.home-strip-label {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--vault-fg-muted);
+  white-space: nowrap;
   flex-shrink: 0;
+}
+
+.home-strip-label-accent {
+  color: var(--vault-sapphire);
+}
+
+/* CSS separator — no Unicode box-drawing characters */
+.home-strip-divider {
+  display: inline-block;
+  width: 0;
+  height: 14px;
+  border-left: 1px solid var(--vault-border);
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+/* ── WEEKLY RECORD strip ─────────────────────────────────── */
+.home-strip-weekly {
+  gap: var(--space-4);
+}
+
+.home-strip-stat-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+}
+
+/* W / L / WR stats — JetBrains Mono per design-system */
+.home-stat-w,
+.home-stat-l,
+.home-stat-wr {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 500;
   line-height: 1;
 }
 
-.home-feature-content {
+.home-strip-today {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-muted);
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+/* ── LAST MATCH micro-strip ──────────────────────────────── */
+.home-strip-last-match {
+  padding: 8px var(--space-4);
+  gap: var(--space-3);
+  background: var(--vault-bg);
+  border-color: var(--vault-border-subtle);
+}
+
+.home-last-match-result {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.home-last-match-archetype {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-fg-secondary);
+}
+
+.home-last-match-elapsed {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-muted);
+  margin-left: auto;
+}
+
+/* ── ACTIVE DRAFT strip — visually dominant ──────────────── */
+/* Spec: ~20px internal padding, sapphire border, heavier presence */
+.home-strip-active-draft {
+  padding: var(--space-5) var(--space-4);   /* 20px v, 16px h */
+  border-color: var(--vault-sapphire);
+  background: color-mix(in srgb, var(--vault-sapphire) 8%, var(--vault-bg-raised));
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.home-strip-active-draft:hover {
+  background: color-mix(in srgb, var(--vault-sapphire) 14%, var(--vault-bg-raised));
+  box-shadow: var(--shadow-sapphire-vault);
+}
+
+.home-strip-active-draft:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--vault-sapphire);
+}
+
+.home-draft-name {
+  font-family: var(--font-display-vault);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--vault-fg);
   flex: 1;
+}
+
+.home-draft-cta {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--vault-sapphire);
+  white-space: nowrap;
+  transition: transform var(--transition-fast);
+}
+
+.home-strip-active-draft:hover .home-draft-cta {
+  transform: translateX(2px);
+}
+
+/* ── LAST DECK strip ─────────────────────────────────────── */
+/* Spec: ~12px internal padding — lighter than active draft */
+.home-strip-last-deck {
+  padding: 12px var(--space-4);  /* 12px v — already the strip base */
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.home-strip-last-deck:hover {
+  background: var(--vault-bg-overlay);
+  border-color: color-mix(in srgb, var(--vault-sapphire) 40%, var(--vault-border));
+}
+
+.home-strip-last-deck:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--vault-sapphire);
+}
+
+.home-deck-name {
+  font-family: var(--font-display-vault);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--vault-fg);
+  flex: 1;
+}
+
+.home-deck-cta {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--vault-fg-secondary);
+  white-space: nowrap;
+  transition: color var(--transition-fast), transform var(--transition-fast);
+}
+
+.home-strip-last-deck:hover .home-deck-cta {
+  color: var(--vault-fg);
+  transform: translateX(2px);
+}
+
+/* ── QUICK NAV quadrant ──────────────────────────────────── */
+.home-quick-nav {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.home-nav-tile {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-3);
+  background: var(--vault-bg-raised);
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--vault-fg-secondary);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
-.home-feature-title {
-  font-size: 1.1rem;
-  font-weight: 600;
-  margin: 0;
-  color: var(--fg);
+.home-nav-tile:hover {
+  background: var(--vault-bg-overlay);
+  border-color: color-mix(in srgb, var(--vault-sapphire) 40%, var(--vault-border));
+  color: var(--vault-fg);
 }
 
-.home-feature-description {
-  font-size: 0.875rem;
-  color: rgba(255, 255, 255, 0.6);
-  margin: 0;
-  line-height: 1.4;
+.home-nav-tile:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--vault-sapphire);
 }
 
-.home-feature-arrow {
-  font-size: 1.25rem;
-  color: rgba(255, 255, 255, 0.4);
+.home-nav-icon {
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
-  transition: color 0.2s, transform 0.2s;
 }
 
-.home-feature-card:hover .home-feature-arrow {
-  color: rgba(99, 132, 255, 0.9);
-  transform: translateX(4px);
+.home-nav-label {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  white-space: nowrap;
 }
 
+/* ── Responsive ──────────────────────────────────────────── */
 @media (max-width: 640px) {
-  .home-features {
-    grid-template-columns: 1fr;
-  }
-
   .home-page {
-    padding: 1rem;
+    padding: 0 var(--space-3);
+    margin-top: var(--space-4);
   }
 
-  .home-title {
-    font-size: 1.5rem;
+  .home-quick-nav {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .home-stat-w,
+  .home-stat-l,
+  .home-stat-wr {
+    font-size: var(--text-base);
   }
 }

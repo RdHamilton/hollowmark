@@ -30,6 +30,7 @@
   "dependencies": {
     "@clerk/react": "^6.6.0",
     "@clerk/ui": "^1.10.0",
+    "@heroicons/react": "^2.2.0",
     "@sentry/react": "^10.52.0",
     "mana-font": "^1.18.0",
     "posthog-js": "^1.372.9",
