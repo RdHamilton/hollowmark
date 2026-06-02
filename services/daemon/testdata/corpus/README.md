@@ -74,6 +74,29 @@ inside formerly-stringified envelopes that a naive top-level scan would miss.
 
 Raw captures are never committed. Only sanitised output is committed.
 
+## Fixture Consistency Lint (vmt-t#698)
+
+`corpus_consistency_test.go` contains `TestCorpusConsistency`, a hard-fail guard
+that verifies `match_id`, `format`, `quest_id`, and `deck_id` values in the
+`daemon-emit/` fixtures are identical in the paired `db-expected/` and
+`api-expected/` assertion files.
+
+**Background:** PR #2864 promoted real session data into `daemon-emit/` without
+updating `db-expected/` + `api-expected/`; the silent drift broke
+`TestProjectionIntegration` and was only caught after the fact (#2913). This test
+hard-fails on any such drift so future promotions cannot repeat the regression.
+
+**Pairing table:** The pairings are explicit struct literals in `corpus_consistency_test.go`.
+The test does NOT auto-discover new files. When you add a new `daemon-emit/` fixture
+that has paired `db/api` assertions, you MUST add a row to the appropriate pairing
+slice (`matchPairings`, `questPairings`, `deckPairings`).
+
+**Run locally:** `go test -race ./services/daemon/testdata/corpus/...`
+
+**CI:** `daemon.yml` (Daemon CI / Daemon Unit & Integration Tests) runs
+`go test ./...` in `services/daemon`, which includes this package.
+The test is fast enough to not materially impact CI wall-clock time (~1ms pure JSON parsing).
+
 ## Corpus Refresh Procedure
 
 1. Open MTGA and play at least one match and one draft.
@@ -81,10 +104,11 @@ Raw captures are never committed. Only sanitised output is committed.
 3. Run `python3 tools/fixture-extractor/extract.py --input Player.log --output-dir /tmp/corpus-raw --sanitize --first-only`.
 4. Copy the sanitised output to replace the FORMAT-CONFIRMED fixtures in `player-log/`.
 5. Rebuild the `daemon-emit/` fixtures from the new `player-log/` fixtures.
-6. Update MANIFEST: change provenance from FORMAT-CONFIRMED to REAL, update mtga_version column.
-7. Update `mtga-version.txt`.
-8. Run `go test ./services/daemon/testdata/corpus/...` to verify corpus loads.
-9. Submit a PR with Sarah security review on the fixture files (S-07 gate).
+6. Update the paired `db-expected/` and `api-expected/` fixtures to match the new identity fields (`match_id`, `format`, `quest_id`, `deck_id`). Skipping this step will cause `TestCorpusConsistency` to fail immediately.
+7. Update MANIFEST: change provenance from FORMAT-CONFIRMED to REAL, update mtga_version column.
+8. Update `mtga-version.txt`.
+9. Run `go test -race ./services/daemon/testdata/corpus/...` to verify corpus loads and consistency passes.
+10. Submit a PR with Sarah security review on the fixture files (S-07 gate).
 
 ## Layer Consumption
 
