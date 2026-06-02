@@ -228,69 +228,6 @@ checksum:
   algorithm: sha256
 
 # ---------------------------------------------------------------------------
-# Minisign detached signature of sha256sums.txt
-# ---------------------------------------------------------------------------
-#
-# GoReleaser invokes `minisign -S -s <key> -x ${signature} -m ${artifact}`
-# after the checksum file is produced.  The private key is written to a
-# temp file from the MINISIGN_PRIVATE_KEY env var; the passphrase is read
-# from MINISIGN_PASSWORD.  The resulting sha256sums.txt.minisig is uploaded
-# alongside sha256sums.txt as a release asset.
-#
-# The daemon binary's updatecheck.EmbeddedPublicKey constant (injected via
-# ldflag -X) is verified against this signature at update-install time.
-# If the key constant is still the placeholder value the verification will
-# fail (fail-closed): the aead.dev/minisign library rejects a malformed
-# public key during UnmarshalText, so a binary built without the real key
-# refuses to install any update.
-#
-# Secret requirements (GitHub Actions repo secrets / CI variables):
-#   MINISIGN_PRIVATE_KEY  -- base64-encoded minisign private key file
-#   MINISIGN_PASSWORD     -- passphrase protecting the private key
-#   MINISIGN_PUBLIC_KEY   -- minisign public key string (CI variable, not secret)
-#                            (injected into the binary via ldflags)
-#
-# Key generation (Ramone-gated -- do NOT run without authorization):
-#   minisign -G -p vaultmtg-minisign.pub -s vaultmtg-minisign.key
-#   base64 vaultmtg-minisign.key   # store as MINISIGN_PRIVATE_KEY secret
-#   cat vaultmtg-minisign.pub      # store as MINISIGN_PUBLIC_KEY variable
-#   # Delete vaultmtg-minisign.key from disk; store in 1Password vault.
-#
-# See: vault-mtg-docs/engineering/runbooks/daemon-minisign-signing.md
-signs:
-  - id: minisign-sha256sums
-    # cmd invokes the minisign binary installed in the goreleaser job
-    # (apt-get install minisign in daemon-release.yml).
-    cmd: bash
-    # Write the base64-encoded private key to a temp file, sign the
-    # checksum file, then securely delete the temp key file.
-    # -s: private key file
-    # -x: output signature file (${signature} expands to ${artifact}.minisig)
-    # -m: message (the file to sign)
-    # stdin: password piped via MINISIGN_PASSWORD
-    args:
-      - -c
-      - |
-        set -euo pipefail
-        TMPKEY=$(mktemp)
-        trap 'rm -f "${TMPKEY}"' EXIT
-        echo "${MINISIGN_PRIVATE_KEY}" | base64 -d > "${TMPKEY}"
-        echo "${MINISIGN_PASSWORD}" | minisign -S -s "${TMPKEY}" -x "${signature}" -m "${artifact}"
-    # artifacts: checksum signs only the sha256sums.txt file (not each binary).
-    # The checksum file already covers every artifact -- signing it once is
-    # the standard supply-chain pattern.
-    artifacts: checksum
-    # signature names the output .minisig file.  GoReleaser expands ${artifact}
-    # to the full path of the file being signed (sha256sums.txt in this case).
-    signature: "${artifact}.minisig"
-    # output: true surfaces minisign stdout/stderr in GoReleaser logs so any
-    # signing failure is immediately visible rather than silently swallowed.
-    output: true
-    env:
-      - MINISIGN_PRIVATE_KEY={{ .Env.MINISIGN_PRIVATE_KEY }}
-      - MINISIGN_PASSWORD={{ .Env.MINISIGN_PASSWORD }}
-
-# ---------------------------------------------------------------------------
 # GitHub Release
 # ---------------------------------------------------------------------------
 release:

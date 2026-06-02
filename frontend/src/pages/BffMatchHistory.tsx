@@ -40,6 +40,39 @@ function displayResult(result: string): string {
   return result.toUpperCase();
 }
 
+/**
+ * Set of result values that are considered resolved/terminal.
+ * Only rows with a resolved result are eligible to render.
+ */
+const RESOLVED_RESULTS = new Set(['win', 'loss', 'draw']);
+
+/**
+ * Determine whether a MatchHistoryItem is eligible for display.
+ *
+ * A row is eligible only when:
+ *   1. Its result is a known terminal value (win / loss / draw).
+ *      Null, empty, "unknown", or "-" are all ineligible.
+ *   2. Its format resolves to a non-empty display string.
+ *      Null, empty, or "Unknown" all produce '' from normalizeHistoryFormat
+ *      and are therefore ineligible.
+ *
+ * This is the defensive gate Prof requires: wrong/placeholder data is worse
+ * than no data. Edge cases (disconnects, timeouts, concedes) will always
+ * produce partial rows — we hide them rather than display garbage.
+ *
+ * Note for Bob: the signal distinguishing resolved vs unresolved is
+ * result-present (non-empty, non-unknown) + format-present (normalizeHistoryFormat
+ * returns non-empty). If the BFF history response gains an explicit
+ * "pending" or "processing" field in the future, this function is the
+ * right place to consume it — but the current filter works off the
+ * existing shape.
+ */
+function isEligibleRow(item: MatchHistoryItem): boolean {
+  const hasValidResult = Boolean(item.result) && RESOLVED_RESULTS.has(item.result.toLowerCase());
+  const hasResolvedFormat = Boolean(normalizeHistoryFormat(item.format));
+  return hasValidResult && hasResolvedFormat;
+}
+
 const BffMatchHistory = () => {
   const { getToken, isSignedIn } = useAuth();
   // Stable ref so useCallback / useEffect deps don't re-fire on every render
@@ -164,8 +197,12 @@ const BffMatchHistory = () => {
     }
   }, []);
 
-  const isEmpty = !loading && !error && matches.length === 0;
-  const hasData = !loading && !error && matches.length > 0;
+  // Apply the display-eligibility filter: only rows with a resolved result
+  // AND a resolved format are eligible to render. Ineligible rows are hidden.
+  const eligibleMatches = matches.filter(isEligibleRow);
+
+  const isEmpty = !loading && !error && eligibleMatches.length === 0;
+  const hasData = !loading && !error && eligibleMatches.length > 0;
 
   return (
     <div className="page-container" data-testid="match-history-page">
@@ -185,8 +222,8 @@ const BffMatchHistory = () => {
         <div data-testid="match-history-empty">
           <EmptyState
             icon="🎮"
-            heading="No matches yet"
-            subtext="Your cloud match history will appear here once synced."
+            heading="No recent matches"
+            subtext="Your recent matches are loading — new matches usually appear within a minute."
             variant="no-data"
           />
         </div>
@@ -205,12 +242,10 @@ const BffMatchHistory = () => {
                 </tr>
               </thead>
               <tbody>
-                {matches.map((match) => {
+                {eligibleMatches.map((match) => {
                   const displayFormat = normalizeHistoryFormat(match.format);
                   const resultLabel = displayResult(match.result);
-                  const resultClass = (match.result && match.result.toLowerCase() !== 'unknown')
-                    ? match.result.toLowerCase()
-                    : 'unknown';
+                  const resultClass = match.result.toLowerCase();
                   return (
                     <tr
                       key={match.id}
@@ -221,7 +256,7 @@ const BffMatchHistory = () => {
                       data-testid="match-row"
                     >
                       <td>{formatDate(match.timestamp)}</td>
-                      <td>{displayFormat || '—'}</td>
+                      <td>{displayFormat}</td>
                       <td>
                         <span className={`result-badge ${resultClass}`}>
                           {resultLabel}
