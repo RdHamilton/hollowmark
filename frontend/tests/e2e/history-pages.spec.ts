@@ -28,6 +28,12 @@ import { test, expect, Page } from '@playwright/test';
  * Route note (#2178): there is no /history/matches route — the cloud match
  * history page lives at /match-history (App.tsx). These tests target
  * /match-history directly.
+ *
+ * vmt-t#625 follow-up: mockMatchHistory previously returned the stale
+ * { matches, total, limit, offset } shape. BffMatchHistory reads resp.data
+ * (cursor-paginated), so the old mock produced an empty table. Updated to
+ * { data, has_more, next_cursor_ts, next_cursor_id, limit } — matching the
+ * reference in match-history.spec.ts and BffMatchHistory.test.tsx.
  */
 
 // ---------------------------------------------------------------------------
@@ -48,12 +54,25 @@ async function setClerkSignedOut(page: Page): Promise<void> {
   }, { isSignedIn: false });
 }
 
-type MatchRow = {
-  id: number;
-  opponent_deck: string;
-  result: string;
+/**
+ * MatchItem matches the cursor-paginated BFF shape for
+ * GET /api/v1/history/matches (same contract as match-history.spec.ts).
+ * The old MatchRow type used opponent_deck/played_at which the component
+ * never reads; the component reads id, format, result, timestamp,
+ * player_wins, opponent_wins. (vmt-t#625 follow-up)
+ */
+type MatchItem = {
+  id: string;
   format: string;
-  played_at: string;
+  result: string;
+  timestamp: string;
+  player_wins: number;
+  opponent_wins: number;
+  duration_seconds: number | null;
+  deck_id: string | null;
+  rank_before: string | null;
+  rank_after: string | null;
+  opponent_rank: string | null;
 };
 
 type DraftRow = {
@@ -65,15 +84,34 @@ type DraftRow = {
 };
 
 /**
- * Mock GET /api/v1/history/matches with fixture rows so BffMatchHistory does not
- * depend on a live authenticated BFF. Must be registered before page.goto().
+ * Mock GET /api/v1/history/matches with the ACTUAL BFF cursor-paginated shape.
+ *
+ * BffMatchHistory reads resp.data (not resp.matches). The old mock used
+ * { matches, total, limit, offset } which was always wrong — the component
+ * read resp.data (undefined from old shape) → empty state.
+ *
+ * Must be registered before page.goto(). (vmt-t#625 follow-up)
  */
-async function mockMatchHistory(page: Page, rows: MatchRow[], total = rows.length): Promise<void> {
+async function mockMatchHistory(
+  page: Page,
+  items: MatchItem[],
+  hasMore = false,
+  nextCursorTS?: string,
+  nextCursorID?: string,
+): Promise<void> {
   await page.route('**/api/v1/history/matches**', (route) => {
+    const body: Record<string, unknown> = {
+      data: items,
+      has_more: hasMore,
+      limit: 20,
+    };
+    if (hasMore && nextCursorTS) body['next_cursor_ts'] = nextCursorTS;
+    if (hasMore && nextCursorID) body['next_cursor_id'] = nextCursorID;
+
     void route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ matches: rows, total, limit: 20, offset: 0 }),
+      body: JSON.stringify(body),
     });
   });
 }
@@ -92,14 +130,21 @@ async function mockDraftHistory(page: Page, rows: DraftRow[], total = rows.lengt
   });
 }
 
-// A page of 20 match rows so the table (not the empty state) renders and the
-// total exceeds PAGE_SIZE, which makes the pagination footer appear.
-const MATCH_ROWS: MatchRow[] = Array.from({ length: 20 }, (_, i) => ({
-  id: i + 1,
-  opponent_deck: `Opponent Deck ${i + 1}`,
-  result: i % 2 === 0 ? 'win' : 'loss',
+// A page of 20 match items using the real MatchItem shape that BffMatchHistory
+// renders. Each item has the fields the component reads: id, format, result,
+// timestamp, player_wins, opponent_wins. (vmt-t#625 follow-up)
+const MATCH_ROWS: MatchItem[] = Array.from({ length: 20 }, (_, i) => ({
+  id: String(i + 1),
   format: 'Standard',
-  played_at: '2026-05-01T12:00:00Z',
+  result: i % 2 === 0 ? 'win' : 'loss',
+  timestamp: '2026-05-01T12:00:00Z',
+  player_wins: i % 2 === 0 ? 2 : 0,
+  opponent_wins: i % 2 === 0 ? 0 : 2,
+  duration_seconds: null,
+  deck_id: null,
+  rank_before: null,
+  rank_after: null,
+  opponent_rank: null,
 }));
 
 const DRAFT_ROWS: DraftRow[] = Array.from({ length: 20 }, (_, i) => ({
@@ -167,16 +212,23 @@ test.describe('History: /match-history', () => {
       const table = page.locator('[data-testid="match-history-table"]');
       await expect(table).toBeVisible();
 
-      // BffMatchHistory renders four columns: Date, Format, Opponent Deck, Result.
+      // BffMatchHistory renders four columns: Date, Format, Result, Score.
       await expect(table.locator('thead th').nth(0)).toHaveText('Date');
       await expect(table.locator('thead th').nth(1)).toHaveText('Format');
-      await expect(table.locator('thead th').nth(2)).toHaveText('Opponent Deck');
-      await expect(table.locator('thead th').nth(3)).toHaveText('Result');
+      await expect(table.locator('thead th').nth(2)).toHaveText('Result');
+      await expect(table.locator('thead th').nth(3)).toHaveText('Score');
     });
 
-    test('pagination controls render when total exceeds the page size', async ({ page }) => {
-      // 20 rows with total = 41 → more than one page → footer must render.
-      await mockMatchHistory(page, MATCH_ROWS, 41);
+    test('pagination controls render when there are more pages', async ({ page }) => {
+      // has_more: true + cursor values → the BFF signals a next page exists.
+      // The pagination footer renders with enabled Next when hasMore is true.
+      await mockMatchHistory(
+        page,
+        MATCH_ROWS,
+        true,
+        '2026-05-01T00:00:00Z',
+        'cursor-20',
+      );
       await page.goto('/match-history');
 
       await expect(page.locator('[data-testid="match-history-table"]')).toBeVisible();
@@ -194,7 +246,7 @@ test.describe('History: /match-history', () => {
   test.describe('Authenticated — empty', () => {
     test('empty state renders when the BFF returns no matches', async ({ page }) => {
       await setClerkSignedIn(page);
-      await mockMatchHistory(page, [], 0);
+      await mockMatchHistory(page, [], false);
 
       await page.goto('/match-history');
 
