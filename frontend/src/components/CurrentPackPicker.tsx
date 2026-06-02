@@ -61,16 +61,13 @@ const CurrentPackPicker: React.FC<CurrentPackPickerProps> = ({ sessionID, onRefr
         }
     };
 
-    const getTierColor = (tier: string): string => {
-        switch (tier) {
-            case 'S': return '#ffd700'; // Gold
-            case 'A': return '#c0c0c0'; // Silver
-            case 'B': return '#cd7f32'; // Bronze
-            case 'C': return '#4a9eff'; // Blue
-            case 'D': return '#888888'; // Gray
-            case 'F': return '#ff4444'; // Red
-            default: return '#aaaaaa';
+    const getTierClass = (tier: string): string => {
+        const t = tier.toLowerCase();
+        if (['a', 'b', 'c', 'd', 'f'].includes(t)) {
+            return `tier-badge--${t}`;
         }
+        // S-tier and unknown tiers fall back to the --s modifier (gold, not in §7.3 A/B/C/D/F).
+        return 'tier-badge--s';
     };
 
     const getColorSymbol = (color: string): string => {
@@ -148,9 +145,11 @@ const CurrentPackPicker: React.FC<CurrentPackPickerProps> = ({ sessionID, onRefr
                 <div className="recommended-banner" data-testid="recommended-banner">
                     <span className="rec-label">Recommended Pick:</span>
                     <span className="rec-card-name">{packData.recommended_card.name}</span>
-                    <span className="rec-tier" style={{ color: getTierColor(packData.recommended_card.tier) }}>
-                        {packData.recommended_card.tier}
-                    </span>
+                    {packData.recommended_card.tier && (
+                        <span className={`rec-tier rec-tier--${packData.recommended_card.tier.toLowerCase()}`}>
+                            {packData.recommended_card.tier}
+                        </span>
+                    )}
                     {packData.recommended_card.reasoning && (
                         <span className="rec-reason" data-testid="rec-reasoning">{packData.recommended_card.reasoning}</span>
                     )}
@@ -175,9 +174,15 @@ const CurrentPackPicker: React.FC<CurrentPackPickerProps> = ({ sessionID, onRefr
                                     (e.target as HTMLImageElement).src = CARD_BACK_URL;
                                 }}
                             />
-                            <div className="tier-badge" style={{ backgroundColor: getTierColor(card.tier) }}>
-                                {card.tier}
-                            </div>
+                            {card.tier && (
+                                <div
+                                    className={`tier-badge ${getTierClass(card.tier)}`}
+                                    data-testid={`tier-badge-${card.arena_id || index}`}
+                                    aria-label={`Tier ${card.tier}`}
+                                >
+                                    {card.tier}
+                                </div>
+                            )}
                             {card.is_recommended && (
                                 <div className="recommended-indicator" data-testid="best-pick-indicator">Best Pick</div>
                             )}

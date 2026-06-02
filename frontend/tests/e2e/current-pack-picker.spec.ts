@@ -411,4 +411,60 @@ test.describe('CurrentPackPicker — recommendation surface', () => {
     // Pool size info string.
     await expect(page.getByText('Pool: 12 cards')).toBeVisible();
   });
+
+  // ── 7. Inline tier badges (#686) ─────────────────────────────────────────
+  // Asserts that each pack-grid card tile renders a tier badge with the correct
+  // data-testid and the correct CSS class (§7.3 design-system colors), and that
+  // a card with no tier grade renders no badge.
+
+  test('each card tile shows a tier badge with design-system class (#686)', async ({
+    page,
+  }) => {
+    await mockBffForActiveDraft(page);
+    await mockDaemonCurrentPack(
+      page,
+      buildCurrentPackResponse({
+        cards: [
+          { ...MOCK_RECOMMENDED_CARD, arena_id: '100', tier: 'A', is_recommended: true },
+          { ...MOCK_ALTERNATIVE_CARD, arena_id: '200', tier: 'B', is_recommended: false },
+        ],
+      })
+    );
+
+    await page.goto('/draft');
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+    await expect(page.locator('[data-testid="pack-cards-grid"]')).toBeVisible();
+
+    // Card 100 — Tier A badge must exist and carry the tier-badge--a class.
+    const badgeA = page.locator('[data-testid="tier-badge-100"]');
+    await expect(badgeA).toBeVisible();
+    await expect(badgeA).toHaveClass(/tier-badge--a/);
+    await expect(badgeA).toHaveText('A');
+
+    // Card 200 — Tier B badge.
+    const badgeB = page.locator('[data-testid="tier-badge-200"]');
+    await expect(badgeB).toBeVisible();
+    await expect(badgeB).toHaveClass(/tier-badge--b/);
+    await expect(badgeB).toHaveText('B');
+  });
+
+  test('no tier badge renders for a card with empty tier (#686)', async ({ page }) => {
+    await mockBffForActiveDraft(page);
+    await mockDaemonCurrentPack(
+      page,
+      buildCurrentPackResponse({
+        cards: [
+          { ...MOCK_RECOMMENDED_CARD, arena_id: '300', tier: '', is_recommended: false },
+        ],
+        recommended_card: null,
+      })
+    );
+
+    await page.goto('/draft');
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+    await expect(page.locator('[data-testid="pack-cards-grid"]')).toBeVisible();
+
+    // No badge for ungraded card.
+    await expect(page.locator('[data-testid="tier-badge-300"]')).not.toBeVisible();
+  });
 });
