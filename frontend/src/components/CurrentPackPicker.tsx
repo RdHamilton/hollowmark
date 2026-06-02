@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { drafts } from '@/services/api';
 import { gui } from '@/types/models';
+import { trackEvent } from '@/services/analytics';
 import './CurrentPackPicker.css';
 
 interface CurrentPackPickerProps {
@@ -34,6 +35,24 @@ const CurrentPackPicker: React.FC<CurrentPackPickerProps> = ({ sessionID, onRefr
             loadPackData();
         }
     }, [sessionID, loadPackData]);
+
+    // Analytics: feature_ml_suggestions_viewed — fires once per unique pack
+    // state (session + pack + pick) when the recommendation surface is shown.
+    // No PII: suggestion_count is a count; context is a literal enum value.
+    const lastViewedKeyRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (!packData || !packData.recommended_card || !packData.cards?.length) return;
+        const key = `${sessionID}/${packData.pack_number}/${packData.pick_number}`;
+        if (lastViewedKeyRef.current === key) return;
+        lastViewedKeyRef.current = key;
+        trackEvent({
+            name: 'feature_ml_suggestions_viewed',
+            properties: {
+                suggestion_count: packData.cards.length,
+                context: 'draft',
+            },
+        });
+    }, [sessionID, packData]);
 
     const handleRefresh = () => {
         loadPackData();
@@ -126,24 +145,25 @@ const CurrentPackPicker: React.FC<CurrentPackPickerProps> = ({ sessionID, onRefr
 
             {/* Recommended Pick Banner */}
             {packData.recommended_card && (
-                <div className="recommended-banner">
+                <div className="recommended-banner" data-testid="recommended-banner">
                     <span className="rec-label">Recommended Pick:</span>
                     <span className="rec-card-name">{packData.recommended_card.name}</span>
                     <span className="rec-tier" style={{ color: getTierColor(packData.recommended_card.tier) }}>
                         {packData.recommended_card.tier}
                     </span>
                     {packData.recommended_card.reasoning && (
-                        <span className="rec-reason">{packData.recommended_card.reasoning}</span>
+                        <span className="rec-reason" data-testid="rec-reasoning">{packData.recommended_card.reasoning}</span>
                     )}
                 </div>
             )}
 
             {/* Pack Cards Grid */}
-            <div className="pack-cards-grid">
+            <div className="pack-cards-grid" data-testid="pack-cards-grid">
                 {packData.cards.map((card, index) => (
                     <div
                         key={card.arena_id || index}
                         className={`pack-card ${card.is_recommended ? 'recommended' : ''}`}
+                        data-testid={`pack-card-${card.arena_id || index}`}
                     >
                         <div className="card-image-container">
                             <img
@@ -159,7 +179,7 @@ const CurrentPackPicker: React.FC<CurrentPackPickerProps> = ({ sessionID, onRefr
                                 {card.tier}
                             </div>
                             {card.is_recommended && (
-                                <div className="recommended-indicator">Best Pick</div>
+                                <div className="recommended-indicator" data-testid="best-pick-indicator">Best Pick</div>
                             )}
                         </div>
                         <div className="card-info">

@@ -574,4 +574,75 @@ describe('CurrentPackPicker Component', () => {
       });
     });
   });
+
+  // ── data-testid coverage (AC2, #624) ────────────────────────────────────
+  // Tim's E2E needs stable testid selectors on the key recommendation-surface
+  // elements instead of fragile CSS-class queries.
+
+  describe('data-testid attributes (AC2 — #624)', () => {
+    it('recommendation banner has data-testid="recommended-banner"', async () => {
+      const packData = createMockPackResponse();
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const banner = container.querySelector('[data-testid="recommended-banner"]');
+        expect(banner).toBeInTheDocument();
+      });
+    });
+
+    it('Best Pick indicator has data-testid="best-pick-indicator"', async () => {
+      const packData = createMockPackResponse();
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const indicator = container.querySelector('[data-testid="best-pick-indicator"]');
+        expect(indicator).toBeInTheDocument();
+      });
+    });
+
+    it('pack cards grid has data-testid="pack-cards-grid"', async () => {
+      const packData = createMockPackResponse();
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const grid = container.querySelector('[data-testid="pack-cards-grid"]');
+        expect(grid).toBeInTheDocument();
+      });
+    });
+
+    it('recommendation reasoning has data-testid="rec-reasoning"', async () => {
+      const packData = createMockPackResponse();
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const reasoning = container.querySelector('[data-testid="rec-reasoning"]');
+        expect(reasoning).toBeInTheDocument();
+      });
+    });
+
+    it('each pack card has data-testid="pack-card-{arenaId}"', async () => {
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: '100', name: 'Card A' }),
+          createMockPackCard({ arena_id: '200', name: 'Card B' }),
+        ],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(container.querySelector('[data-testid="pack-card-100"]')).toBeInTheDocument();
+        expect(container.querySelector('[data-testid="pack-card-200"]')).toBeInTheDocument();
+      });
+    });
+  });
 });
