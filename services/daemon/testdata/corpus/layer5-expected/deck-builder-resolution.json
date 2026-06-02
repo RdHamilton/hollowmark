@@ -1,0 +1,19 @@
+{
+  "corpus_mtga_version": "2026.59.20.4846.1277160",
+  "corpus_provenance": "REAL-DERIVED",
+  "expected_empty": false,
+  "assertions": [
+    {
+      "surface": "deck-builder-resolution",
+      "bff_endpoint": "/api/v1/cards?grp_ids=...",
+      "notes": "When the card catalog is populated (test-data.sql has 20 set_cards), DeckList resolves card names from metadata. When the catalog is empty, getCardName() falls back to 'Unknown Card {id}' and the element renders with data-testid='unknown-card'. This assertion catches the 'Unknown Card' regression: if set_cards is empty (failed ingest), every card in the deck shows 'Unknown Card'. The seeded DSK deck (deck-004) has 5 card types that exist in test-data.sql.",
+      "fields": {
+        "unknown_card_element_count_must_be": 0,
+        "seeded_deck_id": "deck-004",
+        "seeded_deck_format": "Limited",
+        "seeded_card_ids": [90002, 90003, 90006, 90005, 90009],
+        "catalog_must_resolve": ["Reluctant Role Model", "Doomsday Excruciator", "Vengeful Possession", "Haunted Screen-Wall", "Oblivion's Hunger"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "corpus_mtga_version": "2026.59.20.4846.1277160",
+  "corpus_provenance": "REAL-DERIVED",
+  "expected_empty": false,
+  "assertions": [
+    {
+      "surface": "match-list",
+      "bff_endpoint": "/api/v1/history/matches",
+      "notes": "BFF returns cursor-paginated shape: { data: [...], has_more, limit }. The SPA reads data.data (not data.matches). A field rename that breaks this shape would produce an empty table.",
+      "fields": {
+        "response_shape": "cursor_paginated",
+        "data_key": "data",
+        "min_row_count": 1,
+        "first_row": {
+          "format": "QuickDraft_SOS_20260526",
+          "result": "win",
+          "player_wins": 1,
+          "opponent_wins": 0
+        }
+      }
+    }
+  ]
+}

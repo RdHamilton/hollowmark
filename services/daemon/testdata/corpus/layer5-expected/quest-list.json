@@ -1,0 +1,38 @@
+{
+  "corpus_mtga_version": "2026.59.20.4846.1277160",
+  "corpus_provenance": "REAL-DERIVED",
+  "expected_empty": false,
+  "assertions": [
+    {
+      "surface": "quest-list",
+      "bff_endpoint": "/api/v1/quests/active",
+      "notes": "The BFF emits first_seen_at (not assigned_at). The SPA must read first_seen_at and render a valid date. A field rename that produces 'Invalid Date' would fail data-testid='quest-date' assertion.",
+      "fields": {
+        "date_field_name": "first_seen_at",
+        "forbidden_field_name": "assigned_at",
+        "min_quest_count": 1,
+        "rendered_date_must_not_be": "Invalid Date",
+        "quests": [
+          {
+            "quest_name": "Simic Evolution",
+            "progress": 11,
+            "goal": 30,
+            "first_seen_at_present": true
+          },
+          {
+            "quest_name": "Dimir Cutpurse",
+            "progress": 17,
+            "goal": 20,
+            "first_seen_at_present": true
+          },
+          {
+            "quest_name": "Raiding Party",
+            "progress": 0,
+            "goal": 30,
+            "first_seen_at_present": true
+          }
+        ]
+      }
+    }
+  ]
+}
