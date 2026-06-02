@@ -11,13 +11,17 @@ import (
 // /api/v1/gameplays/* read paths. It deals with the turn-by-turn play
 // telemetry tables: game_plays, game_state_snapshots, and
 // opponent_cards_observed. Scoping is enforced by joining game_plays.match_id
-// → matches.id → matches.account_id.
+// → matches.id (TEXT PRIMARY KEY = MTGA match text id) → matches.account_id.
 //
-// Note: a GamePlayRepository already exists for the projection worker's
-// per-game/per-life-change writes (see game_play_repo.go). That type uses a
-// different conceptual "GamePlayRow" — the per-game life-change tracker — so
-// the play-by-play action data lives here in its own type to avoid
-// collisions.
+// Schema note (ADR-050): game_plays holds per-turn action rows written by
+// InsertCardPlays (game_id IS NOT NULL). Legacy per-game rows written before
+// the ADR-050 split (game_id IS NULL) are excluded by the WHERE clause.
+// Migration 000101 ensures the per-turn columns exist on all DB variants.
+//
+// Note: a GamePlayRepository also exists for the projection worker's
+// per-game result writes (see game_play_repo.go). That type writes to
+// match_game_results after ADR-050; this repository owns the per-turn read
+// path only.
 type GamePlaysRepository struct {
 	db DB
 }
@@ -50,8 +54,15 @@ type GamePlayActionRow struct {
 	CreatedAt      time.Time
 }
 
-// PlaysByMatch returns every action recorded for the match in sequence
-// order. Scoped to the account via a matches join.
+// PlaysByMatch returns every per-turn action recorded for the match in
+// sequence order. Scoped to the account via a matches join.
+//
+// The gp.game_id IS NOT NULL predicate excludes legacy per-game rows that
+// predate the ADR-050 split (migration 000100). Those rows have game_id=NULL
+// after migration 000101 adds the column on per-game-schema DBs; scanning
+// NULL into GamePlayActionRow.GameID (int64) would cause a runtime error.
+// On per-turn-schema DBs (all game_plays rows have game_id set) the predicate
+// is a no-op and returns no extra overhead.
 func (r *GamePlaysRepository) PlaysByMatch(ctx context.Context, accountID int64, matchID string) ([]GamePlayActionRow, error) {
 	const q = `SELECT gp.id, gp.game_id, gp.match_id, gp.turn_number, gp.phase, gp.step,
 	                  gp.player_type, gp.action_type, gp.card_id, gp.card_name,
@@ -59,7 +70,7 @@ func (r *GamePlaysRepository) PlaysByMatch(ctx context.Context, accountID int64,
 	                  gp.timestamp, gp.sequence_number, gp.created_at
 	           FROM game_plays gp
 	           JOIN matches m ON m.id = gp.match_id
-	           WHERE m.account_id = $1 AND gp.match_id = $2
+	           WHERE m.account_id = $1 AND gp.match_id = $2 AND gp.game_id IS NOT NULL
 	           ORDER BY gp.turn_number, gp.sequence_number, gp.id`
 	return r.scanGamePlayRows(ctx, q, accountID, matchID)
 }
