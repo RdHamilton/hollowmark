@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Staging Smoke Suite (#1444)
+ * Staging Smoke Suite (#1444, updated #678)
  *
  * Targets the live staging BFF at staging-api.vaultmtg.app.
  * No browser UI is loaded — all assertions are made against raw HTTP responses
@@ -18,6 +18,11 @@ import { test, expect } from '@playwright/test';
  *   this secret. This approach is explicitly permitted by the ticket:
  *   "Sign-in stub (Clerk Development instance sign-in flow or a test token)".
  *
+ * Auth-enforcement policy (#678):
+ *   If STAGING_SMOKE_TOKEN is absent, authenticated test cases FAIL with an
+ *   INCONCLUSIVE verdict — they do NOT silently skip. A smoke that skips
+ *   all authenticated API surfaces and reports PASS provides false confidence.
+ *
  * Test cases:
  *   1. Sign-in stub        — pre-issued Clerk test token is accepted by the BFF
  *   2. Authenticated GET   — GET /api/v1/matches with token returns valid JSON
@@ -30,8 +35,8 @@ import { test, expect } from '@playwright/test';
  *
  * Required environment variables:
  *   STAGING_API_URL        — override the staging BFF base URL (optional)
- *   STAGING_SMOKE_TOKEN    — Clerk Development JWT for authenticated calls (required
- *                            for the authenticated test cases; see below)
+ *   STAGING_SMOKE_TOKEN    — Clerk Development JWT for authenticated calls.
+ *                            REQUIRED. Absence causes INCONCLUSIVE hard failure.
  */
 
 // ---------------------------------------------------------------------------
@@ -43,10 +48,35 @@ const STAGING_API = process.env.STAGING_API_URL ?? 'https://staging-api.vaultmtg
 
 /**
  * Pre-issued Clerk Development JWT supplied by the INFRA-7 deploy workflow.
- * If absent, the authenticated test cases are skipped with a clear message so
- * that developers running the suite locally don't hit failures they cannot fix.
+ *
+ * Auth-enforcement (#678): if absent, authenticated tests FAIL with an
+ * INCONCLUSIVE verdict rather than silently skipping. The CI workflow always
+ * supplies this token; absence in CI indicates a secrets misconfiguration.
  */
 const SMOKE_TOKEN = process.env.STAGING_SMOKE_TOKEN ?? '';
+
+/**
+ * Fail hard with an INCONCLUSIVE verdict when STAGING_SMOKE_TOKEN is absent.
+ *
+ * Replaces the former `test.skip` pattern. A suite that skips all
+ * authenticated surfaces and reports PASS is worse than no test.
+ */
+function requireTokenOrFail(context: string): void {
+  if (!SMOKE_TOKEN) {
+    throw new Error(
+      `INCONCLUSIVE: STAGING_SMOKE_TOKEN is not set.\n` +
+      `Cannot exercise authenticated surface: ${context}\n` +
+      '\n' +
+      'In CI (INFRA-7 staging deploy workflow) STAGING_SMOKE_TOKEN is always\n' +
+      'injected from secrets. Its absence indicates a secrets misconfiguration.\n' +
+      '\n' +
+      'Verdict: INCONCLUSIVE (unauthenticated) — treat as FAIL.\n' +
+      '\n' +
+      'To run locally: export STAGING_SMOKE_TOKEN=<staging Clerk JWT> before\n' +
+      'running this suite.',
+    );
+  }
+}
 
 /** Authorization header value for authenticated requests. */
 const authHeader = (): Record<string, string> =>
@@ -102,9 +132,7 @@ test.describe('Staging smoke: auth-gated routes return 401', () => {
 
 test.describe('Staging smoke: sign-in stub (Clerk test token)', () => {
   test('Clerk test token is accepted — BFF returns non-401 on authenticated route', async ({ request }) => {
-    if (!SMOKE_TOKEN) {
-      test.skip(true, 'STAGING_SMOKE_TOKEN not set — skipping authenticated tests (required in CI)');
-    }
+    requireTokenOrFail('GET /api/v1/matches (sign-in stub)');
 
     const res = await request.get(`${STAGING_API}/api/v1/matches`, {
       headers: authHeader(),
@@ -131,9 +159,7 @@ test.describe('Staging smoke: sign-in stub (Clerk test token)', () => {
 
 test.describe('Staging smoke: authenticated GET returns valid response', () => {
   test('GET /api/v1/matches with Clerk token returns JSON', async ({ request }) => {
-    if (!SMOKE_TOKEN) {
-      test.skip(true, 'STAGING_SMOKE_TOKEN not set — skipping authenticated tests (required in CI)');
-    }
+    requireTokenOrFail('GET /api/v1/matches (authenticated GET)');
 
     const res = await request.get(`${STAGING_API}/api/v1/matches`, {
       headers: authHeader(),
@@ -162,16 +188,18 @@ test.describe('Staging smoke: SSE endpoint reachability', () => {
    * Playwright's APIRequestContext does not stream SSE, but a plain GET to the
    * SSE endpoint must not throw a network-level error.
    *
+   * Auth-enforcement (#678): requires STAGING_SMOKE_TOKEN. With a token, the
+   * SSE endpoint must accept the connection (200) or return 404 (route not yet
+   * live). A 401 with a token means the token was rejected — hard failure.
+   *
    * Acceptable outcomes with token:
    *   - 200 — endpoint accepted the connection
    *   - 404 — SSE path not yet live on staging (non-fatal warning)
    *
-   * Acceptable outcomes without token (when SMOKE_TOKEN is absent):
-   *   - 401 — auth guard fires before SSE upgrade (expected)
-   *
    * Any 5xx or thrown network error indicates a broken staging deploy.
    */
   test('GET /api/v1/events does not return 5xx or network error', async ({ request }) => {
+    requireTokenOrFail('GET /api/v1/events (SSE reachability)');
     let res: Awaited<ReturnType<typeof request.get>>;
     try {
       // Short timeout — the SSE server holds the connection open for
@@ -193,13 +221,12 @@ test.describe('Staging smoke: SSE endpoint reachability', () => {
       `SSE endpoint returned ${status} — staging BFF may be unhealthy`,
     ).toBeLessThan(500);
 
-    if (SMOKE_TOKEN) {
-      // With a token, the connection must be accepted (200) or route not found (404).
-      // A 401 here means the token was rejected — fail loudly.
-      expect(
-        status,
-        `SSE endpoint rejected Clerk test token (got ${status}). The BFF Clerk middleware may be misconfigured.`,
-      ).not.toBe(401);
-    }
+    // With a token (always required — see requireTokenOrFail above), the
+    // connection must be accepted (200) or route not found (404).
+    // A 401 here means the token was rejected — fail loudly.
+    expect(
+      status,
+      `SSE endpoint rejected Clerk test token (got ${status}). The BFF Clerk middleware may be misconfigured.`,
+    ).not.toBe(401);
   });
 });
