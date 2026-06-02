@@ -464,6 +464,41 @@ func TestWhyNotPick2_OnlyOnMeaningfulGap(t *testing.T) {
 	}
 }
 
+// TestWhyNotPick2_OffColorComparativeString — when pick 2 is off-color and
+// the top pick is on-color, WhyNotTopReason must be exactly
+// "Off-color vs. the top pick" (grammatical color-fit comparative — vmt-t#648).
+// This exercises the buildWhyNotTop comparative branch (topOnColor && !cardOnColor).
+func TestWhyNotPick2_OffColorComparativeString(t *testing.T) {
+	// G/B committed pool; top pick is on-color (G), pick 2 is off-color (R).
+	pool := poolWithColors(t, 4, "G", 3, "B", 0, "")
+	pack := []string{"green-bomb", "red-card"}
+	count := 1000
+	ratings := stubRatings{"green-bomb": 68.0, "red-card": 66.0}
+	names := stubCards{"green-bomb": "Green Bomb", "red-card": "Red Card"}
+	meta := stubCardMeta{
+		"green-bomb": {Colors: []string{"G"}, ALSA: 2.0, GIHCount: &count},
+		"red-card":   {Colors: []string{"R"}, ALSA: 3.0, GIHCount: &count},
+	}
+	for id, m := range pool {
+		meta[id] = m
+	}
+
+	recs := recommend.Recommend("PremierDraft", poolKeys(pool), pack, ratings, names, meta)
+
+	if len(recs.TopPicks) < 2 {
+		t.Skip("not enough top picks")
+	}
+	// TopPick[0] must be the on-color green-bomb; TopPick[1] the off-color red-card.
+	if recs.TopPicks[0].CardID != "green-bomb" {
+		t.Fatalf("expected green-bomb as top pick, got %q", recs.TopPicks[0].CardID)
+	}
+	pick2 := recs.TopPicks[1]
+	const want = "Off-color vs. the top pick"
+	if pick2.WhyNotTopReason != want {
+		t.Errorf("off-color pick 2 WhyNotTopReason = %q, want %q", pick2.WhyNotTopReason, want)
+	}
+}
+
 // TestWhyNotPick2_FiresOnColorMismatch — when pick 2 is off-color relative
 // to pick 1, the differentiator should fire with color context.
 func TestWhyNotPick2_FiresOnColorMismatch(t *testing.T) {

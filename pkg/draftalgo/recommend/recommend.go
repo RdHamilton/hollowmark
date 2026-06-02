@@ -510,7 +510,7 @@ func buildWhyNotTop(
 		topOnColor := colorIsInPool(topMeta.Colors, poolColors)
 
 		if topOnColor && !cardOnColor {
-			return "Not your colors than the top pick"
+			return "Off-color vs. the top pick"
 		}
 		if !topOnColor && cardOnColor {
 			// Unusual: pick 2 is on-color but ranked below pick 1 (pick 1 is a bomb)
