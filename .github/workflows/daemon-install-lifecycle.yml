@@ -372,7 +372,16 @@ jobs:
             -e 's|__CLERK_FRONTEND_API__|ci-noop|g' \
             -e 's|__CLERK_PUBLISHABLE_KEY__|ci-noop|g' \
             -e 's|__CLERK_OAUTH_CLIENT_ID__|ci-noop|g' \
+            -e 's|__VAULTMTG_CHANNEL__|stable|g' \
             services/daemon/install/macos/pkg/postinstall
+          # Sanity-check: confirm no __PLACEHOLDER__ tokens survived substitution.
+          # Mirrors the guard in daemon-release.yml so CI catches any future
+          # placeholder additions that are not wired into this sed block.
+          if grep -q '__[A-Z_]*__' services/daemon/install/macos/pkg/postinstall; then
+            echo "ERROR: postinstall still contains unsubstituted placeholders:" >&2
+            grep -n '__[A-Z_]*__' services/daemon/install/macos/pkg/postinstall >&2
+            exit 1
+          fi
           bash services/daemon/install/macos/pkg/build-pkg.sh
           ls -la vaultmtg-daemon-darwin-universal.pkg
           echo "PASS: .pkg built"
@@ -577,7 +586,14 @@ jobs:
             -e 's|__CLERK_FRONTEND_API__|ci-noop|g' \
             -e 's|__CLERK_PUBLISHABLE_KEY__|ci-noop|g' \
             -e 's|__CLERK_OAUTH_CLIENT_ID__|ci-noop|g' \
+            -e 's|__VAULTMTG_CHANNEL__|stable|g' \
             services/daemon/install/macos/pkg/postinstall
+          # Sanity-check: confirm no __PLACEHOLDER__ tokens survived substitution.
+          if grep -q '__[A-Z_]*__' services/daemon/install/macos/pkg/postinstall; then
+            echo "ERROR: postinstall still contains unsubstituted placeholders:" >&2
+            grep -n '__[A-Z_]*__' services/daemon/install/macos/pkg/postinstall >&2
+            exit 1
+          fi
 
       # -----------------------------------------------------------------------
       - name: "[BUILD] Build real .pkg artifact"
@@ -879,7 +895,14 @@ jobs:
             -e 's|__CLERK_FRONTEND_API__|ci-noop|g' \
             -e 's|__CLERK_PUBLISHABLE_KEY__|ci-noop|g' \
             -e 's|__CLERK_OAUTH_CLIENT_ID__|ci-noop|g' \
+            -e 's|__VAULTMTG_CHANNEL__|stable|g' \
             services/daemon/install/macos/pkg/postinstall
+          # Sanity-check: confirm no __PLACEHOLDER__ tokens survived substitution.
+          if grep -q '__[A-Z_]*__' services/daemon/install/macos/pkg/postinstall; then
+            echo "ERROR: postinstall still contains unsubstituted placeholders:" >&2
+            grep -n '__[A-Z_]*__' services/daemon/install/macos/pkg/postinstall >&2
+            exit 1
+          fi
 
       # -----------------------------------------------------------------------
       - name: "[STEP 4a] BUILD — build upgrade .pkg artifact"
