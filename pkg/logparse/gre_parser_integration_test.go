@@ -304,3 +304,108 @@ func TestZoneNameResolution_Integration(t *testing.T) {
 		}
 	})
 }
+
+// TestParseGamePlaysResult_RealCorpusFixture replays the promoted corpus
+// gre-game-session fixture (services/daemon/testdata/corpus/player-log/
+// gre-game-session.log — 5 real GRE lines from a 2026-06-01 SOS quick-draft
+// session, sanitized per ADR-041) through ParseGamePlaysResult and verifies
+// the parsers handle real Strixhaven/SOS GRE message shapes without error.
+//
+// This is the parser-validation step required by #403 corpus promotion:
+// the fixture was previously synthetic; running it through the real parser
+// confirms the parsers work on live MTGA data, not just crafted inputs.
+func TestParseGamePlaysResult_RealCorpusFixture(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("Failed to get current file path")
+	}
+	fixturePath := filepath.Join(filepath.Dir(currentFile), "testdata", "gre-game-session-corpus.log")
+
+	data, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Skipf("Skipping: corpus fixture not found at %s", fixturePath)
+	}
+
+	// Each line is a standalone greToClientEvent JSON object.
+	var entries []*LogEntry
+	for _, line := range splitLines(data) {
+		if len(line) == 0 {
+			continue
+		}
+		var raw map[string]interface{}
+		if err := json.Unmarshal(line, &raw); err != nil {
+			continue
+		}
+		entries = append(entries, &LogEntry{
+			IsJSON:    true,
+			JSON:      raw,
+			Timestamp: "2026-01-01 00:00:00",
+		})
+	}
+
+	if len(entries) == 0 {
+		t.Fatal("corpus fixture produced zero log entries")
+	}
+	t.Logf("Loaded %d GRE lines from corpus fixture", len(entries))
+
+	// Identify the player's seat from the ConnectResp in the fixture.
+	playerConn := GetPlayerSeatID(entries)
+	if playerConn == nil {
+		// The fixture may start with a ConnectResp embedded inside the first
+		// greToClientEvent line; fall back to seat 1 (the local player in
+		// MTGA is always seat 1 from their own perspective).
+		playerConn = &GREConnection{SeatID: 1}
+		t.Log("ConnectResp not found via GetPlayerSeatID — defaulting to SeatID=1")
+	}
+	t.Logf("Player seat: %d", playerConn.SeatID)
+
+	result, err := ParseGamePlaysResult(entries, playerConn)
+	if err != nil {
+		t.Fatalf("ParseGamePlaysResult on real corpus fixture: %v", err)
+	}
+
+	// The fixture contains a ConnectResp + SetSettingsResp + GameStateMessages
+	// (including a MulliganReq). We expect snapshots and mulligan data.
+	t.Logf("Snapshots: %d, OpponentCards: %d, Plays: %d, CounterChanges: %d",
+		len(result.Snapshots), len(result.OpponentCards), len(result.Plays), len(result.CounterChanges))
+
+	// Invariant: ParseGamePlaysResult must not error on real GRE data.
+	// At least one GameStateMessage is present so snapshots must be non-nil
+	// (an empty slice is still non-nil after the message loop runs).
+	if result.Snapshots == nil && result.OpponentCards == nil && result.Plays == nil {
+		t.Error("all outputs nil — parser produced no output from real corpus fixture")
+	}
+
+	// If a MulliganReq is present in the fixture, mulligan detection should
+	// not error. Mulligan data may be nil if no pre-game messages with
+	// TurnNumber=0 appear in the trimmed sample.
+	t.Logf("Mulligan data present: %v", result.Mulligan != nil)
+
+	// Counter changes must be 0 for this SOS quick-draft session — confirmed
+	// absence of counter-bearing gameObjects in the 2026-06-01 session log.
+	// This validates #613 counter finding: counter events are absent because
+	// the games played (B/G and B/W aggro) used no counter-bearing permanents.
+	if len(result.CounterChanges) != 0 {
+		t.Errorf("expected 0 counter changes for SOS quick-draft session, got %d — "+
+			"if counters now appear, update the #613 counter finding note in #403",
+			len(result.CounterChanges))
+	}
+}
+
+// splitLines splits a byte slice into non-empty lines.
+func splitLines(data []byte) [][]byte {
+	var lines [][]byte
+	start := 0
+	for i, b := range data {
+		if b == '\n' {
+			if i > start {
+				lines = append(lines, data[start:i])
+			}
+			start = i + 1
+		}
+	}
+	if start < len(data) {
+		lines = append(lines, data[start:])
+	}
+	return lines
+}

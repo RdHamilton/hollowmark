@@ -45,6 +45,18 @@ var questDisplayNames = map[string]string{
 	"Quests/Quest_Rakdos_Cult":       "Cast 20 black or red spells",
 	"Quests/Quest_Selesnya_Conclave": "Cast 20 white or green spells",
 	"Quests/Quest_Boros_Legion":      "Cast 20 white or red spells",
+
+	// Additional locKey variants observed in 2026-06-01 session capture
+	// (services/daemon/testdata/corpus/player-log/quest-progress.log).
+	// Dimir cutpurse variant (goal=20, Dimir colors — same goal count as the
+	// Dimir Infiltrator tier).
+	"Quests/Quest_Dimir_Cutpurse": "Cast 20 blue or black spells",
+
+	// Raiding Party: goal=30 combat-attack quest observed with the 500 XP
+	// chestDescription (headerLocKey Gold_And_XP_Reward, quantity=500).
+	// Name derived from the locKey + goal pattern; update if MTGA UI text is
+	// confirmed from a screen capture.
+	"Quests/Quest_Raiding_Party": "Attack with 30 creatures",
 }
 
 // unknownQuestKeysSeen tracks which unknown locKey values have already been
