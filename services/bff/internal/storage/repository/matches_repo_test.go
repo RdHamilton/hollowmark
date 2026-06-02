@@ -407,3 +407,150 @@ func TestMatchesRepository_Interface(t *testing.T) {
 		t.Fatal("NewMatchesRepository returned nil")
 	}
 }
+
+// ─── GamesByMatchID tests (migration 000100 regression gate) ─────────────────
+
+// TestMatchesRepository_GamesByMatchID_ReturnsGamePlaysRows verifies that
+// GamesByMatchID reads from game_plays (new schema) and returns the correct
+// game_number, result derivation, and duration mapping.
+// This test acts as the migration-000100 regression gate: it will fail if
+// game_plays still has the old action-log schema (missing game_number column).
+func TestMatchesRepository_GamesByMatchID_ReturnsGamePlaysRows(t *testing.T) {
+	db := openTestDB(t)
+	matchRepo := repository.NewMatchesRepository(db)
+	gpRepo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	acct := insertTestAccount(t, db, "gamesbyid-acct")
+	matchID := fmt.Sprintf("gamesbyid-match-%d", acct)
+	ts := time.Now().UTC().Truncate(time.Second)
+
+	// Insert a match with player_team_id=1.
+	insertTestMatch(t, db, matchID, acct, "QuickDraft", ts)
+
+	// Insert game 1: player wins (winning_team_id == player_team_id == 1).
+	durSecs := 95
+	_, err := gpRepo.InsertGamePlay(ctx, repository.GamePlayInsert{
+		AccountID:     acct,
+		MatchID:       matchID,
+		GameNumber:    1,
+		WinningTeamID: 1,
+		TurnCount:     8,
+		DurationSecs:  durSecs,
+		Sequence:      1,
+		OccurredAt:    ts,
+		Partial:       false,
+	})
+	if err != nil {
+		t.Fatalf("InsertGamePlay game 1: %v", err)
+	}
+
+	// Insert game 2: player loses (winning_team_id != player_team_id).
+	_, err = gpRepo.InsertGamePlay(ctx, repository.GamePlayInsert{
+		AccountID:     acct,
+		MatchID:       matchID,
+		GameNumber:    2,
+		WinningTeamID: 2,
+		TurnCount:     12,
+		DurationSecs:  0, // tests NULLIF(duration_secs,0) → NULL
+		Sequence:      2,
+		OccurredAt:    ts.Add(time.Minute),
+		Partial:       false,
+	})
+	if err != nil {
+		t.Fatalf("InsertGamePlay game 2: %v", err)
+	}
+
+	// Insert a partial game — must NOT appear in GamesByMatchID results.
+	_, err = gpRepo.InsertGamePlay(ctx, repository.GamePlayInsert{
+		AccountID:    acct,
+		MatchID:      matchID,
+		GameNumber:   3,
+		Sequence:     3,
+		OccurredAt:   ts.Add(2 * time.Minute),
+		Partial:      true,
+	})
+	if err != nil {
+		t.Fatalf("InsertGamePlay partial: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM game_plays WHERE account_id = $1`, acct)
+		_, _ = db.ExecContext(ctx, `DELETE FROM matches WHERE id = $1`, matchID)
+	})
+
+	games, err := matchRepo.GamesByMatchID(ctx, acct, matchID)
+	if err != nil {
+		t.Fatalf("GamesByMatchID: %v", err)
+	}
+
+	if len(games) != 2 {
+		t.Fatalf("expected 2 non-partial games, got %d", len(games))
+	}
+
+	// Game 1: win, duration populated.
+	g1 := games[0]
+	if g1.GameNumber != 1 {
+		t.Errorf("game[0].GameNumber = %d, want 1", g1.GameNumber)
+	}
+	if g1.Result != "win" {
+		t.Errorf("game[0].Result = %q, want %q", g1.Result, "win")
+	}
+	if g1.DurationSeconds == nil || *g1.DurationSeconds != durSecs {
+		t.Errorf("game[0].DurationSeconds = %v, want %d", g1.DurationSeconds, durSecs)
+	}
+
+	// Game 2: loss, duration nil (duration_secs=0 → NULLIF → NULL).
+	g2 := games[1]
+	if g2.GameNumber != 2 {
+		t.Errorf("game[1].GameNumber = %d, want 2", g2.GameNumber)
+	}
+	if g2.Result != "loss" {
+		t.Errorf("game[1].Result = %q, want %q", g2.Result, "loss")
+	}
+	if g2.DurationSeconds != nil {
+		t.Errorf("game[1].DurationSeconds = %v, want nil (duration_secs=0)", g2.DurationSeconds)
+	}
+}
+
+// TestMatchesRepository_GamesByMatchID_CrossAccountIsolation verifies that
+// account B cannot see account A's game_plays rows.
+func TestMatchesRepository_GamesByMatchID_CrossAccountIsolation(t *testing.T) {
+	db := openTestDB(t)
+	matchRepo := repository.NewMatchesRepository(db)
+	gpRepo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	acctA := insertTestAccount(t, db, "gamesbyid-iso-a")
+	acctB := insertTestAccount(t, db, "gamesbyid-iso-b")
+	matchA := fmt.Sprintf("gamesbyid-iso-match-a-%d", acctA)
+	ts := time.Now().UTC().Truncate(time.Second)
+
+	insertTestMatch(t, db, matchA, acctA, "QuickDraft", ts)
+
+	_, err := gpRepo.InsertGamePlay(ctx, repository.GamePlayInsert{
+		AccountID:  acctA,
+		MatchID:    matchA,
+		GameNumber: 1,
+		Sequence:   1,
+		OccurredAt: ts,
+		Partial:    false,
+	})
+	if err != nil {
+		t.Fatalf("InsertGamePlay: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM game_plays WHERE account_id = $1`, acctA)
+		_, _ = db.ExecContext(ctx, `DELETE FROM matches WHERE id = $1`, matchA)
+	})
+
+	// Account B must see zero rows for account A's match.
+	games, err := matchRepo.GamesByMatchID(ctx, acctB, matchA)
+	if err != nil {
+		t.Fatalf("GamesByMatchID (acctB): %v", err)
+	}
+	if len(games) != 0 {
+		t.Errorf("cross-account leak: acctB query returned %d rows for acctA match", len(games))
+	}
+}

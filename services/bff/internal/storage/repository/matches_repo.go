@@ -419,16 +419,34 @@ type GameRow struct {
 	CreatedAt       time.Time
 }
 
-// GamesByMatchID returns the games belonging to matchID, scoped to accountID
-// via a join through matches. Returned in game_number ASC order so the SPA
-// can render them in play order.
+// GamesByMatchID returns the completed (non-partial) game_plays rows for
+// matchID, scoped to accountID.  Returned in game_number ASC order so the
+// SPA can render them in play order.
+//
+// Result is derived server-side: win when winning_team_id == player_team_id
+// (and both > 0), loss when both > 0 and winning_team_id != player_team_id,
+// unknown otherwise.  ResultReason is not tracked in the new schema and is
+// always nil.  DurationSeconds maps from game_plays.duration_secs.
 func (r *MatchesRepository) GamesByMatchID(ctx context.Context, accountID int64, matchID string) ([]GameRow, error) {
 	const q = `
-		SELECT g.id, g.match_id, g.game_number, g.result, g.result_reason, g.duration_seconds, g.created_at
-		FROM games g
-		JOIN matches m ON m.id = g.match_id
-		WHERE m.account_id = $1 AND g.match_id = $2
-		ORDER BY g.game_number`
+		SELECT
+			gp.id,
+			gp.match_id,
+			gp.game_number,
+			CASE
+				WHEN gp.winning_team_id > 0 AND m.player_team_id > 0
+				     AND gp.winning_team_id = m.player_team_id THEN 'win'
+				WHEN gp.winning_team_id > 0 AND m.player_team_id > 0
+				     AND gp.winning_team_id <> m.player_team_id THEN 'loss'
+				ELSE 'unknown'
+			END AS result,
+			NULL::text AS result_reason,
+			NULLIF(gp.duration_secs, 0) AS duration_seconds,
+			gp.created_at
+		FROM game_plays gp
+		JOIN matches m ON m.id = gp.match_id
+		WHERE gp.account_id = $1 AND gp.match_id = $2 AND gp.partial = false
+		ORDER BY gp.game_number`
 	rows, err := r.db.QueryContext(ctx, q, accountID, matchID)
 	if err != nil {
 		return nil, err
