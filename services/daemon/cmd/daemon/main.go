@@ -21,10 +21,12 @@
 //	MTGA_COLLECTION_HELPER_DIR           Directory containing collection-helper binary and install/ subdir (dev override)
 //	CLERK_PUBLISHABLE_KEY                Clerk publishable key (pk_live_* / pk_test_*) used for PKCE OAuth
 //	CLERK_FRONTEND_API                   Clerk frontend API base URL (e.g. https://accounts.clerk.dev)
+//	VAULTMTG_DAEMON_REPLAY_FILE         Path to a Player.log fixture; when set the daemon runs one-shot replay and exits (#640)
 //
 // Flags:
 //
-//	-config <path>   Path to JSON config file
+//	-config <path>           Path to JSON config file
+//	-replay <path>           Path to a Player.log fixture for one-shot corpus replay (#640, ADR-042 Amendment 1)
 package main
 
 import (
@@ -84,7 +86,21 @@ var DefaultSentryDSN = ""
 func main() {
 	defaultCfgPath := defaultConfigPath()
 	cfgPath := flag.String("config", defaultCfgPath, "path to JSON config file")
+	replayFile := flag.String("replay", "", "path to a Player.log fixture for one-shot corpus replay (ADR-042 Amendment 1, #640)")
 	flag.Parse()
+
+	// ── Replay mode (ADR-042 Amendment 1, #640) ────────────────────────────────
+	// When -replay <file> (or VAULTMTG_DAEMON_REPLAY_FILE env) is set, the daemon
+	// runs a one-shot headless corpus replay and exits (0 on replay:completed,
+	// non-zero on error). It does NOT enter the live poller loop.
+	// The env var is the canonical CI invocation; the flag is for direct testing.
+	effectiveReplayFile := *replayFile
+	if effectiveReplayFile == "" {
+		effectiveReplayFile = config.EnvWithFallback("VAULTMTG_DAEMON_REPLAY_FILE", "")
+	}
+	if effectiveReplayFile != "" {
+		os.Exit(runReplayEntryPoint(effectiveReplayFile, *cfgPath))
+	}
 
 	// ── Step 0: config-dir migration (ADR-022 Phase 2) ─────────────────────────
 	// Copy old brand directories to the new VaultMTG-namespaced paths so users
@@ -827,6 +843,288 @@ func defaultConfigPath() string {
 		return "daemon.json"
 	}
 	return filepath.Join(home, ".vaultmtg", "daemon.json")
+}
+
+// ─── Corpus replay mode (#640, ADR-042 Amendment 1) ─────────────────────────
+
+// headlessPairConfig holds the parameters for a server-to-server Clerk auth +
+// BFF registration — the same chain used by the production synthetic canary
+// (#268, scheduled-prod-canary.yml). All fields are required.
+type headlessPairConfig struct {
+	// ClerkBackendAPIBase is the Clerk Backend API base URL (https://api.clerk.com).
+	// Used for POST /v1/sign_in_tokens and POST /v1/sessions/{id}/tokens.
+	// This is NEVER the FAPI subdomain — the FAPI returns 404 on backend-API paths.
+	ClerkBackendAPIBase string
+	// ClerkFAPIBase is the Clerk FAPI base URL (e.g. https://accounts.clerk.dev or
+	// the tenant subdomain). Used for POST /v1/client/sign_ins?strategy=ticket.
+	ClerkFAPIBase string
+	// ClerkSecretKey is the Clerk Backend API secret key (sk_live_* / sk_test_*).
+	ClerkSecretKey string
+	// ClerkUserID is the pre-provisioned synthetic account user_id in the Clerk
+	// instance. Required by the sign_in_tokens endpoint.
+	ClerkUserID string
+	// BFFBase is the base URL of the staging BFF (cloud_api_url, including /api/v1).
+	BFFBase string
+	// Platform is runtime.GOOS, forwarded to the BFF daemon/register endpoint.
+	Platform string
+	// DaemonVersion is the build-time version string forwarded to daemon/register.
+	DaemonVersion string
+	// DeviceID is the cached daemon device ID (empty on first pair; BFF mints new).
+	DeviceID string
+}
+
+// headlessPair executes a server-to-server Clerk auth chain and registers the
+// daemon with the BFF, returning the minted API key, accountID, and deviceID.
+//
+// The chain mirrors the production synthetic canary (scheduled-prod-canary.yml
+// CHECK 2 + CHECK 4b) — do not change this flow without reading the canary
+// comments. Specifically:
+//   - POST /v1/sign_in_tokens at the Backend API (not the FAPI subdomain).
+//   - Exchange the ticket at FAPI for a session, then mint the session JWT via
+//     the Backend API POST /v1/sessions/{id}/tokens (not the FAPI token endpoint
+//     which is bot-protected).
+//   - POST <bffBase>/daemon/register with the JWT.
+func headlessPair(ctx context.Context, cfg headlessPairConfig) (apiKey, accountID, deviceID string, err error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	// Step 1 — Mint a sign-in token (Backend API).
+	sitBody, _ := json.Marshal(map[string]string{"user_id": cfg.ClerkUserID})
+	sitURL := strings.TrimRight(cfg.ClerkBackendAPIBase, "/") + "/v1/sign_in_tokens"
+	sitReq, err := http.NewRequestWithContext(ctx, http.MethodPost, sitURL, bytes.NewReader(sitBody))
+	if err != nil {
+		return "", "", "", fmt.Errorf("headless-pair: build sign-in token request: %w", err)
+	}
+	sitReq.Header.Set("Authorization", "Bearer "+cfg.ClerkSecretKey)
+	sitReq.Header.Set("Content-Type", "application/json")
+
+	sitResp, err := client.Do(sitReq)
+	if err != nil {
+		return "", "", "", fmt.Errorf("headless-pair: sign-in token request: %w", err)
+	}
+	defer func() { _ = sitResp.Body.Close() }()
+	sitBytes, _ := io.ReadAll(sitResp.Body)
+	if sitResp.StatusCode != http.StatusOK && sitResp.StatusCode != http.StatusCreated {
+		return "", "", "", fmt.Errorf("headless-pair: sign-in token returned %d: %s", sitResp.StatusCode, string(sitBytes))
+	}
+	var sitResult struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(sitBytes, &sitResult); err != nil {
+		return "", "", "", fmt.Errorf("headless-pair: decode sign-in token response: %w", err)
+	}
+	if sitResult.Token == "" {
+		return "", "", "", fmt.Errorf("headless-pair: Clerk returned empty sign-in token")
+	}
+
+	// Step 2 — Exchange ticket for session via FAPI.
+	fapiURL := strings.TrimRight(cfg.ClerkFAPIBase, "/") + "/v1/client/sign_ins?strategy=ticket"
+	ticketBody, _ := json.Marshal(map[string]string{"strategy": "ticket", "ticket": sitResult.Token})
+	fapiReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fapiURL, bytes.NewReader(ticketBody))
+	if err != nil {
+		return "", "", "", fmt.Errorf("headless-pair: build FAPI sign-in request: %w", err)
+	}
+	fapiReq.Header.Set("Content-Type", "application/json")
+
+	fapiResp, err := client.Do(fapiReq)
+	if err != nil {
+		return "", "", "", fmt.Errorf("headless-pair: FAPI sign-in request: %w", err)
+	}
+	defer func() { _ = fapiResp.Body.Close() }()
+	fapiBytes, _ := io.ReadAll(fapiResp.Body)
+	if fapiResp.StatusCode != http.StatusOK && fapiResp.StatusCode != http.StatusCreated {
+		return "", "", "", fmt.Errorf("headless-pair: FAPI sign-in returned %d: %s", fapiResp.StatusCode, string(fapiBytes))
+	}
+	var fapiResult struct {
+		Client struct {
+			Sessions []struct {
+				ID string `json:"id"`
+			} `json:"sessions"`
+		} `json:"client"`
+	}
+	if err := json.Unmarshal(fapiBytes, &fapiResult); err != nil {
+		return "", "", "", fmt.Errorf("headless-pair: decode FAPI sign-in response: %w", err)
+	}
+	if len(fapiResult.Client.Sessions) == 0 {
+		return "", "", "", fmt.Errorf("headless-pair: no sessions in FAPI sign-in response")
+	}
+	sessionID := fapiResult.Client.Sessions[0].ID
+
+	// Step 3 — Mint session JWT via Clerk Backend API.
+	jwtURL := strings.TrimRight(cfg.ClerkBackendAPIBase, "/") + "/v1/sessions/" + sessionID + "/tokens"
+	jwtReq, err := http.NewRequestWithContext(ctx, http.MethodPost, jwtURL, nil)
+	if err != nil {
+		return "", "", "", fmt.Errorf("headless-pair: build JWT request: %w", err)
+	}
+	jwtReq.Header.Set("Authorization", "Bearer "+cfg.ClerkSecretKey)
+
+	jwtResp, err := client.Do(jwtReq)
+	if err != nil {
+		return "", "", "", fmt.Errorf("headless-pair: JWT request: %w", err)
+	}
+	defer func() { _ = jwtResp.Body.Close() }()
+	jwtBytes, _ := io.ReadAll(jwtResp.Body)
+	if jwtResp.StatusCode != http.StatusOK && jwtResp.StatusCode != http.StatusCreated {
+		return "", "", "", fmt.Errorf("headless-pair: JWT minting returned %d: %s", jwtResp.StatusCode, string(jwtBytes))
+	}
+	var jwtResult struct {
+		JWT string `json:"jwt"`
+	}
+	if err := json.Unmarshal(jwtBytes, &jwtResult); err != nil {
+		return "", "", "", fmt.Errorf("headless-pair: decode JWT response: %w", err)
+	}
+	if jwtResult.JWT == "" {
+		return "", "", "", fmt.Errorf("headless-pair: Clerk returned empty session JWT")
+	}
+
+	// Step 4 — Register with the BFF.
+	newAPIKey, newAccountID, newDeviceID, _, err := registerWithBFF(ctx, cfg.BFFBase, jwtResult.JWT, cfg.DeviceID, cfg.Platform, cfg.DaemonVersion)
+	if err != nil {
+		return "", "", "", fmt.Errorf("headless-pair: register with BFF: %w", err)
+	}
+	return newAPIKey, newAccountID, newDeviceID, nil
+}
+
+// replayModeConfig holds the parameters passed to runReplayMode after a
+// successful headless pair. All fields are required.
+type replayModeConfig struct {
+	// LogFile is the path to the Player.log fixture to replay.
+	LogFile string
+	// APIKey is the daemon API key obtained from headlessPair / config.
+	APIKey string
+	// AccountID is the MTGA account ID to tag events (from daemon config or pair).
+	AccountID string
+	// CloudAPIURL is the BFF base URL (cloud_api_url), e.g. https://staging-api.vaultmtg.app/api/v1.
+	CloudAPIURL string
+}
+
+// runReplayMode replays the given Player.log fixture through the real
+// parse → handleEntry → Dispatcher.SendOrBuffer → HTTPS seam and blocks until
+// replay:completed (returns nil) or replay:error / context cancellation
+// (returns a non-nil error). It does NOT enter the live poller loop.
+//
+// This is the one-shot execution contract for the corpus-replay harness:
+// exit 0 on success, exit non-zero on any failure.
+func runReplayMode(ctx context.Context, cfg replayModeConfig) error {
+	if _, err := os.Stat(cfg.LogFile); err != nil {
+		return fmt.Errorf("[replay-mode] log file not accessible: %w", err)
+	}
+
+	daemonCfg := &config.Config{
+		CloudAPIURL: cfg.CloudAPIURL,
+		APIKey:      cfg.APIKey,
+		AccountID:   cfg.AccountID,
+		LogPath:     cfg.LogFile,
+		SyncEnabled: true,
+	}
+
+	svc := daemon.New(daemonCfg)
+
+	// Channel closed when the replay finishes (either completed or errored).
+	done := make(chan error, 1)
+
+	go func() {
+		// Replay is synchronous inside the goroutine — it reads to EOF then
+		// dispatches replay:completed. runReplayMode blocks on <-done.
+		svc.Replay(ctx, false)
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("[replay-mode] context cancelled: %w", ctx.Err())
+	}
+}
+
+// runReplayEntryPoint is the top-level entry point called from main() when
+// replay mode is active. It loads config, optionally headless-pairs, runs the
+// replay, and returns an exit code (0 success, 1 failure).
+func runReplayEntryPoint(logFile, cfgPath string) int {
+	log.Printf("[replay-mode] starting: log_file=%s config=%s", logFile, cfgPath)
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		log.Printf("[replay-mode] config load error: %v", err)
+		// If config is missing/invalid but we have enough env vars, build a minimal config.
+		cloudAPIURL := config.EnvWithFallback("VAULTMTG_DAEMON_CLOUD_API_URL", "MTGA_DAEMON_CLOUD_API_URL")
+		if cloudAPIURL == "" {
+			cloudAPIURL = DefaultCloudAPIURL
+		}
+		cfg = &config.Config{
+			CloudAPIURL: cloudAPIURL,
+			SyncEnabled: true,
+		}
+	}
+
+	// Resolve the API key: keychain → config → headless pair.
+	apiKey := ""
+	accountID := cfg.AccountID
+	if cfg.Keychain {
+		if k, err := keychain.Get(); err == nil {
+			apiKey = k
+		}
+	}
+	if apiKey == "" {
+		apiKey = cfg.APIKey
+	}
+
+	// If we still have no API key, attempt headless pair using env-supplied Clerk creds.
+	if apiKey == "" {
+		clerkSecretKey := os.Getenv("VAULTMTG_REPLAY_CLERK_SECRET_KEY")
+		clerkUserID := os.Getenv("VAULTMTG_REPLAY_CLERK_USER_ID")
+		clerkBackendAPIBase := os.Getenv("VAULTMTG_REPLAY_CLERK_BACKEND_API")
+		if clerkBackendAPIBase == "" {
+			clerkBackendAPIBase = "https://api.clerk.com"
+		}
+		clerkFAPIBase := os.Getenv("VAULTMTG_REPLAY_CLERK_FAPI")
+
+		if clerkSecretKey != "" && clerkUserID != "" && clerkFAPIBase != "" {
+			log.Printf("[replay-mode] no API key in config/keychain — attempting headless pair")
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			pairedKey, pairedAccountID, pairedDeviceID, pairErr := headlessPair(ctx, headlessPairConfig{
+				ClerkBackendAPIBase: clerkBackendAPIBase,
+				ClerkFAPIBase:       clerkFAPIBase,
+				ClerkSecretKey:      clerkSecretKey,
+				ClerkUserID:         clerkUserID,
+				BFFBase:             cfg.CloudAPIURL,
+				Platform:            runtime.GOOS,
+				DaemonVersion:       Version,
+				DeviceID:            cfg.DaemonID,
+			})
+			if pairErr != nil {
+				log.Printf("[replay-mode] headless pair failed: %v", pairErr)
+				return 1
+			}
+			apiKey = pairedKey
+			accountID = pairedAccountID
+			cfg.DaemonID = pairedDeviceID
+			log.Printf("[replay-mode] headless pair succeeded (account=%s)", accountID)
+		}
+	}
+
+	if apiKey == "" {
+		log.Printf("[replay-mode] no API key available and no Clerk creds for headless pair — set VAULTMTG_REPLAY_CLERK_SECRET_KEY/USER_ID/FAPI")
+		return 1
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := runReplayMode(ctx, replayModeConfig{
+		LogFile:     logFile,
+		APIKey:      apiKey,
+		AccountID:   accountID,
+		CloudAPIURL: cfg.CloudAPIURL,
+	}); err != nil {
+		log.Printf("[replay-mode] replay failed: %v", err)
+		return 1
+	}
+
+	log.Printf("[replay-mode] completed successfully")
+	return 0
 }
 
 // runConfigDirMigration copies old brand-namespaced config directories to the
