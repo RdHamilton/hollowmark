@@ -33,25 +33,25 @@ func NewDecksRepository(db DB) *DecksRepository {
 // DeckSummaryRow is the row shape for /decks list endpoints. Mirrors
 // gui.DeckListItem on the SPA (camelCase).
 type DeckSummaryRow struct {
-	ID            string
-	Name          string
-	Format        string
-	Source        string
-	DraftEventID  *string
-	MatchesPlayed int
-	MatchesWon    int
-	GamesPlayed   int
-	GamesWon      int
-	IsAppCreated  bool
-	CreatedAt     time.Time
-	ModifiedAt    time.Time
-	LastPlayed    *time.Time
-	ColorIdentity *string
-	Description   *string
-	CreatedMethod string
-	SeedCardID    *int
-	CardCount     int // computed via subquery
-	Tags          []string
+	ID             string
+	Name           string
+	Format         string
+	Source         string
+	DraftSessionID *string
+	MatchesPlayed  int
+	MatchesWon     int
+	GamesPlayed    int
+	GamesWon       int
+	IsAppCreated   bool
+	CreatedAt      time.Time
+	ModifiedAt     time.Time
+	LastPlayed     *time.Time
+	ColorIdentity  *string
+	Description    *string
+	CreatedMethod  string
+	SeedCardID     *int
+	CardCount      int // computed via subquery
+	Tags           []string
 }
 
 // DeckDetailRow is the rich per-deck shape for /decks/{id}. Carries the
@@ -104,7 +104,7 @@ func (r *DecksRepository) ListDecks(ctx context.Context, accountID int64, f Deck
 		clauses = append(clauses, "d.id IN (SELECT deck_id FROM deck_tags WHERE lower(tag) = ANY($"+strconv.Itoa(next)+"))")
 		args = append(args, lowerSlice(f.Tags))
 	}
-	q := `SELECT d.id, d.name, d.format, d.source, d.draft_event_id,
+	q := `SELECT d.id, d.name, d.format, d.source, d.draft_session_id,
 	             d.matches_played, d.matches_won, d.games_played, d.games_won,
 	             d.is_app_created, d.created_at, d.modified_at, d.last_played,
 	             d.color_identity, d.description, d.created_method, d.seed_card_id,
@@ -128,7 +128,7 @@ func (r *DecksRepository) ListDecks(ctx context.Context, accountID int64, f Deck
 	for rows.Next() {
 		var d DeckSummaryRow
 		if err := rows.Scan(
-			&d.ID, &d.Name, &d.Format, &d.Source, &d.DraftEventID,
+			&d.ID, &d.Name, &d.Format, &d.Source, &d.DraftSessionID,
 			&d.MatchesPlayed, &d.MatchesWon, &d.GamesPlayed, &d.GamesWon,
 			&d.IsAppCreated, &d.CreatedAt, &d.ModifiedAt, &d.LastPlayed,
 			&d.ColorIdentity, &d.Description, &d.CreatedMethod, &d.SeedCardID,
@@ -156,7 +156,7 @@ func (r *DecksRepository) ListDecks(ctx context.Context, accountID int64, f Deck
 // GetDeck returns a single deck (with cards + tags) scoped to account.
 // Returns nil when not found / not owned.
 func (r *DecksRepository) GetDeck(ctx context.Context, accountID int64, deckID string) (*DeckDetailRow, error) {
-	const q = `SELECT d.id, d.name, d.format, d.source, d.draft_event_id,
+	const q = `SELECT d.id, d.name, d.format, d.source, d.draft_session_id,
 	                  d.matches_played, d.matches_won, d.games_played, d.games_won,
 	                  d.is_app_created, d.created_at, d.modified_at, d.last_played,
 	                  d.color_identity, d.description, d.created_method, d.seed_card_id,
@@ -166,7 +166,7 @@ func (r *DecksRepository) GetDeck(ctx context.Context, accountID int64, deckID s
 	           LIMIT 1`
 	var d DeckDetailRow
 	err := r.db.QueryRowContext(ctx, q, accountID, deckID).Scan(
-		&d.ID, &d.Name, &d.Format, &d.Source, &d.DraftEventID,
+		&d.ID, &d.Name, &d.Format, &d.Source, &d.DraftSessionID,
 		&d.MatchesPlayed, &d.MatchesWon, &d.GamesPlayed, &d.GamesWon,
 		&d.IsAppCreated, &d.CreatedAt, &d.ModifiedAt, &d.LastPlayed,
 		&d.ColorIdentity, &d.Description, &d.CreatedMethod, &d.SeedCardID,
@@ -193,18 +193,18 @@ func (r *DecksRepository) GetDeck(ctx context.Context, accountID int64, deckID s
 
 // GetDeckByDraftEvent returns the deck associated with a draft event id.
 func (r *DecksRepository) GetDeckByDraftEvent(ctx context.Context, accountID int64, draftEventID string) (*DeckDetailRow, error) {
-	const q = `SELECT d.id, d.name, d.format, d.source, d.draft_event_id,
+	const q = `SELECT d.id, d.name, d.format, d.source, d.draft_session_id,
 	                  d.matches_played, d.matches_won, d.games_played, d.games_won,
 	                  d.is_app_created, d.created_at, d.modified_at, d.last_played,
 	                  d.color_identity, d.description, d.created_method, d.seed_card_id,
 	                  COALESCE((SELECT SUM(quantity) FROM deck_cards WHERE deck_id = d.id), 0) AS card_count
 	           FROM decks d
-	           WHERE d.account_id = $1 AND d.draft_event_id = $2
+	           WHERE d.account_id = $1 AND d.draft_session_id = $2
 	           ORDER BY d.modified_at DESC
 	           LIMIT 1`
 	var d DeckDetailRow
 	err := r.db.QueryRowContext(ctx, q, accountID, draftEventID).Scan(
-		&d.ID, &d.Name, &d.Format, &d.Source, &d.DraftEventID,
+		&d.ID, &d.Name, &d.Format, &d.Source, &d.DraftSessionID,
 		&d.MatchesPlayed, &d.MatchesWon, &d.GamesPlayed, &d.GamesWon,
 		&d.IsAppCreated, &d.CreatedAt, &d.ModifiedAt, &d.LastPlayed,
 		&d.ColorIdentity, &d.Description, &d.CreatedMethod, &d.SeedCardID,
@@ -228,11 +228,11 @@ func (r *DecksRepository) GetDeckByDraftEvent(ctx context.Context, accountID int
 // side as a v4-ish hash of (account_id + name + timestamp) so the SPA
 // gets a stable deck handle without coordinating UUID generation.
 type CreateDeckInput struct {
-	AccountID    int64
-	Name         string
-	Format       string
-	Source       string
-	DraftEventID *string
+	AccountID      int64
+	Name           string
+	Format         string
+	Source         string
+	DraftSessionID *string
 }
 
 // CreateDeck inserts a deck row and returns it.
@@ -241,19 +241,19 @@ func (r *DecksRepository) CreateDeck(ctx context.Context, in CreateDeckInput) (*
 	// created_method is 'manual' for user-initiated deck creation (vs 'imported'
 	// for sync-sourced or deck-import flows).
 	const q = `INSERT INTO decks (
-	             id, account_id, name, format, source, draft_event_id,
+	             id, account_id, name, format, source, draft_session_id,
 	             is_app_created, created_method, created_at, modified_at
 	           ) VALUES ($1, $2, $3, $4, $5, $6, FALSE, 'manual', NOW(), NOW())
-	           RETURNING id, name, format, source, draft_event_id,
+	           RETURNING id, name, format, source, draft_session_id,
 	                     matches_played, matches_won, games_played, games_won,
 	                     is_app_created, created_at, modified_at, last_played,
 	                     color_identity, description, created_method, seed_card_id`
 	var d DeckDetailRow
 	if err := r.db.QueryRowContext(
 		ctx, q,
-		id, in.AccountID, in.Name, in.Format, in.Source, in.DraftEventID,
+		id, in.AccountID, in.Name, in.Format, in.Source, in.DraftSessionID,
 	).Scan(
-		&d.ID, &d.Name, &d.Format, &d.Source, &d.DraftEventID,
+		&d.ID, &d.Name, &d.Format, &d.Source, &d.DraftSessionID,
 		&d.MatchesPlayed, &d.MatchesWon, &d.GamesPlayed, &d.GamesWon,
 		&d.IsAppCreated, &d.CreatedAt, &d.ModifiedAt, &d.LastPlayed,
 		&d.ColorIdentity, &d.Description, &d.CreatedMethod, &d.SeedCardID,

@@ -234,8 +234,8 @@ func (r *MatchesRepository) UpsertMatch(ctx context.Context, m MatchUpsert) erro
 		INSERT INTO matches (
 			id, account_id, event_id, event_name, timestamp, duration_seconds,
 			player_wins, opponent_wins, player_team_id, deck_id, rank_before, rank_after,
-			format, result, result_reason, opponent_name, opponent_id
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+			format, result, result_reason, opponent_name, opponent_id, draft_session_id
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		ON CONFLICT (id) DO UPDATE
 			SET event_name       = EXCLUDED.event_name,
 			    timestamp        = EXCLUDED.timestamp,
@@ -249,13 +249,14 @@ func (r *MatchesRepository) UpsertMatch(ctx context.Context, m MatchUpsert) erro
 			    result           = EXCLUDED.result,
 			    result_reason    = EXCLUDED.result_reason,
 			    opponent_name    = EXCLUDED.opponent_name,
-			    opponent_id      = EXCLUDED.opponent_id`
+			    opponent_id      = EXCLUDED.opponent_id,
+			    draft_session_id = COALESCE(EXCLUDED.draft_session_id, matches.draft_session_id)`
 
 	_, err := r.db.ExecContext(
 		ctx, q,
 		m.ID, m.AccountID, m.EventID, m.EventName, m.Timestamp, m.DurationSeconds,
 		m.PlayerWins, m.OpponentWins, m.PlayerTeamID, m.DeckID, m.RankBefore, m.RankAfter,
-		m.Format, m.Result, m.ResultReason, m.OpponentName, m.OpponentID,
+		m.Format, m.Result, m.ResultReason, m.OpponentName, m.OpponentID, m.DraftSessionID,
 	)
 	return err
 }
@@ -279,6 +280,10 @@ type MatchUpsert struct {
 	ResultReason    *string
 	OpponentName    *string
 	OpponentID      *string
+	// DraftSessionID links this match to the draft session that produced the
+	// deck. NULL for non-draft matches. Uses COALESCE on conflict so a
+	// backfilled session ID is never overwritten by NULL re-projection.
+	DraftSessionID *string
 }
 
 // MatchFilter captures every filterable dimension the Phase 2 /api/v1/matches
