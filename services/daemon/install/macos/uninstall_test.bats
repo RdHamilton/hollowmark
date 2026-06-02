@@ -153,6 +153,7 @@ _make_fake_home() {
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     with-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   [ -f "${install_dir}/vaultmtg-daemon" ]
 
@@ -160,6 +161,7 @@ _make_fake_home() {
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
 
@@ -178,12 +180,14 @@ _make_fake_home() {
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     with-binary with-current-plist with-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   # First run — full uninstall.
   run env \
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
   echo "first-output: ${output}"
@@ -197,6 +201,7 @@ _make_fake_home() {
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
   echo "second-output: ${output}"
@@ -216,6 +221,7 @@ _make_fake_home() {
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     no-binary with-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   local plist="${fake_home}/Library/LaunchAgents/com.vaultmtg.daemon.plist"
   [ -f "${plist}" ]
@@ -224,6 +230,7 @@ _make_fake_home() {
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
 
@@ -243,6 +250,7 @@ _make_fake_home() {
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     no-binary no-current-plist with-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   local legacy_plist="${fake_home}/Library/LaunchAgents/com.mtga-companion.daemon.plist"
   [ -f "${legacy_plist}" ]
@@ -251,6 +259,7 @@ _make_fake_home() {
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
 
@@ -269,11 +278,13 @@ _make_fake_home() {
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     no-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   run env \
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
 
@@ -295,6 +306,7 @@ _make_fake_home() {
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     with-binary with-current-plist no-legacy-plist with-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   local log_path="${fake_home}/Library/Logs/vaultmtg-daemon.log"
   [ -f "${log_path}" ]
@@ -303,6 +315,7 @@ _make_fake_home() {
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
 
@@ -326,6 +339,7 @@ _make_fake_home() {
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     with-binary with-current-plist no-legacy-plist no-log with-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   local config_file="${fake_home}/.vaultmtg/daemon.json"
   local config_dir="${fake_home}/.vaultmtg"
@@ -335,6 +349,7 @@ _make_fake_home() {
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
 
@@ -346,9 +361,11 @@ _make_fake_home() {
   # Script must call out the preserved config path.
   [[ "${output}" == *"Config file"* ]]
   [[ "${output}" == *"NOT removed"* ]]
-  # Pin the exact config path (#2145): message must reference ~/.vaultmtg/daemon.json,
-  # not the pre-rebrand path ~/.config/mtga-companion/daemon.yaml.
-  [[ "${output}" == *"~/.vaultmtg/daemon.json"* ]]
+  # Pin the daemon.json path (#2145): when common.sh is sourced, CONFIG_DIR resolves
+  # to the absolute path derived from $HOME (not the tilde shorthand). Assert against
+  # the resolved path — both the directory and the filename must appear together.
+  # This covers the channel-parameterized form introduced in #656 (ADR-049 §2).
+  [[ "${output}" == *"${config_dir}/daemon.json"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -363,6 +380,7 @@ _make_fake_home() {
   mkdir -p "${custom_install_dir}"
   local fake_home; fake_home="$(_make_fake_home "${custom_install_dir}" \
     with-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   [ -f "${custom_install_dir}/vaultmtg-daemon" ]
 
@@ -370,6 +388,7 @@ _make_fake_home() {
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${custom_install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
 
@@ -390,11 +409,13 @@ _make_fake_home() {
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     with-binary with-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   run env \
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
 
@@ -420,11 +441,13 @@ _make_fake_home() {
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     with-binary with-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   run env \
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}" --purge
 
@@ -453,11 +476,13 @@ _make_fake_home() {
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     no-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   run env \
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     SECURITY_NOT_FOUND=1 \
     bash "${UNINSTALL_SH}" --purge
@@ -480,6 +505,7 @@ _make_fake_home() {
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     with-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
 
   # Place the legacy binary alongside the current binary — this is the
   # upgrader scenario: both binaries are present in INSTALL_DIR.
@@ -491,6 +517,7 @@ _make_fake_home() {
     PATH="${stub_dir}:${PATH}" \
     HOME="${fake_home}" \
     INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
 
