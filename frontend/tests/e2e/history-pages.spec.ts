@@ -280,6 +280,154 @@ test.describe('History: /match-history', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Match history — detail drill-down (row click → MatchDetailsModal)
+//
+// These tests mock the detail endpoints so they do not require a live,
+// authenticated BFF session. Real-data verification (clicking a real match
+// and seeing real turn-by-turn data) is gated on AWS / a live Clerk session
+// and is covered by Tim's staging-verify pass after this PR merges.
+// ---------------------------------------------------------------------------
+
+test.describe('History: /match-history — detail drill-down', () => {
+  const DETAIL_MATCH_ID = 'match-detail-1';
+
+  const SINGLE_MATCH: MatchItem[] = [
+    {
+      id: DETAIL_MATCH_ID,
+      format: 'Ladder',
+      result: 'win',
+      timestamp: '2026-06-01T10:00:00Z',
+      player_wins: 2,
+      opponent_wins: 1,
+      duration_seconds: null,
+      deck_id: null,
+      rank_before: null,
+      rank_after: null,
+      opponent_rank: null,
+    },
+  ];
+
+  /**
+   * Mock GET /api/v1/matches/{id} — returns a full models.Match (PascalCase).
+   * This is the endpoint BffMatchHistory calls on row click.
+   */
+  async function mockMatchDetail(page: Page, matchId: string): Promise<void> {
+    await page.route(`**/api/v1/matches/${matchId}`, (route) => {
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ID: matchId,
+          AccountID: 1,
+          EventID: 'Ladder',
+          EventName: 'Standard Ranked',
+          Timestamp: '2026-06-01T10:00:00Z',
+          PlayerWins: 2,
+          OpponentWins: 1,
+          PlayerTeamID: 1,
+          Format: 'Ladder',
+          Result: 'win',
+          CreatedAt: '2026-06-01T10:00:00Z',
+        }),
+      });
+    });
+  }
+
+  /** Mock the games endpoint to return empty (detail modal loads cleanly). */
+  async function mockMatchGames(page: Page, matchId: string): Promise<void> {
+    await page.route(`**/api/v1/matches/${matchId}/games`, (route) => {
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([]),
+      });
+    });
+  }
+
+  /** Mock the timeline endpoint. */
+  async function mockMatchTimeline(page: Page, matchId: string): Promise<void> {
+    await page.route(`**/api/v1/matches/${matchId}/plays/timeline`, (route) => {
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([]),
+      });
+    });
+  }
+
+  /** Mock the opponent-cards endpoint. */
+  async function mockOpponentCards(page: Page, matchId: string): Promise<void> {
+    await page.route(`**/api/v1/matches/${matchId}/opponent-cards`, (route) => {
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: [] }),
+      });
+    });
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await setClerkSignedIn(page);
+    await mockMatchHistory(page, SINGLE_MATCH);
+    await mockMatchDetail(page, DETAIL_MATCH_ID);
+    await mockMatchGames(page, DETAIL_MATCH_ID);
+    await mockMatchTimeline(page, DETAIL_MATCH_ID);
+    await mockOpponentCards(page, DETAIL_MATCH_ID);
+  });
+
+  test('clicking a match row opens the detail modal', async ({ page }) => {
+    await page.goto('/match-history');
+
+    // Wait for the table row to render.
+    await expect(page.locator('[data-testid="match-row"]').first()).toBeVisible();
+
+    // The detail modal must not be open yet.
+    await expect(page.locator('.modal-backdrop')).not.toBeVisible();
+
+    // Click the row.
+    await page.locator('[data-testid="match-row"]').first().click();
+
+    // The modal must open.
+    await expect(page.locator('.modal-backdrop')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('.match-details-modal')).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('detail modal contains the Game Timeline panel header', async ({ page }) => {
+    await page.goto('/match-history');
+
+    await expect(page.locator('[data-testid="match-row"]').first()).toBeVisible();
+    await page.locator('[data-testid="match-row"]').first().click();
+
+    await expect(page.locator('.modal-backdrop')).toBeVisible({ timeout: 5_000 });
+
+    // MatchDetailsModal always renders the GamePlayTimelinePanel toggle button.
+    await expect(page.locator('button', { hasText: /Game Timeline/i })).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('detail modal can be closed', async ({ page }) => {
+    await page.goto('/match-history');
+
+    await expect(page.locator('[data-testid="match-row"]').first()).toBeVisible();
+    await page.locator('[data-testid="match-row"]').first().click();
+
+    await expect(page.locator('.modal-backdrop')).toBeVisible({ timeout: 5_000 });
+
+    // Close via the × button.
+    await page.locator('.modal-close').click();
+
+    await expect(page.locator('.modal-backdrop')).not.toBeVisible();
+  });
+
+  test('"Ranked" is displayed for format "Ladder" (format normalization)', async ({ page }) => {
+    await page.goto('/match-history');
+    await expect(page.locator('[data-testid="match-history-table"]')).toBeVisible();
+
+    // SINGLE_MATCH has format: 'Ladder' → should display 'Ranked', not 'Ladder'
+    await expect(page.locator('[data-testid="match-row"]').first().locator('td').nth(1)).toHaveText('Ranked');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Draft history — /history/drafts (BffDraftHistory)
 // ---------------------------------------------------------------------------
 
