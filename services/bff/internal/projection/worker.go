@@ -66,10 +66,25 @@ type deckStore interface {
 	UpsertDeck(ctx context.Context, u repository.DeckUpsert) error
 }
 
-// gamePlayStore writes individual game records and life-change rows.
+// gamePlayStore writes per-game result records and life-change rows.
+// After ADR-050: InsertGamePlay writes to match_game_results (per-game);
+// InsertLifeChanges references match_game_result_id.
 type gamePlayStore interface {
 	InsertGamePlay(ctx context.Context, ins repository.GamePlayInsert) (int64, error)
 	InsertLifeChanges(ctx context.Context, changes []repository.LifeChangeInsert) error
+}
+
+// cardPlayStore writes per-turn card play rows to game_plays.
+// After ADR-050: InsertCardPlays writes the turn-by-turn action log.
+type cardPlayStore interface {
+	InsertCardPlays(ctx context.Context, gameID int64, matchID string, entries []contract.CardPlayEntry, occurredAt time.Time) error
+}
+
+// gameIDResolver looks up games.id for a (match_id, game_number) pair.
+// The match.game_ended projection uses this to resolve the FK before writing
+// per-turn card plays to game_plays.
+type gameIDResolver interface {
+	GameIDByMatchAndNumber(ctx context.Context, matchID string, gameNumber int) (int64, error)
 }
 
 // counterStore writes counter-change rows to game_event_counters.
@@ -129,6 +144,8 @@ type Worker struct {
 	quests     questStore
 	decks      deckStore
 	gamePlays  gamePlayStore
+	cardPlays  cardPlayStore
+	gameIDs    gameIDResolver
 	counters   counterStore
 	dlq        dlqStore
 	postHog    postHogClient
@@ -156,10 +173,24 @@ func NewWorker(
 		quests:     quests,
 		decks:      decks,
 		gamePlays:  gamePlays,
+		cardPlays:  nil, // optional; wired via WithCardPlayStore
+		gameIDs:    nil, // optional; wired via WithGameIDResolver
 		counters:   nil, // optional; wired via WithCounterStore
 		dlq:        nil, // optional; wired via WithDLQ
 		postHog:    noopPostHogClient{},
 	}
+}
+
+// WithCardPlayStore wires the per-turn card play store into w and returns w.
+func (w *Worker) WithCardPlayStore(store cardPlayStore) *Worker {
+	w.cardPlays = store
+	return w
+}
+
+// WithGameIDResolver wires the games.id resolver into w and returns w.
+func (w *Worker) WithGameIDResolver(resolver gameIDResolver) *Worker {
+	w.gameIDs = resolver
+	return w
 }
 
 // WithCounterStore wires the game_event_counters store into w and returns w.
@@ -773,14 +804,27 @@ func (w *Worker) projectDeckUpdated(ctx context.Context, row *repository.DaemonE
 
 // --- match.game_ended projector ---
 
-// projectGamePlayEvent projects a match.game_ended event into game_plays,
+// projectGamePlayEvent projects a match.game_ended event into
+// match_game_results (per-game), game_plays (per-turn card plays),
 // life_change_tracking, and game_event_counters.
 //
+// After ADR-050: InsertGamePlay writes to match_game_results (the new per-game
+// results table). Per-turn card plays from p.CardPlays are written to
+// game_plays via InsertCardPlays. The game_plays table schema (per-turn, from
+// migration 000030/000054) is preserved and the two tables serve distinct
+// purposes.
+//
 // Ordering guarantee: the Sequence field from the DaemonEvent envelope is
-// written to game_plays.sequence.  InsertGamePlay enforces a WHERE
-// game_plays.sequence < EXCLUDED.sequence guard on conflict, ensuring that
-// out-of-order retransmissions of the same (match_id, game_number) do not
+// written to match_game_results.sequence.  InsertGamePlay enforces a WHERE
+// match_game_results.sequence < EXCLUDED.sequence guard on conflict, ensuring
+// that out-of-order retransmissions of the same (match_id, game_number) do not
 // regress the stored state.
+//
+// Card plays (ADR-050): after inserting the per-game row, resolve games.id
+// from (match_id, game_number) and write each CardPlayEntry to game_plays.
+// If games.id cannot be resolved (match.completed not yet projected), log at
+// WARN and skip — the raw payload is preserved in daemon_events.payload for
+// retroactive projection (v0.3.8 follow-on, not a v0.3.7 gate).
 //
 // Counter projection (ADR-046 A2.1, vmt-t#613): if the payload carries
 // CounterChanges and the counterStore is wired, each entry is written to
@@ -816,7 +860,8 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 		return fmt.Errorf("resolve account: %w", err)
 	}
 
-	gamePlayID, err := w.gamePlays.InsertGamePlay(ctx, repository.GamePlayInsert{
+	// InsertGamePlay writes to match_game_results (ADR-050).
+	matchGameResultID, err := w.gamePlays.InsertGamePlay(ctx, repository.GamePlayInsert{
 		AccountID:     accountID,
 		MatchID:       p.MatchID,
 		GameNumber:    p.GameNumber,
@@ -835,16 +880,33 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 		changes := make([]repository.LifeChangeInsert, 0, len(p.LifeChanges))
 		for _, lc := range p.LifeChanges {
 			changes = append(changes, repository.LifeChangeInsert{
-				AccountID:  accountID,
-				GamePlayID: gamePlayID,
-				TeamID:     lc.TeamID,
-				LifeTotal:  lc.LifeTotal,
-				Delta:      lc.Delta,
-				TurnNumber: lc.TurnNumber,
+				AccountID:         accountID,
+				MatchGameResultID: matchGameResultID,
+				TeamID:            lc.TeamID,
+				LifeTotal:         lc.LifeTotal,
+				Delta:             lc.Delta,
+				TurnNumber:        lc.TurnNumber,
 			})
 		}
 		if err := w.gamePlays.InsertLifeChanges(ctx, changes); err != nil {
 			return fmt.Errorf("InsertLifeChanges: %w", err)
+		}
+	}
+
+	// Per-turn card play writes to game_plays (ADR-050).
+	// Requires resolving games.id from (match_id, game_number). If the
+	// match.completed event has not yet been projected (no games row), log
+	// WARN and skip — data is preserved in daemon_events.payload for
+	// retroactive projection (v0.3.8 follow-on).
+	if len(p.CardPlays) > 0 && w.cardPlays != nil && w.gameIDs != nil {
+		gameID, resolveErr := w.gameIDs.GameIDByMatchAndNumber(ctx, p.MatchID, p.GameNumber)
+		if resolveErr != nil {
+			log.Printf("[projection] projectGamePlayEvent id=%d: could not resolve games.id for match_id=%q game_number=%d — skipping card play writes (match.completed not yet projected?): %v",
+				row.ID, p.MatchID, p.GameNumber, resolveErr)
+		} else {
+			if err := w.cardPlays.InsertCardPlays(ctx, gameID, p.MatchID, p.CardPlays, row.OccurredAt); err != nil {
+				return fmt.Errorf("InsertCardPlays: %w", err)
+			}
 		}
 	}
 
@@ -853,15 +915,15 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 		cInserts := make([]repository.GameEventCounterInsert, 0, len(p.CounterChanges))
 		for _, cc := range p.CounterChanges {
 			cInserts = append(cInserts, repository.GameEventCounterInsert{
-				GamePlayID:  gamePlayID,
-				AccountID:   accountID,
-				InstanceID:  cc.InstanceID,
-				ArenaID:     cc.ArenaID,
-				CounterType: cc.CounterType,
-				Count:       cc.Count,
-				Delta:       cc.Delta,
-				Controller:  cc.Controller,
-				TurnNumber:  cc.TurnNumber,
+				MatchGameResultID: matchGameResultID,
+				AccountID:         accountID,
+				InstanceID:        cc.InstanceID,
+				ArenaID:           cc.ArenaID,
+				CounterType:       cc.CounterType,
+				Count:             cc.Count,
+				Delta:             cc.Delta,
+				Controller:        cc.Controller,
+				TurnNumber:        cc.TurnNumber,
 			})
 		}
 		if err := w.counters.InsertCounters(ctx, cInserts); err != nil {
