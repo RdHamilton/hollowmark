@@ -648,6 +648,129 @@ func TestDraftsExport17Lands_NumericPickAndPack(t *testing.T) {
 	}
 }
 
+// ─── Wins / Losses / IsTrophy / FormatType in List response ───────────────────
+//
+// These tests assert the read-path gap found during ADR-051 staging verify:
+// DraftsRepository.ListSessions was missing the LEFT JOIN on draft_match_results
+// so Wins/Losses/IsTrophy/FormatType were never populated in the List response.
+
+func TestDraftsList_IncludesWinsAndLosses(t *testing.T) {
+	now := time.Now().UTC()
+	reader := &stubDraftsReader{sessions: []repository.DraftSessionDetailRow{
+		{
+			ID: "s1", EventName: "PremierDraft", SetCode: "MKM", DraftType: "PremierDraft",
+			StartTime: now, Status: "completed", TotalPicks: 45, CreatedAt: now, UpdatedAt: now,
+			Wins: 5, Losses: 2, IsTrophy: false, FormatType: "premier_draft",
+		},
+	}}
+	accts := &draftsAccountLookup{accountID: 7, found: true}
+	h := handlers.NewDraftsHandler(reader, accts)
+	req := authedDraftsRequest(t, http.MethodPost, "/api/v1/drafts", []byte(`{}`), 168)
+	rr := httptest.NewRecorder()
+	h.List(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	var arr []map[string]any
+	decodeDraftsEnvelope(t, rr.Body.Bytes(), &arr)
+	if len(arr) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(arr))
+	}
+	s := arr[0]
+	if s["Wins"].(float64) != 5 {
+		t.Errorf("Wins: want 5, got %v", s["Wins"])
+	}
+	if s["Losses"].(float64) != 2 {
+		t.Errorf("Losses: want 2, got %v", s["Losses"])
+	}
+	if s["IsTrophy"].(bool) {
+		t.Errorf("IsTrophy: want false, got true")
+	}
+	if s["FormatType"].(string) != "premier_draft" {
+		t.Errorf("FormatType: want premier_draft, got %v", s["FormatType"])
+	}
+}
+
+func TestDraftsList_IsTrophyTrue(t *testing.T) {
+	// A session with 7 wins must surface IsTrophy=true in the response.
+	now := time.Now().UTC()
+	reader := &stubDraftsReader{sessions: []repository.DraftSessionDetailRow{
+		{
+			ID: "s-trophy", EventName: "QuickDraft", SetCode: "MKM", DraftType: "QuickDraft",
+			StartTime: now, Status: "completed", TotalPicks: 45, CreatedAt: now, UpdatedAt: now,
+			Wins: 7, Losses: 1, IsTrophy: true, FormatType: "quick_draft",
+		},
+	}}
+	accts := &draftsAccountLookup{accountID: 7, found: true}
+	h := handlers.NewDraftsHandler(reader, accts)
+	req := authedDraftsRequest(t, http.MethodPost, "/api/v1/drafts", []byte(`{}`), 168)
+	rr := httptest.NewRecorder()
+	h.List(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	var arr []map[string]any
+	decodeDraftsEnvelope(t, rr.Body.Bytes(), &arr)
+	if len(arr) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(arr))
+	}
+	s := arr[0]
+	if s["Wins"].(float64) != 7 {
+		t.Errorf("Wins: want 7, got %v", s["Wins"])
+	}
+	if !s["IsTrophy"].(bool) {
+		t.Errorf("IsTrophy: want true for 7-win session, got false")
+	}
+	if s["FormatType"].(string) != "quick_draft" {
+		t.Errorf("FormatType: want quick_draft, got %v", s["FormatType"])
+	}
+}
+
+func TestDraftsList_ZeroWinsLossesWhenNoMatches(t *testing.T) {
+	// A session with no match results must have Wins=0, Losses=0, IsTrophy=false
+	// (not absent/nil — the fields are always present in the JSON).
+	now := time.Now().UTC()
+	reader := &stubDraftsReader{sessions: []repository.DraftSessionDetailRow{
+		{
+			ID: "s-empty", EventName: "PremierDraft", SetCode: "DSK", DraftType: "PremierDraft",
+			StartTime: now, Status: "in_progress", TotalPicks: 0, CreatedAt: now, UpdatedAt: now,
+			Wins: 0, Losses: 0, IsTrophy: false, FormatType: "premier_draft",
+		},
+	}}
+	accts := &draftsAccountLookup{accountID: 7, found: true}
+	h := handlers.NewDraftsHandler(reader, accts)
+	req := authedDraftsRequest(t, http.MethodPost, "/api/v1/drafts", []byte(`{}`), 168)
+	rr := httptest.NewRecorder()
+	h.List(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	var arr []map[string]any
+	decodeDraftsEnvelope(t, rr.Body.Bytes(), &arr)
+	if len(arr) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(arr))
+	}
+	s := arr[0]
+	// Wins/Losses are always-present integer fields.
+	wins, wok := s["Wins"]
+	losses, lok := s["Losses"]
+	if !wok {
+		t.Error("Wins field missing from response")
+	}
+	if !lok {
+		t.Error("Losses field missing from response")
+	}
+	if wins.(float64) != 0 {
+		t.Errorf("Wins: want 0, got %v", wins)
+	}
+	if losses.(float64) != 0 {
+		t.Errorf("Losses: want 0, got %v", losses)
+	}
+	if s["IsTrophy"].(bool) {
+		t.Errorf("IsTrophy: want false for no-match session, got true")
+	}
+}
+
 // errStubDB is a sentinel error used by negative-case tests to drive the
 // repo stubs into their failure paths.
 var errStubDB = errors.New("stub: database unavailable")
