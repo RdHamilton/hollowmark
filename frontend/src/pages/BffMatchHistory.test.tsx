@@ -1,24 +1,18 @@
 /**
- * BffMatchHistory component tests — regression guard for vmt-t#625.
+ * BffMatchHistory component tests.
  *
- * ROOT CAUSE: bffMatchHistory.ts previously declared MatchHistoryResponse as
- *   { matches: [...], total, limit, offset }
- * but the BFF GET /api/v1/history/matches actually returns:
- *   { data: [...], has_more, next_cursor_ts, next_cursor_id, limit }
- * (cursor-paginated, since PR #2031 migrated the endpoint to keyset pagination).
- *
- * Result: data.matches was always undefined → total === 0 → "No matches yet"
- * even when the BFF returned rows.
- *
- * These tests MUST fail against the old buggy code (which read data.matches)
- * and PASS after the fix (which reads data.data). The "renders table" test is
- * the canonical regression guard.
+ * Covers:
+ *   - Regression guard for vmt-t#625 (cursor-paginated BFF shape)
+ *   - Fix/match-history-detail-drilldown: row click → MatchDetailsModal
+ *   - Fix 2: format normalization ('Ladder'→'Ranked', empty→'—')
+ *   - Fix 3: result badge ('unknown' → '–', WIN/LOSS preserved)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import BffMatchHistory from './BffMatchHistory';
 import type { MatchHistoryResponse, MatchHistoryItem } from '@/services/api/bffMatchHistory';
+import { models } from '@/types/models';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -26,6 +20,27 @@ import type { MatchHistoryResponse, MatchHistoryItem } from '@/services/api/bffM
 
 vi.mock('@/services/api/bffMatchHistory', () => ({
   getMatchHistory: vi.fn(),
+}));
+
+// Mock matches.getMatch so row-click detail fetch works without a live BFF.
+vi.mock('@/services/api', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/services/api')>();
+  return {
+    ...original,
+    matches: {
+      ...original.matches,
+      getMatch: vi.fn(),
+    },
+  };
+});
+
+// Mock MatchDetailsModal so component tests do not need game/timeline API calls.
+vi.mock('../components/MatchDetailsModal', () => ({
+  default: ({ onClose }: { onClose: () => void }) => (
+    <div data-testid="match-details-modal">
+      <button onClick={onClose}>Close</button>
+    </div>
+  ),
 }));
 
 // Track registered SSE event callbacks so tests can fire them manually.
@@ -45,7 +60,9 @@ vi.mock('@/services/websocketClient', () => ({
 
 // Import after mock so we get the vi.fn() version.
 import { getMatchHistory } from '@/services/api/bffMatchHistory';
+import { matches as matchesApi } from '@/services/api';
 const mockGetMatchHistory = vi.mocked(getMatchHistory);
+const mockGetMatch = vi.mocked(matchesApi.getMatch);
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -66,6 +83,24 @@ function makeItem(overrides: Partial<MatchHistoryItem> = {}): MatchHistoryItem {
     opponent_rank: null,
     ...overrides,
   };
+}
+
+/** Build a minimal models.Match for mocking matchesApi.getMatch responses. */
+function makeFullMatch(overrides: Record<string, unknown> = {}): models.Match {
+  return new models.Match({
+    ID: 'match-1',
+    AccountID: 1,
+    EventID: 'event-1',
+    EventName: 'Standard Event',
+    Timestamp: '2026-05-01T14:30:00Z',
+    PlayerWins: 2,
+    OpponentWins: 0,
+    PlayerTeamID: 1,
+    Format: 'Standard',
+    Result: 'win',
+    CreatedAt: '2026-05-01T14:30:00Z',
+    ...overrides,
+  });
 }
 
 /**
@@ -569,6 +604,228 @@ describe('BffMatchHistory', () => {
       });
       expect(screen.queryByTestId('match-history-table')).not.toBeInTheDocument();
       expect(screen.queryByTestId('match-history-empty')).not.toBeInTheDocument();
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Fix 1 — row click opens MatchDetailsModal (detail drill-down)
+  // Regression fix: commit 2099d36d dropped the onClick from rows.
+  // --------------------------------------------------------------------------
+
+  describe('Row click → MatchDetailsModal (detail drill-down)', () => {
+    beforeEach(() => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ id: 'match-42', format: 'Standard', result: 'win' })],
+          has_more: false,
+        })
+      );
+    });
+
+    it('opens MatchDetailsModal when a match row is clicked', async () => {
+      mockGetMatch.mockResolvedValue(makeFullMatch({ ID: 'match-42' }));
+
+      render(<BffMatchHistory />);
+
+      // Wait for table to render.
+      const row = await screen.findByTestId('match-row');
+      expect(screen.queryByTestId('match-details-modal')).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(row);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-details-modal')).toBeInTheDocument();
+      });
+    });
+
+    it('calls matchesApi.getMatch with the correct match id on row click', async () => {
+      mockGetMatch.mockResolvedValue(makeFullMatch({ ID: 'match-42' }));
+
+      render(<BffMatchHistory />);
+
+      const row = await screen.findByTestId('match-row');
+      await act(async () => {
+        fireEvent.click(row);
+      });
+
+      await waitFor(() => {
+        expect(mockGetMatch).toHaveBeenCalledWith('match-42');
+      });
+    });
+
+    it('closes MatchDetailsModal when Close is clicked', async () => {
+      mockGetMatch.mockResolvedValue(makeFullMatch({ ID: 'match-42' }));
+
+      render(<BffMatchHistory />);
+
+      const row = await screen.findByTestId('match-row');
+      await act(async () => {
+        fireEvent.click(row);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-details-modal')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('match-details-modal')).not.toBeInTheDocument();
+      });
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Fix 2 — format normalization
+  // 'Ladder' → 'Ranked'; 'Play' → 'Play Queue'; empty/'Unknown' → '—'
+  // --------------------------------------------------------------------------
+
+  describe('Format normalization', () => {
+    it('maps raw "Ladder" format to "Ranked"', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ format: 'Ladder' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+      });
+
+      expect(screen.getByText('Ranked')).toBeInTheDocument();
+    });
+
+    it('maps raw "Play" format to "Play Queue"', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ format: 'Play' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+      });
+
+      expect(screen.getByText('Play Queue')).toBeInTheDocument();
+    });
+
+    it('passes through a known format string unchanged (e.g. "Standard")', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ format: 'Standard' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+      });
+
+      expect(screen.getByText('Standard')).toBeInTheDocument();
+    });
+
+    it('renders neutral "—" when format is empty string', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ format: '' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+      });
+
+      // Should show neutral dash, NOT an empty cell or a screaming "UNKNOWN"
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    });
+
+    it('renders neutral "—" when format is "Unknown"', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({
+          data: [makeItem({ format: 'Unknown' })],
+          has_more: false,
+        })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+      });
+
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+      // Must NOT show the raw "Unknown" string
+      expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Fix 3 — result badge
+  // 'unknown'/'UNKNOWN' → '–'; 'win' → 'WIN'; 'loss' → 'LOSS'
+  // --------------------------------------------------------------------------
+
+  describe('Result badge display', () => {
+    it('shows "WIN" for result "win"', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({ data: [makeItem({ result: 'win' })], has_more: false })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => expect(screen.getByText('WIN')).toBeInTheDocument());
+    });
+
+    it('shows "LOSS" for result "loss"', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({ data: [makeItem({ result: 'loss' })], has_more: false })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => expect(screen.getByText('LOSS')).toBeInTheDocument());
+    });
+
+    it('shows neutral "–" for result "unknown"', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({ data: [makeItem({ result: 'unknown' })], has_more: false })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+      });
+
+      expect(screen.getByText('–')).toBeInTheDocument();
+      // Must NOT show the screaming "UNKNOWN"
+      expect(screen.queryByText('UNKNOWN')).not.toBeInTheDocument();
+    });
+
+    it('shows neutral "–" for an empty result string', async () => {
+      mockGetMatchHistory.mockResolvedValue(
+        makeResponse({ data: [makeItem({ result: '' })], has_more: false })
+      );
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
+      });
+
+      expect(screen.getByText('–')).toBeInTheDocument();
     });
   });
 });

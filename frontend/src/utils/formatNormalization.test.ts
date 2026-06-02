@@ -4,6 +4,7 @@ import {
   normalizeQueueType,
   getDisplayFormat,
   getDisplayEventName,
+  normalizeHistoryFormat,
 } from './formatNormalization';
 
 describe('formatNormalization', () => {
@@ -333,6 +334,60 @@ describe('formatNormalization', () => {
         });
         expect(getDisplayEventName(match)).toBe('Standard Ranked');
       });
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // normalizeHistoryFormat — handles MatchHistoryItem.format (plain string)
+  // --------------------------------------------------------------------------
+
+  describe('normalizeHistoryFormat', () => {
+    it('maps "Ladder" to "Ranked"', () => {
+      expect(normalizeHistoryFormat('Ladder')).toBe('Ranked');
+    });
+
+    it('maps "Play" to "Play Queue"', () => {
+      expect(normalizeHistoryFormat('Play')).toBe('Play Queue');
+    });
+
+    it('passes through "Standard" unchanged', () => {
+      expect(normalizeHistoryFormat('Standard')).toBe('Standard');
+    });
+
+    it('passes through "Historic" unchanged', () => {
+      expect(normalizeHistoryFormat('Historic')).toBe('Play Queue');
+    });
+
+    it('maps "Alchemy_Ladder" to "Ranked"', () => {
+      expect(normalizeHistoryFormat('Alchemy_Ladder')).toBe('Ranked');
+    });
+
+    it('returns empty string for null', () => {
+      expect(normalizeHistoryFormat(null)).toBe('');
+    });
+
+    it('returns empty string for undefined', () => {
+      expect(normalizeHistoryFormat(undefined)).toBe('');
+    });
+
+    it('returns empty string for empty string', () => {
+      expect(normalizeHistoryFormat('')).toBe('');
+    });
+
+    it('returns empty string for "Unknown" (case-insensitive)', () => {
+      expect(normalizeHistoryFormat('Unknown')).toBe('');
+    });
+
+    it('returns empty string for "UNKNOWN"', () => {
+      expect(normalizeHistoryFormat('UNKNOWN')).toBe('');
+    });
+
+    it('returns empty string for "unknown"', () => {
+      expect(normalizeHistoryFormat('unknown')).toBe('');
+    });
+
+    it('maps "QuickDraft_TLA_20251127" to "QuickDraft"', () => {
+      expect(normalizeHistoryFormat('QuickDraft_TLA_20251127')).toBe('QuickDraft');
     });
   });
 });
