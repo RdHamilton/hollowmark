@@ -864,6 +864,69 @@ describe('CurrentPackPicker Component', () => {
     });
   });
 
+  // ── card-back fallback (Tim staging bug — dead Scryfall CDN) ───────────
+  // The old CARD_BACK_URL pointed at a dead Scryfall CDN path that returned
+  // 404, causing both the primary (null image_url) and the onError handler to
+  // show a broken-image icon indefinitely.  The fix replaces both with the
+  // local /back.png asset which is guaranteed to serve 200.
+
+  describe('card-back fallback renders /back.png (not dead Scryfall URL)', () => {
+    it('card with no image_url uses /back.png as src', async () => {
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: '1', name: 'Unknown Card', image_url: undefined }),
+        ],
+      });
+      (packData.cards[0] as unknown as Record<string, unknown>)['image_url'] = undefined;
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const img = container.querySelector('[data-testid="pack-card-1"] img') as HTMLImageElement | null;
+        expect(img).toBeTruthy();
+        expect(img!.src).toMatch(/\/back\.png$/);
+      });
+    });
+
+    it('onError handler sets src to /back.png, not a remote Scryfall URL', async () => {
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: '2', name: 'Broken Image Card', image_url: 'https://example.com/broken.jpg' }),
+        ],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const img = container.querySelector('[data-testid="pack-card-2"] img') as HTMLImageElement | null;
+        expect(img).toBeTruthy();
+        // Simulate load failure
+        img!.dispatchEvent(new Event('error', { bubbles: true }));
+        expect(img!.src).toMatch(/\/back\.png$/);
+      });
+    });
+
+    it('onError fallback does NOT point at the dead Scryfall CDN path', async () => {
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: '3', name: 'Any Card', image_url: 'https://example.com/card.jpg' }),
+        ],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const img = container.querySelector('[data-testid="pack-card-3"] img') as HTMLImageElement | null;
+        expect(img).toBeTruthy();
+        img!.dispatchEvent(new Event('error', { bubbles: true }));
+        expect(img!.src).not.toContain('backs.scryfall.io');
+      });
+    });
+  });
+
   // ── data-testid coverage (AC2, #624) ────────────────────────────────────
   // Tim's E2E needs stable testid selectors on the key recommendation-surface
   // elements instead of fragile CSS-class queries.

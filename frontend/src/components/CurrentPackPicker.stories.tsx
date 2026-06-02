@@ -13,6 +13,7 @@ import './CurrentPackPicker.css';
  *   3. PackGrid — realistic 5-card pack-grid snapshot with tier badges in situ.
  *      Covers the happy path (all grades), a no-grade card (badge absent), and
  *      the recommended card with "Best Pick" bar overlapping the badge (#686).
+ *   4. MissingImageFallback — /back.png shown when image_url is absent or broken.
  */
 const meta: Meta = {
   title: 'Components/CurrentPackPicker/ColorIndicators',
@@ -185,6 +186,72 @@ export const PackGrid: Story = {
       <p style={{ marginTop: 8, fontSize: 11, color: 'var(--vault-fg-muted, #7890AA)' }}>
         Forest (last card) has no grade — badge is absent.
       </p>
+    </div>
+  ),
+};
+
+// ── 4. Missing Image Fallback ──────────────────────────────────────────────
+
+/**
+ * MissingImageFallback — shows the /back.png placeholder used when a card's
+ * image_url is absent or returns a 4xx/5xx.  Previously this rendered a broken-
+ * image icon because the onError handler pointed at a dead Scryfall CDN URL
+ * (backs.scryfall.io — 404).  The fix routes both the primary src (null
+ * image_url) and the onError handler to the local /back.png asset.
+ */
+export const MissingImageFallback: Story = {
+  name: 'Card Image — missing/broken URL shows /back.png',
+  render: () => (
+    <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+      {/* Card whose image_url is absent — renders /back.png directly */}
+      <div className="pack-card" style={{ width: 120 }}>
+        <div className="card-image-container">
+          <img
+            src="/back.png"
+            alt="Card back (no image_url)"
+            className="card-image"
+          />
+          <div
+            className="tier-badge"
+            style={{ backgroundColor: '#4a9eff' }}
+          >
+            C
+          </div>
+        </div>
+        <div className="card-info">
+          <div className="card-name">Missing Image Card</div>
+          <div className="card-stats">
+            <span className="color-indicator colorless">C</span>
+            <span className="gihwr">50.0%</span>
+            <span className="alsa">ALSA: 4.5</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Card that simulates the old broken-image state for comparison */}
+      <div className="pack-card" style={{ width: 120 }}>
+        <div className="card-image-container">
+          <img
+            src="/back.png"
+            alt="Card back (onError fallback)"
+            className="card-image"
+          />
+          <div
+            className="tier-badge"
+            style={{ backgroundColor: '#ffd700' }}
+          >
+            S
+          </div>
+        </div>
+        <div className="card-info">
+          <div className="card-name">Broken Image Card</div>
+          <div className="card-stats">
+            <span className="color-indicator color-r">R</span>
+            <span className="gihwr">62.3%</span>
+            <span className="alsa">ALSA: 2.1</span>
+          </div>
+        </div>
+      </div>
     </div>
   ),
 };
