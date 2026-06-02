@@ -82,6 +82,8 @@ jobs:
             --region us-east-1 \
             --query Parameter.Value \
             --output text)
+          # Mask the Sentry DSN immediately so it never appears in log output.
+          echo "::add-mask::${SENTRY_DSN}"
           STAGING_SMOKE_TOKEN=$(aws ssm get-parameter \
             --name /vaultmtg/staging/ci-smoke-token \
             --with-decryption \
