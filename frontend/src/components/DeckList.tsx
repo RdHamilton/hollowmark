@@ -265,7 +265,12 @@ export default function DeckList({
                 </div>
               )}
               <div className="card-info">
-                <span className="card-name">{getCardName(card.deckCard.CardID, card.metadata)}</span>
+                <span
+                  className="card-name"
+                  {...(!card.metadata && { 'data-testid': 'unknown-card' })}
+                >
+                  {getCardName(card.deckCard.CardID, card.metadata)}
+                </span>
               </div>
               {(onAddCard || onRemoveCard || onRemoveAllCopies) && (
                 <div className="card-actions">
