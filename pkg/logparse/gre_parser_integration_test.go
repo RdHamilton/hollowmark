@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// TestParseGamePlays_Integration tests the play tracking parser with real match log data.
-// The fixture contains GRE messages from an actual MTGA match (vs crayonscabs).
+// TestParseGamePlays_Integration tests the play tracking parser with sanitized match log data.
+// The fixture contains GRE messages from a synthetic MTGA match fixture (vs TestPlayer#00004).
 func TestParseGamePlays_Integration(t *testing.T) {
 	// Get the directory of this test file
 	_, currentFile, _, ok := runtime.Caller(0)
@@ -44,7 +44,7 @@ func TestParseGamePlays_Integration(t *testing.T) {
 	t.Logf("Loaded %d log entries from fixture", len(entries))
 
 	// Get player connection info
-	playerConn := GetPlayerSeatIDByName(entries, "Jhixiaus")
+	playerConn := GetPlayerSeatIDByName(entries, "TestPlayer#00003")
 	if playerConn == nil {
 		t.Fatal("Failed to find player connection info")
 	}
