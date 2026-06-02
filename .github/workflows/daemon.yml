@@ -83,6 +83,18 @@ jobs:
           flags: daemon
           fail_ci_if_error: false
 
+      # Corpus fixture-consistency lint (vmt-t#698).
+      # Verifies that match_id/format/quest_id/deck_id values in daemon-emit/
+      # are identical in the paired db-expected/ and api-expected/ files.
+      # Hard-fails on any drift so a daemon-emit/ promotion that forgets to
+      # update db/api assertion fixtures is caught before merge, not after.
+      - name: Corpus fixture-consistency lint (vmt-t#698)
+        working-directory: services/daemon
+        env:
+          GONOSUMDB: github.com/RdHamilton/vault-mtg
+          GOPRIVATE: github.com/RdHamilton/vault-mtg
+        run: go test -v -race -run TestCorpusConsistency ./testdata/corpus/...
+
       # ADR-042 Layer 2: contract/serialisation gate.
       # Runs the TestContractEmit_* suite which round-trips every event class
       # through the real parsers + dispatch.BuildEvent and validates payload
