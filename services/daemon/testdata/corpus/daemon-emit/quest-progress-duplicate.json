@@ -4,21 +4,28 @@
   "event_id": "11111111-0000-0000-0000-000000000005",
   "session_id": "22222222-0000-0000-0000-000000000001",
   "sequence": 5,
-  "occurred_at": "2026-05-01T10:20:00Z",
+  "occurred_at": "2026-01-01T00:00:00Z",
   "payload": {
     "quests": [
       {
-        "quest_id": "00000001-0000-4000-8000-000000000001",
-        "quest_name": "Simic Evolution",
-        "progress": 5,
+        "quest_id": "11111111-0000-4000-8000-000000000001",
+        "quest_name": "Cast 30 blue or green spells",
+        "progress": 13,
         "goal": 30,
         "can_swap": true
       },
       {
-        "quest_id": "00000001-0000-4000-8000-000000000002",
-        "quest_name": "Orzhov Advokist",
-        "progress": 8,
+        "quest_id": "11111111-0000-4000-8000-000000000004",
+        "quest_name": "Cast 20 blue or black spells",
+        "progress": 17,
         "goal": 20,
+        "can_swap": true
+      },
+      {
+        "quest_id": "11111111-0000-4000-8000-000000000007",
+        "quest_name": "Attack with 30 creatures",
+        "progress": 0,
+        "goal": 30,
         "can_swap": true
       }
     ]
