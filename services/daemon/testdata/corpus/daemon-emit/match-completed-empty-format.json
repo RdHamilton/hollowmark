@@ -1,9 +1,12 @@
 {
+  "type": "match.completed",
   "account_id": "test-account-001",
   "event_id": "11111111-0000-0000-0000-000000000002",
-  "occurred_at": "2026-05-01T10:05:00Z",
+  "session_id": "22222222-0000-0000-0000-000000000001",
+  "sequence": 2,
+  "occurred_at": "2026-01-01T00:00:00Z",
   "payload": {
-    "match_id": "11111111-0000-4000-8000-000000000003",
+    "match_id": "11111111-0000-4000-8000-000000000122",
     "winning_team_id": 1,
     "result_list": [
       {
@@ -25,8 +28,5 @@
     "player_team_id": 1,
     "player_wins": 1,
     "opponent_wins": 0
-  },
-  "sequence": 2,
-  "session_id": "22222222-0000-0000-0000-000000000001",
-  "type": "match.completed"
+  }
 }
