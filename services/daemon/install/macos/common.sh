@@ -60,7 +60,8 @@ esac
 
 # Binary identity
 BINARY_NAME="vaultmtg-daemon${SUFFIX}"
-INSTALL_DIR="/usr/local/bin"
+# Honor env override (used by tests and dry-run mode); default to canonical location.
+INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
 # LaunchAgent label
 PLIST_LABEL="com.vaultmtg.daemon${LABEL_SUFFIX}"
@@ -74,11 +75,22 @@ CONFIG_DIR="${HOME}/.vaultmtg${SUFFIX}"
 LOG_FILE="${HOME}/Library/Logs/vaultmtg-daemon${SUFFIX}.log"
 INSTALL_STATE="${CONFIG_DIR}/install-state.json"
 
-# macOS launcher app bundle (ADR-036 I-4 / I-9)
-APP_BUNDLE_PATH="/Applications/VaultMTG${APP_SUFFIX}.app"
+# macOS launcher app bundle (ADR-036 I-4 / I-9).
+# Honor env override (used by tests and installer sandbox mode).
+APP_BUNDLE_PATH="${APP_BUNDLE_PATH:-/Applications/VaultMTG${APP_SUFFIX}.app}"
 
 # User-visible tray label
 TRAY_LABEL="VaultMTG${DISPLAY}"
+
+# Local-API TCP port (loopback health/status endpoint).
+# stable = 9001, staging = 9011 (stable + 10, offset matches install.stagingPortOffset in Go).
+# Using offset 10 (not 1) avoids collision with any adjacent well-known port.
+# Enforced by internal/install/crosscheck_test.go (ADR-049 §2 fitness function).
+if [ "${CHANNEL}" = "staging" ]; then
+  LOCAL_API_PORT=9011
+else
+  LOCAL_API_PORT=9001
+fi
 
 # ---------------------------------------------------------------------------
 # Legacy handling — ONLY for the stable channel.
