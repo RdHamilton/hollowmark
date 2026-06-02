@@ -575,6 +575,78 @@ describe('CurrentPackPicker Component', () => {
     });
   });
 
+  // ── low_confidence "Limited data" pill (vmt-t#646) ─────────────────────
+  // Prof gate: backend emits low_confidence=true when sample size < 500 GIH
+  // games. The SPA must surface a visible "Limited data" pill/badge so a
+  // skimmer can distinguish a data-backed rec from a sub-500-sample one.
+
+  describe('low_confidence indicator (vmt-t#646)', () => {
+    it('shows "Limited data" pill when low_confidence is true on a card', async () => {
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: '1', name: 'Rare Card', low_confidence: true }),
+          createMockPackCard({ arena_id: '2', name: 'Normal Card', low_confidence: false }),
+        ],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('low-confidence-1')).toBeInTheDocument();
+        expect(screen.getByTestId('low-confidence-1')).toHaveTextContent('Limited data');
+      });
+    });
+
+    it('does NOT show "Limited data" pill when low_confidence is false', async () => {
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: '1', name: 'Well-Sampled Card', low_confidence: false }),
+        ],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('low-confidence-1')).not.toBeInTheDocument();
+      });
+    });
+
+    it('does NOT show "Limited data" pill when low_confidence is undefined', async () => {
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: '1', name: 'Card Without Field' }),
+        ],
+      });
+      // Explicitly drop low_confidence from the card object
+      (packData.cards[0] as unknown as Record<string, unknown>)['low_confidence'] = undefined;
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('low-confidence-1')).not.toBeInTheDocument();
+      });
+    });
+
+    it('pill has data-testid="low-confidence-{arenaId}" for E2E selection', async () => {
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: 'abc123', name: 'Low Sample', low_confidence: true }),
+        ],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const pill = container.querySelector('[data-testid="low-confidence-abc123"]');
+        expect(pill).toBeInTheDocument();
+      });
+    });
+  });
+
   // ── data-testid coverage (AC2, #624) ────────────────────────────────────
   // Tim's E2E needs stable testid selectors on the key recommendation-surface
   // elements instead of fragile CSS-class queries.
