@@ -420,6 +420,14 @@ func (s *Service) flushGREBuffer(ctx context.Context, sessionID string, entries 
 		}
 	}
 
+	// Derive PlayerOnPlay (#687): the first-turn active player is on the play.
+	// playerConn is nil on stale-sweep flushes; in that case we leave
+	// PlayerOnPlay nil (unknown) rather than making an incorrect determination.
+	if result.FirstTurnActivePlayerSeatID > 0 && playerConn != nil {
+		onPlay := result.FirstTurnActivePlayerSeatID == playerConn.SeatID
+		payload.PlayerOnPlay = &onPlay
+	}
+
 	// Emit gre.game_started for each distinct gameNumber found in this buffer.
 	// This event is emitted retrospectively (game already over when flush fires).
 	// A real-time emission path is a v0.3.8 enhancement.
