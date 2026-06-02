@@ -29,6 +29,16 @@ type TrayHooks struct {
 	// re-runs the PKCE flow. Buffered cap=1; a second click before the first
 	// completes is dropped.
 	RetrySetup <-chan struct{}
+	// NotifyUpdateAvailable is called when the update-check loop finds a newer
+	// daemon version. version is the bare semver (e.g. "0.3.7"); downloadURL is
+	// the GitHub Releases page for the release. The tray must show
+	// "Update available: vX.Y.Z — Click to Install" and signal InstallUpdate when
+	// the user clicks.
+	NotifyUpdateAvailable func(version, downloadURL string)
+	// InstallUpdate is signalled by the tray when the user clicks the
+	// "Update available" tray item. The daemon downloads, verifies, and launches
+	// the installer in response. Buffered cap=1.
+	InstallUpdate <-chan struct{}
 	// SetHelperInstalled updates the tray menu to show Sync Now (true) or
 	// Grant Access (false).
 	SetHelperInstalled func(bool)
