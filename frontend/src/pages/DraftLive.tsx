@@ -15,6 +15,7 @@ import type { DraftPackPayload } from '@/hooks';
 import { getDraftRatings } from '@/services/api/bffDraftRatings';
 import type { BffCardRating } from '@/services/api/bffDraftRatings';
 import { trackEvent } from '@/services/analytics';
+import { useFeatureFlag } from '@/hooks/useFeatureFlag';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import './DraftLive.css';
@@ -92,6 +93,13 @@ const DraftLive: React.FC = () => {
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
   useEffect(() => { getTokenRef.current = getToken; });
+
+  // Feature flag gate: live_draft_advisor_enabled
+  // Optimistic-show default: treat null (loading) as enabled (!== false).
+  // SSE stream stays alive regardless of flag state — only highlighting and
+  // recommendation telemetry are suppressed when the flag is OFF (ADR-047).
+  const { enabled: advisorEnabled } = useFeatureFlag('live_draft_advisor_enabled');
+  const advisorVisible = advisorEnabled !== false;
 
   // ── SSE stream ────────────────────────────────────────────────────────────
   const { latestEvent, status: streamStatus } = useDraftEventStream();
@@ -187,8 +195,10 @@ const DraftLive: React.FC = () => {
   }, [session.currentPackCards, ratingsMap]);
 
   // Analytics: feature_draft_advisor_pick_viewed — fires once per pack when cards are non-empty
+  // Suppressed when live_draft_advisor_enabled flag is OFF (ADR-047).
   const lastPickKeyRef = useRef<string | null>(null);
   useEffect(() => {
+    if (!advisorVisible) return;
     if (packCards.length === 0 || !setCode) return;
     const key = `${setCode}/${session.packNumber}/${session.pickNumber}`;
     if (lastPickKeyRef.current === key) return;
@@ -201,10 +211,11 @@ const DraftLive: React.FC = () => {
         pick_number: session.pickNumber,
       },
     });
-  }, [packCards.length, setCode, session.packNumber, session.pickNumber]);
+  }, [advisorVisible, packCards.length, setCode, session.packNumber, session.pickNumber]);
 
-  // Top pick = highest GIHWR. Undefined when all are unrated.
+  // Top pick = highest GIHWR. Null when all are unrated OR when advisor flag is OFF.
   const topPickArenaId: number | null = useMemo(() => {
+    if (!advisorVisible) return null;
     if (packCards.length === 0) return null;
     let best: PackCard | null = null;
     for (const card of packCards) {
@@ -212,7 +223,7 @@ const DraftLive: React.FC = () => {
       if (!best || card.gihwr > (best.gihwr ?? 0)) best = card;
     }
     return best?.arenaId ?? null;
-  }, [packCards]);
+  }, [advisorVisible, packCards]);
 
   // Picked cards with names from ratings map.
   const pickedCardsInfo = useMemo(() => {
