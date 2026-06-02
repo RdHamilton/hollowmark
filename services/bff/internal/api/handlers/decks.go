@@ -92,24 +92,24 @@ func (h *DecksHandler) WithPostHogClient(client PostHogClient) *DecksHandler {
 // deckListItemResponse mirrors gui.DeckListItem (camelCase). The SPA's
 // list view consumes these.
 type deckListItemResponse struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Format        string   `json:"format"`
-	Source        string   `json:"source"`
-	DraftEventID  *string  `json:"draftEventId,omitempty"`
-	MatchesPlayed int      `json:"matchesPlayed"`
-	MatchesWon    int      `json:"matchesWon"`
-	GamesPlayed   int      `json:"gamesPlayed"`
-	GamesWon      int      `json:"gamesWon"`
-	WinRate       float64  `json:"winRate"`
-	IsAppCreated  bool     `json:"isAppCreated"`
-	CreatedAt     string   `json:"createdAt"`
-	ModifiedAt    string   `json:"modifiedAt"`
-	LastPlayed    *string  `json:"lastPlayed,omitempty"`
-	ColorIdentity string   `json:"colorIdentity,omitempty"`
-	Description   string   `json:"description,omitempty"`
-	CardCount     int      `json:"cardCount"`
-	Tags          []string `json:"tags"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Format         string   `json:"format"`
+	Source         string   `json:"source"`
+	DraftSessionID *string  `json:"draftEventId,omitempty"`
+	MatchesPlayed  int      `json:"matchesPlayed"`
+	MatchesWon     int      `json:"matchesWon"`
+	GamesPlayed    int      `json:"gamesPlayed"`
+	GamesWon       int      `json:"gamesWon"`
+	WinRate        float64  `json:"winRate"`
+	IsAppCreated   bool     `json:"isAppCreated"`
+	CreatedAt      string   `json:"createdAt"`
+	ModifiedAt     string   `json:"modifiedAt"`
+	LastPlayed     *string  `json:"lastPlayed,omitempty"`
+	ColorIdentity  string   `json:"colorIdentity,omitempty"`
+	Description    string   `json:"description,omitempty"`
+	CardCount      int      `json:"cardCount"`
+	Tags           []string `json:"tags"`
 }
 
 // deckCardResponse mirrors gui.DeckCard (camelCase).
@@ -204,10 +204,10 @@ type deckCardChangeResponse struct {
 
 // createDeckRequest mirrors the SPA's CreateDeckRequest.
 type createDeckRequest struct {
-	Name         string  `json:"name"`
-	Format       string  `json:"format"`
-	Source       string  `json:"source"`
-	DraftEventID *string `json:"draft_event_id,omitempty"`
+	Name           string  `json:"name"`
+	Format         string  `json:"format"`
+	Source         string  `json:"source"`
+	DraftSessionID *string `json:"draft_event_id,omitempty"`
 }
 
 // updateDeckRequest mirrors UpdateDeckRequest.
@@ -328,7 +328,7 @@ func (h *DecksHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := h.decks.CreateDeck(r.Context(), repository.CreateDeckInput{
 		AccountID: accountID, Name: req.Name, Format: req.Format,
-		Source: req.Source, DraftEventID: req.DraftEventID,
+		Source: req.Source, DraftSessionID: req.DraftSessionID,
 	})
 	if err != nil {
 		log.Printf("[DecksHandler.Create] accountID=%d: %v", accountID, err)
@@ -1375,8 +1375,8 @@ func deckSummariesToResponse(rows []repository.DeckSummaryRow) []deckListItemRes
 func deckSummaryRowToResponse(d repository.DeckSummaryRow) deckListItemResponse {
 	resp := deckListItemResponse{
 		ID: d.ID, Name: d.Name, Format: d.Format, Source: d.Source,
-		DraftEventID:  d.DraftEventID,
-		MatchesPlayed: d.MatchesPlayed, MatchesWon: d.MatchesWon,
+		DraftSessionID: d.DraftSessionID,
+		MatchesPlayed:  d.MatchesPlayed, MatchesWon: d.MatchesWon,
 		GamesPlayed: d.GamesPlayed, GamesWon: d.GamesWon,
 		IsAppCreated:  d.IsAppCreated,
 		CreatedAt:     d.CreatedAt.UTC().Format(time.RFC3339),

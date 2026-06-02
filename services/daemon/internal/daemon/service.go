@@ -1492,10 +1492,15 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 			s.recordParseFailure(eventType, entry.Raw)
 			payload = entry.JSON
 		} else {
-			payload = p
 			if s.draftState != nil {
 				s.draftState.HandlePick(p)
+				// Attach the active session ID so the BFF can associate
+				// this pick with the correct draft_sessions row.
+				if sess, ok := s.draftState.Get("current"); ok {
+					p.SessionID = sess.ID
+				}
 			}
+			payload = p
 		}
 	case "inventory.updated":
 		p, err := logreader.ParseInventoryEntry(entry)
@@ -1563,6 +1568,18 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 			s.recordParseFailure(eventType, entry.Raw)
 			payload = entry.JSON
 		} else {
+			// Attach DraftSessionID when the active in-memory session's
+			// CourseName matches the match Format (event_name) and the
+			// session was updated within 48 hours.
+			if s.draftState != nil {
+				if sess, ok := s.draftState.Get("current"); ok {
+					if sess.CourseName == p.Format &&
+						time.Since(sess.UpdatedAt) < 48*time.Hour {
+						id := sess.ID
+						p.DraftSessionID = &id
+					}
+				}
+			}
 			payload = p
 		}
 	case "greToClientEvent":
@@ -1649,7 +1666,7 @@ func classifyEntry(entry *logreader.LogEntry) string {
 			return "draft.started"
 		}
 		if fromScene, ok2 := entry.JSON["fromSceneName"].(string); ok2 && fromScene == "Draft" {
-			return "draft.ended"
+			return "draft.completed"
 		}
 	}
 
