@@ -52,8 +52,12 @@ func (s Status) label() string {
 type App struct {
 	appURL  string
 	version string
-	openURL func(string) error
-	onQuit  func()
+	// appLabel is the user-visible title shown next to the tray icon (macOS) and
+	// in the tooltip. "VaultMTG" for the stable channel; "VaultMTG (Staging)"
+	// for the staging channel. Set via NewWithLabel; defaults to "VaultMTG".
+	appLabel string
+	openURL  func(string) error
+	onQuit   func()
 
 	// protected by single-goroutine access after setup()
 	status          Status
@@ -93,15 +97,24 @@ type App struct {
 	InstallUpdate chan struct{}
 }
 
-// New creates an App. appURL is opened when "Open VaultMTG" is clicked.
-// version is the daemon build version (injected via -ldflags -X main.Version=<ver>;
-// defaults to "dev" for local builds) and is displayed in the "About" menu item.
-// openURL is the platform open-browser function. onQuit is called when the
-// tray exits (Quit clicked or process terminated).
+// New creates an App with the default "VaultMTG" label. appURL is opened when
+// "Open VaultMTG" is clicked. version is the daemon build version (injected via
+// -ldflags -X main.Version=<ver>; defaults to "dev" for local builds) and is
+// displayed in the "About" menu item. openURL is the platform open-browser
+// function. onQuit is called when the tray exits (Quit clicked or process
+// terminated). For channel-aware label use NewWithLabel.
 func New(appURL, version string, openURL func(string) error, onQuit func()) *App {
+	return NewWithLabel(appURL, version, openURL, onQuit, "VaultMTG")
+}
+
+// NewWithLabel creates an App with an explicit tray label (ADR-049 Ticket 4).
+// Pass install.Identity(channel).TrayLabel as the label argument so the tray
+// title reflects the channel: "VaultMTG" (stable) or "VaultMTG (Staging)" (staging).
+func NewWithLabel(appURL, version string, openURL func(string) error, onQuit func(), label string) *App {
 	return &App{
 		appURL:        appURL,
 		version:       version,
+		appLabel:      label,
 		openURL:       openURL,
 		onQuit:        onQuit,
 		status:        StatusStarting,
@@ -238,16 +251,17 @@ func (a *App) SetLastSync(t time.Time) {
 
 func (a *App) setup() {
 	systray.SetIcon(iconData)
-	systray.SetTooltip("VaultMTG Companion")
+	// Tooltip shows the channel-specific label so users know which channel is running.
+	systray.SetTooltip(a.appLabel)
 
 	// On macOS the menu bar title is shown next to the icon.
 	if runtime.GOOS == "darwin" {
-		systray.SetTitle("VaultMTG")
+		systray.SetTitle(a.appLabel)
 	}
 
 	// About item — disabled (informational label showing the running version).
 	// Positioned at the top so the version is immediately visible without scrolling.
-	a.miAbout = systray.AddMenuItem("VaultMTG Daemon "+a.version, "Running version")
+	a.miAbout = systray.AddMenuItem(a.appLabel+" Daemon "+a.version, "Running version")
 	a.miAbout.Disable()
 
 	// Check for Updates — opens the GitHub Releases page for the daemon.
@@ -280,11 +294,11 @@ func (a *App) setup() {
 
 	systray.AddSeparator()
 
-	a.miOpenApp = systray.AddMenuItem("Open VaultMTG", "Open the VaultMTG web app")
+	a.miOpenApp = systray.AddMenuItem("Open "+a.appLabel, "Open the VaultMTG web app")
 
 	systray.AddSeparator()
 
-	a.miQuit = systray.AddMenuItem("Quit", "Stop the VaultMTG daemon")
+	a.miQuit = systray.AddMenuItem("Quit", "Stop the "+a.appLabel+" daemon")
 }
 
 // openCheckForUpdates opens the GitHub Releases page for the VaultMTG daemon
