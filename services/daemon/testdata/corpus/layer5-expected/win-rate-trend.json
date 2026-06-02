@@ -1,0 +1,19 @@
+{
+  "corpus_mtga_version": "2026.59.20.4846.1277160",
+  "corpus_provenance": "SYNTHETIC",
+  "expected_empty": false,
+  "assertions": [
+    {
+      "surface": "win-rate-trend",
+      "bff_endpoint": "/api/v1/matches/trends",
+      "notes": "BFF emits json:'Trends' (capital T). The SPA TrendAnalysis class reads source['Trends'] (after the fix from PR #2910). Before the fix the SPA read source['Periods'] which is absent on the wire — the chart was always empty. The seeded test-data.sql has player_stats rows for 8 dates across Standard/QuickDraft formats, enough to produce at least one trend period. A Trends/Periods key mismatch would render win-rate-trend-empty instead of win-rate-trend-chart.",
+      "fields": {
+        "response_key": "Trends",
+        "forbidden_response_key": "Periods",
+        "chart_must_render": true,
+        "empty_state_must_not_render": true,
+        "min_period_count": 1
+      }
+    }
+  ]
+}
