@@ -230,7 +230,7 @@ const GamePlayTimelinePanel = ({
   const selectedEntry = timeline.find((e) => e.turn === selectedTurn);
 
   return (
-    <div className="game-play-timeline-panel">
+    <div className="game-play-timeline-panel" data-testid="game-timeline-panel">
       <button
         type="button"
         className="panel-header"
@@ -248,14 +248,14 @@ const GamePlayTimelinePanel = ({
         <div id="game-play-timeline-content" className="panel-content">
           {loading && <LoadingSpinner message="Loading timeline..." />}
 
-          {error && <div className="error-message">{error}</div>}
+          {error && <div className="error-message" data-testid="game-timeline-error">{error}</div>}
 
           {!loading && !error && timeline.length === 0 && (
-            <div className="empty-state">No game play data available for this match</div>
+            <div className="empty-state" data-testid="game-timeline-empty">No game play data available for this match</div>
           )}
 
           {!loading && !error && timeline.length > 0 && (
-            <div className="timeline-container">
+            <div className="timeline-container" data-testid="game-timeline">
               {/* Turn Navigation */}
               <div className="turn-navigation">
                 <div className="turn-buttons">

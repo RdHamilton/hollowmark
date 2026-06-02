@@ -218,12 +218,14 @@ const RankProgression = () => {
       )}
 
       {!loading && !error && timeline.length === 0 && (
-        <EmptyState
-          icon="🏆"
-          heading="No rank progression data"
-          subtext={`Play ${format === 'constructed' ? 'ranked constructed' : 'limited (draft/sealed)'} matches to track your rank progression over time.`}
-          variant="no-data"
-        />
+        <div data-testid="rank-chart-empty">
+          <EmptyState
+            icon="🏆"
+            heading="No rank progression data"
+            subtext={`Play ${format === 'constructed' ? 'ranked constructed' : 'limited (draft/sealed)'} matches to track your rank progression over time.`}
+            variant="no-data"
+          />
+        </div>
       )}
 
       {!loading && !error && timeline.length > 0 && stats && (
@@ -260,7 +262,7 @@ const RankProgression = () => {
           </div>
 
           {/* Chart */}
-          <div className="chart-container">
+          <div className="chart-container" data-testid="rank-chart">
             <ResponsiveContainer width="100%" height={500}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#3d3d3d" />

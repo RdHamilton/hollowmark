@@ -1,0 +1,18 @@
+{
+  "corpus_mtga_version": "2026.59.20.4846.1277160",
+  "corpus_provenance": "FORMAT-CONFIRMED",
+  "expected_empty": true,
+  "assertions": [
+    {
+      "surface": "draft-surface",
+      "bff_endpoint": "/api/v1/history/drafts",
+      "notes": "ADR-051 draft_match_results / draft_picks write paths are not yet built. The premier-draft-pack.log and premier-draft-pick.log player-log fixtures ARE promoted to REAL in the corpus MANIFEST, but the daemon does not yet write to draft_match_results or draft_picks tables. The BFF returns empty draft history. expected_empty: true means the harness asserts the empty-state component renders (data-testid='draft-history-empty') rather than asserting row data. A 0/0 rendering without the empty-state indicator is still a FAIL. Once ADR-051 write paths land and corpus draft fixtures are promoted, regenerate this manifest with expected_empty: false and the actual draft result values.",
+      "fields": {
+        "empty_state_must_render": true,
+        "empty_state_testid": "draft-history-empty",
+        "table_must_not_render": true,
+        "table_testid": "draft-history-table"
+      }
+    }
+  ]
+}

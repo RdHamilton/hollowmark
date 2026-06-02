@@ -1,0 +1,21 @@
+{
+  "corpus_mtga_version": "2026.59.20.4846.1277160",
+  "corpus_provenance": "SYNTHETIC",
+  "expected_empty": false,
+  "assertions": [
+    {
+      "surface": "rank-progression",
+      "bff_endpoint": "/api/v1/matches/rank-progression-timeline",
+      "notes": "BFF emits { occurred_at, rank, result, match_id } per entry — rank_class and rank_level are NOT emitted on the wire. The SPA uses parseRankString() (after the fix from PR #2910) to derive class+level from the flat rank string. Before the fix the SPA called rankToNumeric(point.rank_class, point.rank_level) which were both undefined, producing an all-zero flat chart. The seeded test-data.sql rank_history has 5 entries (Gold 1-3 constructed, Diamond 1-2 limited). A missing-field bug would render rank-chart-empty or a flat zero series.",
+      "fields": {
+        "wire_fields_present": ["occurred_at", "rank", "result", "match_id"],
+        "wire_fields_absent": ["rank_class", "rank_level"],
+        "chart_must_render": true,
+        "empty_state_must_not_render": true,
+        "min_entry_count": 1,
+        "chart_must_be_non_flat": true,
+        "sample_rank_values": ["Gold 1", "Gold 2", "Gold 3", "Diamond 1", "Diamond 2"]
+      }
+    }
+  ]
+}
