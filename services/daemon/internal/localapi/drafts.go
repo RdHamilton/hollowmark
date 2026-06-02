@@ -57,17 +57,26 @@ type noopCards struct{}
 
 func (noopCards) CardName(_ string) string { return "" }
 
+// noopMeta is the default CardMetaLookup used until a real Phase B
+// ratingsclient is wired. Always reports "not found" so Phase B fields
+// (color, ALSA, low_confidence) gracefully fall back to zero/empty.
+type noopMeta struct{}
+
+func (noopMeta) CardMetaByID(_ string) (draftalgo.CardMeta, bool) {
+	return draftalgo.CardMeta{}, false
+}
+
 // ─── /api/v1/drafts/{id}/current-pack ─────────────────────────────────────
 
 // packCardWithRating mirrors the SPA's gui.PackCardWithRating
 // (frontend/src/types/models.ts). All keys are snake_case to match the
-// SPA TypeScript type exactly. Phase A populates:
+// SPA TypeScript type exactly.
 //
-//	arena_id, name, gihwr, is_recommended, score, reasoning.
-//
-// Phase B will add: alsa, colors, tier, mana_cost, cmc, type_line, rarity.
-// Fields the Phase A daemon can't populate yet are emitted as zero/empty
-// so the SPA falls back to its existing defaults gracefully.
+// Phase A populates: arena_id, name, gihwr, is_recommended, score, reasoning.
+// Phase B (v0.3.8, ADR-047) adds: alsa, colors, rarity + low_confidence.
+// low_confidence is the one new SPA contract field from Phase B (all other
+// Phase B fields were already in models.ts, just emitted as zero/empty).
+// Fields still not populated are emitted as zero/empty for graceful fallback.
 type packCardWithRating struct {
 	ArenaID       string   `json:"arena_id"`
 	Name          string   `json:"name"`
@@ -83,6 +92,10 @@ type packCardWithRating struct {
 	IsRecommended bool     `json:"is_recommended"`
 	Score         float64  `json:"score"`
 	Reasoning     string   `json:"reasoning"`
+	// LowConfidence is true when the card's GIH sample size is below
+	// lowConfidenceGIHFloor (500 games) or absent. New Phase B field
+	// (ADR-047 §2). Frank adds low_confidence?: boolean to models.ts.
+	LowConfidence bool `json:"low_confidence"`
 }
 
 // currentPackResponse mirrors the SPA's gui.CurrentPackResponse
@@ -175,7 +188,9 @@ func (s *Server) handleDraftsPathPrefix(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Run the recommendation algorithm over the current pack.
-	recs := recommend.Recommend(sess.Format, packIDs, poolIDs, s.ratings(), s.cards())
+	// Phase B (ADR-047): pass pool, pack, and meta to get color-fit reasons,
+	// archetype, ALSA signals, low_confidence markers, and pool_colors.
+	recs := recommend.Recommend(sess.Format, poolIDs, packIDs, s.ratings(), s.cards(), s.meta())
 
 	// Build a map from card ID → recommendation entry for O(1) lookup
 	// when constructing the per-card response objects.
@@ -183,6 +198,7 @@ func (s *Server) handleDraftsPathPrefix(w http.ResponseWriter, r *http.Request) 
 		isRecommended bool
 		score         float64
 		reasoning     string
+		lowConfidence bool
 	}
 	recByID := make(map[string]recEntry, len(packIDs))
 	for i, r := range recs.TopPicks {
@@ -190,6 +206,7 @@ func (s *Server) handleDraftsPathPrefix(w http.ResponseWriter, r *http.Request) 
 			isRecommended: i == 0, // only rank-1 is the recommended card
 			score:         float64(r.Priority) / 5.0,
 			reasoning:     r.Reason,
+			lowConfidence: r.LowConfidence,
 		}
 	}
 	for _, r := range recs.Alternatives {
@@ -197,13 +214,28 @@ func (s *Server) handleDraftsPathPrefix(w http.ResponseWriter, r *http.Request) 
 			isRecommended: false,
 			score:         float64(r.Priority) / 5.0,
 			reasoning:     r.Reason,
+			lowConfidence: r.LowConfidence,
 		}
 	}
 
+	// Phase B: resolve per-card metadata for ALSA, Colors, Rarity fields.
+	metaLookup := s.meta()
 	packCards := make([]packCardWithRating, 0, len(sess.CurrentCards))
 	for _, id := range sess.CurrentCards {
 		idStr := strconv.Itoa(id)
 		re := recByID[idStr]
+		// Populate Phase B fields from card metadata.
+		cm, hasMeta := metaLookup.CardMetaByID(idStr)
+		colors := []string{}
+		alsa := 0.0
+		rarity := ""
+		if hasMeta {
+			if len(cm.Colors) > 0 {
+				colors = cm.Colors
+			}
+			alsa = cm.ALSA
+			rarity = cm.Rarity
+		}
 		packCards = append(packCards, packCardWithRating{
 			ArenaID:       idStr,
 			Name:          lookupName(s, idStr),
@@ -211,9 +243,10 @@ func (s *Server) handleDraftsPathPrefix(w http.ResponseWriter, r *http.Request) 
 			IsRecommended: re.isRecommended,
 			Score:         re.score,
 			Reasoning:     re.reasoning,
-			// Phase B fields (colors, tier, alsa, etc.) remain zero/empty
-			// until ratingsclient retains them.
-			Colors: []string{},
+			LowConfidence: re.lowConfidence,
+			Colors:        colors,
+			ALSA:          alsa,
+			Rarity:        rarity,
 		})
 	}
 
@@ -231,6 +264,13 @@ func (s *Server) handleDraftsPathPrefix(w http.ResponseWriter, r *http.Request) 
 
 	packLabel := fmt.Sprintf("Pack %d, Pick %d", sess.CurrentPack+1, sess.CurrentPick+1)
 
+	// Phase B: pool_colors derived by recommend.Recommend from pool card metas,
+	// re-derived on every pick (never cached). Empty slice when not committed.
+	poolColors := recs.PoolColors
+	if poolColors == nil {
+		poolColors = []string{}
+	}
+
 	writeJSON(w, r, http.StatusOK, currentPackResponse{
 		SessionID:       sess.ID,
 		PackNumber:      sess.CurrentPack + 1, // SPA displays 1-based
@@ -238,7 +278,7 @@ func (s *Server) handleDraftsPathPrefix(w http.ResponseWriter, r *http.Request) 
 		PackLabel:       packLabel,
 		Cards:           packCards,
 		RecommendedCard: recommendedCard,
-		PoolColors:      []string{}, // Phase B: derive from pool card colors
+		PoolColors:      poolColors,
 		PoolSize:        len(poolIDs),
 	})
 }
@@ -347,6 +387,16 @@ func (s *Server) cards() draftalgo.CardLookup {
 		return s.cardsLookup
 	}
 	return noopCards{}
+}
+
+// meta returns the Phase B card metadata lookup. Production wires this
+// to the ratingsclient.Client after Phase B widening; tests can inject
+// a stub. Falls back to noopMeta when not wired (Phase A behaviour).
+func (s *Server) meta() draftalgo.CardMetaLookup {
+	if s.metaLookup != nil {
+		return s.metaLookup
+	}
+	return noopMeta{}
 }
 
 // resolvePack figures out the offered pack + the picked card ID for a

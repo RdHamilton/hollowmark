@@ -11,7 +11,11 @@
 //   - Graceful N/A degrade when ratings cache is empty
 //   - Archetype field is empty in Phase A (data not retained yet)
 //
-// Phase B (v0.3.8): extend with color-fit, ALSA, pool signals.
+// Phase B (v0.3.8, ADR-047): color-fit reasons, ALSA signals, pool-color
+//   awareness, archetype suppression (color-commitment heuristic, re-derived
+//   fresh each pick), low_confidence marker (< lowConfidenceGIHFloor games),
+//   splash-consideration path, and "why not pick 2" differentiator.
+//
 // Phase C (post-beta): archetype-conditioned ML win rates.
 //
 // This package does NOT call pickquality.Analyze — doing so per-card would
@@ -21,29 +25,75 @@
 package recommend
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
 	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/rank"
 )
+
+// lowConfidenceGIHFloor is the minimum number of games-in-hand needed
+// for the recommendation to be considered data-backed. Cards below this
+// threshold receive LowConfidence=true. ADR-047 §2: threshold is 500.
+// Named constant — never inline (ADR-047 fitness function).
+const lowConfidenceGIHFloor = 500
+
+// colorCommitmentThreshold is the number of cards of a single color
+// needed for a pool to be considered "committed" to that color. Two
+// colors both meeting this threshold = two-color commitment, triggering
+// pool-aware (archetype + color-fit) mode. Chosen at 3 to match
+// typical early-draft color-signal strength.
+const colorCommitmentThreshold = 3
+
+// splashHighGIHWRFloor is the GIHWR above which an off-color card
+// qualifies for the splash-consideration reason path instead of an
+// off-color penalty. ADR-047 §5 (Prof constraint): "high-GIHWR card
+// one step off-color MUST have a dedicated splash consideration reason."
+const splashHighGIHWRFloor = 66.0
+
+// highALSAFloor is the ALSA above which a card qualifies for the
+// "frequently available late" scarcity signal. 7.0 is a round number
+// that captures bulk rares and late-format filler.
+const highALSAFloor = 7.0
 
 // Recommendation is one card recommendation entry.
 //
 // Reason is plain English — never a raw GIHWR percentage (Prof gate).
 // GIHWR is available for callers that surface it in a secondary/tooltip
-// field only. Archetype is empty in Phase A.
+// field only. Archetype is empty in Phase A and when the pool is not
+// yet color-committed.
+//
+// Phase B additions: LowConfidence, WhyNotTopReason.
 type Recommendation struct {
 	CardID    string  // Arena card ID (string form)
 	CardName  string  // Display name from CardLookup
 	Priority  int     // 1–5, where 5 is the strongest recommendation
 	Reason    string  // Plain-English explanation; never contains a raw "%" literal
-	Archetype string  // Phase A: always empty; Phase B/C will populate this
+	Archetype string  // Phase A: always empty; Phase B: two-color archetype when pool is committed
 	GIHWR     float64 // For callers that surface GIHWR in a secondary/tooltip display only
 	HasGIHWR  bool    // false when no rating data is available
+
+	// LowConfidence is true when the GIHCount is below lowConfidenceGIHFloor
+	// or nil (no sample data). ADR-047 §2. Framing communicates uncertainty,
+	// not weakness — see Reason copy.
+	LowConfidence bool
+
+	// WhyNotTopReason is a short plain-English phrase explaining why this card
+	// ranks below TopPicks[0]. Only populated on TopPicks[1+] when there is a
+	// meaningful gap (color mismatch, archetype fit, or sample confidence).
+	// Empty for rank-1, empty for marginal/noise-level gaps, and must never
+	// contain raw GIHWR numbers. ADR-047 §5 (Prof).
+	WhyNotTopReason string
 }
 
 // Recommendations holds the full recommendation output for one pack.
+//
+// Phase B addition: PoolColors — the two dominant pool colors derived
+// from the pool card metas, re-derived on every call.
 type Recommendations struct {
 	TopPicks     []Recommendation // Up to 3 top-ranked picks
 	Alternatives []Recommendation // Remaining pack cards in rank order
+	PoolColors   []string         // Phase B: dominant pool colors (re-derived each call)
 }
 
 // topPickCount is the number of entries in TopPicks. The rest go to
@@ -56,16 +106,20 @@ const topPickCount = 3
 //   - format is the draft format string (e.g. "PremierDraft") forwarded to
 //     ratings.GIHWR; pass "" when format is unknown.
 //   - pool is the list of card IDs already in the player's draft pool
-//     (previously picked cards). Phase A uses it only for pool size; Phase B
-//     will use it for color-fit signals.
+//     (previously picked cards). Used for pool-color derivation and
+//     archetype detection.
+//   - packCardIDs is the current pack being offered.
 //   - ratings / cards satisfy the same interfaces pickquality.Analyze uses;
 //     nil values produce graceful N/A results.
+//   - meta satisfies draftalgo.CardMetaLookup; nil produces graceful
+//     Phase-A-level results without crashing.
 func Recommend(
 	format string,
-	packCardIDs []string,
 	pool []string,
+	packCardIDs []string,
 	ratings draftalgo.RatingsLookup,
 	cards draftalgo.CardLookup,
+	meta draftalgo.CardMetaLookup,
 ) Recommendations {
 	if len(packCardIDs) == 0 {
 		return Recommendations{}
@@ -82,6 +136,21 @@ func Recommend(
 		}
 	}
 
+	// Phase B: derive pool colors fresh from pool card metas.
+	// Re-derived on every call — never cached (ADR-047 §3 + Prof D).
+	poolColors, colorFreq := derivePoolColorsWithFreq(pool, meta)
+	isCommitted, color1, color2 := detectTwoColorCommitment(colorFreq)
+	archetype := archetypeName(color1, color2)
+
+	// Build a meta-lookup closure that gracefully falls back to zero
+	// when meta is nil (Phase A caller path or cold cache).
+	lookupMeta := func(id string) (draftalgo.CardMeta, bool) {
+		if meta == nil {
+			return draftalgo.CardMeta{}, false
+		}
+		return meta.CardMetaByID(id)
+	}
+
 	altCap := len(ranked) - topPickCount
 	if altCap < 0 {
 		altCap = 0
@@ -89,18 +158,50 @@ func Recommend(
 	out := Recommendations{
 		TopPicks:     make([]Recommendation, 0, topPickCount),
 		Alternatives: make([]Recommendation, 0, altCap),
+		PoolColors:   poolColors,
+	}
+
+	// The top-ranked card (rank-1) is needed for the "why not pick 2"
+	// differentiator. Capture its meta once.
+	var topMeta draftalgo.CardMeta
+	var hasTopMeta bool
+	var topGIHWR float64
+	if len(ranked) > 0 {
+		topMeta, hasTopMeta = lookupMeta(ranked[0].CardID)
+		topGIHWR = ranked[0].GIHWR
 	}
 
 	for _, r := range ranked {
+		cm, hasMeta := lookupMeta(r.CardID)
+
 		rec := Recommendation{
-			CardID:    r.CardID,
-			CardName:  r.CardName,
-			GIHWR:     r.GIHWR,
-			HasGIHWR:  r.HasGIHWR,
-			Archetype: "", // Phase A: no archetype data available
+			CardID:   r.CardID,
+			CardName: r.CardName,
+			GIHWR:    r.GIHWR,
+			HasGIHWR: r.HasGIHWR,
 		}
+
+		// LowConfidence: <500 GIH games or nil sample (ADR-047 §2).
+		rec.LowConfidence = isLowConfidence(cm.GIHCount)
+
+		// Archetype: populated post-commitment, empty pre-commitment
+		// (ADR-047 §3). Re-derived each call, never cached.
+		if isCommitted {
+			rec.Archetype = archetype
+		}
+
 		rec.Priority = priorityForRank(r.Rank, len(ranked))
-		rec.Reason = reasonForRank(r.Rank, len(ranked), r.HasGIHWR, hasAnyRatings)
+
+		// Reason: Phase B adds color-fit, ALSA, and low-confidence
+		// framing. Falls back to Phase A Reason when meta is absent.
+		rec.Reason = buildReason(r, cm, hasMeta, isCommitted, poolColors, hasAnyRatings, len(packCardIDs))
+
+		// WhyNotTopReason: only for picks 2+ in TopPicks, and only
+		// when there is a meaningful gap (ADR-047 §5 + Prof).
+		rank1 := len(out.TopPicks) == 0 // this card will be TopPick[0]
+		if !rank1 && len(out.TopPicks) >= 1 && hasTopMeta {
+			rec.WhyNotTopReason = buildWhyNotTop(r, cm, hasMeta, topMeta, topGIHWR, poolColors)
+		}
 
 		if len(out.TopPicks) < topPickCount {
 			out.TopPicks = append(out.TopPicks, rec)
@@ -111,6 +212,343 @@ func Recommend(
 
 	return out
 }
+
+// ─── low_confidence ───────────────────────────────────────────────────────
+
+// isLowConfidence returns true when the GIH sample is nil or below the
+// lowConfidenceGIHFloor constant (ADR-047 §2).
+func isLowConfidence(count *int) bool {
+	return count == nil || *count < lowConfidenceGIHFloor
+}
+
+// ─── pool-color derivation ────────────────────────────────────────────────
+
+// derivePoolColorsWithFreq counts color occurrences across pool card metas
+// and returns:
+//   - poolColors: dominant colors sorted by frequency descending (unique, deduped)
+//   - freq: the full frequency map used by detectTwoColorCommitment
+//
+// Re-derived from scratch on every call — never cached (ADR-047 §3 + Prof D).
+func derivePoolColorsWithFreq(pool []string, meta draftalgo.CardMetaLookup) ([]string, map[string]int) {
+	if meta == nil || len(pool) == 0 {
+		return nil, nil
+	}
+	freq := make(map[string]int)
+	for _, id := range pool {
+		cm, ok := meta.CardMetaByID(id)
+		if !ok {
+			continue
+		}
+		for _, c := range cm.Colors {
+			if c != "" {
+				freq[c]++
+			}
+		}
+	}
+	// Return colors sorted by frequency descending (deduplicated).
+	// Pool is ≤42 cards, N is tiny — insertion sort is fine.
+	type cv struct {
+		c string
+		n int
+	}
+	var sorted []cv
+	for c, n := range freq {
+		sorted = append(sorted, cv{c, n})
+	}
+	for i := 1; i < len(sorted); i++ {
+		for j := i; j > 0 && sorted[j].n > sorted[j-1].n; j-- {
+			sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
+		}
+	}
+	out := make([]string, 0, len(sorted))
+	for _, cv := range sorted {
+		out = append(out, cv.c)
+	}
+	return out, freq
+}
+
+// detectTwoColorCommitment returns true when the pool frequency map shows
+// two distinct colors each with at least colorCommitmentThreshold cards.
+// Returns the two dominant colors (color1 has the most cards, color2 the
+// second most).
+// ADR-047 §3 + Prof B: a 5G/2B pool is Simic-leaning, not Mono-Green —
+// we detect leaning two-color, not collapsing to the single leading color.
+func detectTwoColorCommitment(freq map[string]int) (committed bool, color1, color2 string) {
+	if len(freq) < 2 {
+		return false, "", ""
+	}
+	type cv struct {
+		c string
+		n int
+	}
+	var top []cv
+	for c, n := range freq {
+		top = append(top, cv{c, n})
+	}
+	// Sort by count desc. Insertion sort — small N.
+	for i := 1; i < len(top); i++ {
+		for j := i; j > 0 && top[j].n > top[j-1].n; j-- {
+			top[j], top[j-1] = top[j-1], top[j]
+		}
+	}
+	if len(top) < 2 {
+		return false, "", ""
+	}
+	// Both top two colors must meet the threshold.
+	if top[0].n >= colorCommitmentThreshold && top[1].n >= colorCommitmentThreshold {
+		return true, top[0].c, top[1].c
+	}
+	return false, "", ""
+}
+
+// archetypeName returns a two-color archetype label from the two committed
+// colors. Uses the Ravnica guild names for canonical WUBRGC two-color pairs.
+func archetypeName(c1, c2 string) string {
+	if c1 == "" || c2 == "" {
+		return ""
+	}
+	key := canonicalColorPair(c1, c2)
+	names := map[string]string{
+		"WU": "Azorius", "UB": "Dimir", "BR": "Rakdos", "RG": "Gruul", "GW": "Selesnya",
+		"WB": "Orzhov", "UR": "Izzet", "BG": "Golgari", "RW": "Boros", "GU": "Simic",
+	}
+	if name, ok := names[key]; ok {
+		return name
+	}
+	// Fallback for non-standard pairs
+	return fmt.Sprintf("%s/%s", c1, c2)
+}
+
+// canonicalColorPair returns the WUBRG-ordered two-color string for any
+// combination of two color chars so the archetype map lookup is order-independent.
+func canonicalColorPair(c1, c2 string) string {
+	order := "WUBRG"
+	i1 := strings.Index(order, c1)
+	i2 := strings.Index(order, c2)
+	if i1 < 0 {
+		i1 = len(order) // non-WUBRG colors sort last
+	}
+	if i2 < 0 {
+		i2 = len(order)
+	}
+	if i1 <= i2 {
+		return c1 + c2
+	}
+	return c2 + c1
+}
+
+// ─── Reason construction ──────────────────────────────────────────────────
+
+// buildReason builds a plain-English Reason string for a card, incorporating
+// Phase B signals: color-fit, ALSA scarcity, and low-confidence framing.
+// Never contains a "%" literal (Prof gate + existing test contract).
+func buildReason(
+	r rank.Card,
+	cm draftalgo.CardMeta,
+	hasMeta bool,
+	isCommitted bool,
+	poolColors []string,
+	hasAnyRatings bool,
+	packSize int,
+) string {
+	// Graceful N/A when no ratings are available for this format/set.
+	if !hasAnyRatings {
+		return "No rating data available for this set"
+	}
+	if !r.HasGIHWR {
+		return "No rating data for this card"
+	}
+
+	// Low-confidence framing takes precedence over pack-size shortcircuit —
+	// communicate uncertainty, not weakness (ADR-047 §5, Prof). Rares/mythics
+	// fire this marker by default (small samples) — framing must read as
+	// "early format data", not "questionable card." (Prof constraint E)
+	if isLowConfidence(cm.GIHCount) {
+		return lowConfidenceReason(r)
+	}
+
+	// Single card in the pack after low-confidence check — trivially the
+	// only option unless we have color/ALSA context to add.
+	if packSize == 1 && !hasMeta {
+		return "Only card in the pack"
+	}
+
+	// Land / mana-producer: no color-fit penalty — just standalone signal.
+	// ADR-047 §5 + Prof constraint C.
+	if hasMeta && cm.IsLand {
+		return standalonePowerReason(r)
+	}
+
+	// Color-fit + splash reasoning when pool is committed.
+	if hasMeta && isCommitted && len(poolColors) > 0 {
+		colorReason := colorFitReason(r, cm, poolColors)
+		if colorReason != "" {
+			// Append ALSA context if the card tables late.
+			alsaCtx := alsaContext(cm.ALSA)
+			if alsaCtx != "" {
+				return colorReason + "; " + alsaCtx
+			}
+			return colorReason
+		}
+	}
+
+	// ALSA scarcity signal for any card (committed or not).
+	if hasMeta && cm.ALSA > 0 {
+		alsaCtx := alsaContext(cm.ALSA)
+		if alsaCtx != "" {
+			return standalonePowerReason(r) + "; " + alsaCtx
+		}
+	}
+
+	// Pre-commitment or no meta: standalone-power reason.
+	return standalonePowerReason(r)
+}
+
+// lowConfidenceReason returns a Reason string for low-sample-size cards.
+// Framing communicates uncertainty / early format, not weakness.
+// ADR-047 §5 + Prof constraint E (rares/mythics especially).
+func lowConfidenceReason(r rank.Card) string {
+	switch {
+	case r.Rank == 1:
+		return "Best pick in pack — small sample, treat as a signal"
+	case r.Rank <= 3:
+		return "Strong standalone pick — limited data, early format"
+	default:
+		return "Solid pick — small sample size, treat as a signal"
+	}
+}
+
+// standalonePowerReason returns a reason based purely on pack rank,
+// with no color or pool context. Used pre-commitment and for lands.
+func standalonePowerReason(r rank.Card) string {
+	switch {
+	case r.Rank == 1:
+		return "Best pick in the pack"
+	case r.Rank <= 3:
+		return "Strong standalone pick"
+	case r.Rank <= 5:
+		return "Solid pick"
+	case r.Rank <= 8:
+		return "Situational pick"
+	default:
+		return "Low-rated for this format"
+	}
+}
+
+// colorFitReason returns a color-context reason string.
+// Returns "" when no color-specific framing applies.
+// ADR-047 §5: high-GIHWR off-color card gets splash-consideration path;
+// off-color penalty MUST NOT apply to lands (caller must check IsLand first).
+func colorFitReason(r rank.Card, cm draftalgo.CardMeta, poolColors []string) string {
+	// Check if any of the card's colors match the pool.
+	isOnColor := false
+	for _, cardColor := range cm.Colors {
+		for _, poolColor := range poolColors {
+			if cardColor == poolColor {
+				isOnColor = true
+				break
+			}
+		}
+		if isOnColor {
+			break
+		}
+	}
+
+	if isOnColor {
+		switch {
+		case r.Rank == 1:
+			return "Best pick in the pack — fits your colors"
+		case r.Rank <= 3:
+			return "On-color for your pool — strong pick"
+		default:
+			return "On-color for your pool"
+		}
+	}
+
+	// Off-color: check for splash worthiness (ADR-047 §5).
+	if r.HasGIHWR && r.GIHWR >= splashHighGIHWRFloor {
+		// High-GIHWR off-color bomb → splash consideration path.
+		return "Off-color but a strong splash consideration"
+	}
+
+	// Off-color, not splash-worthy.
+	return "Weaker in your colors"
+}
+
+// alsaContext returns an ALSA-based scarcity addendum.
+// Never uses probability framing. ADR-047 §5: "frequently available late"
+// / "typically taken early" — no P(wheels) percentage.
+func alsaContext(alsa float64) string {
+	switch {
+	case alsa >= highALSAFloor:
+		return "frequently available late"
+	case alsa > 0 && alsa <= 2.5:
+		return "typically taken early"
+	default:
+		return ""
+	}
+}
+
+// ─── "Why not pick 2" differentiator ─────────────────────────────────────
+
+// buildWhyNotTop returns a short phrase explaining why this card ranks
+// below the top pick. Only fires on meaningful gaps (color, archetype fit,
+// or sample-confidence differential); returns "" for noise-level differences.
+// ADR-047 §5 + Prof: one sentence max; no raw numbers.
+func buildWhyNotTop(
+	r rank.Card,
+	cm draftalgo.CardMeta,
+	hasMeta bool,
+	topMeta draftalgo.CardMeta,
+	topGIHWR float64,
+	poolColors []string,
+) string {
+	// Color mismatch is always a meaningful gap when pool is committed.
+	if hasMeta && len(poolColors) > 0 {
+		cardOnColor := colorIsInPool(cm.Colors, poolColors)
+		topOnColor := colorIsInPool(topMeta.Colors, poolColors)
+
+		if topOnColor && !cardOnColor {
+			return "Weaker in your colors than the top pick"
+		}
+		if !topOnColor && cardOnColor {
+			// Unusual: pick 2 is on-color but ranked below pick 1 (pick 1 is a bomb)
+			// — no differentiator needed; the GIHWR gap explains it.
+			return ""
+		}
+	}
+
+	// Sample-confidence differential: top pick has data, this doesn't.
+	if !isLowConfidence(topMeta.GIHCount) && isLowConfidence(cm.GIHCount) {
+		return "Top pick has more rating data"
+	}
+
+	// GIHWR gap: only fire on a meaningful gap (≥5 percentage points).
+	if r.HasGIHWR && topGIHWR > 0 {
+		gap := topGIHWR - r.GIHWR
+		if gap >= 5.0 {
+			return "Lower win rate than the top pick"
+		}
+	}
+
+	// Marginal / noise-level gap — stay quiet (Prof: no filler).
+	return ""
+}
+
+// colorIsInPool returns true when any color in the card's color slice
+// matches any pool color.
+func colorIsInPool(cardColors, poolColors []string) bool {
+	for _, cc := range cardColors {
+		for _, pc := range poolColors {
+			if cc == pc {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ─── priority derivation (unchanged from Phase A) ─────────────────────────
 
 // priorityForRank converts a 1-based pack rank to a 1–5 priority value.
 // Rank 1 → 5 (highest), rank 2–3 → 4, rank 4–5 → 3, rank 6–8 → 2,
@@ -131,19 +569,14 @@ func priorityForRank(rank, _ int) int {
 }
 
 // reasonForRank produces a plain-English reason string for a card's rank.
+// Retained for backward compat with Phase A tests that call it via the
+// Recommend public API. New call sites should use buildReason instead.
 //
-// Contract: the returned string MUST NOT contain a "%" character — this
-// is enforced by the test suite to satisfy the Prof PLAYER_VERDICT gate.
-// GIHWR numbers are available via the GIHWR field for secondary display.
-//
-// Reason copy is intentionally kept in one place here so it can be revised
-// against Prof feedback before the surface is considered player-final.
+// Contract: the returned string MUST NOT contain a "%" character.
 func reasonForRank(cardRank, packSize int, hasGIHWR, anyRatings bool) string {
-	// Graceful N/A when no ratings are available for this format/set.
 	if !anyRatings {
 		return "No rating data available for this set"
 	}
-	// Single card in the pack is trivially the only option.
 	if packSize == 1 {
 		return "Only card in the pack"
 	}

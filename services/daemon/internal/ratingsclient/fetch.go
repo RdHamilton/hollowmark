@@ -33,9 +33,10 @@ type envelope struct {
 }
 
 // draftRatingsBody mirrors the relevant subset of the
-// /api/v1/draft-ratings/{set}/{format} response. We ignore color
-// ratings and per-card metrics we don't need (OHWR, ALSA, etc.) so
-// the wire contract can grow without forcing a daemon redeploy.
+// /api/v1/draft-ratings/{set}/{format} response. Phase B (v0.3.8,
+// ADR-047) widens the struct to retain Color, Rarity, ALSA, ATA, and
+// GIHCount — fields the BFF already emits but the Phase A daemon
+// discarded. No BFF endpoint or contract change needed.
 type draftRatingsBody struct {
 	SetCode     string           `json:"set_code"`
 	DraftFormat string           `json:"draft_format"`
@@ -46,6 +47,13 @@ type cardRatingWire struct {
 	ArenaID int      `json:"arena_id"`
 	Name    string   `json:"name"`
 	GIHWR   *float64 `json:"gihwr,omitempty"`
+	// Phase B fields — ADR-047 §1. The BFF already emits these; the
+	// daemon now retains them instead of discarding them.
+	Color    string   `json:"color,omitempty"`
+	Rarity   string   `json:"rarity,omitempty"`
+	ALSA     *float64 `json:"alsa,omitempty"`
+	ATA      *float64 `json:"ata,omitempty"`
+	GIHCount *int     `json:"gih_count,omitempty"`
 }
 
 // fetchFor returns the cached entry for (set, format), fetching it
@@ -212,10 +220,24 @@ func (c *Client) fetchOnce(ctx context.Context, endpoint, set, format string) (*
 		fetchedAt: c.clock(),
 	}
 	for _, r := range body.CardRatings {
-		rec := cardRec{Name: r.Name}
+		rec := cardRec{
+			Name:   r.Name,
+			Color:  r.Color,
+			Rarity: r.Rarity,
+		}
 		if r.GIHWR != nil {
 			rec.GIHWR = *r.GIHWR
 			rec.HasGIHWR = true
+		}
+		if r.ALSA != nil {
+			rec.ALSA = *r.ALSA
+		}
+		if r.ATA != nil {
+			rec.ATA = *r.ATA
+		}
+		if r.GIHCount != nil {
+			v := *r.GIHCount
+			rec.GIHCount = &v
 		}
 		ent.cards[strconv.Itoa(r.ArenaID)] = rec
 	}

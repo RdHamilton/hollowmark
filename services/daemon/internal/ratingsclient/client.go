@@ -34,9 +34,11 @@ package ratingsclient
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -165,6 +167,72 @@ func (c *Client) CardName(id string) string {
 		return rec.Name
 	}
 	return ""
+}
+
+// CardMetaByID returns the Phase B card metadata for the given arena ID
+// from the most-recently-touched (set, format) cache entry.
+// Returns (zero, false) when the entry is absent, expired, or the card
+// isn't in it — callers degrade gracefully without metadata.
+//
+// Implements draftalgo.CardMetaLookup.
+func (c *Client) CardMetaByID(id string) (draftalgo.CardMeta, bool) {
+	c.mu.RLock()
+	key := c.mruKey
+	c.mu.RUnlock()
+	if key == "" {
+		return draftalgo.CardMeta{}, false
+	}
+	c.mu.RLock()
+	ent, ok := c.cache[key]
+	c.mu.RUnlock()
+	if !ok || ent.isExpired(c.clock()) {
+		return draftalgo.CardMeta{}, false
+	}
+	rec, ok := ent.cards[id]
+	if !ok {
+		return draftalgo.CardMeta{}, false
+	}
+	meta := draftalgo.CardMeta{
+		Rarity:   rec.Rarity,
+		ALSA:     rec.ALSA,
+		ATA:      rec.ATA,
+		GIHCount: rec.GIHCount,
+		IsLand:   isLandCard(rec),
+	}
+	// Expand the BFF's single-char color string into a []string slice.
+	// BFF emits e.g. "R", "G", "UB" for multi-color cards. Split each
+	// character into its own element so the recommend package can
+	// compare colors directly without knowing the encoding.
+	if rec.Color != "" {
+		meta.Colors = colorStringToSlice(rec.Color)
+	}
+	return meta, true
+}
+
+// colorStringToSlice splits a BFF color string (e.g. "R", "UB", "WUG")
+// into individual color letters (["R"], ["U","B"], ["W","U","G"]).
+// Returns an empty slice for the empty string.
+func colorStringToSlice(s string) []string {
+	s = strings.ToUpper(s)
+	out := make([]string, 0, len(s))
+	for _, r := range s {
+		out = append(out, string(r))
+	}
+	return out
+}
+
+// isLandCard returns true when the card's rarity-or-name context
+// indicates it is a land. In Phase B we use the "L" color indicator
+// the BFF may set, plus a fallback check on the type_line field if
+// it is ever added to the wire.
+//
+// ADR-047 §5: lands must be excluded from color-fit penalty logic.
+// This is a heuristic: in the current BFF wire the only reliable signal
+// is color="L" (the 17Lands convention for lands). Cards without color
+// info default to non-land and rely on the upstream type_line work
+// (tracked in a follow-on ticket).
+func isLandCard(r cardRec) bool {
+	return strings.EqualFold(r.Color, "L")
 }
 
 // Warm proactively fetches (set, format) so the next GIHWR / CardName
