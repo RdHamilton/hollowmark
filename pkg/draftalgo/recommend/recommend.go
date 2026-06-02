@@ -12,9 +12,10 @@
 //   - Archetype field is empty in Phase A (data not retained yet)
 //
 // Phase B (v0.3.8, ADR-047): color-fit reasons, ALSA signals, pool-color
-//   awareness, archetype suppression (color-commitment heuristic, re-derived
-//   fresh each pick), low_confidence marker (< lowConfidenceGIHFloor games),
-//   splash-consideration path, and "why not pick 2" differentiator.
+//
+//	awareness, archetype suppression (color-commitment heuristic, re-derived
+//	fresh each pick), low_confidence marker (< lowConfidenceGIHFloor games),
+//	splash-consideration path, and "why not pick 2" differentiator.
 //
 // Phase C (post-beta): archetype-conditioned ML win rates.
 //
@@ -472,7 +473,7 @@ func colorFitReason(r rank.Card, cm draftalgo.CardMeta, poolColors []string) str
 	}
 
 	// Off-color, not splash-worthy.
-	return "Weaker in your colors"
+	return "Not your colors"
 }
 
 // alsaContext returns an ALSA-based scarcity addendum.
@@ -509,7 +510,7 @@ func buildWhyNotTop(
 		topOnColor := colorIsInPool(topMeta.Colors, poolColors)
 
 		if topOnColor && !cardOnColor {
-			return "Weaker in your colors than the top pick"
+			return "Not your colors than the top pick"
 		}
 		if !topOnColor && cardOnColor {
 			// Unusual: pick 2 is on-color but ranked below pick 1 (pick 1 is a bomb)
