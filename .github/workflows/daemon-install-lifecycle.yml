@@ -156,10 +156,103 @@ jobs:
       - name: "[UNIT] Run existing bats postinstall unit tests"
       # -----------------------------------------------------------------------
         # Covers: plist keys, Clerk env vars, placeholder validation, reinstall
-        # bootout-before-bootstrap ordering.
+        # bootout-before-bootstrap ordering, and (test 17) staging identity.
         run: |
           echo "=== Running postinstall bats unit tests ==="
           bats services/daemon/install/macos/pkg/postinstall_test.bats
+
+      # -----------------------------------------------------------------------
+      - name: "[ASSERT] STAGING channel install lands staging identity (#664)"
+      # -----------------------------------------------------------------------
+        # Regression guard: a CHANNEL=staging postinstall must write the staging
+        # install identity (binary name, LaunchAgent label, config dir, -config
+        # flag) so a staging .pkg can coexist with a prod install on the same
+        # machine without path or label collision (ticket #664).
+        #
+        # Strategy: run postinstall with all placeholders substituted and
+        # CHANNEL=staging, then assert the staging-identity artifacts.
+        # Uses the same stub-directory pattern as the bats unit tests so no
+        # real launchctl/install/xattr calls are needed.
+        run: |
+          echo "=== [ASSERT] STAGING channel identity (#664) ==="
+          STAGING_TEST_DIR="$(mktemp -d)"
+          TMP_SCRIPT="$(mktemp)"
+
+          # Build stub dir (mirrors _make_stub_dir in postinstall_test.bats).
+          STUB_DIR="$(mktemp -d)"
+          for cmd in xattr launchctl install curl sleep pkill security; do
+            printf '#!/usr/bin/env bash\nexit 0\n' > "${STUB_DIR}/${cmd}"
+            chmod +x "${STUB_DIR}/${cmd}"
+          done
+          # curl stub: return healthy JSON so liveness check passes.
+          printf '#!/usr/bin/env bash\necho '"'"'{"status":"ok","auth_status":"setup_required"}'"'"'\n' \
+            > "${STUB_DIR}/curl"
+          chmod +x "${STUB_DIR}/curl"
+
+          # Substitute all placeholders and redirect REAL_HOME to STAGING_TEST_DIR.
+          sed \
+            -e "s|__VAULTMTG_CLOUD_API_URL__|https://staging-api.vaultmtg.app/api/v1|g" \
+            -e "s|__CLERK_FRONTEND_API__|ci-noop|g" \
+            -e "s|__CLERK_PUBLISHABLE_KEY__|ci-noop|g" \
+            -e "s|__CLERK_OAUTH_CLIENT_ID__|ci-noop|g" \
+            -e "s|__VAULTMTG_CHANNEL__|staging|g" \
+            -e "s|REAL_HOME=\$(eval echo \"~\${REAL_USER}\")|REAL_HOME=\"${STAGING_TEST_DIR}\"|g" \
+            services/daemon/install/macos/pkg/postinstall > "${TMP_SCRIPT}"
+          chmod +x "${TMP_SCRIPT}"
+
+          output=$(env \
+            PATH="${STUB_DIR}:${PATH}" \
+            SUDO_USER="$(whoami)" \
+            BATS_TEST_TMPDIR="${STAGING_TEST_DIR}" \
+            bash "${TMP_SCRIPT}" 2>&1)
+          status=$?
+          echo "${output}"
+
+          if [ "${status}" -ne 0 ]; then
+            echo "FAIL: postinstall exited ${status} for CHANNEL=staging"
+            exit 1
+          fi
+
+          # postinstall writes PLIST_DIR="${REAL_HOME}/Library/LaunchAgents" (REAL_HOME=STAGING_TEST_DIR).
+          STAGING_PLIST="${STAGING_TEST_DIR}/Library/LaunchAgents/com.vaultmtg.daemon.staging.plist"
+          STAGING_CONFIG="${STAGING_TEST_DIR}/.vaultmtg-staging/daemon.json"
+
+          # Assert staging LaunchAgent plist written with correct label.
+          [ -f "${STAGING_PLIST}" ] || \
+            { echo "FAIL: staging plist not found at ${STAGING_PLIST}"; exit 1; }
+          grep -q "com.vaultmtg.daemon.staging" "${STAGING_PLIST}" || \
+            { echo "FAIL: plist Label is not com.vaultmtg.daemon.staging"; exit 1; }
+          echo "PASS: staging LaunchAgent label = com.vaultmtg.daemon.staging"
+
+          # Assert staging binary name in ProgramArguments.
+          grep -q "vaultmtg-daemon-staging" "${STAGING_PLIST}" || \
+            { echo "FAIL: plist ProgramArguments does not reference vaultmtg-daemon-staging"; exit 1; }
+          echo "PASS: staging binary name = vaultmtg-daemon-staging"
+
+          # Assert -config flag points at staging config dir.
+          grep -q "\.vaultmtg-staging/daemon\.json" "${STAGING_PLIST}" || \
+            { echo "FAIL: plist -config flag does not point at .vaultmtg-staging/daemon.json"; exit 1; }
+          echo "PASS: -config flag → .vaultmtg-staging/daemon.json"
+
+          # Assert staging channel env var in plist.
+          grep -q "<string>staging</string>" "${STAGING_PLIST}" || \
+            { echo "FAIL: VAULTMTG_DAEMON_CHANNEL not 'staging' in plist"; exit 1; }
+          echo "PASS: VAULTMTG_DAEMON_CHANNEL = staging in plist"
+
+          # Assert staging config file written.
+          [ -f "${STAGING_CONFIG}" ] || \
+            { echo "FAIL: staging daemon.json not found at ${STAGING_CONFIG}"; exit 1; }
+          grep -q "staging-api.vaultmtg.app" "${STAGING_CONFIG}" || \
+            { echo "FAIL: staging daemon.json missing cloud_api_url"; exit 1; }
+          echo "PASS: staging daemon.json written at ${STAGING_CONFIG}"
+
+          # Assert no stable plist was created (identity isolation).
+          [ ! -f "${STAGING_TEST_DIR}/Library/LaunchAgents/com.vaultmtg.daemon.plist" ] || \
+            { echo "FAIL: stable plist written during staging install (identity leak)"; exit 1; }
+          echo "PASS: no stable-identity artifacts written during staging install"
+
+          echo "PASS: CHANNEL=staging install identity verified (#664)"
+          rm -rf "${STAGING_TEST_DIR}" "${STUB_DIR}" "${TMP_SCRIPT}"
 
       # -----------------------------------------------------------------------
       - name: "[LIFECYCLE] FRESH INSTALL — run install.sh in DRY_RUN mode"

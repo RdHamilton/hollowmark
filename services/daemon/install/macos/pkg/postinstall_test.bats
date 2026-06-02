@@ -106,8 +106,11 @@ EOF
 
 # Produce a test-variant of postinstall with:
 #   - all __PLACEHOLDER__ values substituted
-#   - PLIST_DIR and CONFIG_DIR redirected to BATS_TEST_TMPDIR subdirs
-# so the plist and config files are written to an inspectable location.
+#   - REAL_HOME redirected to TEST_DIR so all home-relative paths (PLIST_DIR,
+#     CONFIG_DIR, LOG_FILE) are written to an inspectable BATS_TEST_TMPDIR
+#     location without touching the real ~.
+# Optional channel parameter defaults to "stable"; pass "staging" to test the
+# staging install identity (ADR-049 §2, ticket #664).
 _make_test_script() {
   local dest="$1"
   local test_dir="$2"
@@ -115,18 +118,15 @@ _make_test_script() {
   local clerk_api="${4:-https://settled-martin-99.clerk.accounts.dev}"
   local clerk_key="${5:-pk_test_abc123}"
   local clerk_client="${6:-oauth_testclient}"
-
-  local plist_dir="${test_dir}/LaunchAgents"
-  local config_dir="${test_dir}/.vaultmtg"
+  local channel="${7:-stable}"
 
   sed \
     -e "s|__VAULTMTG_CLOUD_API_URL__|${cloud_url}|g" \
     -e "s|__CLERK_FRONTEND_API__|${clerk_api}|g" \
     -e "s|__CLERK_PUBLISHABLE_KEY__|${clerk_key}|g" \
     -e "s|__CLERK_OAUTH_CLIENT_ID__|${clerk_client}|g" \
-    -e "s|__VAULTMTG_CHANNEL__|stable|g" \
-    -e "s|PLIST_DIR=\"\${REAL_HOME}/Library/LaunchAgents\"|PLIST_DIR=\"${plist_dir}\"|g" \
-    -e "s|CONFIG_DIR=\"\${REAL_HOME}/.vaultmtg\"|CONFIG_DIR=\"${config_dir}\"|g" \
+    -e "s|__VAULTMTG_CHANNEL__|${channel}|g" \
+    -e "s|REAL_HOME=\$(eval echo \"~\${REAL_USER}\")|REAL_HOME=\"${test_dir}\"|g" \
     "${POSTINSTALL_SCRIPT}" > "${dest}"
   chmod +x "${dest}"
 }
@@ -141,9 +141,12 @@ setup() {
   mkdir -p "${TEST_DIR}"
   TMP_SCRIPT="${BATS_TEST_TMPDIR}/postinstall-subst-$$"
   STUB_DIR="$(_make_stub_dir)"
+  # Default test script uses stable channel.
   _make_test_script "${TMP_SCRIPT}" "${TEST_DIR}"
 
-  PLIST_PATH="${TEST_DIR}/LaunchAgents/com.vaultmtg.daemon.plist"
+  # Stable channel: no suffix — com.vaultmtg.daemon / .vaultmtg.
+  # postinstall writes PLIST_DIR="${REAL_HOME}/Library/LaunchAgents" (now TEST_DIR).
+  PLIST_PATH="${TEST_DIR}/Library/LaunchAgents/com.vaultmtg.daemon.plist"
   CONFIG_FILE="${TEST_DIR}/.vaultmtg/daemon.json"
 }
 
@@ -702,4 +705,82 @@ print('PASS: api_key and sync_enabled unchanged on same-env reinstall')
 "
 
   [[ "${output}" == *"cloud_api_url unchanged"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# 17. CHANNEL=staging install lands the staging install identity.
+#
+#     Regression guard for #664: a STAGING .pkg must install with the staging
+#     identity so it can coexist with a prod install (no path/label collision).
+#
+#     Expected outcomes (ADR-049 §2 / common.sh suffix table):
+#       binary name  : vaultmtg-daemon-staging
+#       LaunchAgent  : com.vaultmtg.daemon.staging.plist
+#       config dir   : ${TEST_DIR}/.vaultmtg-staging/daemon.json
+#       -config flag : points at ${TEST_DIR}/.vaultmtg-staging/daemon.json
+#       CHANNEL env  : VAULTMTG_DAEMON_CHANNEL = staging in plist
+#       no legacy    : staging channel has no legacy label to clean up
+# ---------------------------------------------------------------------------
+@test "staging channel: installs staging identity (binary, label, config dir, -config flag)" {
+  local staging_test_dir="${BATS_TEST_TMPDIR}/postinstall-staging-$$"
+  mkdir -p "${staging_test_dir}"
+
+  local staging_script="${BATS_TEST_TMPDIR}/postinstall-staging-subst-$$"
+  _make_test_script \
+    "${staging_script}" \
+    "${staging_test_dir}" \
+    "https://staging-api.vaultmtg.app/api/v1" \
+    "https://settled-martin-99.clerk.accounts.dev" \
+    "pk_test_abc123" \
+    "oauth_testclient" \
+    "staging"
+
+  # Expected staging paths.
+  # postinstall writes PLIST_DIR="${REAL_HOME}/Library/LaunchAgents" (now staging_test_dir).
+  local staging_plist="${staging_test_dir}/Library/LaunchAgents/com.vaultmtg.daemon.staging.plist"
+  local staging_config="${staging_test_dir}/.vaultmtg-staging/daemon.json"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${staging_script}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+
+  # LaunchAgent label must be staging variant.
+  [ -f "${staging_plist}" ] || \
+    { echo "FAIL: staging plist not written at ${staging_plist}"; false; }
+  grep -q "com.vaultmtg.daemon.staging" "${staging_plist}" || \
+    { echo "FAIL: plist Label is not com.vaultmtg.daemon.staging"; false; }
+
+  # Binary name in ProgramArguments must be the staging binary.
+  grep -q "vaultmtg-daemon-staging" "${staging_plist}" || \
+    { echo "FAIL: plist ProgramArguments does not reference vaultmtg-daemon-staging"; false; }
+
+  # -config flag must point at the staging config dir.
+  grep -q "\.vaultmtg-staging/daemon\.json" "${staging_plist}" || \
+    { echo "FAIL: plist -config flag does not point at .vaultmtg-staging/daemon.json"; false; }
+
+  # VAULTMTG_DAEMON_CHANNEL env var in plist must be "staging".
+  grep -q "<string>staging</string>" "${staging_plist}" || \
+    { echo "FAIL: plist VAULTMTG_DAEMON_CHANNEL is not 'staging'"; false; }
+
+  # Config file must be written to the staging config dir.
+  [ -f "${staging_config}" ] || \
+    { echo "FAIL: staging daemon.json not written at ${staging_config}"; false; }
+  grep -q "staging-api.vaultmtg.app" "${staging_config}" || \
+    { echo "FAIL: staging daemon.json missing cloud_api_url"; false; }
+
+  # Staging channel must NOT try to clean up a legacy label.
+  [[ "${output}" == *"staging channel — no legacy label to clean up"* ]] || \
+    { echo "FAIL: expected staging-channel legacy-skip message"; false; }
+
+  # Confirm no stable-identity paths were created.
+  [ ! -f "${staging_test_dir}/Library/LaunchAgents/com.vaultmtg.daemon.plist" ] || \
+    { echo "FAIL: stable plist was written during a staging install"; false; }
+
+  echo "PASS: staging channel install landed staging identity"
 }
