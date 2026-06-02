@@ -1,0 +1,669 @@
+# staging-replay-gate.yml — Automated Layer-4 corpus-replay gate
+#
+# ADR: vault-mtg-docs/engineering/architecture/adr/
+#        2026-05-ADR-042-data-pipeline-regression-test-architecture.md
+#        (Amendment 1 — Corpus-Replay Layer-4 Harness)
+#
+# PURPOSE
+#   Automated Layer-4 regression gate that replaces the per-wave manual
+#   live-MTGA staging rehearsal as the primary pre-release sign-off.
+#   Runs post-staging-deploy / pre-daemon-v* release tag.
+#
+# What this workflow does:
+#   1. Authenticates a dedicated synthetic staging Clerk account via the
+#      proven headless Backend-API auth chain (mirrors scheduled-prod-canary.yml
+#      #268, adapted for the staging Clerk instance and staging BFF).
+#   2. Invokes the corpus-replay harness (ticket #640: daemon -replay mode)
+#      against the golden corpus fixture, dispatching real events through
+#      the full daemon -> BFF -> PostgreSQL projection pipeline on staging.
+#   3. Runs the assertion harness (ticket #641: staging-outcome.json diff)
+#      to verify the staged projection state matches the golden expected-outcome.
+#   4. Always runs a scoped teardown (always()) to delete all synthetic-account
+#      rows from staging, keeping each run idempotent.
+#
+# TRIGGERS
+#   workflow_call — called by staging-deploy.yml after a successful staging
+#                   deploy and before the daemon/v* release tag is cut.
+#   workflow_dispatch — for manual validation runs.
+#
+# DEPENDENCY NOTE (as of 2026-06-02)
+#   Bob's corpus-replay harness implementation is in flight (vault-mtg-tickets
+#   #640 + #641, branch feat/640-641-corpus-replay-harness). This workflow is
+#   built against the documented invocation contract:
+#
+#     Replay step: ./vaultmtg-daemon -replay <corpus-fixture>
+#                  env: VAULTMTG_DAEMON_REPLAY_FILE (alternative to -replay)
+#       Exit 0 on replay:completed, non-zero on replay:error.
+#
+#     Assertion step: go test -tags corpus_replay -count=1 ./cmd/daemon/...
+#                     -run TestCorpusReplay
+#       OR a dedicated binary: cmd/daemon-replay-check (TBD by Bob)
+#       Exit 0 on PASS (all golden assertions satisfied), non-zero on mismatch.
+#       env: REPLAY_STAGING_BFF_BASE_URL, REPLAY_STAGING_ACCOUNT_ID
+#
+#   Invocation targets in the run steps below MUST be updated once Bob's PR
+#   merges and the exact binary/command is confirmed.
+#
+# RULE-INFRA-01 (ray.md Rule 7)
+#   This job starts with continue-on-error: true. Flip to continue-on-error:
+#   false (hard-fail) after two consecutive green runs on staging.
+#
+# SSM PARAMETERS (Ramone-gated provisioning -- see Activation Prerequisites)
+#   /vaultmtg/staging/canary-clerk-secret-key  -- staging Clerk sk_test_* key
+#   /vaultmtg/staging/canary-clerk-user-id     -- synthetic staging Clerk user ID
+#
+# ACTIVATION PREREQUISITES (Ramone-gated -- do NOT run workflow_dispatch until
+# ALL SSM parameters are provisioned AND Bob's harness PRs #640/#641 are merged)
+#
+#   Step 1: Create a synthetic Clerk user in the STAGING Clerk instance
+#           (dashboard: https://dashboard.clerk.com -> staging application).
+#           Suggested email: canary-replay@stg-app.vaultmtg.app
+#           Copy the user's Clerk user ID (format: user_2abc...).
+#
+#   Step 2: Store the staging Clerk backend API secret key:
+#     aws ssm put-parameter \
+#       --profile personal \
+#       --region us-east-1 \
+#       --name "/vaultmtg/staging/canary-clerk-secret-key" \
+#       --type SecureString \
+#       --value "<sk_test_...>" \
+#       --description "Staging Clerk backend API secret key for corpus-replay harness synthetic account"
+#
+#   Step 3: Store the synthetic user's Clerk user ID (non-secret):
+#     aws ssm put-parameter \
+#       --profile personal \
+#       --region us-east-1 \
+#       --name "/vaultmtg/staging/canary-clerk-user-id" \
+#       --type String \
+#       --value "<user_2abc...>" \
+#       --description "Staging Clerk user ID for corpus-replay harness synthetic account"
+#
+#   Until BOTH SSM parameters exist AND Bob's harness is merged, this workflow
+#   will fail early. continue-on-error: true keeps it from blocking staging deploys
+#   during the harness bring-up period.
+#
+# IAM
+#   Runs under the staging GitHub environment (same AWS_DEPLOY_ROLE_ARN secret
+#   as staging-deploy.yml). The deploy role must have ssm:GetParameter on the
+#   /vaultmtg/staging/canary-clerk-* paths. Confirm via IAM simulation before
+#   activating (Ray: /infra-pr-checklist + /cfn-iam-simulate).
+#
+# TEARDOWN SAFETY
+#   The always() teardown scopes all deletes strictly to the synthetic
+#   account_id from SSM. Real staging user data is never touched.
+#   Tables swept: daemon_devices, daemon_api_keys, matches, quests,
+#   decks, deck_cards, projection_errors (any table with account_id FK).
+#   Teardown uses SSM-authenticated psql via the EC2 staging host --
+#   same access pattern as Tim's staging-verify sessions (ADR-019).
+#
+# AUTH CHAIN (staging -- mirrors prod canary Boundaries 1-3)
+#
+#   Boundary 1: workflow -> Clerk Backend API (api.clerk.com)
+#     POST https://api.clerk.com/v1/sign_in_tokens
+#     Authorization: Bearer sk_test_... (staging secret key)
+#     Body: { "user_id": "<synthetic-user-id>" }
+#     Produces: { "token": "sit_xxx" } -- one-time sign-in TICKET
+#
+#   Boundary 2: workflow -> Staging FAPI (clerk.stg-app.vaultmtg.app)
+#     POST https://clerk.stg-app.vaultmtg.app/v1/client/sign_ins
+#     Body: strategy=ticket&ticket=sit_xxx
+#     Cookie jar captures __client session cookie.
+#     Produces: JSON with created_session_id.
+#
+#   Boundary 3: workflow -> Clerk Backend API (session token mint)
+#     POST https://api.clerk.com/v1/sessions/{session_id}/tokens
+#     Authorization: Bearer sk_test_... (same staging key)
+#     Produces: { "jwt": "eyJ..." } -- short-lived (~60s) session JWT
+#
+#   Boundary 4: workflow -> Staging BFF (daemon register)
+#     POST https://staging-api.vaultmtg.app/api/v1/daemon/register
+#     Authorization: Bearer eyJ... (session JWT from Boundary 3)
+#     Produces: daemon API key written to /tmp/replay-daemon-api-key.txt
+#
+# S-07 REQUIRED: Sarah security review is a blocking gate at PR time.
+#   Trigger paths: new SSM reads (/vaultmtg/staging/canary-clerk-*) +
+#   teardown SQL against staging RDS.
+
+name: Staging Corpus-Replay Gate
+
+on:
+  # Called by staging-deploy.yml after successful staging deploy.
+  workflow_call:
+    inputs:
+      staging_bff_base_url:
+        description: 'Staging BFF base URL'
+        required: false
+        type: string
+        default: 'https://staging-api.vaultmtg.app'
+    secrets:
+      AWS_DEPLOY_ROLE_ARN:
+        required: true
+
+  workflow_dispatch:
+    inputs:
+      staging_bff_base_url:
+        description: 'Staging BFF base URL'
+        required: false
+        type: string
+        default: 'https://staging-api.vaultmtg.app'
+
+env:
+  AWS_REGION: us-east-1
+
+  # Clerk Backend API base -- same for staging and prod; it is the Clerk
+  # management API, not the per-application FAPI subdomain.
+  CLERK_BACKEND_API_BASE: https://api.clerk.com
+
+  # Staging FAPI subdomain. Used for the ticket->session exchange (Boundary 2).
+  STAGING_FAPI_HOST: https://clerk.stg-app.vaultmtg.app
+
+  # SSM paths for the synthetic staging Clerk account.
+  # Provisioned manually by Ramone -- see Activation Prerequisites in header.
+  CANARY_SK_SSM_PATH: /vaultmtg/staging/canary-clerk-secret-key
+  CANARY_USER_ID_SSM_PATH: /vaultmtg/staging/canary-clerk-user-id
+
+  # Synthetic-traffic suppression header (mirrors prod canary Option A).
+  SYNTHETIC_HEADER: "X-Synthetic: true"
+
+  # Corpus fixture path (relative to repo root).
+  CORPUS_FIXTURE_PATH: services/daemon/testdata/corpus/player-log.fixture
+
+  # Golden expected-outcome artifact (ticket #641).
+  GOLDEN_OUTCOME_PATH: services/daemon/testdata/corpus/replay-expected/staging-outcome.json
+
+jobs:
+  corpus-replay-gate:
+    name: Corpus Replay Gate (Layer 4)
+    runs-on: ubuntu-latest
+    environment: staging
+    # RULE-INFRA-01: starts continue-on-error: true.
+    # Flip to false after two consecutive green runs on staging.
+    continue-on-error: true
+    timeout-minutes: 20
+
+    steps:
+      # ------------------------------------------------------------------
+      # STEP 0: Assume OIDC role (same staging environment as staging-deploy.yml)
+      # ------------------------------------------------------------------
+      - name: Assume staging OIDC role
+        id: oidc
+        uses: aws-actions/configure-aws-credentials@796449b3e38e3c256861227399e58b780e0e5538  # v6 SHA-pinned
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ------------------------------------------------------------------
+      # STEP 1: Checkout repository (corpus fixture + harness source)
+      # ------------------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # ------------------------------------------------------------------
+      # STEP 2: Set up Go (build + run replay harness)
+      # ------------------------------------------------------------------
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: services/daemon/go.mod
+          cache-dependency-path: services/daemon/go.sum
+
+      - name: Configure private module access
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+      # ------------------------------------------------------------------
+      # STEP 3: Read synthetic staging Clerk secret key from SSM.
+      # SecureString -- requires --with-decryption. Masked immediately.
+      # ------------------------------------------------------------------
+      - name: Read staging Clerk secret key from SSM
+        id: fetch_sk
+        run: |
+          set -euo pipefail
+          if ! STAGING_SK=$(aws ssm get-parameter \
+              --name "${{ env.CANARY_SK_SSM_PATH }}" \
+              --with-decryption \
+              --query 'Parameter.Value' \
+              --output text \
+              --region "${{ env.AWS_REGION }}" 2>/tmp/ssm-sk.err); then
+            echo "::error::Failed to read staging Clerk secret key from SSM path ${{ env.CANARY_SK_SSM_PATH }}"
+            echo "::error::Parameter not yet provisioned -- see Activation Prerequisites in workflow header."
+            cat /tmp/ssm-sk.err >&2
+            exit 1
+          fi
+          echo "::add-mask::${STAGING_SK}"
+          printf '%s' "${STAGING_SK}" > /tmp/staging-clerk-sk.txt
+          echo "PASS: staging Clerk secret key read from SSM."
+
+      # ------------------------------------------------------------------
+      # STEP 4: Read synthetic staging Clerk user ID from SSM.
+      # Plain String -- not secret but masked to keep out of logs.
+      # ------------------------------------------------------------------
+      - name: Read staging Clerk user ID from SSM
+        id: fetch_user_id
+        run: |
+          set -euo pipefail
+          if ! STAGING_USER_ID=$(aws ssm get-parameter \
+              --name "${{ env.CANARY_USER_ID_SSM_PATH }}" \
+              --query 'Parameter.Value' \
+              --output text \
+              --region "${{ env.AWS_REGION }}" 2>/tmp/ssm-uid.err); then
+            echo "::error::Failed to read staging Clerk user ID from SSM path ${{ env.CANARY_USER_ID_SSM_PATH }}"
+            echo "::error::Parameter not yet provisioned -- see Activation Prerequisites in workflow header."
+            cat /tmp/ssm-uid.err >&2
+            exit 1
+          fi
+          echo "::add-mask::${STAGING_USER_ID}"
+          printf '%s' "${STAGING_USER_ID}" > /tmp/staging-clerk-user-id.txt
+          echo "PASS: staging Clerk user ID read from SSM."
+
+      # ------------------------------------------------------------------
+      # STEP 5: Headless auth Boundary 1.
+      # POST api.clerk.com/v1/sign_in_tokens -> sign-in TICKET (sit_xxx).
+      # NOTE: Backend API endpoint at api.clerk.com -- NOT the FAPI subdomain.
+      # Hitting /v1/sign_in_tokens on the FAPI returns HTTP 404.
+      # ------------------------------------------------------------------
+      - name: Clerk Backend API -- mint sign-in ticket (Boundary 1)
+        id: mint_ticket
+        run: |
+          set -euo pipefail
+          STAGING_SK=$(cat /tmp/staging-clerk-sk.txt)
+          STAGING_USER_ID=$(cat /tmp/staging-clerk-user-id.txt)
+          echo "::add-mask::${STAGING_SK}"
+          echo "::add-mask::${STAGING_USER_ID}"
+
+          HTTP_CODE=$(curl -s -o /tmp/auth-sign-in-token.json -w '%{http_code}' \
+            --max-time 15 \
+            --connect-timeout 5 \
+            -X POST \
+            -H "Authorization: Bearer ${STAGING_SK}" \
+            -H "Content-Type: application/json" \
+            -H "${{ env.SYNTHETIC_HEADER }}" \
+            --data "{\"user_id\":\"${STAGING_USER_ID}\"}" \
+            "${{ env.CLERK_BACKEND_API_BASE }}/v1/sign_in_tokens" || echo "000")
+
+          echo "POST ${{ env.CLERK_BACKEND_API_BASE }}/v1/sign_in_tokens -> HTTP ${HTTP_CODE}"
+          if [ "${HTTP_CODE}" != "200" ]; then
+            echo "::error::Clerk sign-in token mint failed (HTTP ${HTTP_CODE}). Check: staging sk_test_ key valid? user_id exists in staging Clerk? api.clerk.com reachable?"
+            exit 1
+          fi
+          if ! grep -q '"token"' /tmp/auth-sign-in-token.json; then
+            echo "::error::Clerk response HTTP 200 but no token field in body."
+            exit 1
+          fi
+
+          SIGNIN_TICKET=$(grep -o '"token":"[^"]*"' /tmp/auth-sign-in-token.json | head -1 | cut -d'"' -f4 || echo "")
+          if [ -z "${SIGNIN_TICKET}" ]; then
+            echo "::error::Could not parse token from Clerk sign-in-token response."
+            exit 1
+          fi
+          echo "::add-mask::${SIGNIN_TICKET}"
+          printf '%s' "${SIGNIN_TICKET}" > /tmp/auth-signin-ticket.txt
+          echo "PASS: sign-in ticket minted."
+
+      # ------------------------------------------------------------------
+      # STEP 6: Headless auth Boundary 2.
+      # POST staging FAPI /v1/client/sign_ins with strategy=ticket.
+      # Cookie jar captures __client for the session context.
+      # Produces: created_session_id.
+      # WHY NOT BACKEND API: Clerk FAPI is the correct ticket->session path.
+      # The Backend API endpoint for session tokens (Boundary 3) requires a
+      # session_id, which we obtain here.
+      # ------------------------------------------------------------------
+      - name: Staging FAPI -- exchange ticket for session (Boundary 2)
+        id: exchange_ticket
+        run: |
+          set -euo pipefail
+          SIGNIN_TICKET=$(cat /tmp/auth-signin-ticket.txt)
+          echo "::add-mask::${SIGNIN_TICKET}"
+
+          HTTP_CODE=$(curl -s -o /tmp/auth-fapi-session.json -w '%{http_code}' \
+            --max-time 15 \
+            --connect-timeout 5 \
+            -c /tmp/auth-fapi-cookies.txt \
+            -X POST \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -H "${{ env.SYNTHETIC_HEADER }}" \
+            --data "strategy=ticket&ticket=${SIGNIN_TICKET}" \
+            "${{ env.STAGING_FAPI_HOST }}/v1/client/sign_ins" || echo "000")
+
+          echo "POST ${{ env.STAGING_FAPI_HOST }}/v1/client/sign_ins -> HTTP ${HTTP_CODE}"
+          if [ "${HTTP_CODE}" != "200" ]; then
+            echo "::error::FAPI ticket exchange failed (HTTP ${HTTP_CODE}). Check: STAGING_FAPI_HOST correct (${{ env.STAGING_FAPI_HOST }})? Ticket not expired? Clerk staging instance running?"
+            exit 1
+          fi
+
+          SESSION_ID=$(grep -o '"created_session_id":"[^"]*"' /tmp/auth-fapi-session.json | head -1 | cut -d'"' -f4 || echo "")
+          if [ -z "${SESSION_ID}" ]; then
+            echo "::error::Could not parse created_session_id from FAPI ticket exchange response."
+            exit 1
+          fi
+          echo "::add-mask::${SESSION_ID}"
+          printf '%s' "${SESSION_ID}" > /tmp/auth-session-id.txt
+          echo "PASS: session ID obtained from staging FAPI."
+
+      # ------------------------------------------------------------------
+      # STEP 7: Headless auth Boundary 3.
+      # POST api.clerk.com/v1/sessions/{id}/tokens -- Backend API session
+      # token mint (avoids bot-protection that would reject FAPI endpoint).
+      # Produces: short-lived (~60s) session JWT for BFF Bearer auth.
+      # WHY NOT FAPI: FAPI GET /v1/client/sessions/{id}/tokens rejects
+      # headless curl with HTTP 401 bot-protection.
+      # ------------------------------------------------------------------
+      - name: Clerk Backend API -- mint session JWT (Boundary 3)
+        id: mint_jwt
+        run: |
+          set -euo pipefail
+          STAGING_SK=$(cat /tmp/staging-clerk-sk.txt)
+          SESSION_ID=$(cat /tmp/auth-session-id.txt)
+          echo "::add-mask::${STAGING_SK}"
+          echo "::add-mask::${SESSION_ID}"
+
+          HTTP_CODE=$(curl -s -o /tmp/auth-session-jwt.json -w '%{http_code}' \
+            --max-time 15 \
+            --connect-timeout 5 \
+            -X POST \
+            -H "Authorization: Bearer ${STAGING_SK}" \
+            -H "${{ env.SYNTHETIC_HEADER }}" \
+            "${{ env.CLERK_BACKEND_API_BASE }}/v1/sessions/${SESSION_ID}/tokens" || echo "000")
+
+          echo "POST ${{ env.CLERK_BACKEND_API_BASE }}/v1/sessions/[SESSION_ID]/tokens -> HTTP ${HTTP_CODE}"
+          if [ "${HTTP_CODE}" != "200" ]; then
+            echo "::error::Clerk session JWT mint failed (HTTP ${HTTP_CODE}). Check: SESSION_ID valid? sk_test_ key valid for this session?"
+            exit 1
+          fi
+
+          SESSION_JWT=$(grep -o '"jwt":"[^"]*"' /tmp/auth-session-jwt.json | head -1 | cut -d'"' -f4 || echo "")
+          if [ -z "${SESSION_JWT}" ]; then
+            echo "::error::Could not parse JWT from Clerk session token response."
+            exit 1
+          fi
+          echo "::add-mask::${SESSION_JWT}"
+          printf '%s' "${SESSION_JWT}" > /tmp/auth-session-jwt.txt
+          echo "PASS: session JWT minted."
+
+      # ------------------------------------------------------------------
+      # STEP 8: Staging BFF -- daemon register (Boundary 4).
+      # POST staging BFF /api/v1/daemon/register with session JWT to obtain
+      # a daemon API key. Writes key + account_id for replay and teardown.
+      # ------------------------------------------------------------------
+      - name: Staging BFF -- daemon register (Boundary 4)
+        id: daemon_register
+        run: |
+          set -euo pipefail
+          SESSION_JWT=$(cat /tmp/auth-session-jwt.txt)
+          echo "::add-mask::${SESSION_JWT}"
+
+          HTTP_CODE=$(curl -s -o /tmp/daemon-register.json -w '%{http_code}' \
+            --max-time 15 \
+            --connect-timeout 5 \
+            -X POST \
+            -H "Authorization: Bearer ${SESSION_JWT}" \
+            -H "Content-Type: application/json" \
+            -H "${{ env.SYNTHETIC_HEADER }}" \
+            "${{ inputs.staging_bff_base_url }}/api/v1/daemon/register" || echo "000")
+
+          echo "POST ${{ inputs.staging_bff_base_url }}/api/v1/daemon/register -> HTTP ${HTTP_CODE}"
+          if [ "${HTTP_CODE}" != "200" ]; then
+            BODY=$(head -c 500 /tmp/daemon-register.json 2>/dev/null || true)
+            echo "::error::daemon/register failed (HTTP ${HTTP_CODE}). Body: ${BODY:-<empty>}"
+            echo "::error::HTTP 401: session JWT expired? HTTP 404: BFF route missing or CLERK_FRONTEND_API stale?"
+            exit 1
+          fi
+
+          # Extract daemon API key. Adjust field name to match Bob's actual
+          # /daemon/register response shape when ticket #640 is implemented.
+          DAEMON_API_KEY=$(grep -o '"api_key":"[^"]*"' /tmp/daemon-register.json | head -1 | cut -d'"' -f4 || echo "")
+          if [ -z "${DAEMON_API_KEY}" ]; then
+            # Fallback: try "token" field name
+            DAEMON_API_KEY=$(grep -o '"token":"[^"]*"' /tmp/daemon-register.json | head -1 | cut -d'"' -f4 || echo "")
+          fi
+          if [ -z "${DAEMON_API_KEY}" ]; then
+            echo "::error::Could not parse daemon API key from register response. Update field extraction to match Bob's implementation."
+            cat /tmp/daemon-register.json >&2
+            exit 1
+          fi
+          echo "::add-mask::${DAEMON_API_KEY}"
+          printf '%s' "${DAEMON_API_KEY}" > /tmp/replay-daemon-api-key.txt
+
+          # Extract and persist account_id for the teardown step.
+          ACCOUNT_ID=$(grep -o '"account_id":"[^"]*"' /tmp/daemon-register.json | head -1 | cut -d'"' -f4 || echo "")
+          if [ -z "${ACCOUNT_ID}" ]; then
+            # Fallback to Clerk user ID as account scope identifier
+            ACCOUNT_ID=$(cat /tmp/staging-clerk-user-id.txt)
+            echo "WARNING: account_id not in register response; falling back to Clerk user ID for teardown."
+          fi
+          echo "::add-mask::${ACCOUNT_ID}"
+          printf '%s' "${ACCOUNT_ID}" > /tmp/replay-account-id.txt
+          echo "PASS: daemon API key obtained; account_id persisted for teardown."
+
+      # ------------------------------------------------------------------
+      # STEP 9: Build the replay harness.
+      # DEPENDENCY: Requires Bob's feat/640-641-corpus-replay-harness PR.
+      # Until merged, this step will fail (corpus_replay build tag absent).
+      # continue-on-error: true absorbs this during bring-up.
+      # ------------------------------------------------------------------
+      - name: Build corpus-replay harness
+        id: build_harness
+        working-directory: services/daemon
+        env:
+          GONOSUMDB: github.com/RdHamilton/vault-mtg
+          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GOFLAGS: -mod=mod
+        run: |
+          set -euo pipefail
+          go mod download
+          # Build the daemon binary with the corpus_replay build tag.
+          # -tags corpus_replay enables the -replay flag (ticket #640 contract).
+          go build \
+            -tags corpus_replay \
+            -o /tmp/vaultmtg-daemon-replay \
+            ./cmd/daemon
+          echo "PASS: replay binary built."
+
+      # ------------------------------------------------------------------
+      # STEP 10: Execute corpus replay.
+      # Runs the daemon in -replay mode against the golden corpus fixture.
+      # The daemon uses VAULTMTG_DAEMON_API_KEY for authentication
+      # (from STEP 8) and dispatches events through the real staging pipeline.
+      # Exit 0 = replay:completed; non-zero = replay:error.
+      #
+      # DEPENDENCY: Bob's #640 implementation must be merged.
+      # ------------------------------------------------------------------
+      - name: Run corpus replay (daemon -replay mode)
+        id: corpus_replay
+        run: |
+          set -euo pipefail
+          DAEMON_API_KEY=$(cat /tmp/replay-daemon-api-key.txt)
+          echo "::add-mask::${DAEMON_API_KEY}"
+
+          VAULTMTG_DAEMON_API_KEY="${DAEMON_API_KEY}" \
+          VAULTMTG_DAEMON_REPLAY_FILE="${{ env.CORPUS_FIXTURE_PATH }}" \
+            /tmp/vaultmtg-daemon-replay \
+              -cloud-api-url "${{ inputs.staging_bff_base_url }}/api/v1"
+
+          echo "PASS: corpus replay completed (replay:completed)."
+
+      # ------------------------------------------------------------------
+      # STEP 11: Assert replay outcomes against golden expected-outcome.
+      # Runs the assertion harness (ticket #641): reads staging state back via
+      # BFF read API scoped to the synthetic account, diffs against golden JSON.
+      # Exit non-zero on mismatch -> gate fails.
+      #
+      # DEPENDENCY: Bob's #641 implementation must be merged.
+      # ------------------------------------------------------------------
+      - name: Assert replay outcomes (golden diff)
+        id: assert_outcomes
+        working-directory: services/daemon
+        env:
+          GONOSUMDB: github.com/RdHamilton/vault-mtg
+          GOPRIVATE: github.com/RdHamilton/vault-mtg
+        run: |
+          set -euo pipefail
+          ACCOUNT_ID=$(cat /tmp/replay-account-id.txt)
+          echo "::add-mask::${ACCOUNT_ID}"
+
+          REPLAY_STAGING_ACCOUNT_ID="${ACCOUNT_ID}" \
+          REPLAY_STAGING_BFF_BASE_URL="${{ inputs.staging_bff_base_url }}" \
+            go test \
+              -tags corpus_replay \
+              -count=1 \
+              -timeout 5m \
+              ./cmd/daemon/... \
+              -run TestCorpusReplay 2>&1 | tee /tmp/assertion-output.txt
+
+          # Propagate exit code (tee swallows it)
+          exit "${PIPESTATUS[0]}"
+
+      # ------------------------------------------------------------------
+      # STEP 12: Write GitHub Actions job summary.
+      # ------------------------------------------------------------------
+      - name: Write job summary
+        if: always()
+        run: |
+          REPLAY_RESULT="${{ steps.corpus_replay.outcome }}"
+          ASSERT_RESULT="${{ steps.assert_outcomes.outcome }}"
+          {
+            echo "## Corpus Replay Gate (Layer 4)"
+            if [ "${REPLAY_RESULT}" = "success" ] && [ "${ASSERT_RESULT}" = "success" ]; then
+              echo "**PASS** -- corpus replay completed and all golden assertions satisfied."
+            else
+              echo "**FAIL** -- replay: ${REPLAY_RESULT}, assertions: ${ASSERT_RESULT}"
+              echo ""
+              echo "New failure: check assertion output for the diff (expected vs. actual)."
+              echo "Bring-up failure: Bob's #640/#641 may not be merged yet."
+            fi
+            # Append assertion output for debugging on failure
+            if [ -f /tmp/assertion-output.txt ]; then
+              echo ""
+              echo "<details><summary>Assertion output</summary>"
+              echo ""
+              echo '```'
+              head -c 10000 /tmp/assertion-output.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ------------------------------------------------------------------
+      # TEARDOWN: always() -- runs even on assertion failure.
+      # Deletes all rows scoped to the synthetic account_id from staging.
+      # Idempotent: safe to run multiple times (0 rows if already clean).
+      # Scoped strictly to synthetic account -- never touches real staging users.
+      #
+      # Uses SSM Run Command on the staging EC2 host (ADR-019 pattern).
+      # ------------------------------------------------------------------
+      - name: Teardown -- delete synthetic account rows (always)
+        if: always()
+        run: |
+          set -uo pipefail
+
+          ACCOUNT_ID_FILE=/tmp/replay-account-id.txt
+          if [ ! -f "${ACCOUNT_ID_FILE}" ]; then
+            echo "WARNING: account ID file not found -- skipping teardown (auth failed before account provisioned)."
+            exit 0
+          fi
+
+          ACCOUNT_ID=$(cat "${ACCOUNT_ID_FILE}")
+          echo "::add-mask::${ACCOUNT_ID}"
+
+          if [ -z "${ACCOUNT_ID}" ]; then
+            echo "WARNING: account ID is empty -- skipping teardown."
+            exit 0
+          fi
+
+          echo "Running scoped teardown for synthetic account..."
+
+          # Fetch the staging EC2 instance ID from SSM.
+          STAGING_INSTANCE_ID=$(aws ssm get-parameter \
+            --name "/vaultmtg/staging/ec2-instance-id" \
+            --query 'Parameter.Value' \
+            --output text \
+            --region "${{ env.AWS_REGION }}" 2>/dev/null || echo "")
+
+          if [ -z "${STAGING_INSTANCE_ID}" ]; then
+            echo "WARNING: /vaultmtg/staging/ec2-instance-id not provisioned -- teardown skipped."
+            echo "To enable teardown: provision this SSM parameter with the staging EC2 instance ID."
+            exit 0
+          fi
+
+          # Build the teardown SQL. All DELETEs are account-scoped and idempotent.
+          # Tables with account_id FK -- extend this list as the schema evolves.
+          # Use single-quotes inside the SQL to avoid shell escaping issues.
+          #
+          # NOTE: On failure (SSM error, psql error), teardown exits 0 with a warning
+          # so that a teardown hiccup does not flip the gate result. The synthetic
+          # account rows in staging are harmless if they persist across one failed run.
+          TEARDOWN_COMMAND="source /etc/mtga-companion-staging/env && psql \"\$DATABASE_URL\" <<'ENDSQL'
+          DO \$body\$
+          DECLARE
+            v_acct TEXT := '${ACCOUNT_ID}';
+          BEGIN
+            DELETE FROM projection_errors WHERE account_id = v_acct;
+            DELETE FROM deck_cards WHERE deck_id IN (SELECT id FROM decks WHERE account_id = v_acct);
+            DELETE FROM decks WHERE account_id = v_acct;
+            DELETE FROM quests WHERE account_id = v_acct;
+            DELETE FROM matches WHERE account_id = v_acct;
+            DELETE FROM daemon_api_keys WHERE account_id = v_acct;
+            DELETE FROM daemon_devices WHERE account_id = v_acct;
+            RAISE NOTICE 'Teardown complete for synthetic account';
+          END \$body\$;
+          ENDSQL"
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "${STAGING_INSTANCE_ID}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "commands=[\"${TEARDOWN_COMMAND}\"]" \
+            --region "${{ env.AWS_REGION }}" \
+            --output text \
+            --query 'Command.CommandId' 2>/tmp/teardown-ssm.err || echo "")
+
+          if [ -z "${COMMAND_ID}" ]; then
+            echo "WARNING: SSM teardown command submission failed -- synthetic account rows may remain."
+            cat /tmp/teardown-ssm.err >&2
+            exit 0
+          fi
+          echo "Teardown SSM command submitted: ${COMMAND_ID}"
+
+          # Poll for teardown completion (max 60s)
+          for _n in $(seq 1 12); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "${COMMAND_ID}" \
+              --instance-id "${STAGING_INSTANCE_ID}" \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'Status' \
+              --output text 2>/dev/null || echo "Pending")
+            if [ "${STATUS}" = "Success" ]; then
+              echo "PASS: teardown complete -- synthetic account rows removed from staging."
+              exit 0
+            elif [ "${STATUS}" = "Failed" ] || [ "${STATUS}" = "Cancelled" ]; then
+              echo "WARNING: teardown SSM command ${STATUS} -- synthetic account rows may remain."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "WARNING: teardown poll timed out -- rows may remain. Check SSM command: ${COMMAND_ID}"
+
+  # Gate job -- branch-protection required status check.
+  # Set "Corpus Replay Gate (Layer 4) / Gate" as the required check
+  # once continue-on-error: false is activated (after 2 consecutive green runs).
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    needs: [corpus-replay-gate]
+    if: always()
+    steps:
+      - name: Check corpus-replay-gate result
+        run: |
+          RESULT="${{ needs.corpus-replay-gate.result }}"
+          # During bring-up (continue-on-error: true), corpus-replay-gate
+          # always reports "success" even if steps failed (GHA behavior).
+          # This gate will read "success" until continue-on-error is flipped.
+          if [[ "${RESULT}" == "success" ]]; then
+            echo "PASS: corpus-replay-gate passed (or continue-on-error absorbed a failure during bring-up)."
+          else
+            echo "FAIL: corpus-replay-gate result: ${RESULT}"
+            exit 1
+          fi
