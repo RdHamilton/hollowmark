@@ -356,8 +356,8 @@ func (r *DraftSessionsRepository) InferSessionForMatch(ctx context.Context, acco
 		SELECT id FROM draft_sessions
 		WHERE account_id = $1
 		  AND event_name = $2
-		  AND start_time >= $3 - INTERVAL '48 hours'
-		  AND start_time <= $3
+		  AND start_time >= $3::timestamptz - INTERVAL '48 hours'
+		  AND start_time <= $3::timestamptz
 		  AND status = 'completed'
 		LIMIT 2`
 
