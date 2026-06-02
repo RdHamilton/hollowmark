@@ -5,8 +5,8 @@ name: E2E Staging Auth Smoke (vmt-t#678)
 # a real Clerk session minted from the staging CLERK_SECRET_KEY in SSM.
 #
 # Auth-enforcement contract (vmt-t#678):
-#   - CLERK_SECRET_KEY is read from the GitHub Actions secret (sourced from SSM
-#     at /vaultmtg/staging/clerk-secret-key). The secret is never echoed to logs.
+#   - CLERK_SECRET_KEY is read directly from SSM (path /vaultmtg/staging/CLERK_SECRET_KEY,
+#     SecureString). The secret is masked immediately and never echoed to logs.
 #   - If CLERK_SECRET_KEY is absent the suite FAILs with INCONCLUSIVE — it does
 #     NOT skip and report PASS. A smoke that skips all authenticated surfaces is
 #     worse than no test (2026-06-02 false-PASS incident).
@@ -108,7 +108,7 @@ jobs:
         id: ssm
         run: |
           CLERK_SECRET_KEY=$(aws ssm get-parameter \
-            --name /vaultmtg/staging/clerk-secret-key \
+            --name /vaultmtg/staging/CLERK_SECRET_KEY \
             --with-decryption \
             --region us-east-1 \
             --query Parameter.Value \
