@@ -55,6 +55,39 @@ var ErrNotFound = errors.New("keychain: api key not found")
 // this variable; do not reassign outside of tests.
 var keyringGet = keyring.Get
 
+// GetForService retrieves the daemon API key from the OS keychain using the
+// supplied service name instead of the package-default ServiceNameNew.
+//
+// This is the channel-aware variant used by runtime consumers that have
+// resolved install.Identity(install.Channel).KeychainService at startup
+// (ADR-049 Ticket 2). Unlike Get(), it does NOT perform the legacy-migration
+// fallback — the caller is responsible for supplying the correct service name
+// for their channel.
+//
+// Returns ErrNotFound when no entry exists under service.
+func GetForService(service string) (string, error) {
+	val, err := keyringGet(service, AccountKey)
+	if err == nil {
+		return val, nil
+	}
+	if isNotFound(err) {
+		return "", ErrNotFound
+	}
+	return "", fmt.Errorf("keychain: get %q: %w", service, err)
+}
+
+// SetForService stores the daemon API key in the OS keychain under the given
+// service name, creating or replacing any existing entry.
+//
+// This is the channel-aware variant used by runtime consumers (ADR-049 Ticket 2).
+// The caller is responsible for passing the correct channel-derived service name.
+func SetForService(service, apiKey string) error {
+	if err := keyring.Set(service, AccountKey, apiKey); err != nil {
+		return fmt.Errorf("keychain: set %q: %w", service, err)
+	}
+	return nil
+}
+
 // Get retrieves the daemon API key from the OS keychain.
 //
 // Migration path (ADR-022 Constraint 1):
