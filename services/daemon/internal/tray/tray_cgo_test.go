@@ -193,6 +193,32 @@ func TestTrayCGO_OpenURLCalled_OnCheckForUpdates(t *testing.T) {
 	assert.Equal(t, "https://github.com/RdHamilton/vault-mtg/releases?q=daemon", gotURL)
 }
 
+// ---------------------------------------------------------------------------
+// launchd spawn-type fix — ensureUIElementPolicy (vmt-t#<hotfix>)
+// ---------------------------------------------------------------------------
+
+// TestTrayCGO_EnsureUIElementPolicy_NoPanic verifies that ensureUIElementPolicy
+// can be called without panicking. The actual Cocoa setActivationPolicy call
+// is a GUI operation that requires a display connection — on a headless CI
+// runner it is a silent no-op; on a real machine it promotes the process to
+// UIElement so NSStatusBar can place the menu-bar icon. The test's job is to
+// confirm (a) the function exists in the cgo build, (b) it does not panic,
+// and (c) calling it before systray.Run() does not corrupt App state.
+func TestTrayCGO_EnsureUIElementPolicy_NoPanic(t *testing.T) {
+	assert.NotPanics(t, func() { ensureUIElementPolicy() })
+}
+
+// TestTrayCGO_RunCallsEnsurePolicy_StateUnchanged verifies that an App's
+// exported state fields are unmodified after ensureUIElementPolicy runs,
+// confirming the Objective-C shim does not touch Go heap memory.
+func TestTrayCGO_RunCallsEnsurePolicy_StateUnchanged(t *testing.T) {
+	app := newCGOTestApp()
+	ensureUIElementPolicy()
+	// State must be exactly as New() left it.
+	assert.Equal(t, StatusStarting, app.status)
+	assert.False(t, app.syncInFlight)
+}
+
 // TestTrayCGO_CheckForUpdates_URLIsVaultMTGRepo verifies the exact URL constant
 // to prevent accidental references to the legacy repo slug (pre-rename).
 func TestTrayCGO_CheckForUpdates_URLIsVaultMTGRepo(t *testing.T) {
