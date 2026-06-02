@@ -63,3 +63,32 @@
 .trend-stable {
   color: var(--fg-secondary) !important;
 }
+
+/*
+ * Set-release annotation legend — used in the Storybook story and any
+ * below-chart legend list that describes the vertical reference lines.
+ * The ReferenceLine SVG elements themselves use inline style props
+ * (fill: var(--fg-muted), stroke: var(--fg-muted)) because Recharts
+ * renders SVG nodes outside the normal CSS cascade.
+ */
+.set-annotation-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.set-annotation-legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.set-annotation-legend-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 1px;
+  border-top: 1px dashed var(--fg-muted);
+}
