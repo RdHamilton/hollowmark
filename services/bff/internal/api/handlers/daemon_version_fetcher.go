@@ -3,13 +3,47 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	contract "github.com/RdHamilton/vault-mtg/services/contract"
 )
+
+// allowedAssetHosts is the set of hostnames permitted in release asset download
+// URLs. Any asset whose BrowserDownloadURL resolves to a host not in this set is
+// silently omitted from the response to protect the daemon from hostile URLs that
+// could be injected into a compromised release.
+//
+// GitHub serves release assets from github.com; CDN-redirected downloads use
+// objects.githubusercontent.com.
+var allowedAssetHosts = map[string]struct{}{
+	"github.com":                    {},
+	"objects.githubusercontent.com": {},
+}
+
+// githubAPIResponseMaxBytes caps the GitHub Releases API response body at 2 MiB.
+// This prevents a pathologically large (or malicious) payload from consuming
+// excessive memory in the BFF.
+const githubAPIResponseMaxBytes = 2 * 1024 * 1024
+
+// isAllowedAssetHost returns true when the given raw URL has a host in the
+// production allow-list. Malformed URLs and off-list hosts return false.
+func isAllowedAssetHost(rawURL string) bool {
+	if rawURL == "" {
+		return false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	_, ok := allowedAssetHosts[host]
+	return ok
+}
 
 // githubRelease is the subset of the GitHub Releases API response that the
 // fetcher cares about.
@@ -93,7 +127,7 @@ func (f *ReleaseFetcher) fetchLatestDaemonRelease() (*contract.DaemonVersionResp
 	}
 
 	var releases []githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, githubAPIResponseMaxBytes)).Decode(&releases); err != nil {
 		return nil, fmt.Errorf("decode github releases: %w", err)
 	}
 
@@ -102,6 +136,11 @@ func (f *ReleaseFetcher) fetchLatestDaemonRelease() (*contract.DaemonVersionResp
 
 // parseDaemonRelease picks the first non-prerelease, non-draft release whose
 // tag starts with "daemon/" and extracts the version metadata.
+//
+// Host validation: every asset URL is validated against allowedAssetHosts before
+// being included in the response. Any asset whose host is not on the allow-list
+// is silently omitted, defending against a compromised release injecting hostile
+// download URLs that the daemon would otherwise trust.
 func parseDaemonRelease(releases []githubRelease) *contract.DaemonVersionResponse {
 	for _, r := range releases {
 		if !strings.HasPrefix(r.TagName, "daemon/") {
@@ -120,13 +159,22 @@ func parseDaemonRelease(releases []githubRelease) *contract.DaemonVersionRespons
 			DownloadURL: r.HTMLURL,
 		}
 
-		// Populate SHA256SUMS and signature URLs from assets.
+		// Populate asset URLs from the release assets, validating every URL's
+		// host against the allow-list before accepting it.
 		for _, asset := range r.Assets {
+			if !isAllowedAssetHost(asset.BrowserDownloadURL) {
+				// Off-list host — skip this asset entirely.
+				continue
+			}
 			switch asset.Name {
 			case "SHA256SUMS":
 				result.Sha256SumsURL = asset.BrowserDownloadURL
 			case "SHA256SUMS.minisig":
 				result.AttestationURL = asset.BrowserDownloadURL
+			case "vaultmtg-daemon-darwin-universal.pkg":
+				result.MacOSInstallerURL = asset.BrowserDownloadURL
+			case "vaultmtg-daemon-windows-amd64.exe":
+				result.WindowsInstallerURL = asset.BrowserDownloadURL
 			}
 		}
 
