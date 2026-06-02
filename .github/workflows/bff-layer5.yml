@@ -30,6 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     # RULE-INFRA-01: start continue-on-error until two consecutive clean runs.
     continue-on-error: true
+    # AC5 (#695): hard cap prevents a hung reconciliation job from consuming a
+    # runner for the default 6-hour GHA job timeout.
+    timeout-minutes: 10
 
     services:
       postgres:
