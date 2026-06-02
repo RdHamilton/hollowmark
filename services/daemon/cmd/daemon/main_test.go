@@ -1172,9 +1172,9 @@ func TestRunReplayMode_ExitsZeroOnReplayCompleted(t *testing.T) {
 	err := runReplayMode(
 		context.Background(),
 		replayModeConfig{
-			LogFile:    logFile,
-			APIKey:     "sk_test_daemon",
-			AccountID:  "acc_replay_001",
+			LogFile:     logFile,
+			APIKey:      "sk_test_daemon",
+			AccountID:   "acc_replay_001",
 			CloudAPIURL: bffSrv.URL,
 		},
 	)
@@ -1188,9 +1188,9 @@ func TestRunReplayMode_ErrorOnMissingFile(t *testing.T) {
 	err := runReplayMode(
 		context.Background(),
 		replayModeConfig{
-			LogFile:    "/tmp/nonexistent-corpus-file-xyzzy.log",
-			APIKey:     "sk_test",
-			AccountID:  "acc_001",
+			LogFile:     "/tmp/nonexistent-corpus-file-xyzzy.log",
+			APIKey:      "sk_test",
+			AccountID:   "acc_001",
 			CloudAPIURL: "http://127.0.0.1:1",
 		},
 	)
