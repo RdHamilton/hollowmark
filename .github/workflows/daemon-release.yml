@@ -995,8 +995,56 @@ jobs:
           # derive CHANNEL from the same expression so all values track together.
           VAULTMTG_CHANNEL_VALUE: ${{ contains(steps.cloud_url.outputs.url, 'staging-api') && 'staging' || 'stable' }}
         run: |
+          # ------------------------------------------------------------------
+          # ADR-049 channel-separated INSTALL identity.
+          #
+          # Root cause of the staging-overwrites-prod install collision
+          # (vault-mtg-tickets#: side-by-side install): the daemon binary and the
+          # postinstall script were already channel-aware, but the .pkg payload
+          # built here (binary copy path, .app bundle name, CFBundleIdentifier,
+          # CFBundleName, launcher PLIST_LABEL, icon, pkgbuild --identifier) was
+          # HARDCODED to the prod identity for both channels.  A staging .pkg
+          # therefore wrote to exactly the same on-disk paths as prod and
+          # overwrote it.  Mirror common.sh / internal/install.Suffixes() here so
+          # the staging .pkg lands on a fully distinct identity (Chrome / Canary
+          # model).  Stable values are bit-for-bit unchanged.
+          #
+          # Single suffix table — the ONLY place channel branches (ADR-049 §2):
+          #   BIN_SUFFIX    ""        / "-staging"   (binary, config dir, log)
+          #   LABEL_SUFFIX  ""        / ".staging"   (reverse-DNS labels/ids)
+          #   APP_SUFFIX    ""        / " Staging"   (.app bundle / display name)
+          #   ICON_NAME     vaultmtg  / vaultmtg-staging  (CFBundleIconFile/.icns)
+          # ------------------------------------------------------------------
+          if [ "$VAULTMTG_CHANNEL_VALUE" = "staging" ]; then
+            BIN_SUFFIX="-staging"
+            LABEL_SUFFIX=".staging"
+            APP_SUFFIX=" Staging"
+            ICON_NAME="vaultmtg-staging"
+          elif [ "$VAULTMTG_CHANNEL_VALUE" = "stable" ]; then
+            BIN_SUFFIX=""
+            LABEL_SUFFIX=""
+            APP_SUFFIX=""
+            ICON_NAME="vaultmtg"
+          else
+            echo "ERROR: VAULTMTG_CHANNEL_VALUE='$VAULTMTG_CHANNEL_VALUE' must be 'stable' or 'staging'" >&2
+            exit 1
+          fi
+          DAEMON_BINARY_NAME="vaultmtg-daemon${BIN_SUFFIX}"
+          PKG_IDENTIFIER="com.vaultmtg.daemon${LABEL_SUFFIX}"
+          APP_BUNDLE="pkg-root/Applications/VaultMTG${APP_SUFFIX}.app"
+          # Channel-distinct output filename so the staging and stable .pkg can
+          # coexist as release assets and the daemon update-checker / Download
+          # button can resolve each channel unambiguously.  Export to GITHUB_ENV
+          # so every downstream step (notarize, staple, upload, checksum) that
+          # references env.PKG operates on the file we actually produced.
+          PKG_FILENAME="vaultmtg-daemon${BIN_SUFFIX}-darwin-universal.pkg"
+          echo "PKG=${PKG_FILENAME}" >> "$GITHUB_ENV"
+          echo "[sign-macos] channel='${VAULTMTG_CHANNEL_VALUE}' binary='${DAEMON_BINARY_NAME}' app='${APP_BUNDLE}' pkg-id='${PKG_IDENTIFIER}' pkg='${PKG_FILENAME}'"
+
           mkdir -p pkg-root/usr/local/bin
-          cp bin/${{ env.BINARY }} pkg-root/usr/local/bin/vaultmtg-daemon
+          # Install the binary under its channel-distinct name so the staging
+          # binary does not overwrite the prod binary at /usr/local/bin.
+          cp bin/${{ env.BINARY }} "pkg-root/usr/local/bin/${DAEMON_BINARY_NAME}"
 
           # pkgbuild does not propagate env vars to the installed postinstall.
           # Substitute placeholders in a copy of the script BEFORE bundling.
@@ -1034,35 +1082,55 @@ jobs:
           fi
 
           # ------------------------------------------------------------------
-          # Build and sign the VaultMTG.app launcher bundle (ADR-036 I-8, #278).
-          # The .app is a thin shell-script launcher placed in /Applications.
-          # It must be codesigned with Developer ID Application (SIGNING_IDENTITY)
-          # before pkgbuild embeds it in the .pkg, so the bundle passes Gatekeeper
-          # when the installer places it on the user's system.
+          # Build and sign the VaultMTG[ Staging].app launcher bundle
+          # (ADR-036 I-8, #278).  The .app is a thin shell-script launcher placed
+          # in /Applications.  It must be codesigned with Developer ID Application
+          # (SIGNING_IDENTITY) before pkgbuild embeds it in the .pkg, so the bundle
+          # passes Gatekeeper when the installer places it on the user's system.
           # ------------------------------------------------------------------
-          APP_BUNDLE="pkg-root/Applications/VaultMTG.app"
           APP_MACOS="${APP_BUNDLE}/Contents/MacOS"
           mkdir -p "${APP_MACOS}"
 
-          # Info.plist — sourced from the static file in the repo to avoid
-          # embedding XML heredocs in YAML (actionlint SC syntax-check failure).
-          cp services/daemon/install/macos/pkg/app-Info.plist \
-            "${APP_BUNDLE}/Contents/Info.plist"
+          # Info.plist — channel placeholders (__VAULTMTG_LABEL_SUFFIX__,
+          # __VAULTMTG_APP_SUFFIX__, __VAULTMTG_ICON_NAME__) substituted here so
+          # the staging bundle carries a distinct CFBundleIdentifier/CFBundleName.
+          # Sourced from a static file (not a YAML heredoc) to avoid actionlint
+          # shell-syntax false positives on embedded XML.
+          ESC_LABEL_SUFFIX=$(escape_sed "$LABEL_SUFFIX")
+          ESC_APP_SUFFIX=$(escape_sed "$APP_SUFFIX")
+          ESC_ICON_NAME=$(escape_sed "$ICON_NAME")
+          sed \
+            -e "s|__VAULTMTG_LABEL_SUFFIX__|$ESC_LABEL_SUFFIX|g" \
+            -e "s|__VAULTMTG_APP_SUFFIX__|$ESC_APP_SUFFIX|g" \
+            -e "s|__VAULTMTG_ICON_NAME__|$ESC_ICON_NAME|g" \
+            services/daemon/install/macos/pkg/app-Info.plist \
+            > "${APP_BUNDLE}/Contents/Info.plist"
 
-          # Launcher shell script (CFBundleExecutable) — sourced from the
-          # static file in the repo for the same reason as Info.plist above.
-          cp services/daemon/install/macos/pkg/app-launcher \
-            "${APP_MACOS}/vaultmtg-launcher"
+          # Launcher shell script (CFBundleExecutable) — same channel placeholder
+          # substitution so the staging launcher bootstraps the staging
+          # LaunchAgent label (com.vaultmtg.daemon.staging), not prod's.
+          sed \
+            -e "s|__VAULTMTG_LABEL_SUFFIX__|$ESC_LABEL_SUFFIX|g" \
+            services/daemon/install/macos/pkg/app-launcher \
+            > "${APP_MACOS}/vaultmtg-launcher"
           chmod 755 "${APP_MACOS}/vaultmtg-launcher"
 
-          # App icon (#307) — Contents/Resources/vaultmtg.icns paired with the
-          # CFBundleIconFile=vaultmtg key in app-Info.plist. This is what gives
-          # VaultMTG.app its Finder/Dock icon. (pkgbuild has no --icon flag; the
-          # icon ships inside the embedded .app bundle, not on the .pkg itself.)
+          # Fail closed: no channel placeholder may survive in the bundle.
+          if grep -rq '__VAULTMTG_[A-Z_]*__' "${APP_BUNDLE}/Contents/Info.plist" "${APP_MACOS}/vaultmtg-launcher"; then
+            echo "ERROR: unsubstituted channel placeholder remains in the .app bundle:" >&2
+            grep -rn '__VAULTMTG_[A-Z_]*__' "${APP_BUNDLE}/Contents/Info.plist" "${APP_MACOS}/vaultmtg-launcher" >&2
+            exit 1
+          fi
+
+          # App icon (#307) — Contents/Resources/<icon>.icns paired with the
+          # CFBundleIconFile key in Info.plist.  The staging channel ships the
+          # distinct vaultmtg-staging.icns so the two bundles are visually
+          # distinguishable in Finder/Dock.  The .icns filename inside Resources
+          # must match CFBundleIconFile (ICON_NAME).
           APP_RESOURCES="${APP_BUNDLE}/Contents/Resources"
           mkdir -p "${APP_RESOURCES}"
-          cp services/daemon/install/icons/vaultmtg.icns \
-            "${APP_RESOURCES}/vaultmtg.icns"
+          cp "services/daemon/install/icons/${ICON_NAME}.icns" \
+            "${APP_RESOURCES}/${ICON_NAME}.icns"
 
           # Sign the .app bundle with Developer ID Application before pkgbuild
           # embeds it. pkgbuild wraps the already-signed bundle; the outer .pkg
@@ -1075,17 +1143,17 @@ jobs:
             --timestamp \
             "${APP_BUNDLE}"
           codesign --verify --verbose "${APP_BUNDLE}"
-          echo "PASS: VaultMTG.app signed."
+          echo "PASS: ${APP_BUNDLE} signed."
 
           pkgbuild \
             --root pkg-root \
             --scripts "$SCRIPTS_DIR" \
-            --identifier com.vaultmtg.daemon \
+            --identifier "${PKG_IDENTIFIER}" \
             --version "${GITHUB_REF#refs/tags/daemon/v}" \
             --install-location / \
             --sign "$INSTALLER_IDENTITY" \
             --timestamp \
-            ${{ env.PKG }}
+            "${PKG_FILENAME}"
 
       - name: Notarize .pkg
         # Submit the .pkg directly to notarytool so it receives its own notarization
