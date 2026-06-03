@@ -416,6 +416,74 @@ func TestBrokerServeHTTP_MultipleSubscribersSameUser(t *testing.T) {
 	readData(scannerB, "tabB")
 }
 
+// TestBrokerHandler_RejectsZeroUserID verifies that a UserIDExtractor that
+// returns (0, true) — a zero-value user ID with ok=true — is treated as
+// unauthenticated.  This guards against a misconfigured extractor silently
+// registering a subscriber under userID=0, which the broadcaster's per-user
+// filter would never match (all real user IDs are > 0 in Postgres serial).
+// The handler must return 401 and must NOT register a subscriber.
+func TestBrokerHandler_RejectsZeroUserID(t *testing.T) {
+	b := sse.New()
+
+	// Extractor returns (0, true) — ok is true but the user ID is the zero value.
+	zeroUserExtractor := func(_ context.Context) (int64, bool) {
+		return 0, true
+	}
+
+	srv := httptest.NewServer(b.Handler(zeroUserExtractor))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("zero userID extractor: expected 401, got %d", resp.StatusCode)
+	}
+
+	// No subscriber must have been registered.
+	time.Sleep(20 * time.Millisecond)
+	if n := b.SubscriberCount(); n != 0 {
+		t.Errorf("zero userID extractor: expected 0 subscribers, got %d", n)
+	}
+}
+
+// TestBrokerHandler_ZeroUserIDPublishNoPanic verifies that when a zero-userID
+// connection is correctly rejected, a subsequent Publish(0, ...) does not
+// panic or deadlock (no subscriber channel was allocated).
+func TestBrokerHandler_ZeroUserIDPublishNoPanic(t *testing.T) {
+	b := sse.New()
+
+	zeroUserExtractor := func(_ context.Context) (int64, bool) {
+		return 0, true
+	}
+
+	srv := httptest.NewServer(b.Handler(zeroUserExtractor))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, http.NoBody)
+	resp, _ := srv.Client().Do(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Must not panic, must not block, and no subscribers should exist.
+	b.Publish(0, makeEvent("test:event"))
+
+	if n := b.SubscriberCount(); n != 0 {
+		t.Errorf("expected 0 subscribers after zero-userID rejection, got %d", n)
+	}
+}
+
 func TestBrokerServeHTTP_NonFlushableWriter(t *testing.T) {
 	b := sse.New()
 
