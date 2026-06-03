@@ -75,7 +75,7 @@ func (h *SystemAccountHandler) GetSystemAccount(w http.ResponseWriter, r *http.R
 		Name:         acct.Name,
 		ScreenName:   acct.ScreenName.String,
 		ClientID:     acct.ClientID.String,
-		IsDefault:    acct.IsDefault != 0,
+		IsDefault:    acct.IsDefault,
 		DailyWins:    acct.DailyWins,
 		WeeklyWins:   acct.WeeklyWins,
 		MasteryLevel: acct.MasteryLevel,

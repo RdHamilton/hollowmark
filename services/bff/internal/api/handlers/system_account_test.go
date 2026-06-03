@@ -47,7 +47,7 @@ func TestGetSystemAccount_OK(t *testing.T) {
 		Name:         "Ramone",
 		ScreenName:   sql.NullString{String: "ArenaHandle", Valid: true},
 		ClientID:     sql.NullString{String: "MTGA_client_1", Valid: true},
-		IsDefault:    1,
+		IsDefault:    true,
 		DailyWins:    3,
 		WeeklyWins:   7,
 		MasteryLevel: 4,
