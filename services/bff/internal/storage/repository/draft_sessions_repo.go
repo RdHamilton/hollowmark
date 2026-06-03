@@ -432,3 +432,31 @@ func (r *DraftSessionsRepository) InsertDraftPick(ctx context.Context, ins Draft
 	)
 	return err
 }
+
+// PickCardIDsForSession returns every card_id stored in draft_picks for the
+// given session, ordered by (pack_number, pick_number). card_id is TEXT in
+// the schema (arena ID string); callers that need int values must parse.
+// Returns an empty slice (not an error) when no picks exist yet.
+func (r *DraftSessionsRepository) PickCardIDsForSession(ctx context.Context, sessionID string) ([]string, error) {
+	const q = `
+		SELECT card_id
+		FROM draft_picks
+		WHERE session_id = $1
+		ORDER BY pack_number, pick_number`
+
+	rows, err := r.db.QueryContext(ctx, q, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []string
+	for rows.Next() {
+		var cardID string
+		if err := rows.Scan(&cardID); err != nil {
+			return nil, err
+		}
+		out = append(out, cardID)
+	}
+	return out, rows.Err()
+}
