@@ -144,10 +144,11 @@ test.describe('DraftLive', () => {
           set_code: 'ONE',
           draft_format: 'PremierDraft',
           cached_at: '2026-01-01T00:00:00Z',
+          // gihwr is a FRACTION (0.0–1.0) — the canonical BFF unit.
           card_ratings: [
-            { arena_id: 101, name: 'Elesh Norn', gihwr: 68 },
-            { arena_id: 102, name: 'Plains', gihwr: 50 },
-            { arena_id: 103, name: 'Swamp', gihwr: 48 },
+            { arena_id: 101, name: 'Elesh Norn', gihwr: 0.68 },
+            { arena_id: 102, name: 'Plains', gihwr: 0.5 },
+            { arena_id: 103, name: 'Swamp', gihwr: 0.48 },
           ],
           color_ratings: [],
         }),
@@ -209,9 +210,10 @@ test.describe('DraftLive', () => {
           set_code: 'BLB',
           draft_format: 'QuickDraft',
           cached_at: '2026-01-01T00:00:00Z',
+          // gihwr is a FRACTION (0.0–1.0) — the canonical BFF unit.
           card_ratings: [
-            { arena_id: 201, name: 'Mosswood Dreadknight', gihwr: 63 },
-            { arena_id: 202, name: 'Forest', gihwr: 46 },
+            { arena_id: 201, name: 'Mosswood Dreadknight', gihwr: 0.63 },
+            { arena_id: 202, name: 'Forest', gihwr: 0.46 },
           ],
           color_ratings: [],
         }),
