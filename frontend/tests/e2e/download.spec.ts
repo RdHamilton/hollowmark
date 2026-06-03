@@ -112,7 +112,7 @@ test.describe('Download Page', () => {
       );
     });
 
-    test('@smoke macOS Universal download link has correct href', async ({ page }) => {
+    test('@smoke macOS Universal download link has a channel-correct href', async ({ page }) => {
       // Mock the GitHub Releases API before navigating so useDaemonRelease resolves
       // the versioned URL. See note on Windows test above.
       await mockGitHubReleasesApi(page, [
@@ -123,10 +123,22 @@ test.describe('Download Page', () => {
 
       const link = page.locator('[data-testid="download-link-vaultmtg-daemon-darwin-universal"]');
       await expect(link).toBeVisible();
-      await expect(link).toHaveAttribute(
-        'href',
-        `https://github.com/${GITHUB_REPO}/releases/download/daemon/v0.3.2/vaultmtg-daemon-darwin-universal.pkg`
-      );
+
+      // The macOS .pkg name is channel-parameterized by the daemon-release
+      // pipeline (ADR-049 §1): the staging build links the -staging-suffixed
+      // asset, the stable build links the unsuffixed asset. The E2E bundle's
+      // VITE_SENTRY_ENV decides which one this build renders, so assert against
+      // BOTH valid channel forms here (the per-channel mapping is asserted
+      // deterministically in the Vitest unit + component tests, which can stub
+      // VITE_SENTRY_ENV). The critical regression guard: the href must always be
+      // one of the two REAL published asset names — never a 404'ing mismatch.
+      const base = `https://github.com/${GITHUB_REPO}/releases/download/daemon/v0.3.2`;
+      const href = await link.getAttribute('href');
+      expect(
+        href === `${base}/vaultmtg-daemon-darwin-universal.pkg` ||
+          href === `${base}/vaultmtg-daemon-staging-darwin-universal.pkg`,
+        `macOS href "${href}" must match a real per-channel .pkg asset name`
+      ).toBe(true);
     });
 
     test('exactly 2 download links are rendered', async ({ page }) => {
