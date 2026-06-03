@@ -4,6 +4,19 @@
   margin: 0 auto;
 }
 
+.draft-analytics__session-scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  color: var(--fg-secondary, #a0aec0);
+  font-size: 0.875rem;
+}
+
 .draft-analytics--loading,
 .draft-analytics--empty {
   display: flex;
