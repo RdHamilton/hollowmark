@@ -126,6 +126,52 @@ func TestStatsRepository_GetDeckPerformance_CrossAccountIsolation(t *testing.T) 
 	}
 }
 
+// TestStatsRepository_GetDeckPerformance_MultiFormatCollapsesToOneRow verifies
+// that matches for the same deck_id across different formats (e.g. "Play" and
+// "Ladder") are collapsed into a single DeckPerformanceRow rather than
+// producing one row per format.  Regression for D2: the previous GROUP BY
+// included m.format, causing per-format splits that the SPA chart rendered as
+// separate (incomplete) entries and the "No deck data" empty state.
+func TestStatsRepository_GetDeckPerformance_MultiFormatCollapsesToOneRow(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewStatsRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "stats-dp-multiformat")
+	deckID := insertTestDeck(t, db, accountID, "multiformat")
+
+	base := time.Now().UTC().Truncate(time.Second)
+
+	// Same deck, two different formats: 1 win (Play) + 2 losses (Ladder).
+	insertTestMatchWithDeck(t, db, fmt.Sprintf("m-mf-1-%d", accountID), accountID, "Play", base, deckID, "win")
+	insertTestMatchWithDeck(t, db, fmt.Sprintf("m-mf-2-%d", accountID), accountID, "Ladder", base.Add(-time.Second), deckID, "loss")
+	insertTestMatchWithDeck(t, db, fmt.Sprintf("m-mf-3-%d", accountID), accountID, "Ladder", base.Add(-2*time.Second), deckID, "loss")
+
+	rows, err := repo.GetDeckPerformance(ctx, accountID)
+	if err != nil {
+		t.Fatalf("GetDeckPerformance: %v", err)
+	}
+
+	// Must return exactly 1 row collapsed across all formats.
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row (multi-format collapsed), got %d: %+v", len(rows), rows)
+	}
+
+	r := rows[0]
+	if r.DeckID != deckID {
+		t.Errorf("DeckID: want %q, got %q", deckID, r.DeckID)
+	}
+	if r.Wins != 1 {
+		t.Errorf("Wins: want 1, got %d", r.Wins)
+	}
+	if r.Losses != 2 {
+		t.Errorf("Losses: want 2, got %d", r.Losses)
+	}
+	if r.TotalGames != 3 {
+		t.Errorf("TotalGames: want 3, got %d", r.TotalGames)
+	}
+}
+
 // ─── GetWinRateTrend ──────────────────────────────────────────────────────────
 
 func TestStatsRepository_GetWinRateTrend_Empty(t *testing.T) {

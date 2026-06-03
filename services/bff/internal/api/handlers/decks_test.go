@@ -223,8 +223,46 @@ func TestDecksList_HappyPath(t *testing.T) {
 	}
 	var arr []map[string]any
 	decodeDecksEnvelope(t, rr.Body.Bytes(), &arr)
-	if len(arr) != 1 || arr[0]["winRate"].(float64) != 0.5 {
+	if len(arr) != 1 || arr[0]["matchWinRate"].(float64) != 0.5 {
 		t.Errorf("list: %v", arr)
+	}
+}
+
+// TestDecksList_MatchWinRateFieldName verifies that the /decks list response
+// carries the field as "matchWinRate" (not "winRate") so gui.DeckListItem
+// receives it via source["matchWinRate"].  Regression for D1 deck-stats NaN.
+func TestDecksList_MatchWinRateFieldName(t *testing.T) {
+	now := time.Now().UTC()
+	reader := &stubDecksReader{list: []repository.DeckSummaryRow{
+		{
+			ID: "d-wr", Name: "Test Deck", Format: "standard", CreatedAt: now, ModifiedAt: now,
+			MatchesPlayed: 3, MatchesWon: 1,
+		},
+	}}
+	h := handlers.NewDecksHandler(reader, &decksAccountLookup{accountID: 7, found: true})
+	req := authedDecksRequest(t, http.MethodGet, "/api/v1/decks", nil, 168)
+	rr := httptest.NewRecorder()
+	h.List(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	var arr []map[string]any
+	decodeDecksEnvelope(t, rr.Body.Bytes(), &arr)
+	if len(arr) != 1 {
+		t.Fatalf("expected 1 deck row, got %d", len(arr))
+	}
+	// "matchWinRate" must be present with the correct value.
+	mwr, ok := arr[0]["matchWinRate"].(float64)
+	if !ok {
+		t.Fatalf("matchWinRate field missing or wrong type; full deck: %v", arr[0])
+	}
+	want := float64(1) / float64(3)
+	if mwr != want {
+		t.Errorf("matchWinRate: got %f, want %f", mwr, want)
+	}
+	// "winRate" must NOT be present — the old field name caused NaN in the SPA.
+	if _, found := arr[0]["winRate"]; found {
+		t.Errorf("winRate field must not be in list response; use matchWinRate")
 	}
 }
 
