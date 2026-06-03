@@ -755,10 +755,18 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// AllowedOrigins is configured via the ALLOWED_ORIGINS environment variable
 	// (comma-separated list).  See ADR-006 for the full connectivity design.
 	// Defaults to localhost-only values when the variable is not set.
+	//
+	// AllowCredentials must be true so that browser EventSource connections
+	// using withCredentials:true receive Access-Control-Allow-Credentials:true
+	// on the streaming 200 response.  Without it the browser blocks the SSE
+	// connection even when Access-Control-Allow-Origin is a specific origin.
+	// AllowedOrigins must remain a list of exact origins (never "*") when
+	// AllowCredentials is true — go-chi/cors enforces this at runtime.
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: cfg.AllowedOrigins,
-		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Authorization", "Content-Type", "X-Request-ID"},
+		AllowedOrigins:   cfg.AllowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Request-ID"},
+		AllowCredentials: true,
 	}))
 
 	// ── Public routes ────────────────────────────────────────────────────────
