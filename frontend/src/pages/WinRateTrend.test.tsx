@@ -522,6 +522,69 @@ describe('WinRateTrend', () => {
     });
   });
 
+  describe('Trend Display — NaN guard', () => {
+    it('does not render "NaN%" when TrendValue is 0 and Trend is undefined', async () => {
+      mockMatches.getTrendAnalysis.mockResolvedValue(
+        createMockTrendAnalysis({
+          Trend: undefined,
+          TrendValue: undefined,
+        })
+      );
+
+      renderWithProvider(<WinRateTrend />);
+
+      await waitFor(() => {
+        expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+      });
+    });
+
+    it('does not render "NaN%" when TrendValue is NaN', async () => {
+      mockMatches.getTrendAnalysis.mockResolvedValue(
+        createMockTrendAnalysis({
+          Trend: 'undefined',
+          TrendValue: NaN,
+        })
+      );
+
+      renderWithProvider(<WinRateTrend />);
+
+      await waitFor(() => {
+        expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+      });
+    });
+
+    it('does not render "NaN%" when TrendValue is null (single data point)', async () => {
+      mockMatches.getTrendAnalysis.mockResolvedValue(
+        createMockTrendAnalysis({
+          Trend: 'stable',
+          TrendValue: null,
+        })
+      );
+
+      renderWithProvider(<WinRateTrend />);
+
+      await waitFor(() => {
+        expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+      });
+    });
+
+    it('renders "—" fallback in Trend summary when TrendValue cannot be computed', async () => {
+      mockMatches.getTrendAnalysis.mockResolvedValue(
+        createMockTrendAnalysis({
+          Trend: undefined,
+          TrendValue: undefined,
+        })
+      );
+
+      renderWithProvider(<WinRateTrend />);
+
+      await waitFor(() => {
+        // The fallback dash should be present
+        expect(screen.getByTestId('trend-summary-value')).toHaveTextContent('—');
+      });
+    });
+  });
+
   describe('Trend Display', () => {
     it('should display declining trend correctly', async () => {
       mockMatches.getTrendAnalysis.mockResolvedValue(
