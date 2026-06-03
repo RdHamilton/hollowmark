@@ -4,49 +4,38 @@ import DeckPerformance from './DeckPerformance';
 import { mockMatches } from '@/test/mocks/apiMock';
 import { mockEventEmitter } from '@/test/mocks/websocketMock';
 import { AppProvider } from '../context/AppContext';
-import { models } from '@/types/models';
+import type { DeckPerformanceRow } from '@/services/api/matches';
 
-// Helper function to create mock statistics
-function createMockStatistics(overrides: Partial<models.Statistics> = {}): models.Statistics {
-  return new models.Statistics({
-    TotalMatches: 20,
-    MatchesWon: 12,
-    MatchesLost: 8,
-    TotalGames: 45,
-    GamesWon: 27,
-    GamesLost: 18,
-    WinRate: 0.6,
-    GameWinRate: 0.6,
-    ...overrides,
-  });
-}
-
-// Helper function to create mock deck stats response
-function createMockDeckStatsResponse(): Record<string, models.Statistics> {
+// Helper: create a mock DeckPerformanceRow (the shape returned by GET /stats/deck-performance)
+function makeDeckRow(overrides: Partial<DeckPerformanceRow> = {}): DeckPerformanceRow {
   return {
-    'Mono Red Aggro': createMockStatistics({ WinRate: 0.65, TotalMatches: 30, MatchesWon: 20, MatchesLost: 10 }),
-    'Azorius Control': createMockStatistics({ WinRate: 0.55, TotalMatches: 25, MatchesWon: 14, MatchesLost: 11 }),
-    'Gruul Stompy': createMockStatistics({ WinRate: 0.45, TotalMatches: 15, MatchesWon: 7, MatchesLost: 8 }),
+    deck_id: 'deck-1',
+    deck_name: 'Test Deck',
+    format: 'Ladder',
+    wins: 12,
+    losses: 8,
+    draws: 0,
+    total_games: 20,
+    ...overrides,
   };
 }
 
-// Wrapper component with AppProvider
+function makeDeckList(): DeckPerformanceRow[] {
+  return [
+    makeDeckRow({ deck_id: 'd1', deck_name: 'Mono Red Aggro', wins: 20, losses: 10, draws: 0, total_games: 30 }),
+    makeDeckRow({ deck_id: 'd2', deck_name: 'Azorius Control', wins: 14, losses: 11, draws: 0, total_games: 25 }),
+    makeDeckRow({ deck_id: 'd3', deck_name: 'Gruul Stompy', wins: 7, losses: 8, draws: 0, total_games: 15 }),
+  ];
+}
+
 function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
 }
 
-// Helper to get select by finding the label then the next select sibling
 function getSelectByLabel(labelText: string): HTMLSelectElement {
   const label = screen.getByText(labelText);
   const filterGroup = label.closest('.filter-group');
   return filterGroup?.querySelector('select') as HTMLSelectElement;
-}
-
-// Helper to get input by finding the label
-function getInputByLabel(labelText: string): HTMLInputElement {
-  const label = screen.getByText(labelText);
-  const filterGroup = label.closest('.filter-group');
-  return filterGroup?.querySelector('input') as HTMLInputElement;
 }
 
 describe('DeckPerformance', () => {
@@ -57,18 +46,15 @@ describe('DeckPerformance', () => {
   });
 
   describe('Loading State', () => {
-    it('should show loading spinner while fetching data', async () => {
-      let resolvePromise: (value: Record<string, models.Statistics>) => void;
-      const loadingPromise = new Promise<Record<string, models.Statistics>>((resolve) => {
-        resolvePromise = resolve;
-      });
-      mockMatches.getMatchupMatrix.mockReturnValue(loadingPromise);
+    it('shows loading spinner while fetching data', async () => {
+      let resolve: (v: DeckPerformanceRow[]) => void;
+      mockMatches.getDeckPerformance.mockReturnValue(new Promise((r) => { resolve = r; }));
 
       renderWithProvider(<DeckPerformance />);
 
       expect(screen.getByText('Loading deck statistics...')).toBeInTheDocument();
 
-      resolvePromise!(createMockDeckStatsResponse());
+      resolve!([]);
       await waitFor(() => {
         expect(screen.queryByText('Loading deck statistics...')).not.toBeInTheDocument();
       });
@@ -76,8 +62,8 @@ describe('DeckPerformance', () => {
   });
 
   describe('Error State', () => {
-    it('should show error state when API fails', async () => {
-      mockMatches.getMatchupMatrix.mockRejectedValue(new Error('Database error'));
+    it('shows error heading when API fails', async () => {
+      mockMatches.getDeckPerformance.mockRejectedValue(new Error('Database error'));
 
       renderWithProvider(<DeckPerformance />);
 
@@ -87,8 +73,8 @@ describe('DeckPerformance', () => {
       expect(screen.getByText('Database error')).toBeInTheDocument();
     });
 
-    it('should show generic error message for non-Error rejections', async () => {
-      mockMatches.getMatchupMatrix.mockRejectedValue('Unknown error');
+    it('shows generic error for non-Error rejections', async () => {
+      mockMatches.getDeckPerformance.mockRejectedValue('Unknown');
 
       renderWithProvider(<DeckPerformance />);
 
@@ -99,21 +85,8 @@ describe('DeckPerformance', () => {
   });
 
   describe('Empty State', () => {
-    it('should show empty state when no deck data', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue({});
-
-      renderWithProvider(<DeckPerformance />);
-
-      await waitFor(() => {
-        expect(screen.getByText('No deck data')).toBeInTheDocument();
-      });
-      expect(
-        screen.getByText('Play matches with different decks to see your deck performance statistics.')
-      ).toBeInTheDocument();
-    });
-
-    it('should show empty state when API returns null', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(null);
+    it('shows empty state when API returns []', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([]);
 
       renderWithProvider(<DeckPerformance />);
 
@@ -124,8 +97,8 @@ describe('DeckPerformance', () => {
   });
 
   describe('Data Display', () => {
-    it('should render deck cards with statistics', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('renders deck cards with names', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       renderWithProvider(<DeckPerformance />);
 
@@ -136,32 +109,69 @@ describe('DeckPerformance', () => {
       expect(screen.getByText('Gruul Stompy')).toBeInTheDocument();
     });
 
-    it('should display win rate correctly', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('renders win rate correctly (wins / total_games)', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([
+        makeDeckRow({ deck_name: 'Test', wins: 13, losses: 7, total_games: 20 }),
+      ]);
 
       renderWithProvider(<DeckPerformance />);
 
       await waitFor(() => {
+        // 13/20 = 65.0%
         expect(screen.getByText('65%')).toBeInTheDocument();
       });
-      expect(screen.getByText('55%')).toBeInTheDocument();
-      expect(screen.getByText('45%')).toBeInTheDocument();
     });
 
-    it('should display match counts', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('renders 0.0% win rate when total_games is 0', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([
+        makeDeckRow({ deck_name: 'Test', wins: 0, losses: 0, total_games: 0 }),
+      ]);
 
       renderWithProvider(<DeckPerformance />);
 
       await waitFor(() => {
-        expect(screen.getByText('30')).toBeInTheDocument();
+        expect(screen.getByText('0.0%')).toBeInTheDocument();
       });
-      expect(screen.getByText('25')).toBeInTheDocument();
-      expect(screen.getByText('15')).toBeInTheDocument();
     });
 
-    it('should display deck count', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('renders wins / losses from deck row fields', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([
+        makeDeckRow({ deck_name: 'Test', wins: 15, losses: 5, total_games: 20 }),
+      ]);
+
+      renderWithProvider(<DeckPerformance />);
+
+      await waitFor(() => {
+        expect(screen.getByText('15W - 5L')).toBeInTheDocument();
+      });
+    });
+
+    it('renders draws in wins/losses when draws > 0', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([
+        makeDeckRow({ deck_name: 'Test', wins: 10, losses: 8, draws: 2, total_games: 20 }),
+      ]);
+
+      renderWithProvider(<DeckPerformance />);
+
+      await waitFor(() => {
+        expect(screen.getByText('10W - 8L - 2D')).toBeInTheDocument();
+      });
+    });
+
+    it('renders "Unknown Deck" for empty deck_name', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([
+        makeDeckRow({ deck_id: 'd0', deck_name: '', total_games: 5 }),
+      ]);
+
+      renderWithProvider(<DeckPerformance />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Unknown Deck')).toBeInTheDocument();
+      });
+    });
+
+    it('renders deck count badge', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       renderWithProvider(<DeckPerformance />);
 
@@ -170,10 +180,8 @@ describe('DeckPerformance', () => {
       });
     });
 
-    it('should display singular deck count for one deck', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue({
-        'Mono Red Aggro': createMockStatistics(),
-      });
+    it('renders singular deck count for one deck', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([makeDeckRow()]);
 
       renderWithProvider(<DeckPerformance />);
 
@@ -182,33 +190,32 @@ describe('DeckPerformance', () => {
       });
     });
 
-    it('should display wins and losses', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue({
-        'Test Deck': createMockStatistics({ MatchesWon: 15, MatchesLost: 5 }),
-      });
+    it('renders human-readable format label', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([
+        makeDeckRow({ deck_name: 'Brawl Deck', format: 'HISTORICBRAWLWITHALLOWLIST_20260126' }),
+      ]);
 
       renderWithProvider(<DeckPerformance />);
 
       await waitFor(() => {
-        expect(screen.getByText('15W - 5L')).toBeInTheDocument();
+        expect(screen.getByText('Historic Brawl')).toBeInTheDocument();
+      });
+    });
+
+    it('renders deck cards with data-testid', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([makeDeckRow()]);
+
+      renderWithProvider(<DeckPerformance />);
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('deck-performance-card').length).toBe(1);
       });
     });
   });
 
   describe('Filters', () => {
-    it('should render date range filter with default value', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
-
-      renderWithProvider(<DeckPerformance />);
-
-      await waitFor(() => {
-        const dateRangeSelect = getSelectByLabel('Date Range') as HTMLSelectElement;
-        expect(dateRangeSelect.value).toBe('7days');
-      });
-    });
-
-    it('should render format filter', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('renders Format filter', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       renderWithProvider(<DeckPerformance />);
 
@@ -217,101 +224,68 @@ describe('DeckPerformance', () => {
       });
     });
 
-    it('should render sort by filter', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('renders Sort By filter with winRate default', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       renderWithProvider(<DeckPerformance />);
 
       await waitFor(() => {
-        const sortBySelect = getSelectByLabel('Sort By') as HTMLSelectElement;
-        expect(sortBySelect.value).toBe('winRate');
+        const sel = getSelectByLabel('Sort By');
+        expect(sel.value).toBe('winRate');
       });
     });
 
-    it('should render sort order filter', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('renders Sort Order filter with desc default', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       renderWithProvider(<DeckPerformance />);
 
       await waitFor(() => {
-        const sortOrderSelect = getSelectByLabel('Sort Order') as HTMLSelectElement;
-        expect(sortOrderSelect.value).toBe('desc');
+        const sel = getSelectByLabel('Sort Order');
+        expect(sel.value).toBe('desc');
       });
     });
 
-    it('should show custom date inputs when custom range selected', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('client-side format filter shows only matching decks', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([
+        makeDeckRow({ deck_id: 'd1', deck_name: 'Ladder Deck', format: 'Ladder' }),
+        makeDeckRow({ deck_id: 'd2', deck_name: 'Draft Deck', format: 'QuickDraft_BLB' }),
+      ]);
 
       renderWithProvider(<DeckPerformance />);
 
       await waitFor(() => {
-        expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
+        expect(screen.getByText('Ladder Deck')).toBeInTheDocument();
+        expect(screen.getByText('Draft Deck')).toBeInTheDocument();
       });
-
-      const dateRangeSelect = getSelectByLabel('Date Range');
-      fireEvent.change(dateRangeSelect, { target: { value: 'custom' } });
-
-      await waitFor(() => {
-        expect(getInputByLabel('Start Date')).toBeInTheDocument();
-        expect(getInputByLabel('End Date')).toBeInTheDocument();
-      });
-    });
-
-    it('should refetch data when date range changes', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
-
-      renderWithProvider(<DeckPerformance />);
-
-      await waitFor(() => {
-        expect(mockMatches.getMatchupMatrix).toHaveBeenCalled();
-      });
-
-      const initialCallCount = mockMatches.getMatchupMatrix.mock.calls.length;
-
-      const dateRangeSelect = getSelectByLabel('Date Range');
-      fireEvent.change(dateRangeSelect, { target: { value: '30days' } });
-
-      await waitFor(() => {
-        expect(mockMatches.getMatchupMatrix.mock.calls.length).toBeGreaterThan(initialCallCount);
-      });
-    });
-
-    it('should refetch data when format changes', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
-
-      renderWithProvider(<DeckPerformance />);
-
-      await waitFor(() => {
-        expect(mockMatches.getMatchupMatrix).toHaveBeenCalled();
-      });
-
-      const initialCallCount = mockMatches.getMatchupMatrix.mock.calls.length;
 
       const formatSelect = getSelectByLabel('Format');
-      fireEvent.change(formatSelect, { target: { value: 'Ladder' } });
+      fireEvent.change(formatSelect, { target: { value: 'limited' } });
 
       await waitFor(() => {
-        expect(mockMatches.getMatchupMatrix.mock.calls.length).toBeGreaterThan(initialCallCount);
+        expect(screen.queryByText('Ladder Deck')).not.toBeInTheDocument();
+        expect(screen.getByText('Draft Deck')).toBeInTheDocument();
       });
     });
   });
 
   describe('Sorting', () => {
-    it('should sort by win rate descending by default', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('sorts by win rate descending by default', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       renderWithProvider(<DeckPerformance />);
 
       await waitFor(() => {
-        const deckCards = screen.getAllByRole('heading', { level: 3 });
-        expect(deckCards[0]).toHaveTextContent('Mono Red Aggro');
-        expect(deckCards[1]).toHaveTextContent('Azorius Control');
-        expect(deckCards[2]).toHaveTextContent('Gruul Stompy');
+        const cards = screen.getAllByRole('heading', { level: 3 });
+        // Mono Red 20/30 = 66.7%, Azorius 14/25 = 56%, Gruul 7/15 = 46.7%
+        expect(cards[0]).toHaveTextContent('Mono Red Aggro');
+        expect(cards[1]).toHaveTextContent('Azorius Control');
+        expect(cards[2]).toHaveTextContent('Gruul Stompy');
       });
     });
 
-    it('should sort by win rate ascending when changed', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('sorts by win rate ascending when sort order changed', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       renderWithProvider(<DeckPerformance />);
 
@@ -319,18 +293,17 @@ describe('DeckPerformance', () => {
         expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
       });
 
-      const sortOrderSelect = getSelectByLabel('Sort Order');
-      fireEvent.change(sortOrderSelect, { target: { value: 'asc' } });
+      fireEvent.change(getSelectByLabel('Sort Order'), { target: { value: 'asc' } });
 
       await waitFor(() => {
-        const deckCards = screen.getAllByRole('heading', { level: 3 });
-        expect(deckCards[0]).toHaveTextContent('Gruul Stompy');
-        expect(deckCards[2]).toHaveTextContent('Mono Red Aggro');
+        const cards = screen.getAllByRole('heading', { level: 3 });
+        expect(cards[0]).toHaveTextContent('Gruul Stompy');
+        expect(cards[2]).toHaveTextContent('Mono Red Aggro');
       });
     });
 
-    it('should sort by match count when selected', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('sorts by match count when selected', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       renderWithProvider(<DeckPerformance />);
 
@@ -338,19 +311,18 @@ describe('DeckPerformance', () => {
         expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
       });
 
-      const sortBySelect = getSelectByLabel('Sort By');
-      fireEvent.change(sortBySelect, { target: { value: 'matches' } });
+      fireEvent.change(getSelectByLabel('Sort By'), { target: { value: 'matches' } });
 
       await waitFor(() => {
-        const deckCards = screen.getAllByRole('heading', { level: 3 });
-        expect(deckCards[0]).toHaveTextContent('Mono Red Aggro'); // 30 matches
-        expect(deckCards[1]).toHaveTextContent('Azorius Control'); // 25 matches
-        expect(deckCards[2]).toHaveTextContent('Gruul Stompy'); // 15 matches
+        const cards = screen.getAllByRole('heading', { level: 3 });
+        expect(cards[0]).toHaveTextContent('Mono Red Aggro'); // 30 games
+        expect(cards[1]).toHaveTextContent('Azorius Control'); // 25 games
+        expect(cards[2]).toHaveTextContent('Gruul Stompy'); // 15 games
       });
     });
 
-    it('should sort by deck name when selected', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('sorts by deck name ascending', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       renderWithProvider(<DeckPerformance />);
 
@@ -358,24 +330,21 @@ describe('DeckPerformance', () => {
         expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
       });
 
-      const sortBySelect = getSelectByLabel('Sort By');
-      const sortOrderSelect = getSelectByLabel('Sort Order');
-
-      fireEvent.change(sortBySelect, { target: { value: 'name' } });
-      fireEvent.change(sortOrderSelect, { target: { value: 'asc' } });
+      fireEvent.change(getSelectByLabel('Sort By'), { target: { value: 'name' } });
+      fireEvent.change(getSelectByLabel('Sort Order'), { target: { value: 'asc' } });
 
       await waitFor(() => {
-        const deckCards = screen.getAllByRole('heading', { level: 3 });
-        expect(deckCards[0]).toHaveTextContent('Azorius Control');
-        expect(deckCards[1]).toHaveTextContent('Gruul Stompy');
-        expect(deckCards[2]).toHaveTextContent('Mono Red Aggro');
+        const cards = screen.getAllByRole('heading', { level: 3 });
+        expect(cards[0]).toHaveTextContent('Azorius Control');
+        expect(cards[1]).toHaveTextContent('Gruul Stompy');
+        expect(cards[2]).toHaveTextContent('Mono Red Aggro');
       });
     });
   });
 
   describe('Real-time Updates', () => {
-    it('should reload data when stats:updated event fires', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('reloads data when stats:updated event fires', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       renderWithProvider(<DeckPerformance />);
 
@@ -383,24 +352,23 @@ describe('DeckPerformance', () => {
         expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
       });
 
-      const initialCallCount = mockMatches.getMatchupMatrix.mock.calls.length;
+      const initialCallCount = mockMatches.getDeckPerformance.mock.calls.length;
 
-      // Update mock to return different data
-      mockMatches.getMatchupMatrix.mockResolvedValue({
-        'Updated Deck': createMockStatistics(),
-      });
+      mockMatches.getDeckPerformance.mockResolvedValue([
+        makeDeckRow({ deck_id: 'd99', deck_name: 'Updated Deck' }),
+      ]);
 
       await act(async () => {
         mockEventEmitter.emit('stats:updated', {});
       });
 
       await waitFor(() => {
-        expect(mockMatches.getMatchupMatrix.mock.calls.length).toBeGreaterThan(initialCallCount);
+        expect(mockMatches.getDeckPerformance.mock.calls.length).toBeGreaterThan(initialCallCount);
       });
     });
 
-    it('should unsubscribe from events on unmount', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('unsubscribes from events on unmount', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       const { unmount } = renderWithProvider(<DeckPerformance />);
 
@@ -410,81 +378,24 @@ describe('DeckPerformance', () => {
 
       unmount();
 
-      const callCountAfterUnmount = mockMatches.getMatchupMatrix.mock.calls.length;
+      const callCountAfterUnmount = mockMatches.getDeckPerformance.mock.calls.length;
 
       await act(async () => {
         mockEventEmitter.emit('stats:updated', {});
       });
 
-      // Should not have called GetStatsByDeck again after unmount
-      expect(mockMatches.getMatchupMatrix.mock.calls.length).toBe(callCountAfterUnmount);
+      expect(mockMatches.getDeckPerformance.mock.calls.length).toBe(callCountAfterUnmount);
     });
   });
 
   describe('Page Title', () => {
-    it('should display page title', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
+    it('displays "Deck Performance" heading', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([]);
 
       renderWithProvider(<DeckPerformance />);
 
       await waitFor(() => {
         expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Deck Performance');
-      });
-    });
-  });
-
-  describe('Unknown Deck Handling', () => {
-    it('should display "Unknown Deck" for empty deck name', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue({
-        '': createMockStatistics(),
-      });
-
-      renderWithProvider(<DeckPerformance />);
-
-      await waitFor(() => {
-        expect(screen.getByText('Unknown Deck')).toBeInTheDocument();
-      });
-    });
-  });
-
-  describe('API Filter Parameters', () => {
-    it('should pass constructed formats for constructed filter', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
-
-      renderWithProvider(<DeckPerformance />);
-
-      await waitFor(() => {
-        expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
-      });
-
-      const formatSelect = getSelectByLabel('Format');
-      fireEvent.change(formatSelect, { target: { value: 'constructed' } });
-
-      await waitFor(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const lastCall = mockMatches.getMatchupMatrix.mock.calls.slice(-1)[0] as any[];
-        const filter = lastCall[0] as models.StatsFilter;
-        expect(filter.Formats).toEqual(['Ladder', 'Play']);
-      });
-    });
-
-    it('should pass single format for specific format filter', async () => {
-      mockMatches.getMatchupMatrix.mockResolvedValue(createMockDeckStatsResponse());
-
-      renderWithProvider(<DeckPerformance />);
-
-      await waitFor(() => {
-        expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
-      });
-
-      const formatSelect = getSelectByLabel('Format');
-      fireEvent.change(formatSelect, { target: { value: 'Ladder' } });
-
-      await waitFor(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const lastCall = mockMatches.getMatchupMatrix.mock.calls.slice(-1)[0] as any[];
-        const filter = lastCall[0] as models.StatsFilter;
-        expect(filter.Format).toBe('Ladder');
       });
     });
   });
