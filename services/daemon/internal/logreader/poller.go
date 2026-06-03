@@ -33,6 +33,13 @@ type Poller struct {
 	runningMu     sync.RWMutex
 	metrics       *PollerMetrics
 	enableMetrics bool
+	// readFromStart records whether the poller was initialized to replay the
+	// historical log from byte 0. When true, the first checkForUpdates batch is
+	// the historical backlog and its entries are flagged LogEntry.FromBacklog.
+	readFromStart bool
+	// backlogDrained becomes true after the first checkForUpdates batch has been
+	// emitted. Subsequent entries are live appends, not historical backlog.
+	backlogDrained bool
 }
 
 // PollerMetrics tracks performance metrics for the poller.
@@ -112,6 +119,7 @@ func NewPoller(config *PollerConfig) (*Poller, error) {
 		errChan:       make(chan error, 1),
 		done:          make(chan struct{}),
 		metrics:       &PollerMetrics{},
+		readFromStart: config.ReadFromStart,
 	}
 
 	if err := poller.initializePosition(config.ReadFromStart); err != nil {
@@ -368,12 +376,18 @@ func (p *Poller) checkForUpdates() error {
 	buf := make([]byte, maxScanTokenSize)
 	scanner.Buffer(buf, maxScanTokenSize)
 
+	// Entries read in the first drain pass from byte 0 of a ReadFromStart poller
+	// are the historical backlog (a (re)install replay), not live appends.
+	p.runningMu.RLock()
+	fromBacklog := p.readFromStart && !p.backlogDrained && lastPos == 0
+	p.runningMu.RUnlock()
+
 	var newEntries []*LogEntry
 	newPos := lastPos
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		entry := &LogEntry{Raw: line}
+		entry := &LogEntry{Raw: line, FromBacklog: fromBacklog}
 		entry.parseJSON()
 		if entry.IsJSON {
 			newEntries = append(newEntries, entry)
@@ -407,6 +421,14 @@ func (p *Poller) checkForUpdates() error {
 		case <-p.ctx.Done():
 			return p.ctx.Err()
 		}
+	}
+
+	// The historical-backlog drain pass is complete once the first from-byte-0
+	// batch has been emitted; every later append is a live entry.
+	if fromBacklog {
+		p.runningMu.Lock()
+		p.backlogDrained = true
+		p.runningMu.Unlock()
 	}
 
 	return nil
