@@ -303,8 +303,22 @@ const WinRateTrend = () => {
                 </div>
                 <div className="summary-item">
                   <span className="summary-label">Trend:</span>
-                  <span className={`summary-value trend-${analysis.Trend}`}>
-                    {analysis.Trend} {analysis.TrendValue !== 0 && `(${analysis.TrendValue > 0 ? '+' : ''}${Math.round(analysis.TrendValue * 100 * 10) / 10}%)`}
+                  <span
+                    className={`summary-value trend-${analysis.Trend ?? 'unknown'}`}
+                    data-testid="trend-summary-value"
+                  >
+                    {(() => {
+                      const tv = analysis.TrendValue;
+                      const trendLabel = analysis.Trend ?? '';
+                      const trendValueValid = typeof tv === 'number' && isFinite(tv) && tv !== 0;
+                      if (!trendLabel && !trendValueValid) return '—';
+                      return (
+                        <>
+                          {trendLabel}
+                          {trendValueValid && ` (${tv > 0 ? '+' : ''}${Math.round(tv * 100 * 10) / 10}%)`}
+                        </>
+                      );
+                    })()}
                   </span>
                 </div>
                 {analysis.Overall && (
