@@ -792,7 +792,8 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	daemonVersionHandler.WithFetcher(handlers.NewReleaseFetcher(
 		"https://api.github.com/repos/RdHamilton/vault-mtg/releases",
 		5*time.Minute,
-		nil, // use default http.Client with 10s timeout
+		cfg.GitHubToken, // optional GitHub token (BFF_GITHUB_TOKEN); anonymous when empty
+		nil,             // use default http.Client with 10s timeout
 	))
 	r.Get("/api/v1/daemon/version", daemonVersionHandler.GetDaemonVersion)
 
