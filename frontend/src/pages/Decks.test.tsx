@@ -237,6 +237,25 @@ describe('Decks', () => {
       expect(screen.getByText('explorer')).toBeInTheDocument();
     });
 
+    it('displays human-readable label for HISTORICBRAWLWITHALLOWLIST format slug', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'brawl-deck',
+          name: 'Brawl Deck',
+          format: 'HISTORICBRAWLWITHALLOWLIST_20260126',
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Historic Brawl')).toBeInTheDocument();
+        expect(screen.queryByText('HISTORICBRAWLWITHALLOWLIST_20260126')).not.toBeInTheDocument();
+      });
+    });
+
     it('should display draft badge for draft decks', async () => {
       mockDecks.getDecks.mockResolvedValue(createMockDeckList());
 
