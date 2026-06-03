@@ -19,6 +19,7 @@ import type { BffCardRating } from '@/services/api/bffDraftRatings';
 import { getSetCards } from '@/services/api/cards';
 import { trackEvent } from '@/services/analytics';
 import { useFeatureFlag } from '@/hooks/useFeatureFlag';
+import { gradeFromGihwr } from './draftGrade';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import './DraftLive.css';
@@ -63,22 +64,6 @@ function setCodeFromCourseName(courseName: string | undefined): string | null {
   const parts = courseName.split('_');
   if (parts.length >= 2) return parts[0].toUpperCase();
   return null;
-}
-
-/** Grade letter for a card's GIHWR (Game-In-Hand Win Rate). */
-function gradeFromGihwr(gihwr: number | undefined): string {
-  if (gihwr === undefined || gihwr === 0) return '—';
-  if (gihwr >= 65) return 'A+';
-  if (gihwr >= 62) return 'A';
-  if (gihwr >= 59) return 'A-';
-  if (gihwr >= 57) return 'B+';
-  if (gihwr >= 55) return 'B';
-  if (gihwr >= 53) return 'B-';
-  if (gihwr >= 51) return 'C+';
-  if (gihwr >= 49) return 'C';
-  if (gihwr >= 47) return 'C-';
-  if (gihwr >= 45) return 'D';
-  return 'F';
 }
 
 function gradeClass(grade: string): string {
@@ -399,9 +384,12 @@ const DraftLive: React.FC = () => {
                   >
                     {card.grade}
                   </span>
-                  {card.gihwr !== undefined && (
-                    <span className="draft-live-gihwr">
-                      {card.gihwr.toFixed(1)}%
+                  {card.gihwr !== undefined && card.gihwr !== 0 && (
+                    <span
+                      className="draft-live-gihwr"
+                      data-testid={`card-gihwr-${card.arenaId}`}
+                    >
+                      {(card.gihwr * 100).toFixed(1)}%
                     </span>
                   )}
                   {isTop && (
