@@ -22,6 +22,10 @@ BEGIN
 
         ALTER TABLE accounts
             ALTER COLUMN is_default SET DEFAULT 0;
+
+        -- Restore the CHECK(is_default IN (0, 1)) constraint from migration 000002.
+        ALTER TABLE accounts
+            ADD CONSTRAINT accounts_is_default_check CHECK (is_default = ANY (ARRAY[0, 1]));
     END IF;
 END $$;
 
