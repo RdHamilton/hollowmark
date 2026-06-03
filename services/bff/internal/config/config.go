@@ -62,6 +62,13 @@ type Config struct {
 	// published.  Sourced from BFF_DAEMON_RELEASED_AT.  Empty string when unset.
 	DaemonReleasedAt string
 
+	// GitHubToken is an optional GitHub token used by the daemon-version
+	// resolver to authenticate its GitHub Releases API calls (5000 req/hr vs the
+	// 60 req/hr anonymous limit).  Sourced from BFF_GITHUB_TOKEN (provisioned
+	// from SSM /vaultmtg/prod/github-token at deploy time).  Empty string when
+	// unset, in which case the resolver fetches anonymously.
+	GitHubToken string
+
 	// ClerkSecretKey is the Clerk backend API secret key used to verify Clerk
 	// session JWTs on protected browser-facing routes.
 	//
@@ -220,6 +227,7 @@ func Load() (*Config, error) {
 		AllowedOrigins:                      allowedOrigins,
 		DaemonLatestVersion:                 daemonLatestVersion,
 		DaemonReleasedAt:                    os.Getenv("BFF_DAEMON_RELEASED_AT"),
+		GitHubToken:                         strings.TrimSpace(os.Getenv("BFF_GITHUB_TOKEN")),
 		ClerkSecretKey:                      clerkSecretKey,
 		ClerkFrontendAPI:                    strings.TrimSpace(os.Getenv("CLERK_FRONTEND_API")),
 		SentryDSN:                           strings.TrimSpace(os.Getenv("SENTRY_DSN")),
