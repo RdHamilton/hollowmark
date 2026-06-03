@@ -301,4 +301,59 @@ describe('CommunityComparison Component', () => {
       });
     });
   });
+
+  describe('NaN / null guard (DEFECT-4)', () => {
+    it('shows empty state when sampleSize is 0 with set-specific message', async () => {
+      const emptyComparison = createMockComparison({ sampleSize: 0, setCode: 'BLB' });
+      mockDrafts.getCommunityComparison.mockResolvedValue(emptyComparison);
+
+      render(<CommunityComparison setCode="BLB" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('community-comparison-empty')).toBeInTheDocument();
+        expect(screen.getByText(/need more drafts in this set/i)).toBeInTheDocument();
+      });
+    });
+
+    it('renders – for percentileRank when value is NaN', async () => {
+      const comparison = createMockComparison({
+        sampleSize: 5,
+        percentileRank: NaN,
+        userWinRate: NaN,
+        communityAvgWinRate: NaN,
+        winRateDelta: NaN,
+      });
+      mockDrafts.getCommunityComparison.mockResolvedValue(comparison);
+
+      render(<CommunityComparison setCode="BLB" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('community-comparison-main')).toBeInTheDocument();
+      });
+
+      // Should render – instead of NaN%
+      const allDashes = screen.getAllByText('–');
+      expect(allDashes.length).toBeGreaterThanOrEqual(2);
+      // Should not render any NaN text
+      expect(screen.queryByText(/nan/i)).not.toBeInTheDocument();
+    });
+
+    it('does not render NaN% for winRate when values are 0', async () => {
+      const comparison = createMockComparison({
+        sampleSize: 1,
+        userWinRate: 0,
+        communityAvgWinRate: 0,
+        winRateDelta: 0,
+        percentileRank: 50,
+      });
+      mockDrafts.getCommunityComparison.mockResolvedValue(comparison);
+
+      render(<CommunityComparison setCode="BLB" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('community-comparison-main')).toBeInTheDocument();
+        expect(screen.queryByText(/nan/i)).not.toBeInTheDocument();
+      });
+    });
+  });
 });
