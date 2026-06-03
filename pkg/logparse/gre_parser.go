@@ -1149,12 +1149,67 @@ var annotationActionType = map[string]string{
 	"Surveil":   "zone_change",
 }
 
+// Library and hidden-zone IDs used by the capture-scope exclusions in
+// extractAnnotationPlays. These are the verified MTGA zone-type IDs from the
+// real Player.log: 31/35 = Hand, 32/36 = Library, 33/37 = Graveyard,
+// 28 = Battlefield (see ADR-046 capture-scope exclusions).
+const (
+	zoneIDOurLibrary = 32
+	zoneIDOppLibrary = 36
+)
+
+// isLibraryZoneID reports whether the given GRE zone_src/zone_dest detail ID
+// refers to a Library zone (our or the opponent's). End-of-game "Mill" plays
+// sourced from a Library zone are the engine dumping a dead player's remaining
+// deck into the graveyard — not real player actions — and are suppressed.
+func isLibraryZoneID(zoneID int) bool {
+	return zoneID == zoneIDOurLibrary || zoneID == zoneIDOppLibrary
+}
+
+// isHiddenZoneID reports whether the given GRE zone ID refers to a private,
+// non-rendered zone (Hand or Library). It is the secondary belt-and-suspenders
+// guard for the grpID==0 suppression: an unresolvable-instance ZoneTransfer
+// that lands in a hidden zone is never a player-visible play.
+func isHiddenZoneID(zoneID int) bool {
+	switch zoneID {
+	case 31, 35: // Hand (ours / opponent's)
+		return true
+	case zoneIDOurLibrary, zoneIDOppLibrary: // Library (ours / opponent's)
+		return true
+	default:
+		return false
+	}
+}
+
 // extractAnnotationPlays extracts GamePlayEvents from the annotations array of
 // a single GameStateMessage.  This complements detectZoneChangesWithZones,
 // which compares consecutive object-snapshot pairs and misses plays in
 // partial-state messages that carry annotations but omit a full gameObjects
 // snapshot (the common case in corpus logs — only 413 of 5671 consecutive
 // GameStateMessage pairs both carry gameObjects).
+//
+// Capture-scope exclusions (ADR-046; ticket #814). Two classes of annotation
+// are intentionally dropped at capture because they render as noise that erodes
+// player trust in the Match-Detail timeline without representing a real play:
+//
+//  1. Unresolvable-instance plays. An AffectedID whose instance has no
+//     resolvable gameObject in this (or the cumulative) snapshot yields grpID==0
+//     and a "zone_0" destination — a blank/unknown card on the timeline (the
+//     same failure mode as prod bug #195). Primary signal: grpID==0. Secondary
+//     confirming signal: the annotation's zone_dest is a hidden zone (Hand or
+//     Library), proving the play was never player-visible. These are NOT a
+//     #2937 capture-drop — they are genuinely unrecoverable. The suppression is
+//     narrow: an annotation whose instance DOES resolve to grpID>0 still emits,
+//     so a future real capture-drop is not masked.
+//
+//  2. End-of-game library mill. When a game ends, the engine dumps the losing
+//     player's remaining library into the graveyard as a flood of
+//     category=="Mill", zone_src==Library ZoneTransfer annotations. These are
+//     not plays. Primary signal: category=="Mill" && zone_src is a Library
+//     zone. Secondary confirming signal: the per-message GameStage_GameOver
+//     watermark suppresses any straggler ZoneTransfer plays in a GameOver-stage
+//     message. The lethal play (CastSpell / combat / Destroy) is a different
+//     category and source zone, so it is preserved.
 //
 // The function reads every AnnotationType_ZoneTransfer annotation, resolves
 // the instance's grpId from the message's gameObjects (when present), and maps
@@ -1224,10 +1279,48 @@ func extractAnnotationPlays(
 			continue
 		}
 
+		// Capture-scope exclusion 2 (PRIMARY): end-of-game library mill.
+		// Drop category=="Mill" ZoneTransfer plays sourced from a Library zone —
+		// the engine dumping a dead player's remaining deck into the graveyard.
+		// Keyed on category + zone_src so it touches only the dead-deck dump;
+		// non-Mill graveyard moves (Destroy / Sacrifice / Discard — real deaths)
+		// are untouched, and the lethal play is preserved.
+		if cat == "Mill" {
+			if zoneSrc, ok := ann.Details["zone_src"].(int); ok && isLibraryZoneID(zoneSrc) {
+				continue
+			}
+		}
+
+		// Capture-scope exclusion 2 (SECONDARY / confirming): GameStage_GameOver
+		// watermark. Suppress any straggler ZoneTransfer plays carried on a
+		// GameOver-stage message. The engine emits the mill flood just BEFORE it
+		// flips the stage, so this is a belt-and-suspenders guard for teardown
+		// churn — the Mill-from-Library rule above is the primary cut.
+		if msg.Stage == "GameStage_GameOver" {
+			continue
+		}
+
 		for _, instanceID := range ann.AffectedIDs {
 			grpID := instanceGRP[instanceID]
 			controllerID := instanceController[instanceID]
 			zoneID := instanceZone[instanceID]
+
+			// Capture-scope exclusion 1: unresolvable-instance plays.
+			// PRIMARY signal: grpID==0 — the instance has no resolvable
+			// gameObject, so the play has no card to render and would surface as
+			// an arena=0 / zone_0 blank card (prod bug #195). This is the same
+			// grpID==0 discipline already used in ExtractOpponentCards. A
+			// resolvable grpID still emits, so a real #2937 capture-drop is never
+			// masked by this suppression.
+			//
+			// SECONDARY confirming signal (corroboration, not a second gate):
+			// in the real Player.log every grpID==0 case verifiably lands in a
+			// hidden zone (Hand/Library) — see isHiddenZoneID and the #814
+			// regression test. grpID==0 is sufficient on its own because a play
+			// with no resolvable card has nothing to render regardless of dest.
+			if grpID == 0 {
+				continue
+			}
 
 			// Dedup: skip if the zone-diff pass already produced this event.
 			key := fmt.Sprintf("%d:%d:%s", instanceID, turnNumber, actionType)
@@ -1571,6 +1664,31 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 		}
 	}
 
+	// Capture-scope exclusion 2 (ADR-046; #814): identify every instance that
+	// the engine milled from a Library zone into the graveyard. The snapshot-diff
+	// pass (detectZoneChangesWithZones) sees these same cards appear in the
+	// graveyard and would re-emit them as "to_graveyard" plays, flooding the
+	// final turns with the dead-deck dump. We collect the milled instance IDs
+	// from the authoritative Mill+Library annotations (the same primary signal
+	// extractAnnotationPlays suppresses on) and drop the diff-pass plays for
+	// those instances. This keeps the lethal and all real deaths (Destroy /
+	// Sacrifice / Discard — never category Mill, never sourced from Library).
+	milledInstanceIDs := make(map[int]bool)
+	for _, msg := range messages {
+		for _, ann := range msg.Annotations {
+			if cat, _ := ann.Details["category"].(string); cat != "Mill" {
+				continue
+			}
+			zoneSrc, ok := ann.Details["zone_src"].(int)
+			if !ok || !isLibraryZoneID(zoneSrc) {
+				continue
+			}
+			for _, instanceID := range ann.AffectedIDs {
+				milledInstanceIDs[instanceID] = true
+			}
+		}
+	}
+
 	allTrackedObjects := make(map[int]*trackedObject)
 	lifeTotals := make(map[int]int)
 	// prevCounters tracks the last-observed counter state per instanceID so we
@@ -1626,6 +1744,14 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 
 		// Zone changes (snapshot-diff path).
 		for _, zc := range detectZoneChangesWithZones(prev, curr, playerConn, cumulativeZones, allTrackedObjects) {
+			// Capture-scope exclusion 2 (ADR-046; #814): drop end-of-game library
+			// mill teardown that the diff pass re-derives from the graveyard
+			// snapshot. The milled instance set is built from the authoritative
+			// Mill+Library annotations; only "to_graveyard" plays for those exact
+			// instances are suppressed, so real deaths and the lethal survive.
+			if zc.ActionType == "to_graveyard" && milledInstanceIDs[zc.InstanceID] {
+				continue
+			}
 			zc.SequenceNumber = seqNum
 			seqNum++
 			if zc.GameNumber == 0 {
