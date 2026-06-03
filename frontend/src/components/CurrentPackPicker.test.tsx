@@ -125,7 +125,10 @@ function createMockPackCard(overrides: Partial<gui.PackCardWithRating> = {}): gu
     mana_cost: '{R}',
     cmc: 1,
     type_line: 'Instant',
-    gihwr: 58.5,
+    // gihwr is a FRACTION (0.0–1.0), per the #785/#787 end-to-end units
+    // decision (Bob: daemon grade-pick path serves the BFF fraction verbatim).
+    // 0.585 renders as "58.5%" at the display boundary.
+    gihwr: 0.585,
     alsa: 3.2,
     tier: 'S',
     is_recommended: false,
@@ -517,7 +520,7 @@ describe('CurrentPackPicker Component', () => {
     it('should display GIHWR for each card', async () => {
       const packData = createMockPackResponse({
         cards: [
-          createMockPackCard({ arena_id: '1', name: 'Card A', gihwr: 58.5 }),
+          createMockPackCard({ arena_id: '1', name: 'Card A', gihwr: 0.585 }),
         ],
       });
       mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
@@ -527,6 +530,42 @@ describe('CurrentPackPicker Component', () => {
       await waitFor(() => {
         expect(screen.getByText('58.5%')).toBeInTheDocument();
       });
+    });
+
+    // ── GIHWR units regression (#787) ──────────────────────────────────────
+    // The daemon grade-pick path serves gihwr as a FRACTION (0.0–1.0). The
+    // display multiplies by 100 at the boundary, so a 0.631 GIHWR card must
+    // render "63.1%", NOT the buggy "0.6%" (raw fraction with a % suffix).
+    it('renders a fractional gihwr as a percent (0.631 → "63.1%", not "0.6%")', async () => {
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: '1', name: 'Sire of Seven Deaths', gihwr: 0.631 }),
+        ],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('63.1%')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('0.6%')).not.toBeInTheDocument();
+    });
+
+    it('renders an em-dash (not "0.0%") when gihwr is 0 / missing', async () => {
+      const packData = createMockPackResponse({
+        cards: [
+          createMockPackCard({ arena_id: '1', name: 'No Data Card', gihwr: 0 }),
+        ],
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('No Data Card')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('0.0%')).not.toBeInTheDocument();
     });
 
     it('should display ALSA for each card', async () => {
