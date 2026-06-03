@@ -117,8 +117,9 @@ test.describe('Decks', () => {
   });
 
   test.describe('Win-rate NaN guard (D1)', () => {
-    test('deck card with undefined matchWinRate never shows "NaN%"', async ({ page }) => {
-      // Navigate to a fresh /decks with a deck that has matchesPlayed > 0 but no matchWinRate
+    test('deck card with winRate absent from BFF payload never shows "NaN%"', async ({ page }) => {
+      // Navigate to a fresh /decks with a deck that has matchesPlayed > 0 but no winRate key.
+      // The BFF wire key is "winRate" (not "matchWinRate") — its absence must produce "—".
       await page.route('**/api/v1/decks**', (route) => {
         if (route.request().method() !== 'GET') { void route.continue(); return; }
         void route.fulfill({
@@ -132,7 +133,7 @@ test.describe('Decks', () => {
                 format: 'standard',
                 source: 'manual',
                 matchesPlayed: 3,
-                // matchWinRate absent — undefined on the SPA
+                // winRate absent — BFF real wire key; SPA must show "—", not "NaN%"
                 currentStreak: 0,
               },
             ],
@@ -148,6 +149,40 @@ test.describe('Decks', () => {
       const winRateEl = page.locator('[data-testid="deck-win-rate"]');
       await expect(winRateEl).toBeVisible();
       await expect(winRateEl).not.toContainText('NaN');
+    });
+
+    test('deck card renders correct percentage when BFF payload includes winRate', async ({ page }) => {
+      // Positive wire-key test: BFF sends "winRate": 0.6 (the real JSON key).
+      // SPA must deserialize it through DeckListItem and render "60%".
+      await page.route('**/api/v1/decks**', (route) => {
+        if (route.request().method() !== 'GET') { void route.continue(); return; }
+        void route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: [
+              {
+                id: 'deck-wire',
+                name: 'D1 Wire Key Deck',
+                format: 'standard',
+                source: 'manual',
+                matchesPlayed: 10,
+                winRate: 0.6, // BFF real wire key
+                currentStreak: 2,
+              },
+            ],
+          }),
+        });
+      });
+
+      await page.goto('/decks');
+      await expect(page.locator('.deck-card')).toBeVisible();
+      await expect(page.locator('text=D1 Wire Key Deck')).toBeVisible();
+
+      const winRateEl = page.locator('[data-testid="deck-win-rate"]');
+      await expect(winRateEl).toBeVisible();
+      await expect(winRateEl).not.toContainText('NaN');
+      await expect(winRateEl).toContainText('60%');
     });
   });
 
