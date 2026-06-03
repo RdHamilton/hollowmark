@@ -85,13 +85,13 @@ type Server struct {
 	state         atomic.Pointer[State]
 	srv           *http.Server
 	ln            net.Listener
-	ctx           context.Context            // lifecycle context; cancelled when the daemon stops
-	uninstaller   Uninstaller                // nil → defaultUninstaller; tests override via SetUninstaller
-	draftStore    DraftStore                 // nil → draft endpoints respond with empty/no-session
-	cardsLookup   draftalgo.CardLookup       // nil → noopCards; defaults applied lazily in drafts.go
-	ratingsLookup draftalgo.RatingsLookup    // nil → noopRatings; defaults applied lazily in drafts.go
-	metaLookup    draftalgo.CardMetaLookup   // nil → noMeta; Phase B card metadata (color, ALSA, GIHCount)
-	replayTrigger ReplayFunc                 // nil → /api/v1/replay returns 503
+	ctx           context.Context          // lifecycle context; cancelled when the daemon stops
+	uninstaller   Uninstaller              // nil → defaultUninstaller; tests override via SetUninstaller
+	draftStore    DraftStore               // nil → draft endpoints respond with empty/no-session
+	cardsLookup   draftalgo.CardLookup     // nil → noopCards; defaults applied lazily in drafts.go
+	ratingsLookup draftalgo.RatingsLookup  // nil → noopRatings; defaults applied lazily in drafts.go
+	metaLookup    draftalgo.CardMetaLookup // nil → noMeta; Phase B card metadata (color, ALSA, GIHCount)
+	replayTrigger ReplayFunc               // nil → /api/v1/replay returns 503
 }
 
 // New returns a Server bound to 127.0.0.1:port. Use DefaultPort unless tests
@@ -233,6 +233,21 @@ func (s *Server) Addr() string {
 		return ""
 	}
 	return s.ln.Addr().String()
+}
+
+// boundPort returns the TCP port the listener is actually bound to once Start
+// has run. When the server was constructed with port=0 (ephemeral), s.port is
+// 0 and the real port is only known after the OS assigns it — so prefer the
+// live listener address. Falls back to the configured port before Start (or if
+// the address cannot be parsed) so diagnostics still report the channel-derived
+// port the daemon was constructed with (#667).
+func (s *Server) boundPort() int {
+	if s.ln != nil {
+		if tcp, ok := s.ln.Addr().(*net.TCPAddr); ok {
+			return tcp.Port
+		}
+	}
+	return s.port
 }
 
 // Stop drains in-flight requests and closes the listener. Safe to call before

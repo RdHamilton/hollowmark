@@ -15,7 +15,13 @@ import (
 
 // FlushFunc is called whenever a session buffer is flushed.  The caller is
 // responsible for dispatching the resulting event to the BFF.
-type FlushFunc func(ctx context.Context, sessionID string, entries []json.RawMessage, partial bool) error
+//
+// matchID is an authoritative match id supplied by the caller (the
+// finalMatchResult.matchId parsed by the match.completed detector). It is used
+// only as a FALLBACK when the GRE entries do not self-resolve a match_id —
+// GRE-derived match_id keeps precedence. It is empty ("") for the
+// threshold/stale/shutdown flush paths, which have no authoritative id (#807).
+type FlushFunc func(ctx context.Context, sessionID, matchID string, entries []json.RawMessage, partial bool) error
 
 // SessionBuffer holds accumulated GRE log entries for a single MTGA session.
 type SessionBuffer struct {
@@ -88,7 +94,9 @@ func (m *Manager) Append(ctx context.Context, sessionID string, entry json.RawMe
 		m.mu.Unlock()
 
 		log.Printf("[gre] session=%s threshold=%d reached — flushing partial", sessionID, m.flushThreshold)
-		return m.flush(ctx, sessionID, toFlush, true)
+		// No authoritative match_id on the threshold path — pass "" and let the
+		// flush self-resolve from the buffered GRE entries.
+		return m.flush(ctx, sessionID, "", toFlush, true)
 	}
 	m.mu.Unlock()
 	return nil
@@ -109,10 +117,38 @@ func (m *Manager) FlushAll(ctx context.Context) {
 
 	for id, entries := range sessions {
 		log.Printf("[gre] shutdown flush session=%s entries=%d", id, len(entries))
-		if err := m.flush(ctx, id, entries, true); err != nil {
+		if err := m.flush(ctx, id, "", entries, true); err != nil {
 			log.Printf("[gre] warn: shutdown flush session=%s: %v", id, err)
 		}
 	}
+}
+
+// FlushSession flushes a single named session's buffer with an explicit,
+// authoritative matchID, then resets the buffer. It is invoked by the
+// match.completed handler to emit a non-partial game-end flush carrying the
+// finalMatchResult.matchId (#807). Unlike the threshold/stale/shutdown paths,
+// the caller supplies the match id explicitly so the flush is guaranteed to be
+// anchored even when GRE gameInfo.matchID is sparse/absent in the buffer window.
+//
+// If the session has no buffered entries, FlushSession is a no-op and returns
+// nil — a game can complete with its GRE entries already drained by a prior
+// threshold flush.
+func (m *Manager) FlushSession(ctx context.Context, sessionID, matchID string, partial bool) error {
+	m.mu.Lock()
+	buf, ok := m.sessions[sessionID]
+	if !ok || len(buf.entries) == 0 {
+		m.mu.Unlock()
+		return nil
+	}
+	entries := buf.entries
+	// Reset the buffer so the next game starts fresh and we never double-flush
+	// these entries on a later shutdown/stale sweep.
+	buf.entries = nil
+	m.mu.Unlock()
+
+	log.Printf("[gre] game-end flush session=%s match_id=%s entries=%d partial=%t",
+		sessionID, matchID, len(entries), partial)
+	return m.flush(ctx, sessionID, matchID, entries, partial)
 }
 
 // RunSweep starts the background stale-buffer sweep goroutine.
@@ -156,7 +192,7 @@ func (m *Manager) sweepStale(ctx context.Context) {
 	for id, e := range stale {
 		log.Printf("[gre] stale sweep flushing session=%s entries=%d idle=%s",
 			id, len(e.entries), time.Since(e.lastUpdated).Round(time.Second))
-		if err := m.flush(ctx, id, e.entries, true); err != nil {
+		if err := m.flush(ctx, id, "", e.entries, true); err != nil {
 			log.Printf("[gre] warn: stale sweep flush session=%s: %v", id, err)
 		}
 	}

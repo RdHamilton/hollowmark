@@ -2,7 +2,9 @@ package localapi_test
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -68,8 +70,51 @@ func TestSystemStatusConnected(t *testing.T) {
 	if body.URL != "https://staging-api.vaultmtg.app/api/v1" {
 		t.Errorf("url: got %q", body.URL)
 	}
-	if body.Port != 9001 {
-		t.Errorf("port: got %d", body.Port)
+	// #667: the status endpoint must report the port the server actually
+	// bound — not a hardcoded DefaultPort. startTestServer binds an ephemeral
+	// port (New(0, ...)), so the reported port must equal the port parsed
+	// from the live listener address rather than the prod default 9001.
+	_, addrPort, err := net.SplitHostPort(srv.Addr())
+	if err != nil {
+		t.Fatalf("split listener addr %q: %v", srv.Addr(), err)
+	}
+	wantPort, err := strconv.Atoi(addrPort)
+	if err != nil {
+		t.Fatalf("parse listener port %q: %v", addrPort, err)
+	}
+	if body.Port != wantPort {
+		t.Errorf("port: got %d, want bound port %d", body.Port, wantPort)
+	}
+}
+
+// TestSystemStatusReportsChannelDerivedPort verifies that when the server is
+// constructed with an explicit channel-derived port (as service.go now does
+// via install.Identity(install.Channel).LocalAPIPort), the status endpoint
+// reports that exact port — the cosmetic half of the #667 fix.
+func TestSystemStatusReportsChannelDerivedPort(t *testing.T) {
+	const stagingPort = 9011
+	ln, err := net.Listen("tcp", "127.0.0.1:9011")
+	if err != nil {
+		t.Skipf("port %d already in use on this host; skipping", stagingPort)
+	}
+	_ = ln.Close()
+
+	srv := localapi.New(stagingPort, localapi.State{
+		Version:      "0.3.7-staging",
+		CloudAPIURL:  "https://stg-api.vaultmtg.app/api/v1",
+		BFFReachable: true,
+	})
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start on %d: %v", stagingPort, err)
+	}
+	t.Cleanup(func() { _ = srv.Stop() })
+
+	var body struct {
+		Port int `json:"port"`
+	}
+	getJSON(t, srv, "/api/v1/system/status", &body)
+	if body.Port != stagingPort {
+		t.Errorf("staging status port: got %d, want %d", body.Port, stagingPort)
 	}
 }
 

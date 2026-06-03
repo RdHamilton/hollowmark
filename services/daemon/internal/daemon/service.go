@@ -318,7 +318,14 @@ func computeAuthStatus(cfg *config.Config, keychainErr error, authPaused bool) s
 //
 // WinningTeamID is always zero: GRE messages do not carry a final win signal.
 // The BFF projection worker cross-references the matches table at projection time.
-func (s *Service) flushGREBuffer(ctx context.Context, sessionID string, entries []json.RawMessage, partial bool) error {
+// matchID is an authoritative match id supplied by the caller (the
+// finalMatchResult.matchId from the match.completed detector). It is used only
+// as a FALLBACK: GRE-derived gameInfo.matchID keeps precedence when present.
+// GRE matchID is sparse in real logs (~8 occurrences across 196 game-state
+// lines in the real Player.log), so the explicit fallback is what anchors the
+// non-partial game-end flush to a real match (#807). It is empty ("") for the
+// threshold/stale/shutdown flush paths.
+func (s *Service) flushGREBuffer(ctx context.Context, sessionID, matchID string, entries []json.RawMessage, partial bool) error {
 	// Convert raw GRE log JSON stored in the buffer into LogEntry values that
 	// pkg/logparse functions can consume.
 	logEntries := make([]*logparse.LogEntry, 0, len(entries))
@@ -454,6 +461,14 @@ func (s *Service) flushGREBuffer(ctx context.Context, sessionID string, entries 
 	if result.FirstTurnActivePlayerSeatID > 0 && playerConn != nil {
 		onPlay := result.FirstTurnActivePlayerSeatID == playerConn.SeatID
 		payload.PlayerOnPlay = &onPlay
+	}
+
+	// Match-id fallback (#807): GRE gameInfo.matchID is sparse in real logs, so
+	// when the buffered entries did not self-resolve a match_id, fall back to the
+	// authoritative id supplied by the caller (finalMatchResult.matchId from the
+	// match.completed detector). GRE-derived match_id keeps precedence above.
+	if payload.MatchID == "" && matchID != "" {
+		payload.MatchID = matchID
 	}
 
 	// Emit gre.game_started for each distinct gameNumber found in this buffer.
@@ -936,11 +951,15 @@ func (s *Service) Run(ctx context.Context) error {
 	errs := poller.Errors()
 
 	// Phase 0 of the daemon-local-API plan: serve a /health endpoint on
-	// 127.0.0.1:9001 so the SPA's "daemon connected" indicator can detect
-	// this process. Non-fatal — if the port is busy (e.g. a previous daemon
-	// instance is still draining), the daemon continues with dispatch only.
+	// the channel-derived loopback port (stable=9001, staging=9011) so the
+	// SPA's "daemon connected" indicator can detect this process. Deriving
+	// the port from install.Channel (rather than the hardcoded DefaultPort)
+	// lets a staging daemon coexist with a prod daemon on the same machine
+	// without a port collision (#667 / ADR-049 Ticket 5). Non-fatal — if the
+	// port is busy (e.g. a previous daemon instance is still draining), the
+	// daemon continues with dispatch only.
 	startedAt := time.Now().UTC()
-	localAPI := localapi.New(localapi.DefaultPort, localapi.State{
+	localAPI := localapi.New(install.Identity(install.Channel).LocalAPIPort, localapi.State{
 		Version:      s.version,
 		SessionID:    s.sessionID,
 		StartedAt:    startedAt,
@@ -1673,6 +1692,20 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 					}
 				}
 			}
+
+			// Flush the GRE session as a non-partial game-end event, anchored to
+			// the authoritative finalMatchResult.matchId (#807). This is the
+			// first-and-only writer of game_plays card-play rows (partial flushes
+			// are discarded by the BFF projection worker), so it completes the
+			// #2943 read-side chain and populates the Match-Detail timeline.
+			// No-op when the session buffer is already empty (entries drained by
+			// an earlier threshold flush).
+			if p.MatchID != "" {
+				if flushErr := s.greManager.FlushSession(ctx, s.sessionID, p.MatchID, false); flushErr != nil {
+					log.Printf("[daemon] warn: match.completed GRE game-end flush match_id=%s: %v", p.MatchID, flushErr)
+				}
+			}
+
 			payload = p
 		}
 	case "greToClientEvent":
