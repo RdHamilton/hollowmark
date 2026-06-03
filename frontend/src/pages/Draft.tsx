@@ -3,6 +3,7 @@ import { ViewfinderCircleIcon } from '@heroicons/react/24/outline';
 import { useNavigate } from 'react-router-dom';
 import { drafts, cards, bffDraftRatings } from '@/services/api';
 import type { BffColorRating } from '@/services/api/bffDraftRatings';
+import { getClerkToken } from '@/services/apiClient';
 import { models, pickquality, grading, gui } from '@/types/models';
 
 // Helper to get completed drafts with limit support
@@ -310,12 +311,16 @@ const Draft: React.FC = () => {
             // Load draft data
             console.log('[loadActiveDraft] Loading data for session:', session.ID, 'SetCode:', session.SetCode);
             const draftType = session.DraftType || 'PremierDraft';
+            // draft-ratings is under the BFF Clerk-auth group — thread the Clerk
+            // session token (this page has no useAuth hook in scope, so use the
+            // apiClient token provider designed for non-hook callers).
+            const clerkToken = await getClerkToken();
             const [picks, packs, setCards, ratings, colorRatingsResult] = await Promise.all([
                 drafts.getDraftPicks(session.ID),
                 getDraftPacks(session.ID),
                 cards.getSetCards(session.SetCode),
                 cards.getCardRatings(session.SetCode, draftType),
-                bffDraftRatings.getDraftRatings(session.SetCode, draftType).catch(() => null),
+                bffDraftRatings.getDraftRatings(session.SetCode, draftType, clerkToken).catch(() => null),
             ]);
             console.log('[loadActiveDraft] Data loaded successfully:');
             console.log('  - Picks:', picks?.length || 0);
