@@ -112,8 +112,7 @@ export interface DeckPerformanceRow {
  * Returns decks ordered by total_games DESC.
  */
 export async function getDeckPerformance(): Promise<DeckPerformanceRow[]> {
-  const result = await bffGet<{ data: DeckPerformanceRow[] }>('/stats/deck-performance');
-  return result?.data ?? [];
+  return await bffGet<DeckPerformanceRow[]>('/stats/deck-performance') ?? [];
 }
 
 /**
