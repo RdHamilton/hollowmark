@@ -9,7 +9,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
-import DraftLive from './DraftLive';
+import DraftLive, { gradeFromGihwr } from './DraftLive';
 import type { DraftSessionState, UseDraftSessionReturn } from '@/hooks/useDraftSession';
 import * as useFeatureFlagModule from '@/hooks/useFeatureFlag';
 import * as analyticsModule from '@/services/analytics';
@@ -801,6 +801,116 @@ describe('DraftLive', () => {
         // The name span must not be a bare "#777".
         expect(nameEl?.textContent).not.toBe('#777');
       });
+    });
+  });
+
+  // ── GIHWR units regression (vault-mtg-tickets #<pending>) ──────────────────
+  // The BFF returns gihwr as a FRACTION (0.0–1.0), e.g. 0.631 for a 63.1%
+  // GIHWR card. The grade math and the win-rate display MUST agree on that
+  // unit. The original bug compared the fraction against percent thresholds
+  // (>= 65, >= 45 …) so every real card fell through to "F", and the win-rate
+  // line rendered "0.6%" instead of "63.1%". Tim observed 0.631 → red "F" on a
+  // 63% FDN bomb (Sire of Seven Deaths) on staging.
+  describe('gradeFromGihwr (fraction units)', () => {
+    it('grades a 0.631 fraction (Sire of Seven Deaths) as a bomb, not F', () => {
+      const grade = gradeFromGihwr(0.631);
+      expect(grade).not.toBe('F');
+      expect(grade.charAt(0)).toBe('A'); // 0.631 sits in the A band (0.62–0.65)
+    });
+
+    it('grades each band boundary correctly on the fraction scale', () => {
+      // Just-above each threshold lands in the higher band; just-below drops to
+      // the next lower band.
+      expect(gradeFromGihwr(0.65)).toBe('A+');
+      expect(gradeFromGihwr(0.6499)).toBe('A');
+      expect(gradeFromGihwr(0.62)).toBe('A');
+      expect(gradeFromGihwr(0.6199)).toBe('A-');
+      expect(gradeFromGihwr(0.59)).toBe('A-');
+      expect(gradeFromGihwr(0.5899)).toBe('B+');
+      expect(gradeFromGihwr(0.57)).toBe('B+');
+      expect(gradeFromGihwr(0.5699)).toBe('B');
+      expect(gradeFromGihwr(0.55)).toBe('B');
+      expect(gradeFromGihwr(0.5499)).toBe('B-');
+      expect(gradeFromGihwr(0.53)).toBe('B-');
+      expect(gradeFromGihwr(0.5299)).toBe('C+');
+      expect(gradeFromGihwr(0.51)).toBe('C+');
+      expect(gradeFromGihwr(0.5099)).toBe('C');
+      expect(gradeFromGihwr(0.49)).toBe('C');
+      expect(gradeFromGihwr(0.4899)).toBe('C-');
+      expect(gradeFromGihwr(0.47)).toBe('C-');
+      expect(gradeFromGihwr(0.4699)).toBe('D');
+      expect(gradeFromGihwr(0.45)).toBe('D');
+      expect(gradeFromGihwr(0.4499)).toBe('F');
+      expect(gradeFromGihwr(0.30)).toBe('F');
+    });
+
+    it('returns the em-dash placeholder for 0, undefined, and null', () => {
+      expect(gradeFromGihwr(0)).toBe('—');
+      expect(gradeFromGihwr(undefined)).toBe('—');
+      // null arrives at runtime when the BFF omits gihwr; treat like undefined.
+      expect(gradeFromGihwr(null as unknown as undefined)).toBe('—');
+    });
+  });
+
+  describe('GIHWR win-rate display (fraction → percent)', () => {
+    const startedEvent: import('@/hooks/useDraftEventStream').DaemonEvent = {
+      type: 'draft.started',
+      account_id: 'acc1',
+      event_id: 'e0',
+      session_id: 's1',
+      sequence: 0,
+      occurred_at: '2026-05-08T00:00:00Z',
+      payload: { set_code: 'FDN', draft_type: 'PremierDraft' },
+    };
+
+    it('renders 0.631 as "63.1%" and grades it non-F', async () => {
+      mockGetDraftRatings.mockResolvedValue(
+        buildRatingsResult([{ arena_id: 901, name: 'Sire of Seven Deaths', gihwr: 0.631 }])
+      );
+
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: startedEvent, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active', currentPackCards: [901] }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('pack-card-901')).toBeInTheDocument();
+      });
+
+      // Win-rate line must read 63.1%, NOT the buggy 0.6%.
+      const winRate = screen.getByTestId('card-gihwr-901');
+      expect(winRate).toHaveTextContent('63.1%');
+      expect(winRate).not.toHaveTextContent('0.6%');
+
+      // Grade must be a real grade in the A band, NOT a red F.
+      const grade = screen.getByTestId('card-grade-901');
+      expect(grade.textContent).not.toBe('F');
+      expect(grade.textContent?.charAt(0)).toBe('A');
+    });
+
+    it('renders the em-dash and no win-rate line for an unrated card', async () => {
+      mockGetDraftRatings.mockResolvedValue(
+        buildRatingsResult([{ arena_id: 902, name: 'Plains', gihwr: 0 }])
+      );
+
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: startedEvent, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active', currentPackCards: [902] }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('pack-card-902')).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId('card-grade-902')).toHaveTextContent('—');
+      // gihwr === 0 → the win-rate line is suppressed entirely.
+      expect(screen.queryByTestId('card-gihwr-902')).not.toBeInTheDocument();
     });
   });
 });

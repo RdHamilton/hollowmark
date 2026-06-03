@@ -65,19 +65,29 @@ function setCodeFromCourseName(courseName: string | undefined): string | null {
   return null;
 }
 
-/** Grade letter for a card's GIHWR (Game-In-Hand Win Rate). */
-function gradeFromGihwr(gihwr: number | undefined): string {
-  if (gihwr === undefined || gihwr === 0) return '—';
-  if (gihwr >= 65) return 'A+';
-  if (gihwr >= 62) return 'A';
-  if (gihwr >= 59) return 'A-';
-  if (gihwr >= 57) return 'B+';
-  if (gihwr >= 55) return 'B';
-  if (gihwr >= 53) return 'B-';
-  if (gihwr >= 51) return 'C+';
-  if (gihwr >= 49) return 'C';
-  if (gihwr >= 47) return 'C-';
-  if (gihwr >= 45) return 'D';
+/**
+ * Grade letter for a card's GIHWR (Game-In-Hand Win Rate).
+ *
+ * `gihwr` is a FRACTION in the range 0.0–1.0 — this is the canonical unit
+ * served by the BFF `/api/v1/draft-ratings` endpoint (the sync lambda stores
+ * 17Lands' `ever_drawn_win_rate` verbatim, which is itself a fraction; neither
+ * the sync lambda, the BFF handler, nor this adapter multiplies by 100). A
+ * 63.1% GIHWR card therefore arrives as `0.631`, so the thresholds below are
+ * expressed as fractions. (The earlier percent thresholds — `>= 65` — graded
+ * every real card "F" because `0.631 < 45`.)
+ */
+export function gradeFromGihwr(gihwr: number | undefined | null): string {
+  if (gihwr === undefined || gihwr === null || gihwr === 0) return '—';
+  if (gihwr >= 0.65) return 'A+';
+  if (gihwr >= 0.62) return 'A';
+  if (gihwr >= 0.59) return 'A-';
+  if (gihwr >= 0.57) return 'B+';
+  if (gihwr >= 0.55) return 'B';
+  if (gihwr >= 0.53) return 'B-';
+  if (gihwr >= 0.51) return 'C+';
+  if (gihwr >= 0.49) return 'C';
+  if (gihwr >= 0.47) return 'C-';
+  if (gihwr >= 0.45) return 'D';
   return 'F';
 }
 
@@ -399,9 +409,12 @@ const DraftLive: React.FC = () => {
                   >
                     {card.grade}
                   </span>
-                  {card.gihwr !== undefined && (
-                    <span className="draft-live-gihwr">
-                      {card.gihwr.toFixed(1)}%
+                  {card.gihwr !== undefined && card.gihwr !== 0 && (
+                    <span
+                      className="draft-live-gihwr"
+                      data-testid={`card-gihwr-${card.arenaId}`}
+                    >
+                      {(card.gihwr * 100).toFixed(1)}%
                     </span>
                   )}
                   {isTop && (
