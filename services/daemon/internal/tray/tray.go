@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"fyne.io/systray"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
-	"github.com/getlantern/systray"
 )
 
 // NSApplicationActivationPolicy values, mirrored from AppKit so the
