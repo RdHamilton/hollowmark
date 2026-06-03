@@ -307,4 +307,70 @@ describe('matches API', () => {
       expect(get).toHaveBeenCalledWith('/matches/m1/games');
     });
   });
+
+  // ── DEFECT-2 regression: getDeckPerformance double-unwrap fix ─────────────
+  // apiClient.request<T>() unwraps the BFF envelope at line 279:
+  //   return data.data as T
+  // so callers receive the already-unwrapped payload. Typing the generic as
+  // { data: DeckPerformanceRow[] } then accessing .data yields undefined (array
+  // has no .data property), and the ?? [] fallback fires, silently returning
+  // an empty result. The fix types the generic as DeckPerformanceRow[] directly.
+
+  describe('getDeckPerformance', () => {
+    it('returns the array directly when get() resolves with an already-unwrapped array', async () => {
+      const unwrappedRow: matches.DeckPerformanceRow = {
+        deck_id: 'x',
+        deck_name: 'Test',
+        format: 'Standard',
+        wins: 2,
+        losses: 1,
+        draws: 0,
+        total_games: 3,
+      };
+      vi.mocked(get).mockResolvedValue([unwrappedRow]);
+
+      const result = await matches.getDeckPerformance();
+
+      expect(get).toHaveBeenCalledWith('/stats/deck-performance');
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual(unwrappedRow);
+    });
+
+    it('returns [] when get() resolves with null/undefined (network error fallback)', async () => {
+      vi.mocked(get).mockResolvedValue(null as unknown as matches.DeckPerformanceRow[]);
+
+      const result = await matches.getDeckPerformance();
+
+      expect(result).toEqual([]);
+    });
+
+    it('returns [] when get() resolves with an empty array', async () => {
+      vi.mocked(get).mockResolvedValue([]);
+
+      const result = await matches.getDeckPerformance();
+
+      expect(result).toEqual([]);
+    });
+
+    it('does NOT double-unwrap — result must not have a .data property', async () => {
+      const unwrappedRow: matches.DeckPerformanceRow = {
+        deck_id: 'deck-1',
+        deck_name: 'Aggro',
+        format: 'Historic',
+        wins: 5,
+        losses: 2,
+        draws: 1,
+        total_games: 8,
+      };
+      vi.mocked(get).mockResolvedValue([unwrappedRow]);
+
+      const result = await matches.getDeckPerformance();
+
+      // If double-unwrap were present, result would be undefined/[], not the array.
+      expect(Array.isArray(result)).toBe(true);
+      expect(result).not.toBe(undefined);
+      expect(result).not.toEqual([]);
+      expect(result[0].deck_id).toBe('deck-1');
+    });
+  });
 });
