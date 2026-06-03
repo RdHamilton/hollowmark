@@ -420,9 +420,11 @@ func TestMigration100_MissingTableSimulation(t *testing.T) {
 	// Simulate missing life_change_tracking: table never existed.
 	// (We skip creating it, simulating a DB where migration 000073 ran partially.)
 
-	// The guard: CREATE TABLE IF NOT EXISTS — creates the table if absent.
+	// The guard: CREATE TEMP TABLE IF NOT EXISTS — creates the table if absent.
+	// All sibling tables (gps_missing_sim, mgr_missing_sim) are TEMP; the guard
+	// table must also be TEMP so PostgreSQL allows the FK reference to a temp table.
 	guard := `
-		CREATE TABLE IF NOT EXISTS lct_missing_sim (
+		CREATE TEMP TABLE IF NOT EXISTS lct_missing_sim (
 			id           BIGSERIAL PRIMARY KEY,
 			game_play_id BIGINT    NOT NULL REFERENCES gps_missing_sim(id) ON DELETE CASCADE,
 			team_id      INT       NOT NULL,
