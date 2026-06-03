@@ -94,7 +94,14 @@ func pickQualityScore(picks []draftalgo.Pick) float64 {
 		return 20.0 // Default to C grade if no quality data.
 	}
 
-	avgGIHWR := sum / float64(count)
+	// GIHWR arrives as a fraction (0.0–1.0) — the canonical unit served
+	// end-to-end by the BFF (17Lands ever_drawn_win_rate, stored verbatim
+	// by the sync lambda, passed through by the BFF handler with no *100).
+	// The bucket boundaries below are tuned in percentage points, so scale
+	// the average to a percent once here. (#787 — previously the fractional
+	// average fell through every bucket into the default branch, tanking
+	// pick-quality on every real draft.)
+	avgGIHWR := (sum / float64(count)) * 100
 
 	var score float64
 	switch {

@@ -13,8 +13,13 @@ func (s stubCards) CardName(id string) string {
 	return s[id]
 }
 
-func gihwrPtr(v float64) *float64 { return &v }
-func gradePtr(v string) *string   { return &v }
+// gihwrPtr takes a GIHWR in PERCENT (e.g. 60 for a 60% card) for test
+// readability and returns a pointer to the canonical FRACTION the grading
+// code consumes (0.60). This models the real wire contract: PickedCardGIHWR
+// is a fraction (#787). Tests express percent to keep the bucket boundaries
+// (58/54/50/46) legible.
+func gihwrPtr(percent float64) *float64 { f := percent / 100; return &f }
+func gradePtr(v string) *string         { return &v }
 
 func TestCalculate_EmptyPicksErrors(t *testing.T) {
 	_, err := grading.Calculate(draftalgo.SessionInfo{}, nil, nil)
