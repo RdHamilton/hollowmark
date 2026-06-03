@@ -13,11 +13,25 @@
 # Run with:
 #   bats services/daemon/install/macos/pkg/app-launcher_test.bats
 
-LAUNCHER_SCRIPT="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)/app-launcher"
+LAUNCHER_TEMPLATE="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)/app-launcher"
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Resolve the launcher under test from the template, substituting the ADR-049
+# channel placeholder for the given channel (default: stable) so the test
+# exercises a realistic LaunchAgent label rather than the raw __...__ token.
+# Usage: LAUNCHER_SCRIPT="$(_resolve_launcher [stable|staging])"
+_resolve_launcher() {
+  local channel="${1:-stable}"
+  local label_suffix=""
+  [ "${channel}" = "staging" ] && label_suffix=".staging"
+  local out
+  out="$(mktemp)"
+  sed -e "s|__VAULTMTG_LABEL_SUFFIX__|${label_suffix}|g" "${LAUNCHER_TEMPLATE}" > "${out}"
+  echo "${out}"
+}
 
 # Build a stub directory whose executables replace privileged OS tools.
 _make_stub_dir() {
@@ -50,6 +64,7 @@ EOF
 @test "launcher posts osascript notification after bootstrap" {
   stub_dir="$(_make_stub_dir)"
   export HOME="${BATS_TEST_TMPDIR}"
+  LAUNCHER_SCRIPT="$(_resolve_launcher stable)"
 
   run env PATH="${stub_dir}:${PATH}" bash "${LAUNCHER_SCRIPT}"
 
@@ -72,6 +87,7 @@ EOF
 @test "launcher calls launchctl enable and bootstrap" {
   stub_dir="$(_make_stub_dir)"
   export HOME="${BATS_TEST_TMPDIR}"
+  LAUNCHER_SCRIPT="$(_resolve_launcher stable)"
 
   run env PATH="${stub_dir}:${PATH}" bash "${LAUNCHER_SCRIPT}"
 
@@ -101,6 +117,7 @@ EOF
 @test "launcher notification text mentions VaultMTG" {
   stub_dir="$(_make_stub_dir)"
   export HOME="${BATS_TEST_TMPDIR}"
+  LAUNCHER_SCRIPT="$(_resolve_launcher stable)"
 
   run env PATH="${stub_dir}:${PATH}" bash "${LAUNCHER_SCRIPT}"
 
@@ -110,6 +127,40 @@ EOF
   grep -qi "VaultMTG" "${BATS_TEST_TMPDIR}/osascript_calls" || {
     echo "notification does not mention VaultMTG:" >&2
     cat "${BATS_TEST_TMPDIR}/osascript_calls" >&2
+    return 1
+  }
+}
+
+@test "stable launcher bootstraps the prod LaunchAgent label (com.vaultmtg.daemon)" {
+  stub_dir="$(_make_stub_dir)"
+  export HOME="${BATS_TEST_TMPDIR}"
+  LAUNCHER_SCRIPT="$(_resolve_launcher stable)"
+
+  run env PATH="${stub_dir}:${PATH}" bash "${LAUNCHER_SCRIPT}"
+  [ "$status" -eq 0 ]
+
+  # Must reference the bare prod label, NOT the staging one (ADR-049).
+  grep -q "com.vaultmtg.daemon" "${BATS_TEST_TMPDIR}/launchctl_calls"
+  if grep -q "com.vaultmtg.daemon.staging" "${BATS_TEST_TMPDIR}/launchctl_calls"; then
+    echo "FAIL: stable launcher referenced the staging label:" >&2
+    cat "${BATS_TEST_TMPDIR}/launchctl_calls" >&2
+    return 1
+  fi
+}
+
+@test "staging launcher bootstraps the staging LaunchAgent label (com.vaultmtg.daemon.staging)" {
+  stub_dir="$(_make_stub_dir)"
+  export HOME="${BATS_TEST_TMPDIR}"
+  LAUNCHER_SCRIPT="$(_resolve_launcher staging)"
+
+  run env PATH="${stub_dir}:${PATH}" bash "${LAUNCHER_SCRIPT}"
+  [ "$status" -eq 0 ]
+
+  # Must reference the channel-suffixed staging label so the staging launcher
+  # never bootstraps the prod daemon (the install-collision root cause).
+  grep -q "com.vaultmtg.daemon.staging" "${BATS_TEST_TMPDIR}/launchctl_calls" || {
+    echo "FAIL: staging launcher did not reference the staging label:" >&2
+    cat "${BATS_TEST_TMPDIR}/launchctl_calls" >&2
     return 1
   }
 }

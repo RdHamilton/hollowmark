@@ -280,7 +280,9 @@ release:
     # makensis changes its CWD to the .nsi file's directory before processing OutFile,
     # so the installer is written to services/daemon/install/windows/nsis/ — not the
     # repo root. The glob must reflect the actual output path. (Fixes vmt-t#633.)
-    - glob: "services/daemon/install/windows/nsis/vaultmtg-daemon-setup-*.exe"
+    # The staging channel emits vaultmtg-daemon-staging-setup-*.exe (ADR-049),
+    # so the glob matches an optional channel suffix between the base and -setup.
+    - glob: "services/daemon/install/windows/nsis/vaultmtg-daemon*-setup-*.exe"
     # NOTE: macOS .pkg/.dmg are NOT listed here.
     # They are built and uploaded by the sign-macos job (macos-latest runner) via
     # 'gh release upload' after notarization. GoReleaser runs on ubuntu-latest and
