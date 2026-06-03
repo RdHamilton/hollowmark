@@ -13,6 +13,7 @@ import {
   setApiKey,
   setClerkTokenProvider,
   resetErrorThrottle,
+  inFlightGetCount,
 } from '../apiClient';
 
 // Mock fetch globally
@@ -751,5 +752,74 @@ describe('error_auth_failed analytics', () => {
       ([e]: [{ name: string }]) => e.name === 'error_auth_failed',
     );
     expect(calls).toHaveLength(0);
+  });
+
+  // Regression guard for the staging 429 over-fetch incident: concurrent GETs
+  // for the same endpoint must collapse into a single network request.
+  describe('in-flight GET coalescing (#staging-429)', () => {
+    it('collapses concurrent same-path GETs into a single fetch', async () => {
+      let resolveFetch: (value: unknown) => void;
+      mockFetch.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        })
+      );
+
+      // Three concurrent callers for the same endpoint, before any resolves.
+      const p1 = get('/decks');
+      const p2 = get('/decks');
+      const p3 = get('/decks');
+
+      expect(inFlightGetCount()).toBe(1);
+
+      resolveFetch!({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ id: 'd1' }] }),
+      });
+
+      const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+
+      // One network call served all three callers, all got the same data.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(r1).toEqual([{ id: 'd1' }]);
+      expect(r2).toEqual(r1);
+      expect(r3).toEqual(r1);
+
+      // Entry is cleared once settled (concurrent de-dupe, not a cache).
+      expect(inFlightGetCount()).toBe(0);
+    });
+
+    it('does NOT collapse a later sequential GET (de-dupe is concurrent-only, not a cache)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { n: 1 } }),
+      });
+      await get('/quests/active');
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { n: 2 } }),
+      });
+      const second = await get('/quests/active');
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(second).toEqual({ n: 2 });
+    });
+
+    it('does NOT collapse concurrent GETs for different paths', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: {} }),
+      });
+
+      await Promise.all([get('/decks'), get('/drafts'), get('/quests/active')]);
+
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(inFlightGetCount()).toBe(0);
+    });
   });
 });

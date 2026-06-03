@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAuth, useUser } from '@clerk/react';
 import * as Sentry from '@sentry/react';
 import { useSettings } from './hooks/useSettings';
@@ -110,10 +110,32 @@ function ThemeSync() {
   return null;
 }
 
-// Component that handles global replay events
+// Component that handles global replay events.
+//
+// The subscription effect runs EXACTLY ONCE on mount with an empty dependency
+// array. Two values that the handlers need are held in refs rather than state
+// so they never destabilize the effect:
+//   - navigate: react-router's navigate function is recreated on some renders;
+//     keeping the latest in a ref lets us call it without listing it as a dep.
+//   - hasShownDraftNotification: this is internal bookkeeping that is never
+//     rendered, so it must not be React state. When it WAS state and listed in
+//     the dep array, every replay event that flipped it (replay:started /
+//     replay:completed / draft_detected) tore down and re-registered all seven
+//     SSE listeners — the "Cleaning up / Setting up global replay event
+//     listeners" loop, which also drove repeated cross-surface refetches and
+//     contributed to the staging 429 storm.
 function ReplayEventHandler() {
   const navigate = useNavigate();
-  const [hasShownDraftNotification, setHasShownDraftNotification] = useState(false);
+  const navigateRef = useRef(navigate);
+
+  // Keep the latest navigate in a ref without listing it as a dependency of the
+  // subscription effect below. Assigning in an effect (not during render)
+  // satisfies the react-hooks/refs rule.
+  useEffect(() => {
+    navigateRef.current = navigate;
+  }, [navigate]);
+
+  const hasShownDraftNotificationRef = useRef(false);
 
   useEffect(() => {
     console.log('[ReplayEventHandler] Setting up global replay event listeners');
@@ -126,7 +148,7 @@ function ReplayEventHandler() {
         isPaused: false,
         progress: data,
       });
-      setHasShownDraftNotification(false);
+      hasShownDraftNotificationRef.current = false;
     });
 
     const unsubscribeProgress = EventsOn('replay:progress', (data: gui.ReplayStatus) => {
@@ -159,22 +181,22 @@ function ReplayEventHandler() {
         isPaused: false,
         progress: data,
       });
-      setHasShownDraftNotification(false);
+      hasShownDraftNotificationRef.current = false;
     });
 
     const unsubscribeDraftDetected = EventsOn('replay:draft_detected', (data: unknown) => {
       const eventData = gui.ReplayDraftDetectedEvent.createFrom(data);
       console.log('[ReplayEventHandler] Draft detected during replay:', eventData);
 
-      // Automatically navigate to Draft tab
-      navigate('/draft');
+      // Automatically navigate to Draft tab (latest navigate held in a ref).
+      navigateRef.current('/draft');
 
       // Show notification only once per replay session
-      if (!hasShownDraftNotification) {
+      if (!hasShownDraftNotificationRef.current) {
         // We'll use a console log for now since alerts don't work in desktop mode
         // The toast system will handle the notification
         console.log('Draft event detected - navigated to Draft tab!');
-        setHasShownDraftNotification(true);
+        hasShownDraftNotificationRef.current = true;
       }
     });
 
@@ -197,7 +219,10 @@ function ReplayEventHandler() {
       unsubscribeDraftDetected();
       unsubscribeError();
     };
-  }, [navigate, hasShownDraftNotification]);
+    // Empty deps: subscribe once on mount, never re-subscribe. navigate and the
+    // draft-notification flag are read through refs above, so they do not need
+    // to be listed here and cannot trigger a setup/teardown loop.
+  }, []);
 
   return null; // This component doesn't render anything
 }
