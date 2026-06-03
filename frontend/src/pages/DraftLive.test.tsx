@@ -9,7 +9,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
-import DraftLive, { gradeFromGihwr } from './DraftLive';
+import DraftLive from './DraftLive';
+import { gradeFromGihwr } from './draftGrade';
 import type { DraftSessionState, UseDraftSessionReturn } from '@/hooks/useDraftSession';
 import * as useFeatureFlagModule from '@/hooks/useFeatureFlag';
 import * as analyticsModule from '@/services/analytics';
