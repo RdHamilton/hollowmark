@@ -266,3 +266,114 @@ func TestParseDeckEntry_RoundTrip(t *testing.T) {
 	assert.Equal(t, float64(12345), card["arena_id"])
 	assert.Equal(t, float64(4), card["quantity"])
 }
+
+// ---------------------------------------------------------------------------
+// IsCourseDeckEntry
+// ---------------------------------------------------------------------------
+
+// realCourseDeckEntry returns a LogEntry matching the actual MTGA wire format
+// for a CourseDeck event as observed in the corpus:
+//
+//	{
+//	  "CourseId": "bd46df66-ba9d-4dbf-81a5-861ecc483c61",
+//	  "InternalEventName": "Play",
+//	  "CourseDeckSummary": { "DeckId": "6bfa48aa-9840-48f1-9318-9eacedc3e84a", "Name": "..." },
+//	  "CourseDeck": { "MainDeck": [...], "Sideboard": [] }
+//	}
+func realCourseDeckEntry(deckID string) *LogEntry {
+	return &LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"CourseId":          "bd46df66-ba9d-4dbf-81a5-861ecc483c61",
+			"InternalEventName": "Play",
+			"CourseDeckSummary": map[string]interface{}{
+				"DeckId": deckID,
+				"Name":   "(Standard) Antiquities on the Loose",
+			},
+			"CourseDeck": map[string]interface{}{
+				"MainDeck":  []interface{}{},
+				"Sideboard": []interface{}{},
+			},
+		},
+	}
+}
+
+func TestIsCourseDeckEntry_Nil(t *testing.T) {
+	assert.False(t, IsCourseDeckEntry(nil))
+}
+
+func TestIsCourseDeckEntry_NotJSON(t *testing.T) {
+	assert.False(t, IsCourseDeckEntry(&LogEntry{IsJSON: false}))
+}
+
+func TestIsCourseDeckEntry_MissingCourseDeckKey(t *testing.T) {
+	entry := &LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"CourseDeckSummary": map[string]interface{}{"DeckId": "abc"},
+		},
+	}
+	assert.False(t, IsCourseDeckEntry(entry))
+}
+
+func TestIsCourseDeckEntry_MissingCourseDeckSummary(t *testing.T) {
+	entry := &LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"CourseDeck": map[string]interface{}{},
+		},
+	}
+	assert.False(t, IsCourseDeckEntry(entry))
+}
+
+func TestIsCourseDeckEntry_EmptyDeckID(t *testing.T) {
+	entry := &LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"CourseDeck":        map[string]interface{}{},
+			"CourseDeckSummary": map[string]interface{}{"DeckId": ""},
+		},
+	}
+	assert.False(t, IsCourseDeckEntry(entry))
+}
+
+func TestIsCourseDeckEntry_ValidEntry(t *testing.T) {
+	assert.True(t, IsCourseDeckEntry(realCourseDeckEntry("6bfa48aa-9840-48f1-9318-9eacedc3e84a")))
+}
+
+// ---------------------------------------------------------------------------
+// ParseCourseDeckEntry
+// ---------------------------------------------------------------------------
+
+func TestParseCourseDeckEntry_Nil(t *testing.T) {
+	_, err := ParseCourseDeckEntry(nil)
+	require.Error(t, err)
+}
+
+func TestParseCourseDeckEntry_MissingCourseDeckKey(t *testing.T) {
+	entry := &LogEntry{
+		IsJSON: true,
+		JSON:   map[string]interface{}{"other": "value"},
+	}
+	_, err := ParseCourseDeckEntry(entry)
+	require.Error(t, err)
+}
+
+func TestParseCourseDeckEntry_ValidEntry(t *testing.T) {
+	const wantDeckID = "6bfa48aa-9840-48f1-9318-9eacedc3e84a"
+	deckID, err := ParseCourseDeckEntry(realCourseDeckEntry(wantDeckID))
+	require.NoError(t, err)
+	assert.Equal(t, wantDeckID, deckID)
+}
+
+func TestParseCourseDeckEntry_MissingDeckID(t *testing.T) {
+	entry := &LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"CourseDeck":        map[string]interface{}{},
+			"CourseDeckSummary": map[string]interface{}{},
+		},
+	}
+	_, err := ParseCourseDeckEntry(entry)
+	require.Error(t, err)
+}
