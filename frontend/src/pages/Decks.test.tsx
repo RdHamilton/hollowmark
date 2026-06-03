@@ -1539,6 +1539,223 @@ describe('Decks', () => {
     });
   });
 
+  describe('Streak badge NaN guard (DEFECT-1)', () => {
+    it('does not render streak badge when currentStreak is undefined (field absent from BFF)', async () => {
+      // The BFF deckListItemResponse does not include currentStreak.
+      // DeckListItem constructor reads source["currentStreak"] which is undefined.
+      // formatStreak(undefined) must return null so no badge renders.
+      mockDecks.getDecks.mockResolvedValue([
+        new gui.DeckListItem({
+          id: 'deck-no-streak',
+          name: 'No Streak Deck',
+          format: 'standard',
+          source: 'manual',
+          matchesPlayed: 1,
+          winRate: 0,
+          cardCount: 60,
+          modifiedAt: new Date('2024-01-15T10:00:00').toISOString(),
+          // currentStreak intentionally absent — mirrors real BFF wire shape
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('No Streak Deck')).toBeInTheDocument();
+      });
+
+      // No streak badge must render; specifically no "NaN" text anywhere
+      expect(document.querySelector('[data-testid="deck-streak"]')).not.toBeInTheDocument();
+      expect(document.body.textContent).not.toMatch(/NaN/);
+    });
+
+    it('does not render streak badge when currentStreak is null', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        new gui.DeckListItem({
+          id: 'deck-null-streak',
+          name: 'Null Streak Deck',
+          format: 'standard',
+          source: 'manual',
+          matchesPlayed: 2,
+          winRate: 0.5,
+          cardCount: 60,
+          modifiedAt: new Date('2024-01-15T10:00:00').toISOString(),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          currentStreak: null as any,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Null Streak Deck')).toBeInTheDocument();
+      });
+
+      expect(document.querySelector('[data-testid="deck-streak"]')).not.toBeInTheDocument();
+      expect(document.body.textContent).not.toMatch(/NaN/);
+    });
+
+    it('does not render streak badge when currentStreak is NaN', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-nan-streak',
+          name: 'Zero Matches No Streak Deck',
+          matchesPlayed: 3,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          currentStreak: NaN as any,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Zero Matches No Streak Deck')).toBeInTheDocument();
+      });
+
+      // No streak badge rendered — NaN streak must not produce a visible badge
+      expect(document.querySelector('[data-testid="deck-streak"]')).not.toBeInTheDocument();
+      // No stray "NaN" text anywhere in the rendered output
+      expect(document.body.textContent).not.toMatch(/NaN/);
+    });
+
+    it('does not render streak badge when currentStreak is 0', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-zero-streak',
+          name: 'Zero Streak Deck',
+          matchesPlayed: 5,
+          currentStreak: 0,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Zero Streak Deck')).toBeInTheDocument();
+      });
+
+      expect(document.querySelector('[data-testid="deck-streak"]')).not.toBeInTheDocument();
+    });
+
+    it('renders a win-streak badge when currentStreak is positive', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-win-streak',
+          name: 'Win Streak Deck',
+          matchesPlayed: 5,
+          currentStreak: 3,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Win Streak Deck')).toBeInTheDocument();
+      });
+
+      const badge = document.querySelector('[data-testid="deck-streak"]');
+      expect(badge).toBeInTheDocument();
+      expect(badge?.textContent).toMatch(/3W/);
+      expect(badge?.className).toMatch(/win-streak/);
+      expect(document.body.textContent).not.toMatch(/NaN/);
+    });
+
+    it('renders a loss-streak badge when currentStreak is negative', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-loss-streak',
+          name: 'Loss Streak Deck',
+          matchesPlayed: 4,
+          currentStreak: -2,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Loss Streak Deck')).toBeInTheDocument();
+      });
+
+      const badge = document.querySelector('[data-testid="deck-streak"]');
+      expect(badge).toBeInTheDocument();
+      expect(badge?.textContent).toMatch(/2L/);
+      expect(badge?.className).toMatch(/loss-streak/);
+      expect(document.body.textContent).not.toMatch(/NaN/);
+    });
+  });
+
+  describe('data-testid coverage (DEFECT-3)', () => {
+    it('deck cards render data-testid="deck-card-{id}"', async () => {
+      mockDecks.getDecks.mockResolvedValue(createMockDeckList());
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
+      });
+
+      expect(document.querySelector('[data-testid="deck-card-deck-1"]')).toBeInTheDocument();
+      expect(document.querySelector('[data-testid="deck-card-deck-2"]')).toBeInTheDocument();
+      expect(document.querySelector('[data-testid="deck-card-deck-3"]')).toBeInTheDocument();
+    });
+
+    it('edit buttons render data-testid="deck-edit-{id}"', async () => {
+      mockDecks.getDecks.mockResolvedValue(createMockDeckList());
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
+      });
+
+      expect(document.querySelector('[data-testid="deck-edit-deck-1"]')).toBeInTheDocument();
+    });
+
+    it('clicking deck-card navigates to /deck-builder/:id', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({ id: 'abc123', name: 'Click Me Deck' }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Click Me Deck')).toBeInTheDocument();
+      });
+
+      const card = document.querySelector('[data-testid="deck-card-abc123"]') as HTMLElement;
+      fireEvent.click(card);
+
+      expect(mockNavigate).toHaveBeenCalledWith('/deck-builder/abc123');
+    });
+
+    it('clicking deck-edit navigates to /deck-builder/:id', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({ id: 'def456', name: 'Edit Me Deck' }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Edit Me Deck')).toBeInTheDocument();
+      });
+
+      const editBtn = document.querySelector('[data-testid="deck-edit-def456"]') as HTMLElement;
+      fireEvent.click(editBtn);
+
+      expect(mockNavigate).toHaveBeenCalledWith('/deck-builder/def456');
+    });
+  });
+
   describe('Create Deck Modal — Format Select Positioning (#2011)', () => {
     it('AC1: Format select renders inside modal without scrolling ancestor', async () => {
       mockDecks.getDecks.mockResolvedValue(createMockDeckList());
