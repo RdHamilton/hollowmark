@@ -97,7 +97,7 @@ const BffDraftHistory = () => {
               <tbody>
                 {drafts.map((draft) => (
                   <tr key={draft.id}>
-                    <td>{formatDate(draft.drafted_at)}</td>
+                    <td>{formatDate(draft.started_at)}</td>
                     <td>{draft.set_code}</td>
                     <td>{draft.wins}</td>
                     <td>{draft.losses}</td>
