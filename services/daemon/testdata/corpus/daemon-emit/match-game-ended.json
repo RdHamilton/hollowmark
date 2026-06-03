@@ -1,0 +1,18 @@
+{
+  "type": "match.game_ended",
+  "account_id": "test-account-001",
+  "event_id": "11111111-0000-0000-0000-000000000002",
+  "session_id": "22222222-0000-0000-0000-000000000001",
+  "sequence": 2,
+  "occurred_at": "2026-01-01T00:00:00Z",
+  "payload": {
+    "match_id": "11111111-0000-4000-8000-000000000122",
+    "game_number": 1,
+    "winning_team_id": 1,
+    "turn_count": 8,
+    "duration_secs": 240,
+    "player_on_play": true,
+    "partial": false,
+    "life_changes": []
+  }
+}
