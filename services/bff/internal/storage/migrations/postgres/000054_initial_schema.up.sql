@@ -544,7 +544,11 @@ CREATE TABLE IF NOT EXISTS accounts (
 
 CREATE INDEX IF NOT EXISTS idx_accounts_is_default ON accounts(is_default);
 -- Only one default account allowed
-CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_default ON accounts(is_default) WHERE is_default = 1;
+-- accounts.is_default is BOOLEAN (see column definition ~line 535); the partial-index predicate
+-- MUST use TRUE/FALSE, not 1/0 -- PG16 rejects boolean = integer. Do not change this back to
+-- "= 1": that is the exact error from commit c47aff5d (PR #1034) that broke Schema-000054-Compat.
+-- See: https://github.com/RdHamilton/vault-mtg-tickets/issues/620
+CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_default ON accounts(is_default) WHERE is_default = TRUE;
 
 -- Matches: match results and metadata
 CREATE TABLE IF NOT EXISTS matches (
