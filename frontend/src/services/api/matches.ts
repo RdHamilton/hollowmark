@@ -93,6 +93,30 @@ export async function getStats(filter: StatsFilterRequest = {}): Promise<Statist
 }
 
 /**
+ * Deck performance row returned by GET /api/v1/stats/deck-performance.
+ * Each row represents a deck the user has played, with win/loss/draw counts.
+ */
+export interface DeckPerformanceRow {
+  deck_id: string;
+  deck_name: string;
+  format: string;
+  wins: number;
+  losses: number;
+  draws: number;
+  total_games: number;
+}
+
+/**
+ * Get per-deck win/loss/draw statistics for the authenticated user.
+ * Hits GET /api/v1/stats/deck-performance (Clerk-auth protected).
+ * Returns decks ordered by total_games DESC.
+ */
+export async function getDeckPerformance(): Promise<DeckPerformanceRow[]> {
+  const result = await bffGet<{ data: DeckPerformanceRow[] }>('/stats/deck-performance');
+  return result?.data ?? [];
+}
+
+/**
  * Get trend analysis over time.
  */
 export async function getTrendAnalysis(request: TrendAnalysisRequest): Promise<unknown> {

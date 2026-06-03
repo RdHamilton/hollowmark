@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import ApiKeysPage from './ApiKeys';
 
@@ -76,5 +76,21 @@ describe('ApiKeysPage', () => {
     expect(
       screen.getByText(/full key is only shown once/i)
     ).toBeInTheDocument();
+  });
+
+  it('does not show fallback initially (Clerk component renders content)', () => {
+    renderPage();
+    expect(screen.queryByTestId('api-keys-fallback')).not.toBeInTheDocument();
+  });
+
+  it('fallback is not shown when Clerk component has rendered content', async () => {
+    vi.useFakeTimers();
+    renderPage();
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+    // The mock renders a div with children, so the fallback should not appear
+    expect(screen.queryByTestId('api-keys-fallback')).not.toBeInTheDocument();
+    vi.useRealTimers();
   });
 });

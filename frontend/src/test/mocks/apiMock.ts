@@ -41,6 +41,7 @@ export const mockMatches = {
   getRankProgression: vi.fn((() => Promise.resolve({} as unknown)) as MockFn),
   getRankProgressionTimeline: vi.fn((() => Promise.resolve({} as unknown)) as MockFn),
   getMatchupMatrix: vi.fn((() => Promise.resolve({} as unknown)) as MockFn),
+  getDeckPerformance: vi.fn((() => Promise.resolve([] as unknown[])) as MockFn),
   getFormatDistribution: vi.fn((() => Promise.resolve({} as unknown)) as MockFn),
   exportMatches: vi.fn((() => Promise.resolve([] as unknown[])) as MockFn),
   statsFilterToRequest: vi.fn(((filter: unknown) => filter) as MockFn),
