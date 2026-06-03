@@ -62,23 +62,37 @@ export interface BffDraftRatingsResult {
  *
  * Targets: GET /api/v1/draft-ratings/{setCode}/{format}
  *
+ * This route is mounted under the BFF's Clerk-auth group (RequireClerkAuth), so
+ * the request MUST carry an `Authorization: Bearer <clerk-token>` header — without
+ * it the BFF returns 401 {"error":"unauthorized"} and the advisor renders no
+ * names/grades.  Callers pass the current Clerk session JWT (obtained from
+ * useAuth().getToken at the call site); when null/empty the header is omitted
+ * (the request will 401, which the caller surfaces as an error).
+ *
  * Note: The BFF returns the JSON envelope directly (not wrapped in { data: ... }),
  * so we issue a raw fetch rather than using apiClient.getRaw which unwraps a
  * data envelope.
  *
  * @param setCode   Three-letter MTG set code, e.g. "ONE"
- * @param format    Draft format, e.g. "PremierDraft"
+ * @param format    Draft format, e.g. "PremierDraft" (must match the DB draft_format key exactly)
+ * @param token     Clerk session JWT, or null when unavailable
  */
 export async function getDraftRatings(
   setCode: string,
-  format: string
+  format: string,
+  token: string | null
 ): Promise<BffDraftRatingsResult> {
   const { baseUrl } = getApiConfig();
   const url = `${baseUrl}/draft-ratings/${encodeURIComponent(setCode)}/${encodeURIComponent(format)}`;
 
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const response = await fetch(url, {
     method: 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
   });
 
   if (!response.ok) {
