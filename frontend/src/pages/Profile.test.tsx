@@ -85,9 +85,11 @@ describe('Profile — unauthenticated state', () => {
 // ---------------------------------------------------------------------------
 
 describe('Profile — display (AC1)', () => {
-  it('renders the page title', () => {
+  it('renders the page title as "Profile"', () => {
     renderWithRouter(<Profile useUserHook={signedInHook()} />);
-    expect(screen.getByTestId('profile-title')).toHaveTextContent('User Profile');
+    expect(screen.getByTestId('profile-title')).toHaveTextContent('Profile');
+    // Title must not say "User Profile" (internal/legacy string)
+    expect(screen.getByTestId('profile-title').textContent).not.toBe('User Profile');
   });
 
   it('renders the avatar with imageUrl as src', () => {

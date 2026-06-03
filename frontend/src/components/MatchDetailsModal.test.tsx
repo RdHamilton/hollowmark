@@ -204,25 +204,54 @@ describe('MatchDetailsModal', () => {
   });
 
   describe('error state', () => {
-    it('shows error message when games fail to load', async () => {
+    it('shows friendly error message when games fail to load due to network error', async () => {
       mockGetMatchGames.mockRejectedValue(new Error('Network error'));
 
       render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
 
       await waitFor(() => {
-        expect(screen.getByText(/Failed to load games: Network error/i)).toBeInTheDocument();
+        const errorEl = document.querySelector('.error-message');
+        expect(errorEl).toBeInTheDocument();
+        // friendlyErrorMessage maps "Network error" -> friendly copy, not raw string
+        expect(errorEl?.textContent).not.toContain('Network error');
+        expect(errorEl?.textContent).toMatch(/Failed to load games:/i);
+      });
+    });
+
+    it('shows VaultMTG-specific message for service unavailable error', async () => {
+      mockGetMatchGames.mockRejectedValue(new Error('service unavailable'));
+
+      render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
+
+      await waitFor(() => {
+        const errorEl = document.querySelector('.error-message');
+        expect(errorEl).toBeInTheDocument();
+        expect(errorEl?.textContent).toContain("couldn't reach VaultMTG");
       });
     });
   });
 
   describe('empty state', () => {
-    it('shows message when no games available', async () => {
+    it('shows explanatory message when no games available', async () => {
       mockGetMatchGames.mockResolvedValue([]);
 
       render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
 
       await waitFor(() => {
-        expect(screen.getByText(/No game data available/i)).toBeInTheDocument();
+        expect(
+          screen.getByText(/didn.*t capture game events/i)
+        ).toBeInTheDocument();
+      });
+    });
+
+    it('empty-state message mentions VaultMTG', async () => {
+      mockGetMatchGames.mockResolvedValue([]);
+
+      render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('no-games-message')).toBeInTheDocument();
+        expect(screen.getByTestId('no-games-message').textContent).toContain('VaultMTG');
       });
     });
   });
