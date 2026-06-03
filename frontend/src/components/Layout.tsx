@@ -6,7 +6,7 @@ import AuthBar from './AuthBar';
 import DaemonHealthIndicator, { type DaemonHealthState } from './DaemonHealthIndicator';
 import { OnboardingModal } from './OnboardingModal';
 import { usePostHogIdentity } from '@/hooks/usePostHogIdentity';
-import { useDaemonOnboarding } from '@/hooks/useDaemonOnboarding';
+import { useDaemonOnboarding, type AccountDataState, SESSION_HAS_ACCOUNT_DATA_KEY } from '@/hooks/useDaemonOnboarding';
 import ReportBugButton from './ReportBugButton';
 import vaultMark from '@/assets/logo-vaultmtg-mark.svg';
 import { getHomeSummary } from '@/services/api/bffHomeSummary';
@@ -25,39 +25,94 @@ const Layout = ({ children }: LayoutProps) => {
   // Track daemon health status from the indicator so the onboarding hook can use it.
   const [daemonStatus, setDaemonStatus] = useState<DaemonHealthState>('loading');
 
-  // Whether the account already has BFF data (matches/drafts/decks).
-  // Fetched once when we know the user is signed in and daemon is disconnected.
-  // A returning user with existing data must never see the first-run onboarding flow.
-  const [hasAccountData, setHasAccountData] = useState(false);
-  const dataCheckDoneRef = useRef(false);
+  // Tri-state account data check.
+  //
+  // 'pending'  — fetch not yet started or in flight; blocks the modal (fail-closed)
+  // 'has-data' — summary confirmed all_time.matches > 0; returning user, never show modal
+  // 'empty'    — summary positively confirmed 0 matches; genuine new user candidate
+  //
+  // Seeded from sessionStorage so that route navigation does not re-fetch on every
+  // Layout mount. Sign-out clears the session entry (see effect below).
+  const [accountDataState, setAccountDataState] = useState<AccountDataState>(() => {
+    try {
+      return sessionStorage.getItem(SESSION_HAS_ACCOUNT_DATA_KEY) === 'true'
+        ? 'has-data'
+        : 'pending';
+    } catch {
+      return 'pending';
+    }
+  });
 
+  // Guards the one-per-session fetch so it never fires twice (regardless of
+  // how many times Layout re-renders or the user navigates).
+  const dataCheckDoneRef = useRef<boolean>(
+    (() => {
+      try {
+        return sessionStorage.getItem(SESSION_HAS_ACCOUNT_DATA_KEY) === 'true';
+      } catch {
+        return false;
+      }
+    })()
+  );
+
+  // Fire getHomeSummary as soon as the user is signed in — do NOT gate on
+  // daemonStatus.  Gating on daemonStatus reintroduces the original async race:
+  // daemonStatus can resolve before or after the summary fetch, making the
+  // 'pending' guard unreliable.
   useEffect(() => {
-    // Only run the check when: signed in, daemon disconnected (the auto-show
-    // condition), and we haven't already resolved it this session.
-    if (!isSignedIn || daemonStatus !== 'disconnected' || dataCheckDoneRef.current) return;
+    if (!isSignedIn || dataCheckDoneRef.current) return;
     dataCheckDoneRef.current = true;
 
     const checkAccountData = async () => {
       try {
         const token = await getToken();
-        if (!token) return;
+        if (!token) {
+          // No token yet — keep 'pending' so the modal stays blocked.
+          return;
+        }
         const summary = await getHomeSummary(token);
         if (summary.all_time.matches > 0) {
-          setHasAccountData(true);
+          // Returning user confirmed — persist to sessionStorage so navigation
+          // does not re-race on the next Layout mount.
+          try {
+            sessionStorage.setItem(SESSION_HAS_ACCOUNT_DATA_KEY, 'true');
+          } catch {
+            // ignore storage errors
+          }
+          setAccountDataState('has-data');
+        } else {
+          // Positively confirmed zero — genuine new-user candidate.
+          // Do NOT write sessionStorage for 'empty'; only 'has-data' is cached.
+          setAccountDataState('empty');
         }
       } catch {
-        // If the summary endpoint fails or is not yet live, default to
-        // hasAccountData=false (conservative: show onboarding for truly new users).
+        // Network error or BFF unavailable → stay 'pending' (fail-closed).
+        // Never show the modal when account data state is uncertain.
+        // The user can still manually open via the daemon status indicator.
       }
     };
 
     void checkAccountData();
-  }, [isSignedIn, daemonStatus, getToken]);
+  }, [isSignedIn, getToken]);
 
-  // Onboarding modal logic: show when daemon disconnected on first login AND
-  // the account has no existing data. Returning users are never shown this flow.
+  // Reset on sign-out: if the user signs out within the same tab, clear the
+  // ref and the session entry so that a subsequent sign-in re-fetches instead
+  // of inheriting the prior session's state.
+  useEffect(() => {
+    if (isSignedIn) return; // only act on the transition to signed-out
+    dataCheckDoneRef.current = false;
+    setAccountDataState('pending');
+    try {
+      sessionStorage.removeItem(SESSION_HAS_ACCOUNT_DATA_KEY);
+    } catch {
+      // ignore storage errors
+    }
+  }, [isSignedIn]);
+
+  // Onboarding modal logic: autoShow fires ONLY when accountDataState === 'empty'
+  // AND daemonStatus === 'disconnected'.  Both 'pending' and 'has-data' block it.
   const { isOpen: onboardingOpen, open: openOnboarding, dismiss: dismissOnboarding, complete: completeOnboarding } =
-    useDaemonOnboarding(daemonStatus, isSignedIn ?? false, hasAccountData);
+    useDaemonOnboarding(daemonStatus, isSignedIn ?? false, accountDataState);
 
   const handleDaemonStatusChange = useCallback((status: DaemonHealthState) => {
     setDaemonStatus(status);
@@ -260,7 +315,9 @@ const Layout = ({ children }: LayoutProps) => {
       {/* Footer with Stats */}
       <Footer />
 
-      {/* Daemon onboarding modal — shown on first login if daemon not connected */}
+      {/* Daemon onboarding modal — shown on first login if daemon not connected
+          and account has no existing data (accountDataState === 'empty').
+          'pending' and 'has-data' both suppress the modal. */}
       <OnboardingModal
         isOpen={onboardingOpen}
         onDismiss={dismissOnboarding}
