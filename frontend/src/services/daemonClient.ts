@@ -1,11 +1,11 @@
 /**
  * Daemon API client — communicates with the local MTGA log-parsing daemon.
  *
- * Uses VITE_DAEMON_URL (defaults to http://localhost:9001/api/v1).
- * Port 9001 matches the daemon's localapi server (see
- * services/daemon/internal/localapi). It is also the same port hardcoded
- * in Setup.tsx for the /health probe, intentionally unified so the SPA
- * only ever has to discover one local daemon port.
+ * Targets the daemon's local API at the URL derived in `./daemonConfig`
+ * from the single coupling point `VITE_DAEMON_URL` (defaults to the stable
+ * port 9001; staging builds set it to 9011). The same source-of-truth feeds
+ * the Setup /health probe and the Copy-Diagnostics fetch, so the SPA only
+ * ever has to discover one local daemon port per channel.
  *
  * Surface (post Phase 2 PR #15): `get` + `post` only. Two modules call us:
  *   - system.ts        (the surviving /system/* + /feedback/ml-training routes)
@@ -21,13 +21,14 @@
 
 import type { ApiConfig, ApiError } from './apiClient';
 import { ApiRequestError, getApiKey } from './apiClient';
+import { daemonApiBaseUrl } from './daemonConfig';
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
 const config: ApiConfig = {
-  baseUrl: import.meta.env.VITE_DAEMON_URL ?? 'http://localhost:9001/api/v1',
+  baseUrl: daemonApiBaseUrl,
   timeout: 30000,
 };
 

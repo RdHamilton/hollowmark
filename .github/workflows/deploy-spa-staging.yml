@@ -104,6 +104,13 @@ jobs:
         run: npm run build
         env:
           VITE_BFF_URL: ${{ vars.VITE_BFF_URL }}
+          # Staging daemon binds the staging local-API port 9011 (stable=9001) —
+          # see internal/install + services/daemon/internal/localapi. Without this
+          # the env-aware SPA client (services/daemonConfig.ts) falls back to the
+          # stable port 9001 and the staging install cannot reach its daemon.
+          # Value is a loopback port only — not a secret. Coupled to the daemon
+          # 9011-bind change (ticket #667); must deploy together.
+          VITE_DAEMON_URL: ${{ vars.VITE_DAEMON_URL || 'http://localhost:9011/api/v1' }}
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
           VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
           VITE_SENTRY_DSN: ${{ steps.ssm.outputs.sentry_dsn }}
