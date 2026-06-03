@@ -98,10 +98,15 @@ const Layout = ({ children }: LayoutProps) => {
   // Reset on sign-out: if the user signs out within the same tab, clear the
   // ref and the session entry so that a subsequent sign-in re-fetches instead
   // of inheriting the prior session's state.
+  //
+  // setAccountDataState('pending') is intentionally omitted here — calling
+  // setState synchronously inside an effect triggers react-hooks/set-state-in-effect.
+  // It is also unnecessary: autoShow requires isSignedIn === true, so a stale
+  // signed-out accountDataState value cannot trigger the modal.  dataCheckDoneRef
+  // reset guarantees the next sign-in re-fetches from scratch.
   useEffect(() => {
     if (isSignedIn) return; // only act on the transition to signed-out
     dataCheckDoneRef.current = false;
-    setAccountDataState('pending');
     try {
       sessionStorage.removeItem(SESSION_HAS_ACCOUNT_DATA_KEY);
     } catch {
