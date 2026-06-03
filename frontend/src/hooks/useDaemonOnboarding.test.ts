@@ -1,10 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useDaemonOnboarding } from './useDaemonOnboarding';
+import { useDaemonOnboarding, type AccountDataState } from './useDaemonOnboarding';
 
 const STORAGE_KEY = 'vaultmtg_onboarding_dismissed';
 const STORAGE_COMPLETED_KEY = 'vaultmtg_onboarding_completed';
 
+/**
+ * useDaemonOnboarding — tri-state AccountDataState tests
+ *
+ * The hook now takes (daemonStatus, isSignedIn, accountDataState: AccountDataState).
+ * autoShow fires ONLY when accountDataState === 'empty' AND daemonStatus === 'disconnected'.
+ * Both 'pending' and 'has-data' suppress the modal.
+ */
 describe('useDaemonOnboarding', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -14,81 +21,80 @@ describe('useDaemonOnboarding', () => {
     localStorage.clear();
   });
 
-  describe('auto-show behavior', () => {
-    it('shows modal when signed in and daemon is disconnected and not seen before', () => {
+  // ── AccountDataState tri-state tests ────────────────────────────────────────
+
+  describe('AccountDataState tri-state — auto-show gating', () => {
+    it("'empty' + disconnected + signed-in = modal shows (genuine new user)", () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true)
+        useDaemonOnboarding('disconnected', true, 'empty')
       );
       expect(result.current.isOpen).toBe(true);
     });
 
-    it('does NOT show modal when daemon is connected', () => {
+    it("'pending' + disconnected + signed-in = modal BLOCKED (fetch in flight)", () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('connected', true)
+        useDaemonOnboarding('disconnected', true, 'pending')
       );
       expect(result.current.isOpen).toBe(false);
     });
 
-    it('does NOT show modal when daemon is loading (give it time to resolve)', () => {
+    it("'has-data' + disconnected + signed-in = modal BLOCKED (returning user)", () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('loading', true)
+        useDaemonOnboarding('disconnected', true, 'has-data')
       );
       expect(result.current.isOpen).toBe(false);
     });
 
-    it('does NOT show modal when daemon is in error state', () => {
-      const { result } = renderHook(() =>
-        useDaemonOnboarding('error', true)
+    it("'pending' blocks modal even when daemon is disconnected — slow-fetch safety", () => {
+      // Simulate: user loads the app, fetch is in flight ('pending'), daemon already
+      // reports disconnected.  Modal must NOT pop while the fetch is unresolved.
+      const { result, rerender } = renderHook(
+        ({ state }: { state: AccountDataState }) =>
+          useDaemonOnboarding('disconnected', true, state),
+        { initialProps: { state: 'pending' as AccountDataState } }
       );
-      expect(result.current.isOpen).toBe(false);
-    });
 
-    it('does NOT show modal when user is NOT signed in', () => {
-      const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', false)
-      );
+      // While 'pending' — no modal
       expect(result.current.isOpen).toBe(false);
-    });
 
-    it('does NOT show modal when previously dismissed', () => {
-      localStorage.setItem(STORAGE_KEY, 'true');
-      const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true)
-      );
-      expect(result.current.isOpen).toBe(false);
-    });
-
-    it('does NOT show modal when previously completed', () => {
-      localStorage.setItem(STORAGE_COMPLETED_KEY, 'true');
-      const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true)
-      );
-      expect(result.current.isOpen).toBe(false);
-    });
-
-    // Bug 1 — returning users with BFF data must never see first-run onboarding
-    it('does NOT show modal when account already has data (returning user)', () => {
-      const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, /* hasAccountData */ true)
-      );
-      expect(result.current.isOpen).toBe(false);
-    });
-
-    it('shows modal when account has no data and daemon is disconnected (genuine new user)', () => {
-      const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, /* hasAccountData */ false)
-      );
+      // After fetch resolves as 'empty' — modal should fire
+      rerender({ state: 'empty' });
       expect(result.current.isOpen).toBe(true);
     });
 
-    it('manual open still works even when account has data (user explicitly opens from status indicator)', () => {
-      const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, /* hasAccountData */ true)
+    it("'pending' stays closed if fetch errors (fail-closed behavior)", () => {
+      // Caller keeps state at 'pending' on error — modal never shows.
+      const { result, rerender } = renderHook(
+        ({ state }: { state: AccountDataState }) =>
+          useDaemonOnboarding('disconnected', true, state),
+        { initialProps: { state: 'pending' as AccountDataState } }
       );
-      // Auto-show suppressed because account has data
+
       expect(result.current.isOpen).toBe(false);
 
-      // But user can still manually open via the status indicator
+      // Fetch errors → caller leaves state at 'pending'
+      rerender({ state: 'pending' });
+      expect(result.current.isOpen).toBe(false);
+    });
+
+    it("manual open() works regardless of accountDataState (user explicitly clicks status indicator)", () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', true, 'has-data')
+      );
+      expect(result.current.isOpen).toBe(false);
+
+      act(() => {
+        result.current.open();
+      });
+      expect(result.current.isOpen).toBe(true);
+    });
+
+    it("manual open() works when state is 'pending' too", () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', true, 'pending')
+      );
+      expect(result.current.isOpen).toBe(false);
+
       act(() => {
         result.current.open();
       });
@@ -96,10 +102,60 @@ describe('useDaemonOnboarding', () => {
     });
   });
 
+  // ── Legacy auto-show behavior (daemonStatus gates) ──────────────────────────
+
+  describe('auto-show behavior — daemonStatus gates', () => {
+    it('does NOT show modal when daemon is connected (even if empty)', () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('connected', true, 'empty')
+      );
+      expect(result.current.isOpen).toBe(false);
+    });
+
+    it('does NOT show modal when daemon is loading', () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('loading', true, 'empty')
+      );
+      expect(result.current.isOpen).toBe(false);
+    });
+
+    it('does NOT show modal when daemon is in error state', () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('error', true, 'empty')
+      );
+      expect(result.current.isOpen).toBe(false);
+    });
+
+    it('does NOT show modal when user is NOT signed in', () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', false, 'empty')
+      );
+      expect(result.current.isOpen).toBe(false);
+    });
+
+    it('does NOT show modal when previously dismissed (localStorage)', () => {
+      localStorage.setItem(STORAGE_KEY, 'true');
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', true, 'empty')
+      );
+      expect(result.current.isOpen).toBe(false);
+    });
+
+    it('does NOT show modal when previously completed (localStorage)', () => {
+      localStorage.setItem(STORAGE_COMPLETED_KEY, 'true');
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', true, 'empty')
+      );
+      expect(result.current.isOpen).toBe(false);
+    });
+  });
+
+  // ── hasSeenOnboarding ───────────────────────────────────────────────────────
+
   describe('hasSeenOnboarding', () => {
     it('is false initially when no localStorage entry', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('connected', true)
+        useDaemonOnboarding('connected', true, 'empty')
       );
       expect(result.current.hasSeenOnboarding).toBe(false);
     });
@@ -107,7 +163,7 @@ describe('useDaemonOnboarding', () => {
     it('is true when dismissed key is set in localStorage', () => {
       localStorage.setItem(STORAGE_KEY, 'true');
       const { result } = renderHook(() =>
-        useDaemonOnboarding('connected', true)
+        useDaemonOnboarding('connected', true, 'empty')
       );
       expect(result.current.hasSeenOnboarding).toBe(true);
     });
@@ -115,16 +171,18 @@ describe('useDaemonOnboarding', () => {
     it('is true when completed key is set in localStorage', () => {
       localStorage.setItem(STORAGE_COMPLETED_KEY, 'true');
       const { result } = renderHook(() =>
-        useDaemonOnboarding('connected', true)
+        useDaemonOnboarding('connected', true, 'empty')
       );
       expect(result.current.hasSeenOnboarding).toBe(true);
     });
   });
 
+  // ── open() ──────────────────────────────────────────────────────────────────
+
   describe('open()', () => {
     it('opens the modal regardless of daemon status', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('connected', true)
+        useDaemonOnboarding('connected', true, 'empty')
       );
       expect(result.current.isOpen).toBe(false);
 
@@ -137,7 +195,7 @@ describe('useDaemonOnboarding', () => {
 
     it('can re-open after dismiss', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true)
+        useDaemonOnboarding('disconnected', true, 'empty')
       );
 
       act(() => {
@@ -152,10 +210,12 @@ describe('useDaemonOnboarding', () => {
     });
   });
 
+  // ── dismiss() ───────────────────────────────────────────────────────────────
+
   describe('dismiss()', () => {
     it('closes the modal', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true)
+        useDaemonOnboarding('disconnected', true, 'empty')
       );
       expect(result.current.isOpen).toBe(true);
 
@@ -168,7 +228,7 @@ describe('useDaemonOnboarding', () => {
 
     it('sets hasSeenOnboarding to true', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true)
+        useDaemonOnboarding('disconnected', true, 'empty')
       );
 
       act(() => {
@@ -180,7 +240,7 @@ describe('useDaemonOnboarding', () => {
 
     it('persists dismissed state to localStorage', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true)
+        useDaemonOnboarding('disconnected', true, 'empty')
       );
 
       act(() => {
@@ -192,9 +252,9 @@ describe('useDaemonOnboarding', () => {
 
     it('prevents modal from re-appearing when daemon is still disconnected', () => {
       const { result, rerender } = renderHook(
-        ({ status, signed }: { status: 'disconnected' | 'connected'; signed: boolean }) =>
-          useDaemonOnboarding(status, signed),
-        { initialProps: { status: 'disconnected' as const, signed: true } }
+        ({ status, state }: { status: 'disconnected' | 'connected'; state: AccountDataState }) =>
+          useDaemonOnboarding(status, true, state),
+        { initialProps: { status: 'disconnected' as const, state: 'empty' as AccountDataState } }
       );
 
       act(() => {
@@ -202,15 +262,17 @@ describe('useDaemonOnboarding', () => {
       });
 
       // Re-render with same disconnected status — modal should stay closed
-      rerender({ status: 'disconnected', signed: true });
+      rerender({ status: 'disconnected', state: 'empty' });
       expect(result.current.isOpen).toBe(false);
     });
   });
 
+  // ── complete() ──────────────────────────────────────────────────────────────
+
   describe('complete()', () => {
     it('closes the modal', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true)
+        useDaemonOnboarding('disconnected', true, 'empty')
       );
 
       act(() => {
@@ -222,7 +284,7 @@ describe('useDaemonOnboarding', () => {
 
     it('sets hasSeenOnboarding to true', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true)
+        useDaemonOnboarding('disconnected', true, 'empty')
       );
 
       act(() => {
@@ -234,7 +296,7 @@ describe('useDaemonOnboarding', () => {
 
     it('persists completed state to localStorage', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true)
+        useDaemonOnboarding('disconnected', true, 'empty')
       );
 
       act(() => {
