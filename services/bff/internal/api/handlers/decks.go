@@ -101,7 +101,7 @@ type deckListItemResponse struct {
 	MatchesWon     int      `json:"matchesWon"`
 	GamesPlayed    int      `json:"gamesPlayed"`
 	GamesWon       int      `json:"gamesWon"`
-	WinRate        float64  `json:"winRate"`
+	WinRate        float64  `json:"matchWinRate"`
 	IsAppCreated   bool     `json:"isAppCreated"`
 	CreatedAt      string   `json:"createdAt"`
 	ModifiedAt     string   `json:"modifiedAt"`
