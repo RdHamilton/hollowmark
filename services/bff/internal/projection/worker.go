@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,6 +82,18 @@ type questStore interface {
 // deckStore writes deck snapshots to the decks and deck_cards tables.
 type deckStore interface {
 	UpsertDeck(ctx context.Context, u repository.DeckUpsert) error
+}
+
+// draftDeckCreator creates a deck row from a completed draft session's picks.
+// It is implemented by *repository.DecksRepository.
+type draftDeckCreator interface {
+	CreateDraftDeck(ctx context.Context, in repository.CreateDraftDeckInput) (*repository.DeckDetailRow, error)
+}
+
+// draftPickReader reads the picked card IDs for a session from draft_picks.
+// It is implemented by *repository.DraftSessionsRepository.
+type draftPickReader interface {
+	PickCardIDsForSession(ctx context.Context, sessionID string) ([]string, error)
 }
 
 // gamePlayStore writes per-game result records and life-change rows.
@@ -163,6 +176,8 @@ type Worker struct {
 	accounts   accountStore
 	matches    matchStore
 	drafts     draftStore
+	draftDecks draftDeckCreator
+	draftPicks draftPickReader
 	collection collectionStore
 	inventory  inventoryStore
 	quests     questStore
@@ -235,6 +250,22 @@ func (w *Worker) WithCounterStore(store counterStore) *Worker {
 // WithDLQ wires the dead-letter store into w and returns w.
 func (w *Worker) WithDLQ(store dlqStore) *Worker {
 	w.dlq = store
+	return w
+}
+
+// WithDraftDeckCreator wires the draft-deck creation store into w and returns w.
+// When wired, a draft.completed event automatically creates a deck row from the
+// session's draft_picks (the draft → deck linkage per ADR-051).
+func (w *Worker) WithDraftDeckCreator(creator draftDeckCreator) *Worker {
+	w.draftDecks = creator
+	return w
+}
+
+// WithDraftPickReader wires the draft-picks reader into w and returns w.
+// Required alongside WithDraftDeckCreator — it supplies the card IDs for the
+// new deck from draft_picks.
+func (w *Worker) WithDraftPickReader(reader draftPickReader) *Worker {
+	w.draftPicks = reader
 	return w
 }
 
@@ -342,11 +373,26 @@ func (w *Worker) projectRow(ctx context.Context, row *repository.DaemonEventRow)
 			outcome = outcomeSkippedMalformed
 		}
 
-	case "draft.started", "draft.completed":
+	case "draft.started":
 		writeErr = w.projectDraftSession(ctx, row)
 		if writeErr != nil {
 			log.Printf("[projection] projectDraftSession id=%d type=%s: %v", row.ID, row.EventType, writeErr)
 			outcome = outcomeSkippedMalformed
+		}
+
+	case "draft.completed":
+		writeErr = w.projectDraftSession(ctx, row)
+		if writeErr != nil {
+			log.Printf("[projection] projectDraftSession id=%d type=%s: %v", row.ID, row.EventType, writeErr)
+			outcome = outcomeSkippedMalformed
+			break
+		}
+		// Mint a draft deck from the session's picks once the draft completes.
+		// Soft failure: if deck creation fails, the session is still projected.
+		if w.draftDecks != nil && w.draftPicks != nil {
+			if deckErr := w.projectDraftDeck(ctx, row); deckErr != nil {
+				log.Printf("[projection] projectDraftDeck id=%d: %v — draft session projected without deck", row.ID, deckErr)
+			}
 		}
 
 	case "draft.pick":
@@ -793,6 +839,90 @@ func (w *Worker) projectDraftPick(ctx context.Context, row *repository.DaemonEve
 	}
 
 	return nil
+}
+
+// projectDraftDeck creates a decks row from the picks accumulated in
+// draft_picks for the session that just completed. It is called as a soft
+// follow-on after projectDraftSession succeeds on a draft.completed event.
+//
+// Idempotency: CreateDraftDeck checks whether a deck already exists for the
+// (account_id, draft_session_id) pair and returns it if so — replay is safe.
+//
+// Card IDs: draft_picks.card_id is stored as TEXT (arena ID string). We parse
+// each value to int before passing to CreateDraftDeck; unparseable rows are
+// skipped with a log warning so a single bad pick does not abort deck creation.
+func (w *Worker) projectDraftDeck(ctx context.Context, row *repository.DaemonEventRow) error {
+	var p draftPayload
+	if err := json.Unmarshal(row.Payload, &p); err != nil {
+		return fmt.Errorf("unmarshal draft payload for deck creation: %w", err)
+	}
+	if p.SessionID == "" {
+		return fmt.Errorf("draft.completed payload missing session_id — cannot create deck")
+	}
+
+	accountID, err := w.accounts.GetOrCreateByClientID(ctx, row.AccountID, row.UserID)
+	if err != nil {
+		return fmt.Errorf("resolve account: %w", err)
+	}
+
+	cardIDStrs, err := w.draftPicks.PickCardIDsForSession(ctx, p.SessionID)
+	if err != nil {
+		return fmt.Errorf("PickCardIDsForSession: %w", err)
+	}
+	if len(cardIDStrs) == 0 {
+		log.Printf("[projection] projectDraftDeck: no picks found for session %s — skipping deck creation", p.SessionID)
+		return nil
+	}
+
+	cardIDs := make([]int, 0, len(cardIDStrs))
+	for _, s := range cardIDStrs {
+		n, convErr := strconv.Atoi(strings.TrimSpace(s))
+		if convErr != nil || n <= 0 {
+			log.Printf("[projection] projectDraftDeck: skip unparseable card_id %q: %v", s, convErr)
+			continue
+		}
+		cardIDs = append(cardIDs, n)
+	}
+	if len(cardIDs) == 0 {
+		log.Printf("[projection] projectDraftDeck: all card_ids unparseable for session %s — skipping", p.SessionID)
+		return nil
+	}
+
+	// Derive a human-readable deck name from the event name.
+	deckName := deckNameForDraft(p.EventName, p.SetCode)
+
+	_, createErr := w.draftDecks.CreateDraftDeck(ctx, repository.CreateDraftDeckInput{
+		AccountID:      accountID,
+		DraftSessionID: p.SessionID,
+		Name:           deckName,
+		Format:         "Limited",
+		CardIDs:        cardIDs,
+	})
+	if createErr != nil {
+		return fmt.Errorf("CreateDraftDeck session=%s: %w", p.SessionID, createErr)
+	}
+
+	log.Printf("[projection] projectDraftDeck: created deck for session %s (%d cards)", p.SessionID, len(cardIDs))
+	return nil
+}
+
+// deckNameForDraft returns a human-readable deck name for a draft deck.
+// Examples: "QuickDraft SOS" → "QuickDraft SOS Draft Deck",
+//
+//	"PremierDraft_BLB" → "PremierDraft BLB Draft Deck".
+func deckNameForDraft(eventName, setCode string) string {
+	if setCode != "" && eventName != "" {
+		return setCode + " Draft Deck"
+	}
+	if setCode != "" {
+		return setCode + " Draft Deck"
+	}
+	if eventName != "" {
+		// Replace underscores for display.
+		display := strings.ReplaceAll(eventName, "_", " ")
+		return display + " Draft Deck"
+	}
+	return "Draft Deck"
 }
 
 // projectCollectionUpdated applies the delta from a collection.updated event
