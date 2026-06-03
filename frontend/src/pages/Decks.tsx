@@ -326,8 +326,11 @@ export default function Decks() {
                 </div>
                 {deck.matchesPlayed > 0 && (
                   <div className="deck-stats-row">
-                    <span className="deck-win-rate">
-                      {Math.round(deck.matchWinRate * 100)}% WR ({deck.matchesPlayed} matches)
+                    <span className="deck-win-rate" data-testid="deck-win-rate">
+                      {deck.matchWinRate == null || !isFinite(deck.matchWinRate * 100)
+                        ? '—'
+                        : `${Math.round(deck.matchWinRate * 100)}%`}{' '}
+                      WR ({deck.matchesPlayed} matches)
                     </span>
                     {formatStreak(deck.currentStreak) && (
                       <span className={`deck-streak ${formatStreak(deck.currentStreak)?.className}`}>

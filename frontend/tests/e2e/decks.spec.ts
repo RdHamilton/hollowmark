@@ -116,6 +116,41 @@ test.describe('Decks', () => {
     });
   });
 
+  test.describe('Win-rate NaN guard (D1)', () => {
+    test('deck card with undefined matchWinRate never shows "NaN%"', async ({ page }) => {
+      // Navigate to a fresh /decks with a deck that has matchesPlayed > 0 but no matchWinRate
+      await page.route('**/api/v1/decks**', (route) => {
+        if (route.request().method() !== 'GET') { void route.continue(); return; }
+        void route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: [
+              {
+                id: 'deck-d1',
+                name: 'D1 NaN Guard Deck',
+                format: 'standard',
+                source: 'manual',
+                matchesPlayed: 3,
+                // matchWinRate absent — undefined on the SPA
+                currentStreak: 0,
+              },
+            ],
+          }),
+        });
+      });
+
+      await page.goto('/decks');
+      await expect(page.locator('.deck-card')).toBeVisible();
+      await expect(page.locator('text=D1 NaN Guard Deck')).toBeVisible();
+
+      // The win-rate element must exist (matchesPlayed=3 > 0) but must not contain "NaN"
+      const winRateEl = page.locator('[data-testid="deck-win-rate"]');
+      await expect(winRateEl).toBeVisible();
+      await expect(winRateEl).not.toContainText('NaN');
+    });
+  });
+
   test.describe('DeckBuilder Build Around', () => {
     test('should show Build Around button for non-draft decks', async ({ page }) => {
       // Wait for decks to load
