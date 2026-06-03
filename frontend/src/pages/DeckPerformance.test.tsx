@@ -246,6 +246,46 @@ describe('DeckPerformance', () => {
       });
     });
 
+    it('count label updates to filtered count when format filter is applied', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([
+        makeDeckRow({ deck_id: 'd1', deck_name: 'Ladder Deck', format: 'Ladder', wins: 10, losses: 5, total_games: 15 }),
+        makeDeckRow({ deck_id: 'd2', deck_name: 'Draft Deck', format: 'QuickDraft_BLB', wins: 7, losses: 3, total_games: 10 }),
+        makeDeckRow({ deck_id: 'd3', deck_name: 'Play Deck', format: 'Play', wins: 8, losses: 4, total_games: 12 }),
+        makeDeckRow({ deck_id: 'd4', deck_name: 'Another Draft', format: 'PremierDraft_OTJ', wins: 5, losses: 5, total_games: 10 }),
+      ]);
+
+      renderWithProvider(<DeckPerformance />);
+
+      await waitFor(() => {
+        expect(screen.getByText('4 decks found')).toBeInTheDocument();
+      });
+
+      fireEvent.change(getSelectByLabel('Format'), { target: { value: 'constructed' } });
+
+      await waitFor(() => {
+        // Constructed = Ladder + Play = 2 decks
+        expect(screen.getByText('2 decks found')).toBeInTheDocument();
+      });
+    });
+
+    it('count label shows 0 decks found when filter matches nothing', async () => {
+      mockMatches.getDeckPerformance.mockResolvedValue([
+        makeDeckRow({ deck_id: 'd1', deck_name: 'Draft Deck', format: 'QuickDraft_BLB', wins: 7, losses: 3, total_games: 10 }),
+      ]);
+
+      renderWithProvider(<DeckPerformance />);
+
+      await waitFor(() => {
+        expect(screen.getByText('1 deck found')).toBeInTheDocument();
+      });
+
+      fireEvent.change(getSelectByLabel('Format'), { target: { value: 'constructed' } });
+
+      await waitFor(() => {
+        expect(screen.getByText('0 decks found')).toBeInTheDocument();
+      });
+    });
+
     it('client-side format filter shows only matching decks', async () => {
       mockMatches.getDeckPerformance.mockResolvedValue([
         makeDeckRow({ deck_id: 'd1', deck_name: 'Ladder Deck', format: 'Ladder' }),

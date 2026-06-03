@@ -149,8 +149,8 @@ const DeckPerformance = () => {
         </div>
 
         {!loading && !error && deckStats.length > 0 && (
-          <div className="deck-count">
-            {deckStats.length} deck{deckStats.length !== 1 ? 's' : ''} found
+          <div className="deck-count" data-testid="deck-count-label">
+            {filteredDecks.length} deck{filteredDecks.length !== 1 ? 's' : ''} found
           </div>
         )}
       </div>
