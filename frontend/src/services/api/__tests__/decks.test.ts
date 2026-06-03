@@ -85,6 +85,41 @@ describe('decks API', () => {
 
       expect(get).toHaveBeenCalledWith('/decks?source=draft');
     });
+
+    it('maps raw BFF winRate to matchWinRate via DeckListItem.createFrom()', async () => {
+      // Simulates the raw JSON the BFF sends — the wire key is "winRate", not
+      // "matchWinRate". getDecks() must deserialize through DeckListItem so the
+      // constructor bridge (winRate → matchWinRate) applies.
+      vi.mocked(get).mockResolvedValue([
+        {
+          id: 'deck-list-1',
+          name: 'Test Deck',
+          format: 'standard',
+          source: 'manual',
+          matchesPlayed: 8,
+          winRate: 0.625, // BFF wire key
+          currentStreak: 0,
+          cardCount: 60,
+          modifiedAt: '2024-01-15T10:00:00Z',
+        },
+      ]);
+
+      const result = await decks.getDecks();
+
+      expect(result).toHaveLength(1);
+      // matchWinRate must be populated — if getDecks() returned raw JSON without
+      // instantiation, matchWinRate would be undefined here.
+      expect(result[0].matchWinRate).toBe(0.625);
+      expect(result[0].id).toBe('deck-list-1');
+    });
+
+    it('returns an empty array when BFF returns null', async () => {
+      vi.mocked(get).mockResolvedValue(null as unknown as unknown[]);
+
+      const result = await decks.getDecks();
+
+      expect(result).toEqual([]);
+    });
   });
 
   describe('getDeck', () => {
