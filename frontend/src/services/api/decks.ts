@@ -209,6 +209,12 @@ export interface AnalyzeDeckRequest {
 
 /**
  * Get all decks with optional filtering.
+ *
+ * The BFF returns plain JSON objects with camelCase field names (e.g. `winRate`).
+ * The SPA's `gui.DeckListItem` class maps BFF wire keys to typed properties
+ * (e.g. `winRate` → `matchWinRate`). We must deserialize through the constructor
+ * so that key-remapping applies; returning `get<DeckListItem[]>()` without
+ * instantiation yields raw objects where `deck.matchWinRate` is always `undefined`.
  */
 export async function getDecks(options?: {
   format?: string;
@@ -219,7 +225,8 @@ export async function getDecks(options?: {
   if (options?.source) params.set('source', options.source);
 
   const query = params.toString();
-  return get<DeckListItem[]>(`/decks${query ? `?${query}` : ''}`);
+  const raw = await get<unknown[]>(`/decks${query ? `?${query}` : ''}`);
+  return (raw ?? []).map((item) => gui.DeckListItem.createFrom(item));
 }
 
 /**
