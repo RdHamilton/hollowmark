@@ -130,7 +130,7 @@ describe('DraftLive', () => {
       ).toBeInTheDocument();
     });
 
-    it('still shows container and stream status in idle state', () => {
+    it('shows container in idle state but no stream-status badge', () => {
       mockUseDraftEventStream.mockReturnValue({ latestEvent: null, status: 'connecting' });
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'idle' }),
@@ -140,7 +140,24 @@ describe('DraftLive', () => {
       render(<DraftLive />);
 
       expect(screen.getByTestId('draft-live-container')).toBeInTheDocument();
-      expect(screen.getByTestId('stream-status')).toHaveTextContent('connecting');
+      // Stream-status badge is intentionally absent in the idle/empty state:
+      // showing "Error" alongside "No active draft" is confusing and incorrect UX.
+      expect(screen.queryByTestId('stream-status')).not.toBeInTheDocument();
+    });
+
+    it('does NOT show error badge when session is idle (Bug 6 regression)', () => {
+      // Reproduces the staging bug: SSE error when there is no active draft
+      // must not display an error badge alongside the "No active draft" empty state.
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: null, status: 'error' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'idle' }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      expect(screen.getByText('No active draft')).toBeInTheDocument();
+      expect(screen.queryByTestId('stream-status')).not.toBeInTheDocument();
     });
   });
 
