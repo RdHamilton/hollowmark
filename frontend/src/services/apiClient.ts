@@ -295,11 +295,56 @@ async function request<T>(
   }
 }
 
+// ---------------------------------------------------------------------------
+// In-flight GET coalescing (de-dupe)
+// ---------------------------------------------------------------------------
+//
+// Multiple components / effects frequently request the same GET endpoint within
+// the same tick — React StrictMode double-invokes mount effects in dev, rapid
+// tab navigation can remount a page before its first fetch resolves, and a
+// burst of SSE events can trigger overlapping reloads. Without coalescing each
+// of those becomes a separate network request, which (with a single user) was
+// enough to trip the deliberately-conservative staging rate limit (HTTP 429).
+//
+// This map keys an in-flight GET by `method + path + auth-relevant headers`
+// and hands every concurrent caller the SAME promise. The entry is removed as
+// soon as the promise settles, so this is a de-dupe of *concurrent* requests,
+// NOT a response cache — a later, separate GET still hits the network and sees
+// fresh data. Only GETs are coalesced; mutating verbs always execute.
+
+const inFlightGets = new Map<string, Promise<unknown>>();
+
+/**
+ * Number of GET requests currently coalesced in flight.
+ * Exported for test assertions only — not part of the public API surface.
+ */
+export function inFlightGetCount(): number {
+  return inFlightGets.size;
+}
+
 /**
  * HTTP GET request.
+ *
+ * Concurrent calls for the same path (and same custom headers) share a single
+ * in-flight network request — see the coalescing note above.
  */
 export function get<T>(path: string, options?: ApiRequestOptions): Promise<T> {
-  return request<T>('GET', path, undefined, options);
+  // Key on path plus any caller-supplied headers so that requests differing
+  // only by, e.g., a header are not collapsed together.
+  const headerKey = options?.headers ? JSON.stringify(options.headers) : '';
+  const key = `GET ${path} ${headerKey}`;
+
+  const existing = inFlightGets.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+
+  const promise = request<T>('GET', path, undefined, options).finally(() => {
+    inFlightGets.delete(key);
+  });
+
+  inFlightGets.set(key, promise);
+  return promise as Promise<T>;
 }
 
 /**
