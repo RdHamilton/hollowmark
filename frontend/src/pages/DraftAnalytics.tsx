@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { apiAdapter } from '@/services/adapter';
 import { useSettings } from '@/hooks/useSettings';
 import { trackEvent } from '@/services/analytics';
@@ -8,8 +9,14 @@ import FormatInsights from '@/components/FormatInsights';
 import './DraftAnalytics.css';
 
 const DraftAnalytics: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  // ?session= and ?set= are emitted by BffDraftHistory row clicks.
+  // When present, scope the view to that specific draft session.
+  const sessionParam = searchParams.get('session');
+  const setParam = searchParams.get('set');
+
   const [availableSets, setAvailableSets] = useState<string[]>([]);
-  const [selectedSet, setSelectedSet] = useState<string>('');
+  const [selectedSet, setSelectedSet] = useState<string>(setParam ?? '');
   const [draftFormat, setDraftFormat] = useState<string>('PremierDraft');
   const [loading, setLoading] = useState(true);
   // AC1/AC2: read from global settings — do not manage local auto-refresh state (#2023).
@@ -24,6 +31,7 @@ const DraftAnalytics: React.FC = () => {
         const formats = await apiAdapter.drafts.getDraftFormats();
         setAvailableSets(formats);
         if (formats.length > 0) {
+          // If a ?set= param was provided, honour it (pre-select); otherwise default to first.
           setSelectedSet((currentSet) => currentSet || formats[0]);
           if (!viewedFiredRef.current) {
             viewedFiredRef.current = true;
@@ -62,6 +70,15 @@ const DraftAnalytics: React.FC = () => {
 
   return (
     <div className="draft-analytics">
+      {sessionParam && (
+        <div
+          className="draft-analytics__session-scope"
+          data-testid="draft-analytics-session-scope"
+          data-session-id={sessionParam}
+        >
+          Viewing draft session{setParam ? ` — ${setParam}` : ''}
+        </div>
+      )}
       <div className="draft-analytics__header">
         <h1>Draft Analytics</h1>
         <div className="draft-analytics__filters">
