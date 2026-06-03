@@ -1,8 +1,11 @@
 -- PostgreSQL initial schema for MTGA Companion
 -- Equivalent to SQLite migrations 000001 through 000052 (consolidated).
--- Migrations 000051-000053 (users table, account_id on draft_sessions,
--- composite account_id indexes) are handled by their own postgres/ files.
--- This migration creates the base schema that those files build on.
+-- Migrations 000052-000053 (account_id on draft_sessions, composite account_id
+-- indexes) are handled by their own postgres/ files.  Migration 000051 (users
+-- table + accounts.user_id) is inlined here so that the consolidated
+-- fresh-init path (migrate force 53 → up) creates the users table before the
+-- incremental 000055/000066/000083 migrations that depend on it.
+-- Ref: https://github.com/RdHamilton/vault-mtg-tickets/issues/620 (AC4 gap)
 
 -- Extensions
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -522,11 +525,30 @@ VALUES (1, '2027-01-23', TRUE)
 ON CONFLICT (id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
+-- APP-LEVEL USER TABLE (inlined from 000051 for fresh-init correctness)
+-- Ref: https://github.com/RdHamilton/vault-mtg-tickets/issues/620 (AC4 gap)
+-- ---------------------------------------------------------------------------
+
+-- users represents the app-level user (the person who logs in and pays).
+-- Distinct from `accounts`, which are MTGA Arena accounts owned by a user.
+CREATE TABLE IF NOT EXISTS users (
+    id                  BIGSERIAL PRIMARY KEY,
+    email               TEXT NOT NULL UNIQUE,
+    api_key             TEXT NOT NULL UNIQUE DEFAULT encode(gen_random_bytes(32), 'hex'),
+    subscription_status TEXT NOT NULL DEFAULT 'free'
+                            CHECK (subscription_status IN ('free', 'pro')),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email   ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key);
+
+-- ---------------------------------------------------------------------------
 -- TENANT-SCOPED BASE TABLES
 -- ---------------------------------------------------------------------------
 
 -- Accounts: MTGA Arena accounts (multi-account support)
--- user_id added by migration 000051; kept nullable here for backwards compat
 CREATE TABLE IF NOT EXISTS accounts (
     id              BIGSERIAL PRIMARY KEY,
     name            TEXT NOT NULL,
@@ -549,6 +571,13 @@ CREATE INDEX IF NOT EXISTS idx_accounts_is_default ON accounts(is_default);
 -- "= 1": that is the exact error from commit c47aff5d (PR #1034) that broke Schema-000054-Compat.
 -- See: https://github.com/RdHamilton/vault-mtg-tickets/issues/620
 CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_default ON accounts(is_default) WHERE is_default = TRUE;
+
+-- Link each MTGA account to an app-level user (inlined from 000051).
+-- Nullable during migration; backfill required before enforcing NOT NULL.
+-- IF NOT EXISTS guards make this idempotent on incremental-path DBs where
+-- 000051 already ran.  Ref: https://github.com/RdHamilton/vault-mtg-tickets/issues/620 (AC4 gap)
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON accounts(user_id);
 
 -- Matches: match results and metadata
 CREATE TABLE IF NOT EXISTS matches (
@@ -760,9 +789,12 @@ CREATE INDEX IF NOT EXISTS idx_currency_history_account_id_timestamp_desc
     ON currency_history(account_id, timestamp DESC);
 
 -- Inventory: current wildcard / currency snapshot (one row per account)
+-- account_id intentionally omitted here: it was added as TEXT in migration 000068
+-- (add_account_id_to_telemetry_tables) and converted to BIGINT FK in 000080.
+-- Including it here as BIGINT would break 000072's sentinel-row DELETE on fresh-init.
+-- Ref: https://github.com/RdHamilton/vault-mtg-tickets/issues/620 (AC4 gap)
 CREATE TABLE IF NOT EXISTS inventory (
     id              BIGSERIAL PRIMARY KEY,
-    account_id      BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     gold            INTEGER NOT NULL DEFAULT 0,
     gems            INTEGER NOT NULL DEFAULT 0,
     wc_common       INTEGER NOT NULL DEFAULT 0,
