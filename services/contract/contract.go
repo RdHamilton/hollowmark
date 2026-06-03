@@ -173,6 +173,12 @@ type MatchCompletedPayload struct {
 	// constructed/ladder/other non-draft matches, and nil when the daemon
 	// restarted between draft and match play.
 	DraftSessionID *string `json:"draft_session_id,omitempty"`
+	// DeckID is the MTGA Arena deck UUID extracted from the CourseDeck log entry
+	// that fires when the player submits a deck to a match. It is derived from
+	// the CourseDeckSummary.DeckId field. Empty when the daemon did not observe
+	// a CourseDeck entry before this match (e.g. daemon started mid-match, or
+	// the event format does not emit a CourseDeck).
+	DeckID string `json:"deck_id,omitempty"`
 }
 
 // LifeChangeEntry records a single life-total mutation observed in a game.
