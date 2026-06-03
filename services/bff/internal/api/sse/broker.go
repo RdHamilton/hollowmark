@@ -151,7 +151,12 @@ func (b *Broker) Handler(extractUserID UserIDExtractor) http.HandlerFunc {
 		}
 
 		userID, ok := extractUserID(r.Context())
-		if !ok {
+		if !ok || userID <= 0 {
+			// Reject both the unauthenticated case (!ok) and the zero-value
+			// user ID case (userID <= 0).  A zero user ID indicates the
+			// middleware resolved no valid DB row — subscribing under userID=0
+			// would create a phantom subscriber that never receives any events
+			// (all real Postgres serial IDs are > 0) and leaks memory.
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

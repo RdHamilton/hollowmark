@@ -457,6 +457,119 @@ func TestRouter_SSE_ValidJWT_ResolverDBError_Returns500(t *testing.T) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// SSE endpoint — ClerkAuthSSEMiddl (?token= query-param path) — issue #778
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// The browser EventSource API cannot set Authorization headers, so the SPA
+// appends the Clerk JWT as ?token= on every (re)connect.  These tests exercise
+// the ClerkAuthSSEMiddl path (RequireClerkAuthForSSE) through the full router.
+
+// depsWithClerkSSE builds RouterDeps with both ClerkAuthMiddl and
+// ClerkAuthSSEMiddl populated (the production configuration).
+func depsWithClerkSSE(t *testing.T) RouterDeps {
+	t.Helper()
+	broker := sse.NewWithHeartbeat(0)
+	ingest := handlers.NewIngestHandler(&noopBroadcaster{})
+	return RouterDeps{
+		Broker:            broker,
+		IngestHandler:     ingest,
+		ClerkAuthMiddl:    bffmiddleware.RequireClerkAuth("test-secret-key"),
+		ClerkAuthSSEMiddl: bffmiddleware.RequireClerkAuthForSSE("test-secret-key"),
+		ClerkUserResolver: bffmiddleware.ClerkUserResolver(&stubUserRepo{}),
+	}
+}
+
+// TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_NoToken verifies that when
+// ClerkAuthSSEMiddl is configured (production path), a request with no token
+// at all returns 401 — not 200 with stream headers.
+func TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_NoToken(t *testing.T) {
+	r := BuildRouter(minimalConfig(), depsWithClerkSSE(t))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/v1/events ClerkAuthSSEMiddl no token: want 401, got %d — body: %s",
+			rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); ct == "text/event-stream" {
+		t.Error("headers must NOT include text/event-stream when auth fails before stream opens")
+	}
+}
+
+// TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_EmptyQueryToken verifies that
+// ?token= with an empty value returns 401 and does not open an SSE stream.
+// This is the case Frank's frontend fix addresses: getToken() returns null,
+// EventSource URL is opened as /api/v1/events?token= (or no ?token at all).
+func TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_EmptyQueryToken(t *testing.T) {
+	r := BuildRouter(minimalConfig(), depsWithClerkSSE(t))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?token=", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/v1/events?token= empty: want 401, got %d — body: %s",
+			rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); ct == "text/event-stream" {
+		t.Error("headers must NOT include text/event-stream when auth fails before stream opens")
+	}
+}
+
+// TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_InvalidQueryToken verifies that
+// ?token=<garbage> (e.g. the literal string "null" from a JavaScript null
+// coerce, or a structurally invalid value) returns 401.
+func TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_InvalidQueryToken(t *testing.T) {
+	r := BuildRouter(minimalConfig(), depsWithClerkSSE(t))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?token=null", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/v1/events?token=null: want 401, got %d — body: %s",
+			rr.Code, rr.Body.String())
+	}
+}
+
+// TestRouter_SSE_ClerkAuthSSEMiddl_ValidQueryToken_PassesAuth verifies that a
+// valid Clerk JWT passed via ?token= is accepted by ClerkAuthSSEMiddl and the
+// request reaches the SSE handler (200 + text/event-stream headers).
+//
+// Uses httptest.NewServer + a real HTTP client so the streaming SSE handler
+// does not block httptest.NewRecorder.
+func TestRouter_SSE_ClerkAuthSSEMiddl_ValidQueryToken_PassesAuth(t *testing.T) {
+	jwt := setupClerkBackend(t)
+
+	r := BuildRouter(minimalConfig(), depsWithClerkSSE(t))
+	ts := httptest.NewServer(r)
+	t.Cleanup(ts.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		ts.URL+"/api/v1/events?token="+jwt, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	// No Authorization header — only ?token= to simulate EventSource.
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/events?token=<jwt>: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Fatal("valid ?token= JWT: ClerkAuthSSEMiddl rejected the token — it should have passed through")
+	}
+	// Deferred cancel() terminates the SSE connection; ts.Close() then completes cleanly.
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // E2EUnguardedSSE — pipeline E2E bypass
 // ──────────────────────────────────────────────────────────────────────────────
 
