@@ -447,7 +447,7 @@ describe('Setup — auth status panel (#2142)', () => {
 //
 // On any browser-only session `isDesktopApp()` returns `false`. Setup.tsx must
 // short-circuit the polling effect so it never calls `fetch` against the local
-// daemon — the previous implementation hit `http://localhost:9001/health`
+// daemon — the previous implementation hit the daemon /health endpoint
 // unconditionally and produced ERR_CONNECTION_REFUSED noise (#1927 AC1).
 // ---------------------------------------------------------------------------
 
@@ -481,7 +481,7 @@ describe('Setup — runtime context gating (#1927)', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('never hits localhost:9001 even after the full timeout window', async () => {
+    it('never hits the daemon health port even after the full timeout window', async () => {
       renderSetup();
 
       await act(async () => {
@@ -491,9 +491,10 @@ describe('Setup — runtime context gating (#1927)', () => {
       // No fetch at all — no calls to any URL, daemon or otherwise.
       expect(fetchMock).not.toHaveBeenCalled();
 
-      // Specifically: no daemon-health calls.
+      // Specifically: no daemon-health calls. The daemon URL derives from
+      // VITE_DAEMON_URL via daemonConfig (host normalized to 127.0.0.1).
       const daemonCalls = fetchMock.mock.calls.filter(([url]) =>
-        typeof url === 'string' && url.includes('localhost:9001'),
+        typeof url === 'string' && url.includes('127.0.0.1:9001'),
       );
       expect(daemonCalls).toHaveLength(0);
     });
@@ -527,7 +528,7 @@ describe('Setup — runtime context gating (#1927)', () => {
 
       expect(fetchMock).toHaveBeenCalled();
       const daemonCalls = fetchMock.mock.calls.filter(([url]) =>
-        typeof url === 'string' && url.includes('localhost:9001/health'),
+        typeof url === 'string' && url.includes('127.0.0.1:9001/health'),
       );
       expect(daemonCalls.length).toBeGreaterThan(0);
     });

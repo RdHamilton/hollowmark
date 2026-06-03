@@ -3,12 +3,16 @@
  * These handlers return realistic API responses matching the actual backend.
  */
 import { http, HttpResponse } from 'msw';
+import { daemonApiBaseUrl } from '../../services/daemonConfig';
 
 // Routes still served by the daemon localapi (Phase 2 hasn't migrated them
 // yet) live under DAEMON_BASE; routes that have been migrated to the BFF
 // (matches, collection) live under BFF_BASE. Per-test handler overrides
 // must use the matching base so MSW intercepts correctly.
-const DAEMON_BASE = 'http://localhost:9001/api/v1';
+// Derive DAEMON_BASE from the same source-of-truth the daemon client uses
+// (services/daemonConfig — normalizes the host to 127.0.0.1) so the mock URL
+// can never drift from the URL the client actually requests.
+const DAEMON_BASE = daemonApiBaseUrl;
 const BFF_BASE = 'http://localhost:8080/api/v1';
 
 // API_BASE retained as the daemon-side alias so older mocks keep working

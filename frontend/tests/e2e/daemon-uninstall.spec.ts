@@ -45,7 +45,7 @@ async function setClerkSignedIn(page: Page, user?: Partial<ClerkTestState>): Pro
 // uninstall button is enabled. Tests that want it disabled call
 // mockDaemonDisconnected instead.
 async function mockDaemonConnected(page: Page): Promise<void> {
-  await page.route('**/localhost:9001/api/v1/system/status', async (route) => {
+  await page.route('**/127.0.0.1:9001/api/v1/system/status', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -67,7 +67,7 @@ async function mockDaemonDisconnected(page: Page): Promise<void> {
   // the request fails outright. Both result in isConnected=false on
   // the SPA side. We use the failure path because it matches a daemon-
   // not-running scenario most realistically.
-  await page.route('**/localhost:9001/api/v1/system/status', async (route) => {
+  await page.route('**/127.0.0.1:9001/api/v1/system/status', async (route) => {
     await route.abort('failed');
   });
 }
@@ -82,7 +82,7 @@ async function mockUninstall(
     onMatch?: (url: URL) => void;
   },
 ): Promise<void> {
-  await page.route('**/localhost:9001/api/v1/system/uninstall*', async (route) => {
+  await page.route('**/127.0.0.1:9001/api/v1/system/uninstall*', async (route) => {
     if (opts.onMatch) {
       opts.onMatch(new URL(route.request().url()));
     }
