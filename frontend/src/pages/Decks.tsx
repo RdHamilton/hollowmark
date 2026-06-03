@@ -6,6 +6,7 @@ import { useRotationNotifications } from '@/hooks/useRotationNotifications';
 import { useSettings } from '@/hooks/useSettings';
 import { RotationBanner } from '@/components/RotationBanner';
 import EmptyState from '@/components/EmptyState';
+import { normalizeQueueType } from '@/utils/formatNormalization';
 import './Decks.css';
 
 type ExportFormat = 'arena' | 'moxfield' | 'archidekt' | 'mtgo' | 'mtggoldfish' | 'plaintext';
@@ -311,7 +312,7 @@ export default function Decks() {
               </div>
               <div className="deck-card-body">
                 <div className="deck-info">
-                  <span className="deck-format">{deck.format}</span>
+                  <span className="deck-format">{normalizeQueueType(deck.format)}</span>
                   {deck.modifiedAt && (
                     <span className="deck-date">Modified: {formatDate(deck.modifiedAt)}</span>
                   )}
