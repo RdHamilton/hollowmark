@@ -16,6 +16,7 @@ import { useDraftEventStream, useDraftSession } from '@/hooks';
 import type { DraftPackPayload } from '@/hooks';
 import { getDraftRatings } from '@/services/api/bffDraftRatings';
 import type { BffCardRating } from '@/services/api/bffDraftRatings';
+import { getSetCards } from '@/services/api/cards';
 import { trackEvent } from '@/services/analytics';
 import { useFeatureFlag } from '@/hooks/useFeatureFlag';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -27,15 +28,30 @@ import './DraftLive.css';
 // ---------------------------------------------------------------------------
 
 /**
- * Map draft_type / CourseName strings to human-readable format labels.
+ * Map draft_type / CourseName strings to the canonical draft_format key.
+ *
+ * The returned string is sent verbatim to the BFF draft-ratings endpoint and
+ * MUST match the `draft_format` value the sync lambda writes to the DB exactly
+ * — `"PremierDraft"`, `"QuickDraft"`, `"Sealed"` (no spaces, exact casing).
+ * Any drift (e.g. `"Quick Draft"` with a space) produces a 404 with no rows.
+ *
+ * MTGA's CurrentModule names QuickDraft internally as `"BotDraft"` (see
+ * classify.go) and `draft.started` carries `draft_type: "BotDraft"`, so BotDraft
+ * must map to the canonical `"QuickDraft"` key — not passed through unchanged.
+ *
  * Handles both the flat `draft_type` field and the nested `CourseName` field
  * from the daemon pack payload.
  */
 function formatLabel(raw: string | undefined): string {
   if (!raw) return 'Draft';
   const upper = raw.toUpperCase();
-  if (upper.includes('PREMIER') || upper.includes('TRADITIONAL')) return 'Premier Draft';
-  if (upper.includes('QUICK')) return 'Quick Draft';
+  if (upper.includes('PREMIER') || upper.includes('TRADITIONAL') || upper.includes('TRAD')) {
+    return 'PremierDraft';
+  }
+  // "BOTDRAFT" is MTGA's internal CurrentModule name for QuickDraft (classify.go).
+  if (upper.includes('QUICK') || upper.includes('BOTDRAFT') || upper.includes('BOT')) {
+    return 'QuickDraft';
+  }
   if (upper.includes('SEALED')) return 'Sealed';
   return raw;
 }
@@ -154,7 +170,8 @@ const DraftLive: React.FC = () => {
     const fetchRatings = async () => {
       setRatingsState((prev) => ({ ...prev, loading: true, error: null }));
       try {
-        const result = await getDraftRatings(setCode, draftFormat);
+        const token = await getTokenRef.current();
+        const result = await getDraftRatings(setCode, draftFormat, token);
         setRatingsState({
           ratings: result.data.card_ratings ?? [],
           loading: false,
@@ -172,6 +189,41 @@ const DraftLive: React.FC = () => {
     void fetchRatings();
   }, [setCode, draftFormat]);
 
+  // ── Base catalog name fallback ────────────────────────────────────────────
+  // Names come from the ratings map only when ratings exist. When ratings are
+  // unavailable for ANY reason (auth failure, 404, stale-cache miss), a player
+  // must NEVER see a raw "#<arenaId>".  We resolve the card NAME from the base
+  // catalog (/api/v1/cards — the same source the deck-builder uses) so names
+  // always render; ratings supply GRADES only.
+  const [catalogNames, setCatalogNames] = useState<Map<number, string>>(new Map());
+  const lastCatalogSetRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!setCode) return;
+    if (lastCatalogSetRef.current === setCode) return;
+    lastCatalogSetRef.current = setCode;
+
+    const fetchCatalog = async () => {
+      try {
+        const cards = await getSetCards(setCode);
+        const map = new Map<number, string>();
+        for (const c of cards) {
+          const id = Number(c.ArenaID);
+          if (Number.isFinite(id) && c.Name) {
+            map.set(id, c.Name);
+          }
+        }
+        setCatalogNames(map);
+      } catch {
+        // Catalog fetch is best-effort — leave names empty and fall back to
+        // the ratings name when present (grade still renders as "—").
+        setCatalogNames(new Map());
+      }
+    };
+
+    void fetchCatalog();
+  }, [setCode]);
+
   // ── Derived data: pack cards with ratings ─────────────────────────────────
   const ratingsMap = useMemo(() => {
     const map = new Map<number, BffCardRating>();
@@ -184,6 +236,7 @@ const DraftLive: React.FC = () => {
   interface PackCard {
     arenaId: number;
     rating: BffCardRating | undefined;
+    name: string | null;
     grade: string;
     gihwr: number | undefined;
   }
@@ -192,9 +245,12 @@ const DraftLive: React.FC = () => {
     return session.currentPackCards.map((id) => {
       const rating = ratingsMap.get(id);
       const grade = gradeFromGihwr(rating?.gihwr);
-      return { arenaId: id, rating, grade, gihwr: rating?.gihwr };
+      // Prefer ratings name, fall back to base-catalog name. null only when
+      // neither source has it (render shows "Card #<id>", never a bare "#id").
+      const name = rating?.name ?? catalogNames.get(id) ?? null;
+      return { arenaId: id, rating, name, grade, gihwr: rating?.gihwr };
     });
-  }, [session.currentPackCards, ratingsMap]);
+  }, [session.currentPackCards, ratingsMap, catalogNames]);
 
   // Analytics: feature_draft_advisor_pick_viewed — fires once per pack when cards are non-empty
   // Suppressed when live_draft_advisor_enabled flag is OFF (ADR-047).
@@ -227,13 +283,14 @@ const DraftLive: React.FC = () => {
     return best?.arenaId ?? null;
   }, [advisorVisible, packCards]);
 
-  // Picked cards with names from ratings map.
+  // Picked cards with names: ratings name → catalog name → last-resort label.
   const pickedCardsInfo = useMemo(() => {
     return session.pickedCards.map((id) => {
       const rating = ratingsMap.get(id);
-      return { arenaId: id, name: rating?.name ?? `Card #${id}`, grade: gradeFromGihwr(rating?.gihwr) };
+      const name = rating?.name ?? catalogNames.get(id) ?? `Card #${id}`;
+      return { arenaId: id, name, grade: gradeFromGihwr(rating?.gihwr) };
     });
-  }, [session.pickedCards, ratingsMap]);
+  }, [session.pickedCards, ratingsMap, catalogNames]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -334,7 +391,7 @@ const DraftLive: React.FC = () => {
                   data-top-pick={isTop ? 'true' : undefined}
                 >
                   <span className="draft-live-card-name">
-                    {card.rating?.name ?? `#${card.arenaId}`}
+                    {card.name ?? `Card #${card.arenaId}`}
                   </span>
                   <span
                     className={`draft-live-grade ${gradeClass(card.grade)}`}

@@ -43,6 +43,11 @@ vi.mock('@/services/api/bffDraftRatings', () => ({
   getDraftRatings: vi.fn(),
 }));
 
+// Base catalog adapter — used for the card-name fallback (Defect 3).
+vi.mock('@/services/api/cards', () => ({
+  getSetCards: vi.fn(),
+}));
+
 // Clerk useAuth mock
 vi.mock('@clerk/react', () => ({
   useAuth: vi.fn(() => ({ getToken: vi.fn().mockResolvedValue('test-token') })),
@@ -64,10 +69,12 @@ vi.mock('@/services/analytics', () => ({
 
 import { useDraftEventStream, useDraftSession } from '@/hooks';
 import { getDraftRatings } from '@/services/api/bffDraftRatings';
+import { getSetCards } from '@/services/api/cards';
 
 const mockUseDraftEventStream = vi.mocked(useDraftEventStream);
 const mockUseDraftSession = vi.mocked(useDraftSession);
 const mockGetDraftRatings = vi.mocked(getDraftRatings);
+const mockGetSetCards = vi.mocked(getSetCards);
 const mockUseFeatureFlag = vi.mocked(useFeatureFlagModule.useFeatureFlag);
 const mockTrackEvent = vi.mocked(analyticsModule.trackEvent);
 
@@ -80,6 +87,32 @@ function buildSession(overrides: Partial<DraftSessionState> = {}): DraftSessionS
     pickedCards: [],
     ...overrides,
   };
+}
+
+/**
+ * Build minimal SetCard catalog rows for the name-fallback path.
+ * Only ArenaID + Name are load-bearing; the rest satisfy the type shape.
+ */
+function buildCatalog(cards: { arenaId: number; name: string }[]) {
+  return cards.map((c) => ({
+    ID: c.arenaId,
+    SetCode: 'ONE',
+    ArenaID: String(c.arenaId),
+    ScryfallID: '',
+    Name: c.name,
+    ManaCost: '',
+    CMC: 0,
+    Types: [],
+    Colors: [],
+    Rarity: '',
+    Text: '',
+    Power: '',
+    Toughness: '',
+    ImageURL: '',
+    ImageURLSmall: '',
+    ImageURLArt: '',
+    FetchedAt: undefined as never,
+  }));
 }
 
 function buildRatingsResult(cards: { arena_id: number; name: string; gihwr?: number }[]) {
@@ -107,6 +140,8 @@ describe('DraftLive', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetDraftRatings.mockResolvedValue(buildRatingsResult([]));
+    // Default: empty catalog — individual tests override as needed.
+    mockGetSetCards.mockResolvedValue(buildCatalog([]));
     // Default: flag ON — preserves existing test behaviour
     mockUseFeatureFlag.mockReturnValue({ enabled: true });
   });
@@ -373,7 +408,8 @@ describe('DraftLive', () => {
       render(<DraftLive />);
 
       await waitFor(() => {
-        expect(mockGetDraftRatings).toHaveBeenCalledWith('ONE', 'Premier Draft');
+        // Canonical DB key — no space — and the Clerk token threaded through.
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('ONE', 'PremierDraft', 'test-token');
       });
     });
 
@@ -424,7 +460,8 @@ describe('DraftLive', () => {
 
       await waitFor(() => {
         expect(screen.getByTestId('draft-live-set')).toHaveTextContent('MKM');
-        expect(screen.getByTestId('draft-live-format')).toHaveTextContent('Quick Draft');
+        // Canonical DB key — "QuickDraft", no space.
+        expect(screen.getByTestId('draft-live-format')).toHaveTextContent('QuickDraft');
       });
     });
   });
@@ -596,6 +633,173 @@ describe('DraftLive', () => {
         expect(mockTrackEvent).toHaveBeenCalledWith(
           expect.objectContaining({ name: 'feature_draft_advisor_pick_viewed' })
         );
+      });
+    });
+  });
+
+  // ── Defect 2: canonical draft_format key mapping ──────────────────────────
+  // The string passed to the BFF MUST match the DB draft_format value the sync
+  // lambda writes EXACTLY — "PremierDraft" / "QuickDraft" / "Sealed", no spaces.
+  // MTGA's CurrentModule names QuickDraft as "BotDraft"; draft.started carries
+  // draft_type: "BotDraft" → it must map to "QuickDraft", not pass through.
+  describe('format key mapping (Defect 2)', () => {
+    function startedEvent(setCode: string, draftType: string): import('@/hooks/useDraftEventStream').DaemonEvent {
+      return {
+        type: 'draft.started',
+        account_id: 'acc1',
+        event_id: 'e0',
+        session_id: 's1',
+        sequence: 0,
+        occurred_at: '2026-05-08T00:00:00Z',
+        payload: { set_code: setCode, draft_type: draftType },
+      };
+    }
+
+    function renderWithDraftType(setCode: string, draftType: string) {
+      mockUseDraftEventStream.mockReturnValue({
+        latestEvent: startedEvent(setCode, draftType),
+        status: 'open',
+      });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active' }),
+        dispatch: vi.fn(),
+      });
+      render(<DraftLive />);
+    }
+
+    it('maps draft_type "BotDraft" → "QuickDraft" in the ratings fetch', async () => {
+      renderWithDraftType('SOS', 'BotDraft');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('SOS', 'QuickDraft', 'test-token');
+      });
+    });
+
+    it('displays "QuickDraft" (no space) in the meta bar for BotDraft', async () => {
+      renderWithDraftType('SOS', 'BotDraft');
+
+      await waitFor(() => {
+        expect(screen.getByTestId('draft-live-format')).toHaveTextContent('QuickDraft');
+      });
+    });
+
+    it('maps draft_type "QuickDraft" to the no-space key "QuickDraft"', async () => {
+      renderWithDraftType('BLB', 'QuickDraft');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('BLB', 'QuickDraft', 'test-token');
+      });
+    });
+
+    it('maps draft_type "PremierDraft" to the no-space key "PremierDraft"', async () => {
+      renderWithDraftType('ONE', 'PremierDraft');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('ONE', 'PremierDraft', 'test-token');
+      });
+    });
+
+    it('maps Traditional/Trad draft_type to "PremierDraft"', async () => {
+      renderWithDraftType('ONE', 'TradDraft');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('ONE', 'PremierDraft', 'test-token');
+      });
+    });
+
+    it('never emits a format string containing a space', async () => {
+      renderWithDraftType('SOS', 'BotDraft');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalled();
+      });
+      const formatArg = mockGetDraftRatings.mock.calls[0][1];
+      expect(formatArg).not.toContain(' ');
+    });
+  });
+
+  // ── Defect 3: base-catalog name fallback ──────────────────────────────────
+  // A player must NEVER see a raw "#<arenaId>". When ratings are unavailable for
+  // ANY reason, names resolve from the base catalog (/api/v1/cards) and the grade
+  // shows "—".
+  describe('catalog name fallback (Defect 3)', () => {
+    const startedEvent: import('@/hooks/useDraftEventStream').DaemonEvent = {
+      type: 'draft.started',
+      account_id: 'acc1',
+      event_id: 'e0',
+      session_id: 's1',
+      sequence: 0,
+      occurred_at: '2026-05-08T00:00:00Z',
+      payload: { set_code: 'SOS', draft_type: 'BotDraft' },
+    };
+
+    it('renders the catalog NAME (not "#id") when ratings are empty', async () => {
+      // Ratings empty (e.g. 401/404) but catalog has the name.
+      mockGetDraftRatings.mockResolvedValue(buildRatingsResult([]));
+      mockGetSetCards.mockResolvedValue(
+        buildCatalog([{ arenaId: 102520, name: 'Sheoldred, the Apocalypse' }])
+      );
+
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: startedEvent, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active', currentPackCards: [102520] }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('pack-card-102520')).toHaveTextContent(
+          'Sheoldred, the Apocalypse'
+        );
+      });
+      // The raw "#id" must NOT appear.
+      expect(screen.queryByText('#102520')).not.toBeInTheDocument();
+      // Grade shows "—" because ratings are absent.
+      expect(screen.getByTestId('card-grade-102520')).toHaveTextContent('—');
+    });
+
+    it('prefers the ratings name over the catalog name when both exist', async () => {
+      mockGetDraftRatings.mockResolvedValue(
+        buildRatingsResult([{ arena_id: 555, name: 'Ratings Name', gihwr: 60 }])
+      );
+      mockGetSetCards.mockResolvedValue(
+        buildCatalog([{ arenaId: 555, name: 'Catalog Name' }])
+      );
+
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: startedEvent, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active', currentPackCards: [555] }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('pack-card-555')).toHaveTextContent('Ratings Name');
+      });
+      expect(screen.queryByText('Catalog Name')).not.toBeInTheDocument();
+    });
+
+    it('falls back to "Card #id" only when neither ratings nor catalog has the name', async () => {
+      mockGetDraftRatings.mockResolvedValue(buildRatingsResult([]));
+      mockGetSetCards.mockResolvedValue(buildCatalog([])); // catalog miss too
+
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: startedEvent, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active', currentPackCards: [777] }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      // Last-resort label is the human "Card #777", never the bare "#777" the
+      // original bug produced.
+      await waitFor(() => {
+        const nameEl = screen.getByTestId('pack-card-777').querySelector('.draft-live-card-name');
+        expect(nameEl).toHaveTextContent('Card #777');
+        // The name span must not be a bare "#777".
+        expect(nameEl?.textContent).not.toBe('#777');
       });
     });
   });
