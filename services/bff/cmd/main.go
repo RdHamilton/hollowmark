@@ -471,6 +471,7 @@ func main() {
 			)
 			worker.WithCounterStore(gameEventCountersRepo)
 			worker.WithCardPlayStore(gamePlayRepo)
+			worker.WithGameRowWriter(gamePlayRepo)
 			worker.WithGameIDResolver(gamePlayRepo)
 			worker.WithDLQ(projectionErrorsRepo)
 			if postHogClient != nil {
