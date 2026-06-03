@@ -13,6 +13,21 @@ import (
 // period_type argument is not one of the accepted values (week|month).
 var ErrInvalidDraftPeriodType = errors.New("period_type must be week|month")
 
+// normalizeStatusFilter maps the external-facing API status alias "active"
+// to the canonical DB value "in_progress" that the projection worker writes.
+// All other values are passed through unchanged.
+//
+// The projection worker writes status="in_progress" while a draft is ongoing
+// and status="completed" when it ends.  The SPA and daemon call
+// POST /api/v1/drafts with {status: "active"} — the two representations need
+// reconciling at the repo boundary so callers never see the mismatch.
+func normalizeStatusFilter(s string) string {
+	if strings.ToLower(s) == "active" {
+		return "in_progress"
+	}
+	return s
+}
+
 // DraftsRepository serves the Phase 2 /api/v1/drafts/* surface — reads
 // against draft_sessions + draft_picks + draft_temporal_trends +
 // draft_community_comparison. The existing DraftSessionsRepository
@@ -90,7 +105,7 @@ func (r *DraftsRepository) ListSessions(ctx context.Context, accountID int64, f 
 	}
 	if f.Status != "" {
 		clauses = append(clauses, "lower(ds.status) = lower($"+strconv.Itoa(next)+")")
-		args = append(args, f.Status)
+		args = append(args, normalizeStatusFilter(f.Status))
 		next++
 	}
 	if f.StartDate != nil {
@@ -261,7 +276,7 @@ func (r *DraftsRepository) AggregateStats(ctx context.Context, accountID int64, 
 	}
 	if f.Status != "" {
 		clauses = append(clauses, "lower(status) = lower($"+strconv.Itoa(next)+")")
-		args = append(args, f.Status)
+		args = append(args, normalizeStatusFilter(f.Status))
 		next++
 	}
 	if f.StartDate != nil {
