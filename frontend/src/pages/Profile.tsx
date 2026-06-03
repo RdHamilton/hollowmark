@@ -158,7 +158,7 @@ const Profile = ({ useUserHook = useDefaultUser }: ProfilePageProps) => {
           ← Back
         </button>
         <h1 className="page-title" data-testid="profile-title">
-          User Profile
+          Profile
         </h1>
       </div>
 

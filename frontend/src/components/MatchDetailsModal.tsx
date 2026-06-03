@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { matches } from '@/services/api';
 import { models } from '@/types/models';
+import { humanizeFormatSlug } from '@/lib/formatLabels';
+import { friendlyErrorMessage } from '@/lib/errorMessages';
 import LoadingSpinner from './LoadingSpinner';
 import OpponentAnalysisPanel from './OpponentAnalysisPanel';
 import GamePlayTimelinePanel from './GamePlayTimelinePanel';
@@ -26,7 +28,8 @@ const MatchDetailsModal = ({ match, onClose }: MatchDetailsModalProps) => {
         const gamesData = await matches.getMatchGames(match.ID);
         setGames(gamesData || []);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load games');
+        const raw = err instanceof Error ? err.message : 'Failed to load games';
+        setError(friendlyErrorMessage(raw));
         console.error('Error loading games:', err);
       } finally {
         setLoading(false);
@@ -106,12 +109,14 @@ const MatchDetailsModal = ({ match, onClose }: MatchDetailsModalProps) => {
           <div className="match-summary">
             <div className="summary-row">
               <span className="summary-label">Format:</span>
-              <span className="summary-value">{match.Format}</span>
+              <span className="summary-value">{humanizeFormatSlug(match.Format) || match.Format}</span>
             </div>
-            <div className="summary-row">
-              <span className="summary-label">Event:</span>
-              <span className="summary-value">{match.EventName}</span>
-            </div>
+            {match.EventName && match.EventName !== match.Format && (
+              <div className="summary-row">
+                <span className="summary-label">Event:</span>
+                <span className="summary-value">{humanizeFormatSlug(match.EventName) || match.EventName}</span>
+              </div>
+            )}
             <div className="summary-row">
               <span className="summary-label">Result:</span>
               <span className={`summary-value result-badge ${match.Result.toLowerCase()}`}>
@@ -149,8 +154,8 @@ const MatchDetailsModal = ({ match, onClose }: MatchDetailsModalProps) => {
             )}
 
             {!loading && !error && games.length === 0 && (
-              <div className="no-games">
-                No game data available for this match.
+              <div className="no-games" data-testid="no-games-message">
+                We didn&apos;t capture game events for this match. Keep VaultMTG running during play to unlock full game analysis.
               </div>
             )}
 
