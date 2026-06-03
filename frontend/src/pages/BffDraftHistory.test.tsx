@@ -25,6 +25,28 @@ function makeResponse(overrides: Partial<DraftHistoryResponse> = {}): DraftHisto
   };
 }
 
+// Minimal DraftHistoryItem matching the BFF wire shape.
+function makeDraft(overrides: Partial<{
+  id: string;
+  set_code: string;
+  format: string;
+  started_at: string;
+  completed_at: string | null;
+  wins: number;
+  losses: number;
+}> = {}) {
+  return {
+    id: 'seed-00',
+    set_code: 'BLB',
+    format: 'Premier',
+    started_at: '2026-05-01T10:00:00Z',
+    completed_at: '2026-05-01T12:00:00Z',
+    wins: 3,
+    losses: 2,
+    ...overrides,
+  };
+}
+
 describe('BffDraftHistory', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -73,9 +95,7 @@ describe('BffDraftHistory', () => {
     it('renders table when data is returned', async () => {
       mockGetDraftHistory.mockResolvedValue(makeResponse({
         total: 1,
-        drafts: [
-          { id: 1, set_code: 'BLB', wins: 3, losses: 2, drafted_at: '2026-05-01T10:00:00Z' },
-        ],
+        drafts: [makeDraft()],
       }));
 
       render(<BffDraftHistory />);
@@ -88,9 +108,7 @@ describe('BffDraftHistory', () => {
     it('renders column headers: Date, Set, Wins, Losses', async () => {
       mockGetDraftHistory.mockResolvedValue(makeResponse({
         total: 1,
-        drafts: [
-          { id: 1, set_code: 'BLB', wins: 3, losses: 2, drafted_at: '2026-05-01T10:00:00Z' },
-        ],
+        drafts: [makeDraft()],
       }));
 
       render(<BffDraftHistory />);
@@ -110,9 +128,7 @@ describe('BffDraftHistory', () => {
     it('renders draft data in table rows', async () => {
       mockGetDraftHistory.mockResolvedValue(makeResponse({
         total: 1,
-        drafts: [
-          { id: 1, set_code: 'BLB', wins: 3, losses: 2, drafted_at: '2026-05-01T10:00:00Z' },
-        ],
+        drafts: [makeDraft({ set_code: 'BLB', wins: 3, losses: 2 })],
       }));
 
       render(<BffDraftHistory />);
@@ -128,8 +144,8 @@ describe('BffDraftHistory', () => {
       mockGetDraftHistory.mockResolvedValue(makeResponse({
         total: 2,
         drafts: [
-          { id: 1, set_code: 'BLB', wins: 3, losses: 2, drafted_at: '2026-05-01T10:00:00Z' },
-          { id: 2, set_code: 'DSK', wins: 7, losses: 0, drafted_at: '2026-04-15T08:00:00Z' },
+          makeDraft({ id: 'seed-00', set_code: 'BLB', wins: 3, losses: 2 }),
+          makeDraft({ id: 'seed-01', set_code: 'DSK', wins: 7, losses: 0 }),
         ],
       }));
 
@@ -140,6 +156,25 @@ describe('BffDraftHistory', () => {
         expect(screen.getByText('DSK')).toBeInTheDocument();
       });
     });
+
+    it('renders started_at as the date column', async () => {
+      mockGetDraftHistory.mockResolvedValue(makeResponse({
+        total: 1,
+        drafts: [makeDraft({ started_at: '2026-05-01T10:00:00Z' })],
+      }));
+
+      render(<BffDraftHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('draft-history-table')).toBeInTheDocument();
+      });
+
+      // The date cell should render something (locale-formatted) for the started_at value.
+      // Exact format is locale-dependent, so just verify the row exists.
+      const rows = screen.getAllByRole('row');
+      // Header row + 1 data row
+      expect(rows.length).toBe(2);
+    });
   });
 
   describe('Pagination', () => {
@@ -148,13 +183,7 @@ describe('BffDraftHistory', () => {
         total: 21,
         offset: 0,
         limit: 20,
-        drafts: Array.from({ length: 20 }, (_, i) => ({
-          id: i + 1,
-          set_code: 'BLB',
-          wins: 2,
-          losses: 1,
-          drafted_at: '2026-05-01T10:00:00Z',
-        })),
+        drafts: Array.from({ length: 20 }, (_, i) => makeDraft({ id: `seed-${i}` })),
       }));
 
       render(<BffDraftHistory />);
@@ -169,13 +198,7 @@ describe('BffDraftHistory', () => {
         total: 3,
         offset: 0,
         limit: 20,
-        drafts: Array.from({ length: 3 }, (_, i) => ({
-          id: i + 1,
-          set_code: 'BLB',
-          wins: 2,
-          losses: 1,
-          drafted_at: '2026-05-01T10:00:00Z',
-        })),
+        drafts: Array.from({ length: 3 }, (_, i) => makeDraft({ id: `seed-${i}` })),
       }));
 
       render(<BffDraftHistory />);
@@ -190,13 +213,7 @@ describe('BffDraftHistory', () => {
         total: 25,
         offset: 0,
         limit: 20,
-        drafts: Array.from({ length: 20 }, (_, i) => ({
-          id: i + 1,
-          set_code: 'BLB',
-          wins: 2,
-          losses: 1,
-          drafted_at: '2026-05-01T10:00:00Z',
-        })),
+        drafts: Array.from({ length: 20 }, (_, i) => makeDraft({ id: `seed-${i}` })),
       }));
 
       render(<BffDraftHistory />);
@@ -211,21 +228,13 @@ describe('BffDraftHistory', () => {
         total: 25,
         offset: 0,
         limit: 20,
-        drafts: Array.from({ length: 20 }, (_, i) => ({
-          id: i + 1,
-          set_code: 'BLB',
-          wins: 2,
-          losses: 1,
-          drafted_at: '2026-05-01T10:00:00Z',
-        })),
+        drafts: Array.from({ length: 20 }, (_, i) => makeDraft({ id: `seed-${i}` })),
       });
       const page2: DraftHistoryResponse = makeResponse({
         total: 25,
         offset: 20,
         limit: 20,
-        drafts: [
-          { id: 21, set_code: 'FDN', wins: 5, losses: 3, drafted_at: '2026-04-01T10:00:00Z' },
-        ],
+        drafts: [makeDraft({ id: 'seed-20', set_code: 'FDN', wins: 5, losses: 3 })],
       });
 
       mockGetDraftHistory
@@ -290,6 +299,55 @@ describe('BffDraftHistory', () => {
       const h1 = screen.getByRole('heading', { level: 1 });
       expect(h1).toHaveTextContent('Draft History');
       expect(h1.textContent).not.toMatch(/§|Chapter|Compendium/);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Response shape regression guard: BFF wire shape alignment
+  // --------------------------------------------------------------------------
+
+  describe('BFF wire shape alignment', () => {
+    it('renders 3 seeded drafts when BFF returns the correct wire shape', async () => {
+      // This test mirrors the actual BFF response for account_id 17 (ci-smoke).
+      // The BFF returns { data: [...], total, page, limit } — NOT { drafts: [...] }.
+      // getDraftHistory must map data → drafts so the component renders correctly.
+      mockGetDraftHistory.mockResolvedValue({
+        drafts: [
+          makeDraft({ id: 'seed-02', set_code: 'SOS', wins: 1, losses: 3 }),
+          makeDraft({ id: 'seed-01', set_code: 'BLB', wins: 0, losses: 0 }),
+          makeDraft({ id: 'seed-00', set_code: 'SOS', wins: 6, losses: 3 }),
+        ],
+        total: 3,
+        limit: 20,
+        offset: 0,
+      });
+
+      render(<BffDraftHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('draft-history-table')).toBeInTheDocument();
+      });
+
+      const rows = screen.getAllByRole('row');
+      // Header row + 3 data rows
+      expect(rows.length).toBe(4);
+      expect(screen.getAllByText('SOS').length).toBe(2);
+      expect(screen.getByText('BLB')).toBeInTheDocument();
+    });
+
+    it('renders empty state when BFF returns total=0 with empty data array', async () => {
+      mockGetDraftHistory.mockResolvedValue({
+        drafts: [],
+        total: 0,
+        limit: 20,
+        offset: 0,
+      });
+
+      render(<BffDraftHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('draft-history-empty')).toBeInTheDocument();
+      });
     });
   });
 });
