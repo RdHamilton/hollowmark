@@ -1324,6 +1324,140 @@ describe('Decks', () => {
     });
   });
 
+  describe('Win-rate NaN guard (D1)', () => {
+    it('should display fallback "—" when matchWinRate is undefined', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-nan',
+          name: 'NaN Deck',
+          matchesPlayed: 1,
+          matchWinRate: undefined,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('NaN Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/—/);
+    });
+
+    it('should display fallback "—" when matchWinRate is null', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-null-wr',
+          name: 'Null WR Deck',
+          matchesPlayed: 3,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          matchWinRate: null as any,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Null WR Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/—/);
+    });
+
+    it('should display fallback "—" when matchWinRate computes to NaN (0/0 scenario)', async () => {
+      // matchWinRate = NaN (e.g. 0/0 computed server-side and serialised as NaN)
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-nan-rate',
+          name: 'Zero Zero Deck',
+          matchesPlayed: 1,
+          matchWinRate: NaN,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Zero Zero Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/—/);
+    });
+
+    it('should render "0%" for matchWinRate = 0 (zero wins, has played)', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-zero-wins',
+          name: 'Zero Wins Deck',
+          matchesPlayed: 5,
+          matchWinRate: 0,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Zero Wins Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/0%/);
+    });
+
+    it('should render correct percentage for valid matchWinRate', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-valid',
+          name: 'Valid WR Deck',
+          matchesPlayed: 10,
+          matchWinRate: 0.7,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Valid WR Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/70%/);
+    });
+
+    it('should not render win-rate row when matchesPlayed is 0 (existing guard)', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-no-matches',
+          name: 'No Matches Deck',
+          matchesPlayed: 0,
+          matchWinRate: 0,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('No Matches Deck')).toBeInTheDocument();
+      });
+
+      expect(document.querySelector('[data-testid="deck-win-rate"]')).not.toBeInTheDocument();
+    });
+  });
+
   describe('Create Deck Modal — Format Select Positioning (#2011)', () => {
     it('AC1: Format select renders inside modal without scrolling ancestor', async () => {
       mockDecks.getDecks.mockResolvedValue(createMockDeckList());
