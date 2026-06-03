@@ -14,8 +14,23 @@ type GREGameStateMessage struct {
 	Players       []GREPlayerState
 	GameObjects   []GREGameObject
 	Zones         map[int]*GREZone     // Zone ID to zone info mapping
+	Annotations   []GREAnnotation      // Per-event annotations; populated by parseGameStateMessage
 	PrevGameState *GREGameStateMessage // For comparing state changes
 	Timestamp     time.Time
+}
+
+// GREAnnotation is one annotation entry from a GRE GameStateMessage.
+// Annotations carry explicit action semantics (e.g. ZoneTransfer.category =
+// "CastSpell" / "PlayLand" / "Resolve") and complement the object-snapshot
+// diff used by detectZoneChangesWithZones.
+type GREAnnotation struct {
+	ID          int
+	AffectorID  int
+	AffectedIDs []int
+	Types       []string
+	// Details is a flat key→value map derived from the annotation's details
+	// array. Integer values are stored as int; string values as string.
+	Details map[string]interface{}
 }
 
 // GREZone represents a zone in the game.
@@ -366,7 +381,70 @@ func parseGameStateMessage(msgMap map[string]interface{}, timestamp time.Time) *
 		}
 	}
 
+	// Parse annotations — carry explicit action semantics (ZoneTransfer.category,
+	// ResolutionStart.grpid, etc.) that the object-snapshot diff can miss when
+	// only partial-state messages are present.
+	if annotations, ok := gameStateMsg["annotations"].([]interface{}); ok {
+		for _, annData := range annotations {
+			annMap, ok := annData.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			ann := parseAnnotation(annMap)
+			msg.Annotations = append(msg.Annotations, ann)
+		}
+	}
+
 	return msg
+}
+
+// parseAnnotation parses a single annotation entry from the GRE game state.
+func parseAnnotation(annMap map[string]interface{}) GREAnnotation {
+	ann := GREAnnotation{
+		Details: make(map[string]interface{}),
+	}
+	if id, ok := annMap["id"].(float64); ok {
+		ann.ID = int(id)
+	}
+	if affectorID, ok := annMap["affectorId"].(float64); ok {
+		ann.AffectorID = int(affectorID)
+	}
+	if affectedIDs, ok := annMap["affectedIds"].([]interface{}); ok {
+		for _, aid := range affectedIDs {
+			if id, ok := aid.(float64); ok {
+				ann.AffectedIDs = append(ann.AffectedIDs, int(id))
+			}
+		}
+	}
+	if types, ok := annMap["type"].([]interface{}); ok {
+		for _, t := range types {
+			if ts, ok := t.(string); ok {
+				ann.Types = append(ann.Types, ts)
+			}
+		}
+	}
+	if details, ok := annMap["details"].([]interface{}); ok {
+		for _, detData := range details {
+			detMap, ok := detData.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			key, _ := detMap["key"].(string)
+			if key == "" {
+				continue
+			}
+			if vs, ok := detMap["valueInt32"].([]interface{}); ok && len(vs) > 0 {
+				if v, ok := vs[0].(float64); ok {
+					ann.Details[key] = int(v)
+				}
+			} else if vs, ok := detMap["valueString"].([]interface{}); ok && len(vs) > 0 {
+				if v, ok := vs[0].(string); ok {
+					ann.Details[key] = v
+				}
+			}
+		}
+	}
+	return ann
 }
 
 // parseZone parses a zone from the game state.
@@ -1051,6 +1129,152 @@ func detectBlocks(prev, curr *GREGameStateMessage, playerConn *GREConnection) []
 	return events
 }
 
+// annotationActionType maps a ZoneTransfer.category string from the GRE
+// annotations array to the canonical ActionType values used by GamePlayEvent.
+// Categories not listed here are skipped (e.g. "Draw" is intentionally
+// filtered out to match detectZoneChangesWithZones behaviour).
+var annotationActionType = map[string]string{
+	"CastSpell": "cast_spell",
+	"PlayLand":  "land_drop",
+	"Resolve":   "resolve_spell",
+	"Put":       "enter_battlefield",
+	"Exile":     "exile",
+	"Discard":   "to_graveyard",
+	"Destroy":   "to_graveyard",
+	"Mill":      "to_graveyard",
+	"Sacrifice": "to_graveyard",
+	"Return":    "zone_change",
+	"Surveil":   "zone_change",
+}
+
+// extractAnnotationPlays extracts GamePlayEvents from the annotations array of
+// a single GameStateMessage.  This complements detectZoneChangesWithZones,
+// which compares consecutive object-snapshot pairs and misses plays in
+// partial-state messages that carry annotations but omit a full gameObjects
+// snapshot (the common case in corpus logs — only 413 of 5671 consecutive
+// GameStateMessage pairs both carry gameObjects).
+//
+// The function reads every AnnotationType_ZoneTransfer annotation, resolves
+// the instance's grpId from the message's gameObjects (when present), and maps
+// the annotation category to the canonical ActionType string.  "Draw" events
+// are intentionally skipped to match the existing filter in
+// detectZoneChangesWithZones.
+//
+// seenKey is a deduplication set shared with the zone-diff pass.  The key is
+// (instanceID, turnNumber, actionType); when the zone-diff already produced a
+// play for the same (instance, turn, action), the annotation play is skipped.
+func extractAnnotationPlays(
+	msg *GREGameStateMessage,
+	playerConn *GREConnection,
+	cumulativeZones map[int]*GREZone,
+	lastValidTurnNumber int,
+	currentGameNumber int,
+	seenKey map[string]bool,
+) []*GamePlayEvent {
+	if len(msg.Annotations) == 0 {
+		return nil
+	}
+
+	// Build instanceID → grpId lookup from this message's gameObjects.
+	instanceGRP := make(map[int]int, len(msg.GameObjects))
+	instanceController := make(map[int]int, len(msg.GameObjects))
+	instanceZone := make(map[int]int, len(msg.GameObjects))
+	for _, obj := range msg.GameObjects {
+		instanceGRP[obj.InstanceID] = obj.GRPId
+		instanceController[obj.InstanceID] = obj.ControllerSeatID
+		instanceZone[obj.InstanceID] = obj.ZoneID
+	}
+
+	turnNumber := lastValidTurnNumber
+	if msg.TurnInfo != nil && msg.TurnInfo.TurnNumber > 0 {
+		turnNumber = msg.TurnInfo.TurnNumber
+	}
+
+	phase := ""
+	step := ""
+	if msg.TurnInfo != nil {
+		phase = normalizePhase(msg.TurnInfo.Phase)
+		step = normalizeStep(msg.TurnInfo.Step)
+	}
+
+	gameNumber := currentGameNumber
+	if msg.GameNumber > 0 {
+		gameNumber = msg.GameNumber
+	}
+
+	var events []*GamePlayEvent
+	for _, ann := range msg.Annotations {
+		hasZoneTransfer := false
+		for _, t := range ann.Types {
+			if t == "AnnotationType_ZoneTransfer" {
+				hasZoneTransfer = true
+				break
+			}
+		}
+		if !hasZoneTransfer {
+			continue
+		}
+
+		cat, _ := ann.Details["category"].(string)
+		actionType, ok := annotationActionType[cat]
+		if !ok {
+			// Skip Draw and any unknown categories.
+			continue
+		}
+
+		for _, instanceID := range ann.AffectedIDs {
+			grpID := instanceGRP[instanceID]
+			controllerID := instanceController[instanceID]
+			zoneID := instanceZone[instanceID]
+
+			// Dedup: skip if the zone-diff pass already produced this event.
+			key := fmt.Sprintf("%d:%d:%s", instanceID, turnNumber, actionType)
+			if seenKey[key] {
+				continue
+			}
+			seenKey[key] = true
+
+			playerType := "opponent"
+			if playerConn != nil && controllerID == playerConn.SeatID {
+				playerType = "player"
+			}
+
+			// Resolve zone name for the destination zone.
+			zoneTo := getZoneName(zoneID, cumulativeZones)
+			// ZoneFrom is not directly available from this annotation; derive from
+			// the category so the action is self-describing even without the pair.
+			zoneFrom := ""
+			switch cat {
+			case "CastSpell":
+				zoneFrom = "hand"
+				zoneTo = "stack"
+			case "PlayLand":
+				zoneFrom = "hand"
+				zoneTo = "battlefield"
+			case "Resolve":
+				zoneFrom = "stack"
+			case "Put":
+				zoneFrom = ""
+			}
+
+			events = append(events, &GamePlayEvent{
+				MatchID:    msg.MatchID,
+				GameNumber: gameNumber,
+				TurnNumber: turnNumber,
+				Phase:      phase,
+				Step:       step,
+				PlayerType: playerType,
+				ActionType: actionType,
+				CardID:     grpID,
+				ZoneFrom:   zoneFrom,
+				ZoneTo:     zoneTo,
+				Timestamp:  msg.Timestamp,
+			})
+		}
+	}
+	return events
+}
+
 // normalizePhase converts MTGA phase names to readable names.
 func normalizePhase(phase string) string {
 	switch phase {
@@ -1358,6 +1582,10 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 	currentGameNumber := 1
 	lastValidTurnNumber := 1
 
+	// seenKey prevents double-counting between the zone-diff pass and the
+	// annotation-based pass.  Key: "instanceID:turnNumber:actionType".
+	seenKey := make(map[string]bool)
+
 	// Seed prevCounters from the first message so the first comparison has a
 	// baseline to diff against.
 	for _, obj := range messages[0].GameObjects {
@@ -1394,7 +1622,7 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 			plays = append(plays, lc)
 		}
 
-		// Zone changes.
+		// Zone changes (snapshot-diff path).
 		for _, zc := range detectZoneChangesWithZones(prev, curr, playerConn, cumulativeZones, allTrackedObjects) {
 			zc.SequenceNumber = seqNum
 			seqNum++
@@ -1405,6 +1633,8 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 				zc.TurnNumber = lastValidTurnNumber
 			}
 			plays = append(plays, zc)
+			// Register in seenKey so the annotation pass skips this event.
+			seenKey[fmt.Sprintf("%d:%d:%s", 0, zc.TurnNumber, zc.ActionType)] = true
 		}
 
 		// Attacks.
@@ -1458,6 +1688,36 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 		}
 		for _, player := range curr.Players {
 			lifeTotals[player.SeatID] = player.LifeTotal
+		}
+
+		// Annotation-based plays (per-message pass).
+		// This complements the snapshot-diff pass above — it captures card
+		// plays in partial-state messages where gameObjects are absent from
+		// one or both consecutive messages, which is the typical shape of
+		// real MTGA corpus logs.  seenKey prevents double-counting events
+		// already detected by the snapshot-diff pass.
+		for _, ap := range extractAnnotationPlays(curr, playerConn, cumulativeZones, lastValidTurnNumber, currentGameNumber, seenKey) {
+			ap.SequenceNumber = seqNum
+			seqNum++
+			plays = append(plays, ap)
+		}
+	}
+
+	// Also run the annotation pass on the first message, which is not visited
+	// as curr in the diff loop.
+	if len(messages) >= 1 {
+		first := messages[0]
+		if first.GameNumber > 0 {
+			currentGameNumber = first.GameNumber
+		}
+		firstTurn := lastValidTurnNumber
+		if first.TurnInfo != nil && first.TurnInfo.TurnNumber > 0 {
+			firstTurn = first.TurnInfo.TurnNumber
+		}
+		for _, ap := range extractAnnotationPlays(first, playerConn, cumulativeZones, firstTurn, currentGameNumber, seenKey) {
+			ap.SequenceNumber = seqNum
+			seqNum++
+			plays = append(plays, ap)
 		}
 	}
 
