@@ -147,6 +147,40 @@ func (f *fakeDeckStore) UpsertDeck(_ context.Context, _ repository.DeckUpsert) e
 	return f.err
 }
 
+type fakeDraftDeckCreator struct {
+	createdDecks []repository.CreateDraftDeckInput
+	returnDeck   *repository.DeckDetailRow
+	err          error
+}
+
+func (f *fakeDraftDeckCreator) CreateDraftDeck(_ context.Context, in repository.CreateDraftDeckInput) (*repository.DeckDetailRow, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.createdDecks = append(f.createdDecks, in)
+	if f.returnDeck != nil {
+		return f.returnDeck, nil
+	}
+	// Return a minimal stub so callers don't panic on nil dereference.
+	return &repository.DeckDetailRow{
+		DeckSummaryRow: repository.DeckSummaryRow{
+			ID:     "deck_stub",
+			Name:   in.Name,
+			Format: in.Format,
+			Source: "draft",
+		},
+	}, nil
+}
+
+type fakeDraftPickReader struct {
+	cardIDs []string
+	err     error
+}
+
+func (f *fakeDraftPickReader) PickCardIDsForSession(_ context.Context, _ string) ([]string, error) {
+	return f.cardIDs, f.err
+}
+
 // --- helpers ---
 
 func makePayload(t *testing.T, v interface{}) json.RawMessage {
@@ -2737,5 +2771,137 @@ func TestProjectDraftSession_IsTrophy_DraftStarted_NotQueried(t *testing.T) {
 	}
 	if len(events.projected) != 1 || events.projected[0] != 702 {
 		t.Errorf("expected row 702 marked projected, got %v", events.projected)
+	}
+}
+
+// TestProjectDraftCompleted_CreatesDraftDeck verifies that when draft.completed
+// is projected and WithDraftDeckCreator + WithDraftPickReader are wired, a deck
+// row is created from the session's picks.
+func TestProjectDraftCompleted_CreatesDraftDeck(t *testing.T) {
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{{
+			ID:        801,
+			AccountID: "acct-draft-1",
+			EventType: "draft.completed",
+			Payload: makePayload(t, map[string]interface{}{
+				"session_id": "sess-draft-001",
+				"event_name": "QuickDraft_SOS_20260526",
+				"set_code":   "SOS",
+				"draft_type": "BotDraft",
+				"status":     "completed",
+			}),
+			OccurredAt: time.Now(),
+		}},
+	}
+	drafts := &fakeDraftStore{winsForSession: 3}
+	accounts := &fakeAccountStore{accountID: 42}
+	deckCreator := &fakeDraftDeckCreator{}
+	pickReader := &fakeDraftPickReader{
+		cardIDs: []string{"102470", "102471", "102472", "102470"}, // 102470 appears twice
+	}
+
+	worker := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	worker.WithDraftDeckCreator(deckCreator)
+	worker.WithDraftPickReader(pickReader)
+
+	worker.RunOnce(context.Background())
+
+	// draft.completed should project the session.
+	if len(drafts.upserts) == 0 {
+		t.Fatal("expected draft session upsert from draft.completed")
+	}
+	if drafts.upserts[0].Status != "completed" {
+		t.Errorf("expected status=completed, got %q", drafts.upserts[0].Status)
+	}
+
+	// A deck should have been created for the session.
+	if len(deckCreator.createdDecks) != 1 {
+		t.Fatalf("expected 1 CreateDraftDeck call, got %d", len(deckCreator.createdDecks))
+	}
+	created := deckCreator.createdDecks[0]
+	if created.DraftSessionID != "sess-draft-001" {
+		t.Errorf("DraftSessionID: want %q, got %q", "sess-draft-001", created.DraftSessionID)
+	}
+	if created.AccountID != 42 {
+		t.Errorf("AccountID: want 42, got %d", created.AccountID)
+	}
+	// 4 raw card IDs passed as-is (no deduplication at the projection layer).
+	if len(created.CardIDs) != 4 {
+		t.Errorf("expected 4 card IDs (raw list), got %d", len(created.CardIDs))
+	}
+	if created.Format != "Limited" {
+		t.Errorf("Format: want %q, got %q", "Limited", created.Format)
+	}
+}
+
+// TestProjectDraftCompleted_NoPicks_SkipsDeckCreation verifies that when there
+// are no picks for the session, deck creation is skipped gracefully.
+func TestProjectDraftCompleted_NoPicks_SkipsDeckCreation(t *testing.T) {
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{{
+			ID:        802,
+			AccountID: "acct-draft-2",
+			EventType: "draft.completed",
+			Payload: makePayload(t, map[string]interface{}{
+				"session_id": "sess-draft-002",
+				"event_name": "QuickDraft_SOS_20260526",
+				"set_code":   "SOS",
+				"status":     "completed",
+			}),
+			OccurredAt: time.Now(),
+		}},
+	}
+	drafts := &fakeDraftStore{}
+	accounts := &fakeAccountStore{accountID: 43}
+	deckCreator := &fakeDraftDeckCreator{}
+	pickReader := &fakeDraftPickReader{cardIDs: nil} // no picks
+
+	worker := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	worker.WithDraftDeckCreator(deckCreator)
+	worker.WithDraftPickReader(pickReader)
+
+	worker.RunOnce(context.Background())
+
+	// Session should still be projected.
+	if len(drafts.upserts) == 0 {
+		t.Fatal("expected session upsert even with no picks")
+	}
+	// No deck should be created.
+	if len(deckCreator.createdDecks) != 0 {
+		t.Errorf("expected no deck creation when picks are empty, got %d", len(deckCreator.createdDecks))
+	}
+}
+
+// TestProjectDraftCompleted_WithoutDeckCreator_NoError verifies that when
+// WithDraftDeckCreator is not wired, draft.completed still projects the session
+// without error (backward compatibility).
+func TestProjectDraftCompleted_WithoutDeckCreator_NoError(t *testing.T) {
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{{
+			ID:        803,
+			AccountID: "acct-draft-3",
+			EventType: "draft.completed",
+			Payload: makePayload(t, map[string]interface{}{
+				"session_id": "sess-draft-003",
+				"event_name": "QuickDraft_SOS_20260526",
+				"set_code":   "SOS",
+				"status":     "completed",
+			}),
+			OccurredAt: time.Now(),
+		}},
+	}
+	drafts := &fakeDraftStore{}
+	accounts := &fakeAccountStore{accountID: 44}
+
+	worker := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	// Intentionally NOT wiring WithDraftDeckCreator.
+
+	worker.RunOnce(context.Background())
+
+	if len(drafts.upserts) == 0 {
+		t.Fatal("expected session upsert even without deck creator")
+	}
+	if len(events.projected) != 1 || events.projected[0] != 803 {
+		t.Errorf("expected row 803 marked projected, got %v", events.projected)
 	}
 }
