@@ -159,3 +159,100 @@ func TestHandleEntry_AuthClientId_LossMatch_DispatchesCorrectResult(t *testing.T
 	assert.Equal(t, "loss", payload.Result,
 		"result must be 'loss' when opponent wins; got empty/unknown means player_team_id was 0")
 }
+
+// TestHandleEntry_CourseDeck_AttachesDeckIDToMatchCompleted verifies that when a
+// CourseDeck entry fires before a match.completed entry, the daemon:
+//  1. Caches the deck UUID from CourseDeckSummary.DeckId.
+//  2. Attaches the cached deck ID to the dispatched MatchCompletedPayload.deck_id.
+//  3. Clears the cached deck ID after the match.completed dispatch.
+//
+// This is the primary fix for the all-NULL deck_id regression where 19 seeded
+// matches all had deck_id = NULL. The root cause: the daemon never classified
+// CourseDeck events and therefore never extracted the deck UUID from the log.
+func TestHandleEntry_CourseDeck_AttachesDeckIDToMatchCompleted(t *testing.T) {
+	const wantDeckID = "6bfa48aa-9840-48f1-9318-9eacedc3e84a"
+
+	authEntry := loadRealEntry(t, "authenticate_2026.59.20.log")
+	matchEntry := loadRealEntry(t, "match_completed_win_2026.59.20.log")
+
+	// Build a synthetic CourseDeck entry matching the real MTGA wire format.
+	courseDeckEntry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"CourseId":          "bd46df66-ba9d-4dbf-81a5-861ecc483c61",
+			"InternalEventName": "Play",
+			"CourseDeckSummary": map[string]interface{}{
+				"DeckId": wantDeckID,
+				"Name":   "(Standard) Antiquities on the Loose",
+			},
+			"CourseDeck": map[string]interface{}{
+				"MainDeck":  []interface{}{},
+				"Sideboard": []interface{}{},
+			},
+		},
+	}
+
+	var (
+		mu       sync.Mutex
+		captured *contract.MatchCompletedPayload
+		gotEvent = make(chan struct{}, 1)
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		var evt contract.DaemonEvent
+		if json.Unmarshal(body, &evt) == nil && evt.Type == "match.completed" {
+			var p contract.MatchCompletedPayload
+			if json.Unmarshal(evt.Payload, &p) == nil {
+				mu.Lock()
+				if captured == nil {
+					captured = &p
+					select {
+					case gotEvent <- struct{}{}:
+					default:
+					}
+				}
+				mu.Unlock()
+			}
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := &config.Config{
+		CloudAPIURL: srv.URL,
+		IngestPath:  "/v1/ingest/events",
+		APIKey:      "test-key-deckid",
+		AccountID:   "acc-deckid-test",
+	}
+	svc := New(cfg)
+
+	// Step 1: authenticate → sets mtgaUserID.
+	require.NoError(t, svc.handleEntry(context.Background(), authEntry))
+
+	// Step 2: course.deck_submitted → caches deck ID in svc.lastDeckID.
+	require.NoError(t, svc.handleEntry(context.Background(), courseDeckEntry))
+	assert.Equal(t, wantDeckID, svc.lastDeckID,
+		"lastDeckID must be set after course.deck_submitted")
+
+	// Step 3: match.completed → deck ID must be attached and cache must be cleared.
+	require.NoError(t, svc.handleEntry(context.Background(), matchEntry))
+
+	select {
+	case <-gotEvent:
+	default:
+		// synchronous dispatch; check captured directly
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotNil(t, captured, "match.completed event must be dispatched")
+	assert.Equal(t, wantDeckID, captured.DeckID,
+		"deck_id in match.completed payload must match the CourseDeck entry")
+	assert.Empty(t, svc.lastDeckID,
+		"lastDeckID must be cleared after being attached to match.completed")
+}

@@ -113,6 +113,14 @@ func ClassifyEntry(entry *logreader.LogEntry) string {
 		return "deck.updated"
 	}
 
+	// Course deck submission — fires just before a match starts when the player
+	// submits their deck to an event (Ladder, Play, draft, etc.). Carries the
+	// Arena deck UUID via CourseDeckSummary.DeckId. Emitted before greToClientEvent
+	// so deck linkage is available when match.completed fires.
+	if logreader.IsCourseDeckEntry(entry) {
+		return "course.deck_submitted"
+	}
+
 	// GRE game-state messages — buffered into the GRE session manager for batch
 	// dispatch. greToClientEvent lines are never dispatched individually.
 	if _, ok := entry.JSON["greToClientEvent"]; ok {
