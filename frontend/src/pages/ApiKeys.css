@@ -19,3 +19,14 @@
 .api-keys-content .cl-apiKeys {
   width: 100%;
 }
+
+.api-keys-fallback {
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem;
+  background: var(--vault-bg-raised);
+  border: 1px solid var(--vault-border-subtle);
+  border-radius: 8px;
+  color: var(--vault-fg-secondary);
+  font-size: 14px;
+  max-width: 600px;
+}

@@ -324,7 +324,7 @@ const Quests = () => {
         <ErrorState
           message="Failed to load quest data"
           error={error}
-          helpText="Make sure detailed logging is enabled in MTGA: Options → View Account → Detailed Logs (Plugin Support)"
+          helpText="The service may be temporarily unavailable. Please try refreshing the page."
         />
       )}
 
