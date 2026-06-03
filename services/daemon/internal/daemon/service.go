@@ -6,6 +6,7 @@ package daemon
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -100,6 +102,23 @@ type Service struct {
 	// payload so the BFF can link the match row to the correct deck.
 	// Empty until a course.deck_submitted event has been processed.
 	lastDeckID string
+
+	// lastCollectionHash is the content hash (sorted arena_id:count) of the most
+	// recently DISPATCHED collection.updated snapshot from the log-reader path.
+	// handleEntry skips dispatch when an incoming snapshot hashes identically —
+	// this is the dedup guard that kills the rc3 idle emit-storm (Arena
+	// re-writing an unchanged GetPlayerCardsV3 line ~1-2/sec). Only ever
+	// read/written from the single run-loop goroutine via handleEntry; the
+	// user-triggered memory-scan path (performCollectionSync) is intentionally
+	// exempt and does not touch this field.
+	lastCollectionHash string
+	// pendingBacklogCollection holds the latest collection snapshot observed
+	// during the historical-backlog drain on (re)install startup. Backlog
+	// snapshots are coalesced (not dispatched per-line) so a replay of the whole
+	// Player.log does not flood the BFF; the single held snapshot is flushed when
+	// the first live (non-backlog) collection entry arrives. Nil once flushed.
+	pendingBacklogCollection *contract.CollectionUpdatedPayload
+	pendingBacklogHash       string
 	// trayHooks connects the tray icon to the daemon event loop.
 	// All fields are optional — nil channels block forever in select (safe no-op).
 	trayHooks TrayHooks
@@ -1552,9 +1571,42 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 			log.Printf("[daemon] warn: parse collection: %v", err)
 			s.recordParseFailure(eventType, entry.Raw)
 			payload = entry.JSON
-		} else {
-			payload = p
+			break
 		}
+
+		h := collectionContentHash(p)
+
+		// Historical-backlog coalescing: on a (re)install the daemon replays the
+		// whole Player.log from byte 0, surfacing every past GetPlayerCardsV3
+		// snapshot as a backlog entry. Hold only the latest one instead of
+		// dispatching each — it is flushed when the first live entry arrives.
+		if entry.FromBacklog {
+			s.pendingBacklogCollection = p
+			s.pendingBacklogHash = h
+			return nil
+		}
+
+		// First live entry: flush any coalesced backlog snapshot so the BFF
+		// learns the current collection exactly once, then fall through to dedup
+		// the live entry against it.
+		if s.pendingBacklogCollection != nil {
+			if s.pendingBacklogHash != s.lastCollectionHash {
+				if derr := s.dispatchCollection(ctx, s.pendingBacklogCollection); derr != nil {
+					return derr
+				}
+				s.lastCollectionHash = s.pendingBacklogHash
+			}
+			s.pendingBacklogCollection = nil
+			s.pendingBacklogHash = ""
+		}
+
+		// Dedup guard: skip dispatch when the snapshot is byte-for-byte the same
+		// collection as the last one we sent (the rc3 idle-storm vector).
+		if h == s.lastCollectionHash {
+			return nil
+		}
+		s.lastCollectionHash = h
+		payload = p
 	case "deck.updated":
 		p, err := logreader.ParseDeckEntry(entry)
 		if err != nil {
@@ -1659,6 +1711,43 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 	// onBFFFailure and onBFFSuccess callbacks wired to the Dispatcher in New().
 	// Do NOT call clearBFFFailureCounter here — it is called by onBFFSuccess
 	// inside SendOrBuffer on confirmed HTTP 2xx delivery.
+	return nil
+}
+
+// collectionContentHash returns a stable SHA-256 hex digest of a collection
+// snapshot's contents (sorted arena_id:count pairs). Two snapshots with the same
+// set of cards and counts produce the same hash regardless of map iteration
+// order, which is what the dedup guard relies on.
+func collectionContentHash(p *contract.CollectionUpdatedPayload) string {
+	if p == nil {
+		return ""
+	}
+	pairs := make([]string, 0, len(p.Cards))
+	for _, c := range p.Cards {
+		pairs = append(pairs, strconv.Itoa(c.ArenaID)+":"+strconv.Itoa(c.Count))
+	}
+	sort.Strings(pairs)
+	sum := sha256.Sum256([]byte(strings.Join(pairs, ",")))
+	return hex.EncodeToString(sum[:])
+}
+
+// dispatchCollection builds and sends a collection.updated event for the given
+// payload. It mirrors the dispatch tail of handleEntry but is reused for the
+// flushed backlog snapshot. Reauth handling matches handleEntry's contract.
+func (s *Service) dispatchCollection(ctx context.Context, p *contract.CollectionUpdatedPayload) error {
+	evt, err := dispatch.BuildEvent("collection.updated", s.cfg.AccountID, s.sessionID, p)
+	if err != nil {
+		return fmt.Errorf("build collection event: %w", err)
+	}
+	dispatchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := s.dispatcher.SendOrBuffer(dispatchCtx, evt); err != nil {
+		if errors.Is(err, dispatch.ErrReauthRequired) {
+			go s.dispatchAuthFailed(context.Background(), "bff_rejected")
+			return nil
+		}
+		return err
+	}
 	return nil
 }
 

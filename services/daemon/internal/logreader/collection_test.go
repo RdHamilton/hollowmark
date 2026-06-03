@@ -27,10 +27,13 @@ func TestIsCollectionEntry_True(t *testing.T) {
 	assert.True(t, IsCollectionEntry(collectionEntry()))
 }
 
-// TestIsCollectionEntry_EmptyObject accepts an explicit empty-object response.
+// TestIsCollectionEntry_EmptyObject rejects an empty-object ({}) entry. Arena
+// writes bare {} lines constantly at idle; treating them as collection snapshots
+// is the false-positive source of the rc3 emit-storm. An empty object carries no
+// positive GetPlayerCardsV3 signal, so it must NOT classify as collection.updated.
 func TestIsCollectionEntry_EmptyObject(t *testing.T) {
 	entry := &LogEntry{IsJSON: true, JSON: map[string]interface{}{}}
-	assert.True(t, IsCollectionEntry(entry))
+	assert.False(t, IsCollectionEntry(entry))
 }
 
 // TestIsCollectionEntry_False_NilEntry rejects a nil entry.
@@ -133,13 +136,13 @@ func TestParseCollectionEntry_PopulatesAllFields(t *testing.T) {
 	assert.Equal(t, 1, p.Cards[2].Count)
 }
 
-// TestParseCollectionEntry_EmptyObject returns an empty card slice, no error.
+// TestParseCollectionEntry_EmptyObject returns an error: an empty object ({}) is
+// no longer a valid collection snapshot (it carries no positive card signal).
 func TestParseCollectionEntry_EmptyObject(t *testing.T) {
 	entry := &LogEntry{IsJSON: true, JSON: map[string]interface{}{}}
-	p, err := ParseCollectionEntry(entry)
-	require.NoError(t, err)
-	assert.Empty(t, p.Cards)
-	assert.False(t, p.IsDelta)
+	_, err := ParseCollectionEntry(entry)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "collection snapshot")
 }
 
 // TestParseCollectionEntry_NilEntry returns an error for a nil entry.

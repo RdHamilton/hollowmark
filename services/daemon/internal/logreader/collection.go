@@ -12,10 +12,17 @@ import (
 // object whose keys are string-encoded arena IDs and whose values are integer
 // copy counts (e.g. {"12345": 4, "67890": 2}).
 //
-// Detection heuristic: the entry is JSON, has no recognisable wrapper keys
-// (InventoryInfo, quests, draftPack, etc.), and every key can be parsed as a
-// positive integer — indicating a card-ID map rather than a named-field object.
-// An empty object ({}) is accepted as a valid (empty) collection snapshot.
+// Detection heuristic: the entry is JSON, has at least one key, has no
+// recognisable wrapper keys (InventoryInfo, quests, draftPack, etc.), and every
+// key can be parsed as a positive integer — indicating a card-ID map rather than
+// a named-field object.
+//
+// An empty object ({}) is NOT a collection snapshot. Arena writes bare {} lines
+// continuously at idle; accepting them produced a massive false-positive rate
+// that 429-storms the BFF (the rc3 emit-storm). A real GetPlayerCardsV3 response
+// always carries at least one positive arena_id:count pair, so requiring a
+// non-empty map is a safe minimum positive signal that does not reject any real
+// collection snapshot.
 func IsCollectionEntry(entry *LogEntry) bool {
 	if entry == nil || !entry.IsJSON {
 		return false
@@ -23,8 +30,8 @@ func IsCollectionEntry(entry *LogEntry) bool {
 
 	m := entry.JSON
 	if len(m) == 0 {
-		// An explicit empty-object response counts as a collection snapshot.
-		return true
+		// An empty object carries no card signal — not a collection snapshot.
+		return false
 	}
 
 	// Reject entries that contain well-known named wrapper keys used by other
