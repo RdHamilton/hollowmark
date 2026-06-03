@@ -155,6 +155,32 @@ describe('Layout Component', () => {
       expect(draftTab).toHaveClass('active');
     });
 
+    it('should highlight Draft tab when on /draft/live route', () => {
+      render(
+        <Layout>
+          <div>Test Content</div>
+        </Layout>,
+        { initialRoute: '/draft/live' }
+      );
+
+      const draftTab = screen.getByTestId('nav-tab-draft');
+      expect(draftTab).toHaveClass('active');
+      // Match History must NOT be highlighted -- that was the bug
+      expect(screen.getByTestId('nav-tab-match-history')).not.toHaveClass('active');
+    });
+
+    it('should highlight Draft tab when on /history/drafts route', () => {
+      render(
+        <Layout>
+          <div>Test Content</div>
+        </Layout>,
+        { initialRoute: '/history/drafts' }
+      );
+
+      const draftTab = screen.getByTestId('nav-tab-draft');
+      expect(draftTab).toHaveClass('active');
+    });
+
     it('should navigate to correct route when tab is clicked', async () => {
       render(
         <Layout>
