@@ -13,6 +13,11 @@
  * off` on `/api/v1/events` so JWTs do not land in long-lived proxy logs.
  *
  * Features:
+ * - Waits for Clerk to finish hydrating (`isLoaded && isSignedIn`) before
+ *   opening the EventSource.  This prevents an unauthenticated SSE connection
+ *   during the brief window where `getToken()` returns null at mount time even
+ *   though the user's session is valid.  See issue #SSE-auth-bug /
+ *   "Tim draft-verify Scenario-A SSE-auth".
  * - Reconnects with exponential backoff (100ms base, 30s cap) on error.
  *   Each reconnect re-fetches `getToken()` so rotated JWTs are picked up.
  * - Exposes `latestEvent` (last parsed draft event or null) and `status`.
@@ -23,7 +28,7 @@ import { useAuth } from '@clerk/react';
 import { useEffect, useRef, useState } from 'react';
 
 /** Status of the underlying SSE connection. */
-export type DraftEventStreamStatus = 'connecting' | 'open' | 'closed' | 'error';
+export type DraftEventStreamStatus = 'connecting' | 'open' | 'closed' | 'error' | 'waiting-for-auth';
 
 /** Parsed wire format of a DaemonEvent sent by the BFF broker. */
 export interface DaemonEvent {
@@ -63,10 +68,10 @@ function computeBackoff(attempt: number): number {
 }
 
 export function useDraftEventStream(): UseDraftEventStreamReturn {
-  const { getToken } = useAuth();
+  const { getToken, isLoaded, isSignedIn } = useAuth();
 
   const [latestEvent, setLatestEvent] = useState<DaemonEvent | null>(null);
-  const [status, setStatus] = useState<DraftEventStreamStatus>('connecting');
+  const [status, setStatus] = useState<DraftEventStreamStatus>('waiting-for-auth');
 
   // All mutable state lives in refs so callbacks captured in EventSource
   // handlers always see the current value without triggering re-renders.
@@ -89,6 +94,9 @@ export function useDraftEventStream(): UseDraftEventStreamReturn {
     getTokenRef.current = getToken;
   }, [getToken]);
 
+  // Re-run the main connection effect when Clerk auth state changes so we
+  // connect as soon as isLoaded+isSignedIn become true (fixes the mount-time
+  // race where getToken() returns null before Clerk JS hydrates).
   useEffect(() => {
     unmountedRef.current = false;
 
@@ -97,15 +105,24 @@ export function useDraftEventStream(): UseDraftEventStreamReturn {
     const setLatestEventLocal = setLatestEventRef.current;
     const setStatusLocal = setStatusRef.current;
 
+    // Guard: do not open an EventSource until Clerk has finished loading and
+    // confirmed the user is signed in.  getToken() returns null while
+    // isLoaded=false (Clerk JS still hydrating) — opening the connection in
+    // that state produces a tokenless URL that the BFF registers as userID=0,
+    // which receives no events and never self-heals because `onopen` resets
+    // the backoff counter.
+    if (!isLoaded || !isSignedIn) {
+      setStatusLocal('waiting-for-auth');
+      return;
+    }
+
     async function connect() {
       if (unmountedRef.current) return;
 
       setStatusLocal('connecting');
 
       // Fresh JWT every (re)connect so a rotated Clerk session picks up on
-      // the next backoff cycle.  If getToken returns null (not signed in /
-      // Clerk still hydrating), open the URL without ?token= and let the
-      // server's 401 trigger the existing reconnect path.
+      // the next backoff cycle.
       let url = SSE_URL;
       try {
         const token = await getTokenRef.current();
@@ -114,6 +131,10 @@ export function useDraftEventStream(): UseDraftEventStreamReturn {
           u.searchParams.set('token', token);
           url = u.toString();
         }
+        // If getToken() returns null here (very unlikely given the isSignedIn
+        // guard above, but possible during a mid-session sign-out race), fall
+        // through — onerror backoff will retry, and the next attempt re-calls
+        // getTokenRef.current() which will have the fresh function reference.
       } catch {
         // Token fetch failure — fall through and let SSE 401 + backoff retry.
       }
@@ -191,7 +212,12 @@ export function useDraftEventStream(): UseDraftEventStreamReturn {
 
       setStatusLocal('closed');
     };
-  }, []);
+  // Re-run when Clerk auth state resolves so the connection is made as soon
+  // as isLoaded+isSignedIn become true.  getToken is intentionally excluded
+  // from this dep array — it is kept current via getTokenRef so a JWT rotation
+  // does not tear down the SSE connection.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded, isSignedIn]);
 
   return { latestEvent, status };
 }
