@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,34 @@ import userEvent from '@testing-library/user-event';
 import { render } from '../test/utils/testUtils';
 import Layout from './Layout';
 import { mockMatches } from '@/test/mocks/apiMock';
+import { SESSION_HAS_ACCOUNT_DATA_KEY } from '@/hooks/useDaemonOnboarding';
+
+// Mock bffHomeSummary so Layout tests do not hit real fetch and do not pop
+// the onboarding modal accidentally (getHomeSummary returns 19 matches = 'has-data').
+// Tests that need the new-user path should override getHomeSummary per-test.
+vi.mock('@/services/api/bffHomeSummary', () => ({
+  getHomeSummary: vi.fn(() =>
+    Promise.resolve({
+      today: { wins: 2, losses: 1, win_rate: 0.667 },
+      this_week: { wins: 10, losses: 9, win_rate: 0.526, matches: 19 },
+      all_time: {
+        wins: 10,
+        losses: 9,
+        win_rate: 0.526,
+        matches: 19,
+        current_streak: 1,
+        streak_type: 'W',
+      },
+      last_match: { result: 'win', opponent_archetype: null, elapsed_seconds: 600 },
+    })
+  ),
+  makeMockHomeSummary: vi.fn(() => ({
+    today: { wins: 0, losses: 0, win_rate: 0 },
+    this_week: { wins: 0, losses: 0, win_rate: 0, matches: 0 },
+    all_time: { wins: 0, losses: 0, win_rate: 0, matches: 0, current_streak: 0, streak_type: 'W' },
+    last_match: null,
+  })),
+}));
 
 const CSS_PATH = join(dirname(fileURLToPath(import.meta.url)), 'Layout.css');
 
@@ -262,6 +290,69 @@ describe('Layout Component', () => {
 
       // Layout should still render
       expect(screen.getByTestId('nav-tab-match-history')).toBeInTheDocument();
+    });
+  });
+
+  describe('Sign-out reset (#715 — Ray required addition)', () => {
+    // The sign-out useEffect in Layout must clear the sessionStorage entry and
+    // reset dataCheckDoneRef so a subsequent sign-in re-fetches the summary
+    // instead of inheriting the prior session's 'has-data' state.
+
+    afterEach(() => {
+      sessionStorage.removeItem(SESSION_HAS_ACCOUNT_DATA_KEY);
+    });
+
+    it('clears sessionStorage when isSignedIn transitions to false', async () => {
+      // This test verifies that the sign-out useEffect in Layout.tsx calls
+      // sessionStorage.removeItem(SESSION_HAS_ACCOUNT_DATA_KEY) when isSignedIn is false.
+      //
+      // Approach: spy on sessionStorage.removeItem, render Layout with a signed-out
+      // Clerk mock. The global vi.mock('@clerk/react') factory is hoisted, but we can
+      // spy on the module's exports after import.
+
+      const clerkModule = await import('@clerk/react');
+      const useAuthSpy = vi.spyOn(clerkModule, 'useAuth').mockReturnValue({
+        isLoaded: true,
+        isSignedIn: false,
+        getToken: () => Promise.resolve(null),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      // Seed sessionStorage — the sign-out effect should clear this.
+      sessionStorage.setItem(SESSION_HAS_ACCOUNT_DATA_KEY, 'true');
+
+      render(
+        <Layout>
+          <div>Test Content</div>
+        </Layout>
+      );
+
+      // The sign-out effect (useEffect([isSignedIn])) should fire on mount
+      // because isSignedIn is false, clearing the sessionStorage entry.
+      await waitFor(() => {
+        expect(sessionStorage.getItem(SESSION_HAS_ACCOUNT_DATA_KEY)).toBeNull();
+      });
+
+      useAuthSpy.mockRestore();
+    });
+
+    it('does NOT clear sessionStorage while still signed in', async () => {
+      // Seed sessionStorage — should persist while signed in.
+      sessionStorage.setItem(SESSION_HAS_ACCOUNT_DATA_KEY, 'true');
+
+      // Default mock returns isSignedIn: true — no override needed.
+      render(
+        <Layout>
+          <div>Test Content</div>
+        </Layout>
+      );
+
+      // Give the effect time to run — it should not clear the entry.
+      await waitFor(() => {
+        expect(screen.getByTestId('app-container')).toBeInTheDocument();
+      });
+
+      expect(sessionStorage.getItem(SESSION_HAS_ACCOUNT_DATA_KEY)).toBe('true');
     });
   });
 });
