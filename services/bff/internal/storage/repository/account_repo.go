@@ -17,7 +17,7 @@ type AccountRow struct {
 	Name         string
 	ScreenName   sql.NullString
 	ClientID     sql.NullString
-	IsDefault    int
+	IsDefault    bool
 	DailyWins    int
 	WeeklyWins   int
 	MasteryLevel int
