@@ -15,7 +15,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Setup Page — structure', () => {
   test.beforeEach(async ({ page }) => {
     // Default: daemon health unreachable (keeps pairing in "waiting" state)
-    await page.route('http://localhost:9001/health', async (route) => {
+    await page.route('http://127.0.0.1:9001/health', async (route) => {
       await route.abort('connectionrefused');
     });
     await page.goto('/setup');
@@ -51,7 +51,7 @@ test.describe('Setup Page — structure', () => {
 
 test.describe('Setup Page — install warnings', () => {
   test('@smoke both Gatekeeper and SmartScreen sections are accessible', async ({ page }) => {
-    await page.route('http://localhost:9001/health', async (route) => {
+    await page.route('http://127.0.0.1:9001/health', async (route) => {
       await route.abort('connectionrefused');
     });
     await page.goto('/setup');
@@ -70,7 +70,7 @@ test.describe('Setup Page — install warnings', () => {
   });
 
   test('Gatekeeper section contains bypass instructions', async ({ page }) => {
-    await page.route('http://localhost:9001/health', async (route) => {
+    await page.route('http://127.0.0.1:9001/health', async (route) => {
       await route.abort('connectionrefused');
     });
     await page.goto('/setup');
@@ -95,7 +95,7 @@ test.describe('Setup Page — install warnings', () => {
   });
 
   test('SmartScreen section contains bypass instructions', async ({ page }) => {
-    await page.route('http://localhost:9001/health', async (route) => {
+    await page.route('http://127.0.0.1:9001/health', async (route) => {
       await route.abort('connectionrefused');
     });
     await page.goto('/setup');
@@ -119,7 +119,7 @@ test.describe('Setup Page — install warnings', () => {
   });
 
   test('copy is empathetic — explains unsigned beta is normal', async ({ page }) => {
-    await page.route('http://localhost:9001/health', async (route) => {
+    await page.route('http://127.0.0.1:9001/health', async (route) => {
       await route.abort('connectionrefused');
     });
     await page.goto('/setup');
@@ -131,7 +131,7 @@ test.describe('Setup Page — install warnings', () => {
 
 test.describe('Setup Page — PKCE pairing flow', () => {
   test('@smoke shows "Waiting for auth" in initial state', async ({ page }) => {
-    await page.route('http://localhost:9001/health', async (route) => {
+    await page.route('http://127.0.0.1:9001/health', async (route) => {
       await route.abort('connectionrefused');
     });
     await page.goto('/setup');
@@ -146,7 +146,7 @@ test.describe('Setup Page — PKCE pairing flow', () => {
     page,
   }) => {
     // Daemon returns configured: true immediately
-    await page.route('http://localhost:9001/health', async (route) => {
+    await page.route('http://127.0.0.1:9001/health', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -192,7 +192,7 @@ test.describe('Setup Page — auth status states (#2142)', () => {
       (window as unknown as Record<string, unknown>).__VAULTMTG_DESKTOP__ = true;
     });
 
-    await page.route('http://localhost:9001/health', async (route) => {
+    await page.route('http://127.0.0.1:9001/health', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -218,7 +218,7 @@ test.describe('Setup Page — auth status states (#2142)', () => {
       (window as unknown as Record<string, unknown>).__VAULTMTG_DESKTOP__ = true;
     });
 
-    await page.route('http://localhost:9001/health', async (route) => {
+    await page.route('http://127.0.0.1:9001/health', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -244,7 +244,7 @@ test.describe('Setup Page — auth status states (#2142)', () => {
 
 test.describe('Setup Page — navigation', () => {
   test('setup page is accessible at /setup (HTTP 200)', async ({ page }) => {
-    await page.route('http://localhost:9001/health', async (route) => {
+    await page.route('http://127.0.0.1:9001/health', async (route) => {
       await route.abort('connectionrefused');
     });
     const response = await page.goto('/setup');

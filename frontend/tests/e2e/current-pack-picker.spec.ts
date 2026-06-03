@@ -204,8 +204,8 @@ async function mockBffForActiveDraft(page: Page): Promise<void> {
 
 /**
  * Mock the daemon current-pack endpoint.
- * The daemon client hits http://localhost:9001/api/v1 — the glob pattern
- * matches regardless of port so tests run without a live daemon.
+ * The daemon client hits http://127.0.0.1:9001/api/v1 — the glob pattern
+ * matches regardless of host/port so tests run without a live daemon.
  */
 async function mockDaemonCurrentPack(
   page: Page,
