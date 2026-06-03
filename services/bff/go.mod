@@ -2,7 +2,7 @@ module github.com/RdHamilton/vault-mtg/services/bff
 
 go 1.25.0
 
-toolchain go1.25.10
+toolchain go1.25.11
 
 require (
 	github.com/RdHamilton/vault-mtg/services/contract v0.1.5
