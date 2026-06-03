@@ -116,7 +116,47 @@ func GetPlayerSeatIDByName(entries []*LogEntry, playerScreenName string) *GRECon
 			continue
 		}
 
-		// Look for connectResp - this is reliable as it's sent directly to the player
+		// Primary: look for GREMessageType_ConnectResp inside the greToClientEvent wrapper.
+		// Real MTGA Player.log lines carry connectResp as a nested GRE message:
+		//   { "greToClientEvent": { "greToClientMessages": [
+		//       { "type": "GREMessageType_ConnectResp", "systemSeatIds": [N], "connectResp": {...} }
+		//   ]}}
+		// The systemSeatIds field at the message level (not inside connectResp) is the
+		// authoritative player seat number.
+		if greEvt, ok := entry.JSON["greToClientEvent"].(map[string]interface{}); ok {
+			if msgs, ok := greEvt["greToClientMessages"].([]interface{}); ok {
+				for _, m := range msgs {
+					msg, ok := m.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					if msg["type"] != "GREMessageType_ConnectResp" {
+						continue
+					}
+					conn := &GREConnection{}
+					// systemSeatIds is at the message level (not inside connectResp).
+					if seatIDs, ok := msg["systemSeatIds"].([]interface{}); ok && len(seatIDs) > 0 {
+						if seatID, ok := seatIDs[0].(float64); ok {
+							conn.SystemSeatID = int(seatID)
+							conn.SeatID = int(seatID)
+						}
+					}
+					// teamId may be inside connectResp.
+					if cr, ok := msg["connectResp"].(map[string]interface{}); ok {
+						if teamID, ok := cr["teamId"].(float64); ok {
+							conn.TeamID = int(teamID)
+						}
+					}
+					if conn.SeatID != 0 || conn.SystemSeatID != 0 {
+						return conn
+					}
+				}
+			}
+		}
+
+		// Legacy / test-fixture path: top-level connectResp key.
+		// Synthetic test entries may place connectResp at the top level of the JSON
+		// object for brevity. Real MTGA logs do not use this shape.
 		if connectResp, ok := entry.JSON["connectResp"]; ok {
 			connMap, ok := connectResp.(map[string]interface{})
 			if !ok {
