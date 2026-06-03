@@ -192,7 +192,9 @@ export default function Decks() {
     return new Date(String(date)).toLocaleDateString();
   };
 
-  const formatStreak = (streak: number) => {
+  const formatStreak = (streak: number | null | undefined) => {
+    // Guard: if streak is null/undefined (field absent from BFF payload), suppress the badge.
+    if (streak == null || !isFinite(streak)) return null;
     if (streak === 0) return null;
     if (streak > 0) {
       return { text: `${streak}W`, className: 'win-streak', icon: '🔥' };
@@ -291,11 +293,12 @@ export default function Decks() {
           </div>
         </>
       ) : (
-        <div className="decks-grid">
+        <div className="decks-grid" data-testid="decks-grid">
           {deckList.map((deck) => (
             <div
               key={deck.id}
               className="deck-card"
+              data-testid={`deck-card-${deck.id}`}
               onClick={() => navigate(`/deck-builder/${deck.id}`)}
             >
               <div className="deck-card-header">
@@ -333,7 +336,10 @@ export default function Decks() {
                       WR ({deck.matchesPlayed} matches)
                     </span>
                     {formatStreak(deck.currentStreak) && (
-                      <span className={`deck-streak ${formatStreak(deck.currentStreak)?.className}`}>
+                      <span
+                        className={`deck-streak ${formatStreak(deck.currentStreak)?.className}`}
+                        data-testid="deck-streak"
+                      >
                         {formatStreak(deck.currentStreak)?.icon} {formatStreak(deck.currentStreak)?.text}
                       </span>
                     )}
@@ -346,6 +352,7 @@ export default function Decks() {
               <div className="deck-card-footer">
                 <button
                   className="edit-button"
+                  data-testid={`deck-edit-${deck.id}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     navigate(`/deck-builder/${deck.id}`);
@@ -355,12 +362,14 @@ export default function Decks() {
                 </button>
                 <button
                   className="export-button"
+                  data-testid={`deck-export-${deck.id}`}
                   onClick={(e) => handleExportClick(deck, e)}
                 >
                   Export
                 </button>
                 <button
                   className="delete-button"
+                  data-testid={`deck-delete-${deck.id}`}
                   onClick={(e) => handleDeleteClick(deck, e)}
                 >
                   Delete
