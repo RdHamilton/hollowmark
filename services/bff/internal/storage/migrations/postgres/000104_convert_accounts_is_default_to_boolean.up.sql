@@ -18,6 +18,11 @@ BEGIN
         DROP INDEX IF EXISTS idx_accounts_default;
         DROP INDEX IF EXISTS idx_accounts_is_default;
 
+        -- Must drop the integer DEFAULT before the type ALTER; PostgreSQL
+        -- cannot auto-cast DEFAULT 0 to boolean in the same ALTER statement.
+        ALTER TABLE accounts
+            ALTER COLUMN is_default DROP DEFAULT;
+
         ALTER TABLE accounts
             ALTER COLUMN is_default TYPE BOOLEAN
             USING (is_default <> 0);
