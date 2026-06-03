@@ -1505,6 +1505,38 @@ describe('Decks', () => {
       expect(winRateEl?.textContent).not.toMatch(/NaN/);
       expect(winRateEl?.textContent).toMatch(/60%/);
     });
+
+    it('renders correct win-rate from DeckListItem deserialized from BFF wire shape (winRate: 0.8)', async () => {
+      // Verifies the full render path post-fix: getDecks() maps raw BFF JSON
+      // through DeckListItem.createFrom() (see decks.ts getDecks fix), which
+      // bridges the BFF wire key "winRate" to the SPA property "matchWinRate".
+      // The service test in decks.test.ts validates the deserialization step;
+      // this test validates the render step given a correctly deserialized item.
+      mockDecks.getDecks.mockResolvedValue([
+        gui.DeckListItem.createFrom({
+          id: 'deck-deserialized',
+          name: 'Deserialized Deck',
+          format: 'standard',
+          source: 'manual',
+          matchesPlayed: 5,
+          winRate: 0.8, // BFF wire key — createFrom() maps this to matchWinRate
+          currentStreak: 0,
+          cardCount: 60,
+          modifiedAt: new Date('2024-01-15T10:00:00').toISOString(),
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Deserialized Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/80%/);
+    });
   });
 
   describe('Create Deck Modal — Format Select Positioning (#2011)', () => {
