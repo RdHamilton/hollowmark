@@ -8,7 +8,7 @@ import { render } from '../test/utils/testUtils';
 import Draft from './Draft';
 import { mockDrafts, mockCards } from '@/test/mocks/apiMock';
 import { mockEventEmitter } from '@/test/mocks/websocketMock';
-import { models, gui } from '@/types/models';
+import { models, gui, pickquality } from '@/types/models';
 import * as useFeatureFlagModule from '@/hooks/useFeatureFlag';
 
 // Mock useFeatureFlag so flag state is test-controlled without PostHog
@@ -325,6 +325,55 @@ describe('Draft Component', () => {
         const gradeBadges = document.querySelectorAll('.pick-quality-badge');
         expect(gradeBadges.length).toBeGreaterThan(0);
       });
+    });
+
+    // ── GIHWR units regression (#787 AC5) ──────────────────────────────────
+    // The pick-quality tooltip renders gihwr from the daemon grade-pick path,
+    // which serves a FRACTION (0.0–1.0) per Bob's #787 decision. The display
+    // must multiply by 100: a 0.631 picked-card GIHWR reads "63.1%", and a
+    // 0.685 alternative reads "68.5%" — NOT the buggy raw "0.6%"/"0.7%".
+    it('renders pick-quality tooltip GIHWR as a percent, not a raw fraction (#787)', async () => {
+      const session = createMockDraftSession();
+      const card = createMockSetCard({ ArenaID: '12345' });
+      const pick = createMockDraftPick({
+        CardID: '12345',
+        PackNumber: 0,
+        PickNumber: 1,
+        PickQualityGrade: 'B',
+        PickQualityRank: 2,
+      });
+
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
+      mockDrafts.getDraftPicks.mockResolvedValue([pick]);
+      mockDrafts.getDraftPool.mockResolvedValue([]);
+      mockCards.getSetCards.mockResolvedValue([card]);
+      mockCards.getCardRatings.mockResolvedValue([]);
+      mockDrafts.getDraftDeckMetrics.mockResolvedValue(createMockDeckMetrics());
+      // Daemon grade-pick path returns fractional gihwr values.
+      mockDrafts.getPickAlternatives.mockResolvedValue(
+        new pickquality.PickQuality({
+          grade: 'B',
+          rank: 2,
+          pack_best_gihwr: 0.685,
+          picked_card_gihwr: 0.631,
+          alternatives: [{ card_name: 'Better Bomb', gihwr: 0.685 }],
+        }),
+      );
+
+      render(<Draft />);
+
+      // The pick-history card image carries an onMouseEnter that lazily loads
+      // the alternatives and renders the pick-quality tooltip.
+      const cardImg = await screen.findByRole('img', { name: 'Test Card' });
+      await userEvent.hover(cardImg);
+
+      await waitFor(() => {
+        expect(screen.getByText('63.1%')).toBeInTheDocument();
+        expect(screen.getByText('68.5%')).toBeInTheDocument();
+      });
+      // The buggy raw-fraction render must be absent.
+      expect(screen.queryByText('0.6%')).not.toBeInTheDocument();
+      expect(screen.queryByText('0.7%')).not.toBeInTheDocument();
     });
   });
 
