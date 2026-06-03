@@ -626,6 +626,161 @@ func TestProjectionIntegration(t *testing.T) {
 	})
 }
 
+// ─── Layer 3a: player_on_play pipeline smoke (ticket #712) ─────────────────
+
+// TestProjectionIntegration_PlayerOnPlay verifies the full player_on_play
+// pipeline:
+//
+//	match.completed corpus event  → worker.RunOnce → matches row
+//	match.game_ended corpus event → worker.RunOnce → match_game_results row (player_on_play=true)
+//	GET /api/v1/history/matches   → response includes player_on_play: true for that match
+//
+// Root-cause context (#712): the ci-smoke seed only inserts match.completed
+// events, which write to matches but NOT to match_game_results. The
+// ListByAccountIDCursorFiltered LEFT JOIN on match_game_results finds no
+// game-1 row, so player_on_play is NULL on every history row regardless of
+// the column's migration state. This test gates the missing corpus fixture
+// and proves the full chain in one shot.
+func TestProjectionIntegration_PlayerOnPlay(t *testing.T) {
+	db := openIntegrationDB(t)
+	corpus := corpusDir(t)
+
+	// Corpus fixtures — match.completed must project first so the match row
+	// exists when match.game_ended arrives and resolves account_id.
+	rawMatchCompleted := mustReadCorpus(t, corpus, "daemon-emit", "match-completed.json")
+	rawGameEnded := mustReadCorpus(t, corpus, "daemon-emit", "match-game-ended.json")
+
+	// Expected DB values after projection.
+	expectedGameEnded := mustReadCorpus(t, corpus, "db-expected", "match-game-ended.json")
+
+	var expGame struct {
+		MatchID      string `json:"MatchID"`
+		GameNumber   int    `json:"GameNumber"`
+		PlayerOnPlay bool   `json:"PlayerOnPlay"`
+		Partial      bool   `json:"Partial"`
+	}
+	if err := json.Unmarshal(expectedGameEnded, &expGame); err != nil {
+		t.Fatalf("decode db-expected/match-game-ended.json: %v", err)
+	}
+
+	clientID := "test-l3a-player-on-play"
+	userID := seedUser(t, db, clientID)
+	accountID := resolveAccountID(t, db, clientID, userID)
+
+	// Insert both events. Order matters: match.completed assigns the account row
+	// used by match.game_ended's InsertGamePlay call.
+	rowCompleted := corpusDaemonEventRow(t, rawMatchCompleted, userID, clientID)
+	rowGameEnded := corpusDaemonEventRow(t, rawGameEnded, userID, clientID)
+
+	insertDaemonEvent(t, db, rowCompleted)
+	insertDaemonEvent(t, db, rowGameEnded)
+
+	w := buildWorker(db)
+	w.RunOnce(context.Background())
+
+	// --- AC1: match_game_results row exists with correct player_on_play ---
+
+	var gotGameNumber int
+	var gotPlayerOnPlay *bool
+	var gotPartial bool
+
+	err := db.QueryRowContext(
+		context.Background(),
+		`SELECT game_number, player_on_play, partial
+		 FROM match_game_results
+		 WHERE account_id = $1 AND match_id = $2 AND game_number = $3`,
+		accountID, expGame.MatchID, expGame.GameNumber,
+	).Scan(&gotGameNumber, &gotPlayerOnPlay, &gotPartial)
+	if err != nil {
+		t.Fatalf("[PlayerOnPlay] SELECT match_game_results: %v — match.game_ended event was not projected", err)
+	}
+
+	if gotGameNumber != expGame.GameNumber {
+		t.Errorf("[PlayerOnPlay] game_number: want %d, got %d", expGame.GameNumber, gotGameNumber)
+	}
+	if gotPlayerOnPlay == nil {
+		t.Error("[PlayerOnPlay] player_on_play is NULL in match_game_results — corpus fixture not carrying the field?")
+	} else if *gotPlayerOnPlay != expGame.PlayerOnPlay {
+		t.Errorf("[PlayerOnPlay] player_on_play: want %v, got %v", expGame.PlayerOnPlay, *gotPlayerOnPlay)
+	}
+	if gotPartial != expGame.Partial {
+		t.Errorf("[PlayerOnPlay] partial: want %v, got %v", expGame.Partial, gotPartial)
+	}
+
+	// --- AC2: history API response includes player_on_play for this match ---
+
+	matchesRepo := repository.NewMatchesRepository(db)
+	accountRepo := repository.NewAccountRepository(db)
+	h := handlers.NewHistoryHandler(accountRepo, matchesRepo, nil)
+
+	r := chi.NewRouter()
+	r.Get("/api/v1/history/matches", func(w http.ResponseWriter, req *http.Request) {
+		req = req.WithContext(bffmiddleware.WithUserID(req.Context(), userID))
+		h.GetMatches(w, req)
+	})
+
+	ts := httptest.NewServer(r)
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/api/v1/history/matches?limit=20")
+	if err != nil {
+		t.Fatalf("[PlayerOnPlay] GET /history/matches: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("[PlayerOnPlay] status: want 200, got %d", resp.StatusCode)
+	}
+
+	// history.go writes cursorPaginatedMatchResponse with top-level "data" array.
+	var envelope struct {
+		Data []struct {
+			ID           string `json:"id"`
+			PlayerOnPlay *bool  `json:"player_on_play"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("[PlayerOnPlay] decode history response: %v", err)
+	}
+
+	if len(envelope.Data) == 0 {
+		t.Fatal("[PlayerOnPlay] history response data is empty — match.completed not projected?")
+	}
+
+	// Find the match we projected. There may be other matches from earlier subtests
+	// if the DB is shared; look up by ID.
+	var foundMatch *struct {
+		ID           string `json:"id"`
+		PlayerOnPlay *bool  `json:"player_on_play"`
+	}
+	for i := range envelope.Data {
+		if envelope.Data[i].ID == expGame.MatchID {
+			foundMatch = &envelope.Data[i]
+			break
+		}
+	}
+	if foundMatch == nil {
+		t.Fatalf("[PlayerOnPlay] match ID %q not found in history response", expGame.MatchID)
+	}
+
+	if foundMatch.PlayerOnPlay == nil {
+		t.Error("[PlayerOnPlay] history response player_on_play is null/absent — LEFT JOIN on match_game_results returned no row (ADR-050 gap: match.game_ended not in seed)")
+	} else if *foundMatch.PlayerOnPlay != expGame.PlayerOnPlay {
+		t.Errorf("[PlayerOnPlay] history response player_on_play: want %v, got %v", expGame.PlayerOnPlay, *foundMatch.PlayerOnPlay)
+	}
+
+	// AC3: zero projection_errors.
+	var errCount int
+	_ = db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM projection_errors WHERE account_id = $1`,
+		clientID,
+	).Scan(&errCount)
+	if errCount != 0 {
+		t.Errorf("[PlayerOnPlay] projection_errors: want 0, got %d", errCount)
+	}
+}
+
 // ─── Layer 3b: BFF sync integration smoke (ADR-042 §Layer3b, closes #185) ───
 
 // TestSyncIntegration is the entry point for the Layer 3b BFF sync

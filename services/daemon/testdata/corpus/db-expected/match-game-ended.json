@@ -1,0 +1,9 @@
+{
+  "MatchID": "11111111-0000-4000-8000-000000000122",
+  "GameNumber": 1,
+  "WinningTeamID": 1,
+  "TurnCount": 8,
+  "DurationSecs": 240,
+  "PlayerOnPlay": true,
+  "Partial": false
+}
