@@ -11,8 +11,9 @@ import { test, expect, type Page } from '@playwright/test';
  *
  * Note: Onboarding modal visibility is gated on (useDaemonOnboarding):
  * 1. User is signed in (Clerk test mode provides mock auth)
- * 2. Daemon is disconnected (BFF health check returns disconnected)
- * 3. User has not previously dismissed/completed onboarding (localStorage is clean)
+ * 2. accountDataState === 'empty' (getHomeSummary returns 0 matches)
+ * 3. Daemon is disconnected (BFF health check returns disconnected)
+ * 4. User has not previously dismissed/completed onboarding (localStorage is clean)
  *
  * Fix (#2178): added setClerkSignedIn() injection in beforeEach. Without it the
  * Clerk mock (src/test/mocks/clerkMock.tsx) defaults to isSignedIn: false, so
@@ -21,6 +22,10 @@ import { test, expect, type Page } from '@playwright/test';
  * The mock reads window.__CLERK_TEST_STATE__ injected via addInitScript, and
  * addInitScript persists across every navigation in the page's context, so a
  * single injection in beforeEach covers all the page.goto() calls below.
+ *
+ * Fix (#715): accountDataState is now a tri-state. The modal fires ONLY when
+ * getHomeSummary resolves with 0 matches ('empty'). Every test that expects the
+ * modal to appear must stub history/summary to return 0 matches.
  */
 
 /** Inject signed-in Clerk state before page load. addInitScript persists across navigations. */
@@ -30,22 +35,43 @@ async function setClerkSignedIn(page: Page): Promise<void> {
   }, { isSignedIn: true, firstName: 'Test', lastName: 'User' });
 }
 
+/** Stub history/summary to return 0 matches (new user / 'empty' state). */
+async function stubSummaryNewUser(page: Page): Promise<void> {
+  await page.route('**/api/v1/history/summary', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        today: { wins: 0, losses: 0, win_rate: 0 },
+        this_week: { wins: 0, losses: 0, win_rate: 0, matches: 0 },
+        all_time: {
+          wins: 0,
+          losses: 0,
+          win_rate: 0,
+          matches: 0,
+          current_streak: 0,
+          streak_type: 'W',
+        },
+        last_match: null,
+      }),
+    });
+  });
+}
+
 test.describe('Daemon Onboarding Flow', () => {
   test.beforeEach(async ({ page }) => {
     // Inject signed-in Clerk state so useDaemonOnboarding's autoShow gate
-    // (isSignedIn && daemonStatus === 'disconnected' && !hasSeenOnboarding)
+    // (isSignedIn && accountDataState === 'empty' && daemonStatus === 'disconnected')
     // can fire. Without this the modal never appears (#2178).
     await setClerkSignedIn(page);
 
-    // Clear localStorage so onboarding state is fresh for each test
-    await page.goto('/');
-    await page.evaluate(() => {
+    // Clear localStorage so onboarding state is fresh for each test.
+    // Also clear sessionStorage 'has-data' cache so tri-state starts at 'pending'.
+    await page.addInitScript(() => {
       localStorage.removeItem('vaultmtg_onboarding_dismissed');
       localStorage.removeItem('vaultmtg_onboarding_completed');
+      sessionStorage.removeItem('vaultmtg_has_account_data');
     });
-
-    // Wait for the app to load (timeout governed by global expect.timeout: 30_000)
-    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
   });
 
   test('@smoke onboarding modal appears for new user with no daemon', async ({ page }) => {
@@ -57,17 +83,15 @@ test.describe('Daemon Onboarding Flow', () => {
         body: JSON.stringify({ status: 'disconnected' }),
       });
     });
+    // Stub summary: new user (0 matches) so accountDataState resolves to 'empty'
+    await stubSummaryNewUser(page);
 
-    // Navigate and clear localStorage
     await page.goto('/');
-    await page.evaluate(() => {
-      localStorage.removeItem('vaultmtg_onboarding_dismissed');
-      localStorage.removeItem('vaultmtg_onboarding_completed');
-    });
 
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
 
     // Onboarding modal should appear once the daemon health check returns disconnected
+    // AND accountDataState resolves to 'empty'.
     await expect(page.locator('[data-testid="onboarding-modal"]')).toBeVisible();
   });
 
@@ -79,12 +103,9 @@ test.describe('Daemon Onboarding Flow', () => {
         body: JSON.stringify({ status: 'disconnected' }),
       });
     });
+    await stubSummaryNewUser(page);
 
     await page.goto('/');
-    await page.evaluate(() => {
-      localStorage.removeItem('vaultmtg_onboarding_dismissed');
-      localStorage.removeItem('vaultmtg_onboarding_completed');
-    });
 
     await expect(page.locator('[data-testid="onboarding-modal"]')).toBeVisible();
 
@@ -101,12 +122,9 @@ test.describe('Daemon Onboarding Flow', () => {
         body: JSON.stringify({ status: 'disconnected' }),
       });
     });
+    await stubSummaryNewUser(page);
 
     await page.goto('/');
-    await page.evaluate(() => {
-      localStorage.removeItem('vaultmtg_onboarding_dismissed');
-      localStorage.removeItem('vaultmtg_onboarding_completed');
-    });
 
     await expect(page.locator('[data-testid="onboarding-modal"]')).toBeVisible();
 
@@ -122,12 +140,9 @@ test.describe('Daemon Onboarding Flow', () => {
         body: JSON.stringify({ status: 'disconnected' }),
       });
     });
+    await stubSummaryNewUser(page);
 
     await page.goto('/');
-    await page.evaluate(() => {
-      localStorage.removeItem('vaultmtg_onboarding_dismissed');
-      localStorage.removeItem('vaultmtg_onboarding_completed');
-    });
 
     await expect(page.locator('[data-testid="onboarding-modal"]')).toBeVisible();
 
@@ -144,12 +159,9 @@ test.describe('Daemon Onboarding Flow', () => {
         body: JSON.stringify({ status: 'disconnected' }),
       });
     });
+    await stubSummaryNewUser(page);
 
     await page.goto('/');
-    await page.evaluate(() => {
-      localStorage.removeItem('vaultmtg_onboarding_dismissed');
-      localStorage.removeItem('vaultmtg_onboarding_completed');
-    });
 
     await expect(page.locator('[data-testid="onboarding-modal"]')).toBeVisible();
 
@@ -166,12 +178,9 @@ test.describe('Daemon Onboarding Flow', () => {
         body: JSON.stringify({ status: 'disconnected' }),
       });
     });
+    await stubSummaryNewUser(page);
 
     await page.goto('/');
-    await page.evaluate(() => {
-      localStorage.removeItem('vaultmtg_onboarding_dismissed');
-      localStorage.removeItem('vaultmtg_onboarding_completed');
-    });
 
     await expect(page.locator('[data-testid="onboarding-modal"]')).toBeVisible();
 
@@ -201,12 +210,9 @@ test.describe('Daemon Onboarding Flow', () => {
         });
       }
     });
+    await stubSummaryNewUser(page);
 
     await page.goto('/');
-    await page.evaluate(() => {
-      localStorage.removeItem('vaultmtg_onboarding_dismissed');
-      localStorage.removeItem('vaultmtg_onboarding_completed');
-    });
 
     await expect(page.locator('[data-testid="onboarding-modal"]')).toBeVisible();
 
@@ -225,12 +231,9 @@ test.describe('Daemon Onboarding Flow', () => {
         body: JSON.stringify({ status: 'disconnected' }),
       });
     });
+    await stubSummaryNewUser(page);
 
     await page.goto('/');
-    await page.evaluate(() => {
-      localStorage.removeItem('vaultmtg_onboarding_dismissed');
-      localStorage.removeItem('vaultmtg_onboarding_completed');
-    });
 
     await expect(page.locator('[data-testid="onboarding-modal"]')).toBeVisible();
 
@@ -252,12 +255,9 @@ test.describe('Daemon Onboarding Flow', () => {
         body: JSON.stringify({ status: 'disconnected' }),
       });
     });
+    await stubSummaryNewUser(page);
 
     await page.goto('/');
-    await page.evaluate(() => {
-      localStorage.removeItem('vaultmtg_onboarding_dismissed');
-      localStorage.removeItem('vaultmtg_onboarding_completed');
-    });
 
     await expect(page.locator('[data-testid="onboarding-modal"]')).toBeVisible();
 

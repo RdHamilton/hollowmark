@@ -704,6 +704,25 @@ export const handlers = [
     });
   }),
 
+  // History summary endpoint — returns a returning-user response by default
+  // so Layout tests do not pop the onboarding modal accidentally.
+  // Tests that want to exercise the new-user path should override this handler.
+  http.get(`${BFF_BASE}/history/summary`, () => {
+    return HttpResponse.json({
+      today: { wins: 2, losses: 1, win_rate: 0.667 },
+      this_week: { wins: 10, losses: 9, win_rate: 0.526, matches: 19 },
+      all_time: {
+        wins: 10,
+        losses: 9,
+        win_rate: 0.526,
+        matches: 19,
+        current_streak: 1,
+        streak_type: 'W',
+      },
+      last_match: { result: 'win', opponent_archetype: null, elapsed_seconds: 600 },
+    });
+  }),
+
   // Opponent history endpoint
   http.get(`${BFF_BASE}/analytics/opponent-history`, () => {
     return successResponse({
