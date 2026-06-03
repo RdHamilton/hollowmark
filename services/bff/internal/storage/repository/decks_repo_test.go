@@ -59,7 +59,7 @@ func insertTestDeckCardAsInteger(t *testing.T, db *sql.DB, deckID string, cardID
 	_, err := db.ExecContext(
 		context.Background(),
 		`INSERT INTO deck_cards (deck_id, card_id, quantity, board, from_draft_pick)
-		 VALUES ($1, $2, 1, 'main', $3::boolean)
+		 VALUES ($1, $2, 1, 'main', ($3::int)::boolean)
 		 ON CONFLICT (deck_id, card_id, board) DO NOTHING`,
 		deckID, cardID, fromDraftPickInt,
 	)
