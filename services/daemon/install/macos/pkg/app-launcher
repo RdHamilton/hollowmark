@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # VaultMTG.app launcher — re-enables and re-bootstraps the VaultMTG daemon.
-# This script is the CFBundleExecutable for /Applications/VaultMTG.app.
+# This script is the CFBundleExecutable for /Applications/VaultMTG[ Staging].app.
 # It is NOT the daemon process itself; it exits as soon as launchctl returns.
+#
+# __VAULTMTG_LABEL_SUFFIX__ is substituted at build time by the sign-macos job
+# in .github/workflows/daemon-release.yml (ADR-049 channel separation):
+#   ""         (stable)  -> PLIST_LABEL=com.vaultmtg.daemon
+#   ".staging" (staging) -> PLIST_LABEL=com.vaultmtg.daemon.staging
+# so the staging launcher bootstraps the staging LaunchAgent, not prod's.
 
 set -euo pipefail
 
-PLIST_LABEL="com.vaultmtg.daemon"
+PLIST_LABEL="com.vaultmtg.daemon__VAULTMTG_LABEL_SUFFIX__"
 UID_VAL="$(id -u)"
 PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
 TARGET="gui/${UID_VAL}/${PLIST_LABEL}"

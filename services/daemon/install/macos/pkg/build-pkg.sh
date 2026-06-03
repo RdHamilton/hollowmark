@@ -31,10 +31,28 @@ BINARY_PATH="${BINARY_PATH:?BINARY_PATH is required}"
 VERSION="${VERSION:?VERSION is required}"
 TEAM_ID="${TEAM_ID:-}"
 
-BINARY_NAME="vaultmtg-daemon"
-PKG_ID="com.vaultmtg.daemon"
-PKG_NAME="vaultmtg-daemon-darwin-universal.pkg"
-DMG_NAME="vaultmtg-daemon-darwin-universal.dmg"
+# ADR-049 channel separation — the .pkg identity must match the CI sign-macos
+# job and common.sh.  CHANNEL defaults to "stable" (a developer running this
+# directly with no channel gets the prod identity, like common.sh).  This must
+# stay in lock-step with the suffix table in common.sh / internal/install.
+: "${CHANNEL:=${VAULTMTG_DAEMON_CHANNEL:-stable}}"
+case "$CHANNEL" in
+  stable)
+    BIN_SUFFIX=""; LABEL_SUFFIX=""; APP_SUFFIX="" ;;
+  staging)
+    BIN_SUFFIX="-staging"; LABEL_SUFFIX=".staging"; APP_SUFFIX=" Staging" ;;
+  *)
+    echo "[build-pkg] ERROR: CHANNEL='${CHANNEL}' must be 'stable' or 'staging'" >&2
+    exit 64 ;;
+esac
+# Icon base name is derived (vaultmtg + binary suffix), never a per-channel
+# literal — keeps the ADR-049 §2 fitness function (I-4) happy.
+ICON_NAME="vaultmtg${BIN_SUFFIX}"
+
+BINARY_NAME="vaultmtg-daemon${BIN_SUFFIX}"
+PKG_ID="com.vaultmtg.daemon${LABEL_SUFFIX}"
+PKG_NAME="vaultmtg-daemon${BIN_SUFFIX}-darwin-universal.pkg"
+DMG_NAME="vaultmtg-daemon${BIN_SUFFIX}-darwin-universal.dmg"
 
 # Share directory — where the uninstall script is installed on the target system.
 # Referenced here (to populate the package root) and in postinstall (echo to user).
@@ -44,7 +62,7 @@ SHARE_DIR="/usr/local/share/vaultmtg"
 # ADR-036 I-4 / I-8: single source of truth for the launcher app bundle path.
 # This must stay in sync with appBundlePath in launchagent_darwin.go and with
 # uninstall.sh.  Never copy-paste this path across scripts.
-APP_BUNDLE_PATH="/Applications/VaultMTG.app"
+APP_BUNDLE_PATH="/Applications/VaultMTG${APP_SUFFIX}.app"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_ROOT="$(mktemp -d)/pkg-root"
@@ -95,79 +113,42 @@ APP_MACOS="${APP_CONTENTS}/MacOS"
 
 mkdir -p "${APP_MACOS}"
 
-# Write Contents/Info.plist
-cat > "${APP_CONTENTS}/Info.plist" << 'INFOPLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleExecutable</key>
-  <string>vaultmtg-launcher</string>
-  <key>CFBundleIconFile</key>
-  <string>vaultmtg</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.vaultmtg.launcher</string>
-  <key>CFBundleName</key>
-  <string>VaultMTG</string>
-  <key>CFBundleDisplayName</key>
-  <string>VaultMTG</string>
-  <key>CFBundleVersion</key>
-  <string>1</string>
-  <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleSignature</key>
-  <string>????</string>
-  <key>LSUIElement</key>
-  <true/>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-</dict>
-</plist>
-INFOPLIST
+# Write Contents/Info.plist and the launcher from the shared template files,
+# substituting the ADR-049 channel placeholders.  Using the same static
+# templates as the CI sign-macos job (not a divergent heredoc) keeps a single
+# source of truth — the divergence between this script and the CI job was the
+# original root cause of the staging-overwrites-prod install collision.
+sed \
+  -e "s|__VAULTMTG_LABEL_SUFFIX__|${LABEL_SUFFIX}|g" \
+  -e "s|__VAULTMTG_APP_SUFFIX__|${APP_SUFFIX}|g" \
+  -e "s|__VAULTMTG_ICON_NAME__|${ICON_NAME}|g" \
+  "${SCRIPT_DIR}/app-Info.plist" \
+  > "${APP_CONTENTS}/Info.plist"
 
-# Write the launcher shell script (the CFBundleExecutable).
+# Launcher shell script (the CFBundleExecutable) — channel-substituted so the
+# staging launcher bootstraps the staging LaunchAgent label.
 # LSUIElement=true suppresses the Dock icon while the launcher runs; the daemon
 # itself (launched via launchctl) controls its own tray presence.
-cat > "${APP_MACOS}/vaultmtg-launcher" << 'LAUNCHER'
-#!/usr/bin/env bash
-# VaultMTG.app launcher — re-enables and re-bootstraps the VaultMTG daemon.
-# This script is the CFBundleExecutable for /Applications/VaultMTG.app.
-# It is NOT the daemon process itself; it exits as soon as launchctl returns.
-
-set -euo pipefail
-
-PLIST_LABEL="com.vaultmtg.daemon"
-UID_VAL="$(id -u)"
-PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
-TARGET="gui/${UID_VAL}/${PLIST_LABEL}"
-USER_DOMAIN="gui/${UID_VAL}"
-
-# Step 1: clear any disabled flag from a prior `launchctl bootout`.
-# Failure is non-fatal — the job may never have been booted out.
-launchctl enable "${TARGET}" 2>/dev/null || true
-
-# Step 2: bootstrap the LaunchAgent so launchd starts the daemon.
-# Failure is non-fatal — the job may already be bootstrapped (e.g. first launch
-# before any Quit, or if the user double-clicks the app while already running).
-launchctl bootstrap "${USER_DOMAIN}" "${PLIST_PATH}" 2>/dev/null || true
-
-# Step 3: notify the user that VaultMTG is running (#636).
-# Fires whether the daemon was just started or was already running — the user
-# learns the daemon is active either way. osascript is always present on macOS.
-# This does NOT introduce a persistent process; osascript exits after posting.
-osascript -e 'display notification "VaultMTG is running" with title "VaultMTG"' 2>/dev/null || true
-LAUNCHER
+sed \
+  -e "s|__VAULTMTG_LABEL_SUFFIX__|${LABEL_SUFFIX}|g" \
+  "${SCRIPT_DIR}/app-launcher" \
+  > "${APP_MACOS}/vaultmtg-launcher"
 chmod 755 "${APP_MACOS}/vaultmtg-launcher"
 
-# App icon (#307) — Contents/Resources/vaultmtg.icns paired with the
-# CFBundleIconFile=vaultmtg key in Info.plist above. This is what gives
-# VaultMTG.app its Finder/Dock icon. pkgbuild has no --icon flag; the icon
-# ships inside the embedded .app bundle, not on the .pkg itself.
+# Fail closed: no channel placeholder may survive in the bundle.
+if grep -rq '__VAULTMTG_[A-Z_]*__' "${APP_CONTENTS}/Info.plist" "${APP_MACOS}/vaultmtg-launcher"; then
+  echo "[build-pkg] ERROR: unsubstituted channel placeholder in .app bundle" >&2
+  grep -rn '__VAULTMTG_[A-Z_]*__' "${APP_CONTENTS}/Info.plist" "${APP_MACOS}/vaultmtg-launcher" >&2
+  exit 1
+fi
+
+# App icon (#307) — Contents/Resources/<icon>.icns paired with the
+# CFBundleIconFile key in Info.plist above. This is what gives the .app its
+# Finder/Dock icon (staging ships the distinct vaultmtg-staging.icns).  pkgbuild
+# has no --icon flag; the icon ships inside the embedded .app bundle.
 APP_RESOURCES="${APP_CONTENTS}/Resources"
 mkdir -p "${APP_RESOURCES}"
-cp "${SCRIPT_DIR}/../../icons/vaultmtg.icns" "${APP_RESOURCES}/vaultmtg.icns"
+cp "${SCRIPT_DIR}/../../icons/${ICON_NAME}.icns" "${APP_RESOURCES}/${ICON_NAME}.icns"
 
 # DRY_RUN: pkg-root is now populated — print layout and exit without
 # calling pkgbuild or hdiutil (neither is required for layout assertions).
