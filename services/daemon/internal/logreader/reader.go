@@ -16,6 +16,12 @@ type LogEntry struct {
 	Timestamp string                 // Extracted timestamp if present
 	JSON      map[string]interface{} // Parsed JSON data if the line contains valid JSON
 	IsJSON    bool                   // Whether this line contains JSON data
+	// FromBacklog is true when this entry was read during the initial
+	// ReadFromStart drain of the historical log on daemon startup, as opposed
+	// to a live append observed while the daemon is running. Consumers that
+	// must not flood the BFF on a (re)install replay (notably the
+	// collection.updated path) use this to coalesce historical entries.
+	FromBacklog bool
 }
 
 // Reader reads and parses MTGA Player.log files.
