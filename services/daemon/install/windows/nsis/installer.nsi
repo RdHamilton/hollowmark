@@ -226,12 +226,17 @@ Section "Install" SecInstall
   ; Write uninstaller.
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
-  ; Remove legacy MTGA-Companion-Daemon scheduled task before registering the
-  ; new VaultMTG-Daemon task. This is CRITICAL on upgrade — without it, two
-  ; daemon processes run simultaneously after the first logon.
+!if "${CHANNEL}" == "stable"
+  ; Stable channel only: remove legacy MTGA-Companion-Daemon scheduled task
+  ; before registering the new VaultMTG-Daemon task. This is CRITICAL on
+  ; upgrade - without it, two daemon processes run simultaneously after the
+  ; first logon. The staging channel never had a legacy identity, so this
+  ; block is compiled out of the staging installer to avoid reaching into the
+  ; prod task identity.
   ; /F silences "task not found" so this is a no-op on fresh installs.
   ExecWait 'schtasks /End /TN "MTGA-Companion-Daemon"'
   ExecWait 'schtasks /Delete /TN "MTGA-Companion-Daemon" /F'
+!endif
 
   ; Register Scheduled Task at logon — no UAC (RunLevel LeastPrivilege).
   ; We use schtasks.exe because it is available on all Windows versions
