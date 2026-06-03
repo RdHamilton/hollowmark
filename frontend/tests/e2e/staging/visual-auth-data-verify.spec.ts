@@ -231,11 +231,6 @@ async function capture(page: Page, outputDir: string, name: string): Promise<str
   return filename;
 }
 
-function checkAuthWall(page: Page): boolean {
-  const url = page.url();
-  return url.includes('/sign-in') || url.includes('/sign-up');
-}
-
 async function checkErrorBoundary(page: Page): Promise<boolean> {
   return page.locator('.react-error-boundary, [data-testid="error-boundary"]').isVisible().catch(() => false);
 }
