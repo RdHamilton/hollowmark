@@ -2,14 +2,31 @@ import { useMemo } from 'react';
 import { trackEvent } from '@/services/analytics';
 import { useFeatureFlag } from '@/hooks/useFeatureFlag';
 import { useDaemonRelease } from '@/hooks/useDaemonRelease';
+import { daemonArtifactChannelInfix } from '@/services/daemonRelease';
 import './DaemonDownload.css';
 
 const WAITLIST_URL = 'https://vaultmtg.app/#waitlist';
 
+/** Common stem shared by every channel-suffixed daemon artifact. */
+const DAEMON_STEM = 'vaultmtg-daemon';
+
 interface DownloadOption {
   label: string;
-  /** Artifact filename (without extension) as it appears on the GitHub release. */
-  artifact: string;
+  /**
+   * Artifact filename (without extension) as it appears on the GitHub release,
+   * expressed as the part that follows the `vaultmtg-daemon` stem (including the
+   * leading hyphen). When `channelAware` is true the channel infix
+   * (`-staging` on staging, `` on stable) is spliced in between the stem and
+   * this suffix so the URL resolves to the real per-channel asset name.
+   */
+  artifactSuffix: string;
+  /**
+   * Whether the published asset name carries the channel infix. macOS .pkg is
+   * channel-parameterized (`vaultmtg-daemon-staging-darwin-universal.pkg` on
+   * staging); the bare Windows binary is NOT — it is published under the same
+   * fixed name in both channels (.goreleaser.yml archives id: windows-amd64).
+   */
+  channelAware: boolean;
   /** Logical platform key used for OS detection matching. */
   platform: 'windows' | 'macos';
   ext: string;
@@ -19,14 +36,16 @@ interface DownloadOption {
 const DOWNLOAD_OPTIONS: DownloadOption[] = [
   {
     label: 'Windows (64-bit)',
-    artifact: 'vaultmtg-daemon-windows-amd64',
+    artifactSuffix: '-windows-amd64',
+    channelAware: false,
     platform: 'windows',
     ext: 'exe',
     description: 'Windows 10/11 64-bit',
   },
   {
     label: 'macOS (Universal)',
-    artifact: 'vaultmtg-daemon-darwin-universal',
+    artifactSuffix: '-darwin-universal',
+    channelAware: true,
     platform: 'macos',
     ext: 'pkg',
     description: 'macOS 12+ — Apple Silicon and Intel',
@@ -72,8 +91,20 @@ function detectPlatform(): 'windows' | 'macos' {
   return 'macos';
 }
 
+/**
+ * Resolve the full artifact filename (without extension) for the current
+ * release channel. The channel infix is spliced between the `vaultmtg-daemon`
+ * stem and the platform suffix for channel-aware artifacts so the URL points at
+ * the real per-channel asset (`vaultmtg-daemon-staging-darwin-universal` on
+ * staging, `vaultmtg-daemon-darwin-universal` on stable).
+ */
+function resolveArtifactName(option: DownloadOption): string {
+  const infix = option.channelAware ? daemonArtifactChannelInfix() : '';
+  return `${DAEMON_STEM}${infix}${option.artifactSuffix}`;
+}
+
 function buildDownloadUrl(option: DownloadOption, downloadBase: string): string {
-  return `${downloadBase}/${option.artifact}.${option.ext}`;
+  return `${downloadBase}/${resolveArtifactName(option)}.${option.ext}`;
 }
 
 /** Skeleton placeholder shown while the PostHog feature flag loads. */
@@ -139,18 +170,23 @@ const DaemonDownload = () => {
           {DOWNLOAD_OPTIONS.map((option) => {
             const isDetected = option.platform === detectedPlatform;
             const href = buildDownloadUrl(option, downloadBase);
+            // Channel-stable identity for the DOM key, test selector and the
+            // analytics `os` property: the stem + platform suffix WITHOUT the
+            // channel infix. This keeps selectors and funnel analytics identical
+            // across the staging and stable channels (only the href differs).
+            const stableId = `${DAEMON_STEM}${option.artifactSuffix}`;
             return (
               <a
-                key={option.artifact}
+                key={stableId}
                 href={href}
                 className={`daemon-download-button ${isDetected ? 'daemon-download-button--primary' : 'daemon-download-button--secondary'}`}
-                data-testid={`download-link-${option.artifact}`}
+                data-testid={`download-link-${stableId}`}
                 download
                 onClick={() => {
                   trackEvent({
                     name: 'funnel_daemon_download_started',
                     properties: {
-                      os: option.artifact,
+                      os: stableId,
                       download_source: 'download_page',
                     },
                   });
