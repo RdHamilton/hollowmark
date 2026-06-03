@@ -392,6 +392,90 @@ func TestParseGamePlaysResult_RealCorpusFixture(t *testing.T) {
 	}
 }
 
+// TestParseGamePlaysResult_AnnotationPlays verifies that ParseGamePlaysResult
+// extracts card-play events from the AnnotationType_ZoneTransfer annotations
+// present in real corpus GameStateMessages.  This test guards against the
+// capture gap where the snapshot-diff path (detectZoneChangesWithZones) fails
+// to detect plays in partial-state messages that lack a full gameObjects
+// snapshot.
+//
+// The fixture (testdata/gre-annotation-plays-corpus.log) contains 7 real GRE
+// log lines from the 2026-06-02 corpus snapshot including a ConnectResp and 6
+// GameStateMessage batches with CastSpell, PlayLand, and Resolve ZoneTransfer
+// annotations.
+func TestParseGamePlaysResult_AnnotationPlays(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("Failed to get current file path")
+	}
+	fixturePath := filepath.Join(filepath.Dir(currentFile), "testdata", "gre-annotation-plays-corpus.log")
+
+	data, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Skipf("Skipping: annotation plays corpus fixture not found at %s", fixturePath)
+	}
+
+	var entries []*LogEntry
+	for _, line := range splitLines(data) {
+		if len(line) == 0 {
+			continue
+		}
+		var raw map[string]interface{}
+		if err := json.Unmarshal(line, &raw); err != nil {
+			continue
+		}
+		entries = append(entries, &LogEntry{
+			IsJSON:    true,
+			JSON:      raw,
+			Timestamp: "2026-06-02 00:00:00",
+		})
+	}
+
+	if len(entries) == 0 {
+		t.Fatal("annotation plays corpus fixture produced zero log entries")
+	}
+	t.Logf("Loaded %d GRE lines from annotation plays corpus fixture", len(entries))
+
+	playerConn := GetPlayerSeatID(entries)
+	if playerConn == nil {
+		playerConn = &GREConnection{SeatID: 1}
+		t.Log("ConnectResp not found — defaulting to SeatID=1")
+	}
+	t.Logf("Player seat: %d", playerConn.SeatID)
+
+	result, err := ParseGamePlaysResult(entries, playerConn)
+	if err != nil {
+		t.Fatalf("ParseGamePlaysResult on annotation plays corpus fixture: %v", err)
+	}
+
+	t.Logf("Plays: %d, Snapshots: %d, OpponentCards: %d",
+		len(result.Plays), len(result.Snapshots), len(result.OpponentCards))
+
+	// The fixture has real ZoneTransfer annotations with CastSpell, PlayLand,
+	// and Resolve categories.  We expect at least one non-life-change play.
+	nonLifePlays := 0
+	actionCounts := make(map[string]int)
+	for _, p := range result.Plays {
+		actionCounts[p.ActionType]++
+		if p.ActionType != "life_change" {
+			nonLifePlays++
+		}
+	}
+	t.Logf("Action type breakdown: %v", actionCounts)
+
+	if nonLifePlays == 0 {
+		t.Error("expected annotation-based plays (cast_spell / land_drop / resolve_spell), got 0 — annotation capture is broken")
+	}
+
+	// Verify the specific action types from annotations are present.
+	wantTypes := []string{"cast_spell", "land_drop", "resolve_spell"}
+	for _, wt := range wantTypes {
+		if actionCounts[wt] == 0 {
+			t.Errorf("expected at least one %q play from annotation extraction, got 0", wt)
+		}
+	}
+}
+
 // splitLines splits a byte slice into non-empty lines.
 func splitLines(data []byte) [][]byte {
 	var lines [][]byte
