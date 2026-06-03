@@ -133,7 +133,12 @@ const Layout = ({ children }: LayoutProps) => {
       return 'match-history';
     } else if (location.pathname === '/quests') {
       return 'quests';
-    } else if (location.pathname === '/draft' || location.pathname === '/draft-analytics') {
+    } else if (
+      location.pathname === '/draft' ||
+      location.pathname === '/draft-analytics' ||
+      location.pathname === '/draft/live' ||
+      location.pathname === '/history/drafts'
+    ) {
       return 'draft';
     } else if (location.pathname === '/decks' || location.pathname.startsWith('/deck-builder')) {
       return 'decks';
