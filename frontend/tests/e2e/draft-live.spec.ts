@@ -101,6 +101,26 @@ test.describe('DraftLive', () => {
     ).toBeVisible();
   });
 
+  // Bug 6 regression: the "Error" stream-status badge must NOT appear alongside
+  // "No active draft". The SSE connection may fail simply because the daemon is
+  // not running — that is an expected state, not a page-level error.
+  test('@smoke no error badge when SSE errors and session is idle', async ({ page }) => {
+    // Abort every SSE request so the stream always errors (mimics staging where
+    // the daemon is not connected and the SSE endpoint is unreachable).
+    await page.route('**/api/v1/events*', async (route) => {
+      await route.abort();
+    });
+
+    await page.goto('/draft/live');
+
+    // Empty state renders correctly.
+    await expect(page.locator('[data-testid="draft-live-container"]')).toBeVisible();
+    await expect(page.getByText('No active draft')).toBeVisible();
+
+    // No stream-status badge at all in the idle state.
+    await expect(page.locator('[data-testid="stream-status"]')).not.toBeVisible();
+  });
+
   // ── Active draft — pack display ────────────────────────────────────────────
 
   // NOT @smoke (#2178): the top-pick-badge assertion depends on the BFF

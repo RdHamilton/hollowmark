@@ -236,14 +236,17 @@ const DraftLive: React.FC = () => {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   // No active draft.
+  // The stream-status badge is intentionally omitted here: when there is no active
+  // draft the SSE connection may show 'error' simply because the daemon is not
+  // connected or the staging-api cluster is unreachable. Showing "Error" next to
+  // "No active draft" is confusing — the correct empty state already communicates
+  // that nothing is happening. The badge is only meaningful during an active draft
+  // when real-time pick data is expected.
   if (session.sessionStatus === 'idle') {
     return (
       <div className="draft-live-container" data-testid="draft-live-container">
         <div className="draft-live-header">
           <h1>Live Draft</h1>
-          <span className={`stream-status stream-status--${streamStatus}`} data-testid="stream-status">
-            {streamStatus}
-          </span>
         </div>
         <EmptyState
           icon="🎯"

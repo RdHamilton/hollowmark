@@ -65,6 +65,35 @@ describe('useDaemonOnboarding', () => {
       );
       expect(result.current.isOpen).toBe(false);
     });
+
+    // Bug 1 — returning users with BFF data must never see first-run onboarding
+    it('does NOT show modal when account already has data (returning user)', () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', true, /* hasAccountData */ true)
+      );
+      expect(result.current.isOpen).toBe(false);
+    });
+
+    it('shows modal when account has no data and daemon is disconnected (genuine new user)', () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', true, /* hasAccountData */ false)
+      );
+      expect(result.current.isOpen).toBe(true);
+    });
+
+    it('manual open still works even when account has data (user explicitly opens from status indicator)', () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', true, /* hasAccountData */ true)
+      );
+      // Auto-show suppressed because account has data
+      expect(result.current.isOpen).toBe(false);
+
+      // But user can still manually open via the status indicator
+      act(() => {
+        result.current.open();
+      });
+      expect(result.current.isOpen).toBe(true);
+    });
   });
 
   describe('hasSeenOnboarding', () => {

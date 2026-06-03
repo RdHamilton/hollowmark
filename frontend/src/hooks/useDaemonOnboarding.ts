@@ -5,7 +5,8 @@
  * the daemon yet.
  *
  * Rules:
- * - Show modal on first login if daemon is disconnected
+ * - Show modal on first login if daemon is disconnected AND the account has no BFF data
+ * - Never show for returning users who already have match history, drafts, or decks
  * - "Dismissed" state is stored in localStorage so it persists across sessions
  * - User can manually re-open via the status indicator in the nav
  * - Once daemon connects (status = connected), the modal auto-completes
@@ -46,12 +47,16 @@ function readHasSeen(): boolean {
  * Hook that controls onboarding modal visibility based on daemon status and
  * whether the user has previously seen/dismissed the modal.
  *
- * @param daemonStatus  Current daemon health status from the health indicator
- * @param isSignedIn    Whether the user is signed in (from Clerk useAuth)
+ * @param daemonStatus    Current daemon health status from the health indicator
+ * @param isSignedIn      Whether the user is signed in (from Clerk useAuth)
+ * @param hasAccountData  Whether the account already has BFF data (matches/drafts/decks).
+ *                        When true the modal is suppressed even on first login — a returning
+ *                        player who re-installs the daemon should not see the onboarding flow.
  */
 export function useDaemonOnboarding(
   daemonStatus: DaemonOnboardingStatus,
-  isSignedIn: boolean
+  isSignedIn: boolean,
+  hasAccountData: boolean = false
 ): UseDaemonOnboardingResult {
   // manualOpen: true when the user explicitly opens the modal
   // manualClosed: true when the user has explicitly dismissed it this session
@@ -59,10 +64,14 @@ export function useDaemonOnboarding(
   const [manualClosed, setManualClosed] = useState(false);
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(readHasSeen);
 
-  // Auto-show condition: signed in, daemon disconnected, not seen before, not closed this session
+  // Auto-show condition: signed in, daemon disconnected, account has no data,
+  // not seen before, not closed this session.
+  // hasAccountData gates the modal: a returning user with existing match history,
+  // drafts, or decks must never see the first-run flow regardless of daemon status.
   const autoShow =
     isSignedIn &&
     daemonStatus === 'disconnected' &&
+    !hasAccountData &&
     !hasSeenOnboarding &&
     !manualClosed;
 

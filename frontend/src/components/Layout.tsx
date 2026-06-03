@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@clerk/react';
 import Footer from './Footer';
@@ -9,6 +9,7 @@ import { usePostHogIdentity } from '@/hooks/usePostHogIdentity';
 import { useDaemonOnboarding } from '@/hooks/useDaemonOnboarding';
 import ReportBugButton from './ReportBugButton';
 import vaultMark from '@/assets/logo-vaultmtg-mark.svg';
+import { getHomeSummary } from '@/services/api/bffHomeSummary';
 import './Layout.css';
 
 interface LayoutProps {
@@ -17,16 +18,46 @@ interface LayoutProps {
 
 const Layout = ({ children }: LayoutProps) => {
   const location = useLocation();
-  const { isSignedIn } = useAuth();
+  const { isSignedIn, getToken } = useAuth();
   // Identify signed-in user with PostHog and fire funnel_sign_up_completed once per session.
   usePostHogIdentity();
 
   // Track daemon health status from the indicator so the onboarding hook can use it.
   const [daemonStatus, setDaemonStatus] = useState<DaemonHealthState>('loading');
 
-  // Onboarding modal logic: show when daemon disconnected on first login.
+  // Whether the account already has BFF data (matches/drafts/decks).
+  // Fetched once when we know the user is signed in and daemon is disconnected.
+  // A returning user with existing data must never see the first-run onboarding flow.
+  const [hasAccountData, setHasAccountData] = useState(false);
+  const dataCheckDoneRef = useRef(false);
+
+  useEffect(() => {
+    // Only run the check when: signed in, daemon disconnected (the auto-show
+    // condition), and we haven't already resolved it this session.
+    if (!isSignedIn || daemonStatus !== 'disconnected' || dataCheckDoneRef.current) return;
+    dataCheckDoneRef.current = true;
+
+    const checkAccountData = async () => {
+      try {
+        const token = await getToken();
+        if (!token) return;
+        const summary = await getHomeSummary(token);
+        if (summary.all_time.matches > 0) {
+          setHasAccountData(true);
+        }
+      } catch {
+        // If the summary endpoint fails or is not yet live, default to
+        // hasAccountData=false (conservative: show onboarding for truly new users).
+      }
+    };
+
+    void checkAccountData();
+  }, [isSignedIn, daemonStatus, getToken]);
+
+  // Onboarding modal logic: show when daemon disconnected on first login AND
+  // the account has no existing data. Returning users are never shown this flow.
   const { isOpen: onboardingOpen, open: openOnboarding, dismiss: dismissOnboarding, complete: completeOnboarding } =
-    useDaemonOnboarding(daemonStatus, isSignedIn ?? false);
+    useDaemonOnboarding(daemonStatus, isSignedIn ?? false, hasAccountData);
 
   const handleDaemonStatusChange = useCallback((status: DaemonHealthState) => {
     setDaemonStatus(status);
