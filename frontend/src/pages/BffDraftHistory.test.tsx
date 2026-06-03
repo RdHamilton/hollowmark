@@ -3,8 +3,19 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import BffDraftHistory from './BffDraftHistory';
 import type { DraftHistoryResponse } from '@/services/api/bffDraftHistory';
+
+// Mock useNavigate
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom');
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  };
+});
 
 // Mock the BFF adapter
 vi.mock('@/services/api/bffDraftHistory', () => ({
@@ -14,6 +25,11 @@ vi.mock('@/services/api/bffDraftHistory', () => ({
 // Import after mock so we get the vi.fn() version
 import { getDraftHistory } from '@/services/api/bffDraftHistory';
 const mockGetDraftHistory = vi.mocked(getDraftHistory);
+
+// Wrap in MemoryRouter since BffDraftHistory uses useNavigate
+function renderComponent() {
+  return render(<MemoryRouter><BffDraftHistory /></MemoryRouter>);
+}
 
 function makeResponse(overrides: Partial<DraftHistoryResponse> = {}): DraftHistoryResponse {
   return {
@@ -57,7 +73,7 @@ describe('BffDraftHistory', () => {
       let resolve: (v: DraftHistoryResponse) => void;
       mockGetDraftHistory.mockReturnValue(new Promise((r) => { resolve = r; }));
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       expect(screen.getByText('Loading drafts...')).toBeInTheDocument();
 
@@ -72,7 +88,7 @@ describe('BffDraftHistory', () => {
     it('renders empty state when total === 0', async () => {
       mockGetDraftHistory.mockResolvedValue(makeResponse({ total: 0, drafts: [] }));
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByTestId('draft-history-empty')).toBeInTheDocument();
@@ -83,7 +99,7 @@ describe('BffDraftHistory', () => {
     it('does not render table when total === 0', async () => {
       mockGetDraftHistory.mockResolvedValue(makeResponse({ total: 0, drafts: [] }));
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.queryByTestId('draft-history-table')).not.toBeInTheDocument();
@@ -98,7 +114,7 @@ describe('BffDraftHistory', () => {
         drafts: [makeDraft()],
       }));
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByTestId('draft-history-table')).toBeInTheDocument();
@@ -111,7 +127,7 @@ describe('BffDraftHistory', () => {
         drafts: [makeDraft()],
       }));
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByRole('table')).toBeInTheDocument();
@@ -131,7 +147,7 @@ describe('BffDraftHistory', () => {
         drafts: [makeDraft({ set_code: 'BLB', wins: 3, losses: 2 })],
       }));
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByText('BLB')).toBeInTheDocument();
@@ -149,7 +165,7 @@ describe('BffDraftHistory', () => {
         ],
       }));
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByText('BLB')).toBeInTheDocument();
@@ -163,7 +179,7 @@ describe('BffDraftHistory', () => {
         drafts: [makeDraft({ started_at: '2026-05-01T10:00:00Z' })],
       }));
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByTestId('draft-history-table')).toBeInTheDocument();
@@ -177,6 +193,54 @@ describe('BffDraftHistory', () => {
     });
   });
 
+  describe('Row click navigation', () => {
+    it('renders rows with data-testid draft-history-row', async () => {
+      mockGetDraftHistory.mockResolvedValue(makeResponse({
+        total: 1,
+        drafts: [makeDraft({ id: 'seed-00', set_code: 'BLB' })],
+      }));
+
+      renderComponent();
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('draft-history-row').length).toBe(1);
+      });
+    });
+
+    it('clicking a row navigates to draft-analytics with session and set params', async () => {
+      mockGetDraftHistory.mockResolvedValue(makeResponse({
+        total: 1,
+        drafts: [makeDraft({ id: 'abc-123', set_code: 'BLB' })],
+      }));
+
+      renderComponent();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('draft-history-row')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('draft-history-row'));
+
+      expect(mockNavigate).toHaveBeenCalledWith(
+        '/draft-analytics?session=abc-123&set=BLB'
+      );
+    });
+
+    it('each row has pointer cursor style', async () => {
+      mockGetDraftHistory.mockResolvedValue(makeResponse({
+        total: 1,
+        drafts: [makeDraft({ id: 'seed-00' })],
+      }));
+
+      renderComponent();
+
+      await waitFor(() => {
+        const row = screen.getByTestId('draft-history-row');
+        expect(row).toHaveStyle({ cursor: 'pointer' });
+      });
+    });
+  });
+
   describe('Pagination', () => {
     it('Previous button is disabled on first page', async () => {
       mockGetDraftHistory.mockResolvedValue(makeResponse({
@@ -186,7 +250,7 @@ describe('BffDraftHistory', () => {
         drafts: Array.from({ length: 20 }, (_, i) => makeDraft({ id: `seed-${i}` })),
       }));
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
@@ -201,7 +265,7 @@ describe('BffDraftHistory', () => {
         drafts: Array.from({ length: 3 }, (_, i) => makeDraft({ id: `seed-${i}` })),
       }));
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
@@ -216,7 +280,7 @@ describe('BffDraftHistory', () => {
         drafts: Array.from({ length: 20 }, (_, i) => makeDraft({ id: `seed-${i}` })),
       }));
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
@@ -241,7 +305,7 @@ describe('BffDraftHistory', () => {
         .mockResolvedValueOnce(page1)
         .mockResolvedValueOnce(page2);
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
@@ -260,7 +324,7 @@ describe('BffDraftHistory', () => {
     it('renders Draft History heading', async () => {
       mockGetDraftHistory.mockResolvedValue(makeResponse());
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Draft History');
@@ -290,7 +354,7 @@ describe('BffDraftHistory', () => {
     it('page title reads "Draft History" — no § Chapter / The Draft pattern', async () => {
       mockGetDraftHistory.mockResolvedValue(makeResponse());
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.queryByText('Loading drafts...')).not.toBeInTheDocument();
@@ -322,7 +386,7 @@ describe('BffDraftHistory', () => {
         offset: 0,
       });
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByTestId('draft-history-table')).toBeInTheDocument();
@@ -343,7 +407,7 @@ describe('BffDraftHistory', () => {
         offset: 0,
       });
 
-      render(<BffDraftHistory />);
+      renderComponent();
 
       await waitFor(() => {
         expect(screen.getByTestId('draft-history-empty')).toBeInTheDocument();

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@clerk/react';
+import { useNavigate } from 'react-router-dom';
 import { getDraftHistory } from '@/services/api/bffDraftHistory';
 import type { DraftHistoryItem } from '@/services/api/bffDraftHistory';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -10,6 +11,7 @@ const PAGE_SIZE = 20;
 
 const BffDraftHistory = () => {
   const { getToken, isSignedIn } = useAuth();
+  const navigate = useNavigate();
   // Stable ref so useCallback / useEffect deps don't re-fire on every render
   const getTokenRef = useRef(getToken);
   useEffect(() => { getTokenRef.current = getToken; });
@@ -57,6 +59,10 @@ const BffDraftHistory = () => {
       day: 'numeric',
     });
 
+  const handleRowClick = (draft: DraftHistoryItem) => {
+    navigate(`/draft-analytics?session=${draft.id}&set=${encodeURIComponent(draft.set_code)}`);
+  };
+
   return (
     <div className="page-container">
       <div className="bff-draft-history-header">
@@ -96,7 +102,12 @@ const BffDraftHistory = () => {
               </thead>
               <tbody>
                 {drafts.map((draft) => (
-                  <tr key={draft.id}>
+                  <tr
+                    key={draft.id}
+                    data-testid="draft-history-row"
+                    onClick={() => handleRowClick(draft)}
+                    style={{ cursor: 'pointer' }}
+                  >
                     <td>{formatDate(draft.started_at)}</td>
                     <td>{draft.set_code}</td>
                     <td>{draft.wins}</td>

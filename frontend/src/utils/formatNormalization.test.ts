@@ -107,6 +107,20 @@ describe('formatNormalization', () => {
       });
     });
 
+    describe('MTGA internal format slugs with date suffix (DEFECT — raw format slug)', () => {
+      it('normalizes HISTORICBRAWLWITHALLOWLIST_20260126 to Historic Brawl', () => {
+        expect(normalizeQueueType('HISTORICBRAWLWITHALLOWLIST_20260126')).toBe('Historic Brawl');
+      });
+
+      it('normalizes HistoricBrawlWithAllowlist to Historic Brawl', () => {
+        expect(normalizeQueueType('HistoricBrawlWithAllowlist')).toBe('Historic Brawl');
+      });
+
+      it('normalizes Standard_20260101 to Standard via prefix map', () => {
+        expect(normalizeQueueType('Standard_20260101')).toBe('Standard');
+      });
+    });
+
     describe('edge cases', () => {
       it('should return empty string for empty input', () => {
         expect(normalizeQueueType('')).toBe('');

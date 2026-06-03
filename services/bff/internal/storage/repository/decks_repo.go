@@ -104,8 +104,14 @@ func (r *DecksRepository) ListDecks(ctx context.Context, accountID int64, f Deck
 		clauses = append(clauses, "d.id IN (SELECT deck_id FROM deck_tags WHERE lower(tag) = ANY($"+strconv.Itoa(next)+"))")
 		args = append(args, lowerSlice(f.Tags))
 	}
+	// matches_played and matches_won are derived by counting rows in the
+	// matches table keyed on deck_id. The denormalized decks.matches_played
+	// column is never incremented by the projection worker and is always 0;
+	// computing live counts fixes the /decks list returning matchesPlayed:0.
 	q := `SELECT d.id, d.name, d.format, d.source, d.draft_session_id,
-	             d.matches_played, d.matches_won, d.games_played, d.games_won,
+	             COALESCE(mc.matches_played, 0),
+	             COALESCE(mc.matches_won, 0),
+	             d.games_played, d.games_won,
 	             d.is_app_created, d.created_at, d.modified_at, d.last_played,
 	             d.color_identity, d.description, d.created_method, d.seed_card_id,
 	             COALESCE(cc.card_count, 0) AS card_count
@@ -115,6 +121,14 @@ func (r *DecksRepository) ListDecks(ctx context.Context, accountID int64, f Deck
 	          FROM deck_cards
 	          GROUP BY deck_id
 	      ) cc ON cc.deck_id = d.id
+	      LEFT JOIN (
+	          SELECT deck_id,
+	                 COUNT(*)                                      AS matches_played,
+	                 COUNT(*) FILTER (WHERE lower(result) = 'win') AS matches_won
+	          FROM matches
+	          WHERE account_id = $1
+	          GROUP BY deck_id
+	      ) mc ON mc.deck_id = d.id
 	      WHERE ` + strings.Join(clauses, " AND ") + `
 	      ORDER BY d.modified_at DESC
 	      LIMIT 200`

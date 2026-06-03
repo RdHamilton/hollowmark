@@ -1,23 +1,19 @@
 import { useState, useEffect } from 'react';
 import { EventsOn } from '@/services/websocketClient';
 import { matches } from '@/services/api';
-import { models } from '@/types/models';
+import type { DeckPerformanceRow } from '@/services/api/matches';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import { useAppContext } from '../context/AppContext';
+import { normalizeQueueType } from '@/utils/formatNormalization';
 import './DeckPerformance.css';
-
-interface DeckStats {
-  deckName: string;
-  stats: models.Statistics;
-}
 
 const DeckPerformance = () => {
   const { filters, updateFilters } = useAppContext();
-  const { dateRange, customStartDate, customEndDate, format, sortBy, sortDirection } = filters.deckPerformance;
+  const { format, sortBy, sortDirection } = filters.deckPerformance;
 
-  const [deckStats, setDeckStats] = useState<DeckStats[]>([]);
+  const [deckStats, setDeckStats] = useState<DeckPerformanceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,63 +22,8 @@ const DeckPerformance = () => {
       try {
         setLoading(true);
         setError(null);
-
-        const filter = new models.StatsFilter();
-
-        // Date range
-        if (dateRange === 'custom') {
-          if (customStartDate) {
-            const start = new Date(customStartDate + 'T00:00:00');
-            filter.StartDate = start;
-          }
-          if (customEndDate) {
-            const end = new Date(customEndDate + 'T00:00:00');
-            end.setDate(end.getDate() + 1);
-            filter.EndDate = end;
-          }
-        } else if (dateRange !== 'all') {
-          const now = new Date();
-          const start = new Date();
-
-          switch (dateRange) {
-            case '7days':
-              start.setDate(now.getDate() - 7);
-              break;
-            case '30days':
-              start.setDate(now.getDate() - 30);
-              break;
-            case '90days':
-              start.setDate(now.getDate() - 90);
-              break;
-          }
-
-          start.setHours(0, 0, 0, 0);
-          const end = new Date(now);
-          end.setDate(end.getDate() + 1);
-          end.setHours(0, 0, 0, 0);
-
-          filter.StartDate = start;
-          filter.EndDate = end;
-        }
-
-        // Format filter
-        if (format !== 'all') {
-          if (format === 'constructed') {
-            filter.Formats = ['Ladder', 'Play'];
-          } else {
-            filter.Format = format;
-          }
-        }
-
-        const data = await matches.getMatchupMatrix(matches.statsFilterToRequest(filter));
-
-        // Convert map to array
-        const statsArray: DeckStats[] = Object.entries(data || {}).map(([deckName, stats]) => ({
-          deckName,
-          stats
-        }));
-
-        setDeckStats(statsArray);
+        const data = await matches.getDeckPerformance();
+        setDeckStats(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load deck statistics');
         console.error('Error loading deck stats:', err);
@@ -92,7 +33,7 @@ const DeckPerformance = () => {
     };
 
     loadDeckStats();
-  }, [dateRange, customStartDate, customEndDate, format]);
+  }, []);
 
   // Listen for real-time updates
   useEffect(() => {
@@ -100,63 +41,8 @@ const DeckPerformance = () => {
       try {
         setLoading(true);
         setError(null);
-
-        const filter = new models.StatsFilter();
-
-        // Date range
-        if (dateRange === 'custom') {
-          if (customStartDate) {
-            const start = new Date(customStartDate + 'T00:00:00');
-            filter.StartDate = start;
-          }
-          if (customEndDate) {
-            const end = new Date(customEndDate + 'T00:00:00');
-            end.setDate(end.getDate() + 1);
-            filter.EndDate = end;
-          }
-        } else if (dateRange !== 'all') {
-          const now = new Date();
-          const start = new Date();
-
-          switch (dateRange) {
-            case '7days':
-              start.setDate(now.getDate() - 7);
-              break;
-            case '30days':
-              start.setDate(now.getDate() - 30);
-              break;
-            case '90days':
-              start.setDate(now.getDate() - 90);
-              break;
-          }
-
-          start.setHours(0, 0, 0, 0);
-          const end = new Date(now);
-          end.setDate(end.getDate() + 1);
-          end.setHours(0, 0, 0, 0);
-
-          filter.StartDate = start;
-          filter.EndDate = end;
-        }
-
-        // Format filter
-        if (format !== 'all') {
-          if (format === 'constructed') {
-            filter.Formats = ['Ladder', 'Play'];
-          } else {
-            filter.Format = format;
-          }
-        }
-
-        const data = await matches.getMatchupMatrix(matches.statsFilterToRequest(filter));
-
-        // Convert map to array
-        const statsArray: DeckStats[] = Object.entries(data || {}).map(([deckName, stats]) => ({
-          deckName,
-          stats
-        }));
-
-        setDeckStats(statsArray);
+        const data = await matches.getDeckPerformance();
+        setDeckStats(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load deck statistics');
         console.error('Error loading deck stats:', err);
@@ -167,7 +53,7 @@ const DeckPerformance = () => {
 
     const unsubscribe = EventsOn('stats:updated', () => {
       console.log('Stats updated event received - reloading deck performance data');
-      loadDeckStats();
+      void loadDeckStats();
     });
 
     return () => {
@@ -175,38 +61,46 @@ const DeckPerformance = () => {
         unsubscribe();
       }
     };
-  }, [dateRange, customStartDate, customEndDate, format]);
+  }, []);
 
-  const formatWinRate = (winRate: number) => {
-    return `${Math.round(winRate * 100 * 10) / 10}%`;
+  const formatWinRate = (wins: number, total: number) => {
+    if (total === 0) return '0.0%';
+    return `${Math.round((wins / total) * 100 * 10) / 10}%`;
   };
 
-  const getTodayDateString = () => {
-    const today = new Date();
-    return today.toISOString().split('T')[0];
-  };
-
-  const getMinEndDate = () => {
-    return customStartDate || undefined;
-  };
+  // Filter by format if selected
+  const filteredDecks = deckStats.filter((deck) => {
+    if (format === 'all') return true;
+    if (format === 'constructed') {
+      return ['Ladder', 'Play', 'Standard', 'Historic', 'Explorer', 'Alchemy', 'Timeless', 'Pioneer', 'Modern'].includes(deck.format);
+    }
+    if (format === 'limited') {
+      return deck.format.startsWith('QuickDraft') || deck.format.startsWith('PremierDraft') ||
+             deck.format.startsWith('TradDraft') || deck.format.startsWith('SealedDeck');
+    }
+    return deck.format === format;
+  });
 
   // Sort deck stats
-  const sortedDecks = [...deckStats].sort((a, b) => {
+  const sortedDecks = [...filteredDecks].sort((a, b) => {
     let aVal: number | string = 0;
     let bVal: number | string = 0;
 
     switch (sortBy) {
-      case 'winRate':
-        aVal = a.stats.WinRate;
-        bVal = b.stats.WinRate;
+      case 'winRate': {
+        const aRate = a.total_games > 0 ? a.wins / a.total_games : 0;
+        const bRate = b.total_games > 0 ? b.wins / b.total_games : 0;
+        aVal = aRate;
+        bVal = bRate;
         break;
+      }
       case 'matches':
-        aVal = a.stats.TotalMatches;
-        bVal = b.stats.TotalMatches;
+        aVal = a.total_games;
+        bVal = b.total_games;
         break;
       case 'name':
-        aVal = a.deckName.toLowerCase();
-        bVal = b.deckName.toLowerCase();
+        aVal = (a.deck_name || '').toLowerCase();
+        bVal = (b.deck_name || '').toLowerCase();
         break;
     }
 
@@ -224,42 +118,6 @@ const DeckPerformance = () => {
 
         {/* Filters */}
         <div className="filter-row">
-          <div className="filter-group">
-            <label className="filter-label">Date Range</label>
-            <select value={dateRange} onChange={(e) => updateFilters('deckPerformance', { dateRange: e.target.value })}>
-              <option value="7days">Last 7 Days</option>
-              <option value="30days">Last 30 Days</option>
-              <option value="90days">Last 90 Days</option>
-              <option value="all">All Time</option>
-              <option value="custom">Custom Range</option>
-            </select>
-          </div>
-
-          {dateRange === 'custom' && (
-            <>
-              <div className="filter-group">
-                <label className="filter-label">Start Date</label>
-                <input
-                  type="date"
-                  value={customStartDate}
-                  max={getTodayDateString()}
-                  onChange={(e) => updateFilters('deckPerformance', { customStartDate: e.target.value })}
-                />
-              </div>
-
-              <div className="filter-group">
-                <label className="filter-label">End Date</label>
-                <input
-                  type="date"
-                  value={customEndDate}
-                  min={getMinEndDate()}
-                  max={getTodayDateString()}
-                  onChange={(e) => updateFilters('deckPerformance', { customEndDate: e.target.value })}
-                />
-              </div>
-            </>
-          )}
-
           <div className="filter-group">
             <label className="filter-label">Format</label>
             <select value={format} onChange={(e) => updateFilters('deckPerformance', { format: e.target.value })}>
@@ -319,28 +177,23 @@ const DeckPerformance = () => {
       {!loading && !error && sortedDecks.length > 0 && (
         <div className="deck-grid">
           {sortedDecks.map((deck) => (
-            <div key={deck.deckName} className="deck-card">
-              <h3 className="deck-name">{deck.deckName || 'Unknown Deck'}</h3>
+            <div key={deck.deck_id || deck.deck_name} className="deck-card" data-testid="deck-performance-card">
+              <h3 className="deck-name">{deck.deck_name || 'Unknown Deck'}</h3>
+              {deck.format && (
+                <div className="deck-format-label">{normalizeQueueType(deck.format)}</div>
+              )}
               <div className="deck-stats">
                 <div className="stat">
                   <span className="stat-label">Win Rate</span>
-                  <span className="stat-value win-rate">{formatWinRate(deck.stats.WinRate)}</span>
-                </div>
-                <div className="stat">
-                  <span className="stat-label">Matches</span>
-                  <span className="stat-value">{deck.stats.TotalMatches}</span>
-                </div>
-                <div className="stat">
-                  <span className="stat-label">Wins / Losses</span>
-                  <span className="stat-value">{deck.stats.MatchesWon}W - {deck.stats.MatchesLost}L</span>
-                </div>
-                <div className="stat">
-                  <span className="stat-label">Game Win Rate</span>
-                  <span className="stat-value">{formatWinRate(deck.stats.GameWinRate)}</span>
+                  <span className="stat-value win-rate">{formatWinRate(deck.wins, deck.total_games)}</span>
                 </div>
                 <div className="stat">
                   <span className="stat-label">Games</span>
-                  <span className="stat-value">{deck.stats.TotalGames} ({deck.stats.GamesWon}W - {deck.stats.GamesLost}L)</span>
+                  <span className="stat-value">{deck.total_games}</span>
+                </div>
+                <div className="stat">
+                  <span className="stat-label">Wins / Losses</span>
+                  <span className="stat-value">{deck.wins}W - {deck.losses}L{deck.draws > 0 ? ` - ${deck.draws}D` : ''}</span>
                 </div>
               </div>
             </div>
