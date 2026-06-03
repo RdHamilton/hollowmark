@@ -228,7 +228,6 @@ func TestDecksList_HappyPath(t *testing.T) {
 	}
 }
 
-
 func TestDecksGet_HappyPath(t *testing.T) {
 	reader := &stubDecksReader{deck: sampleDeckDetail()}
 	h := handlers.NewDecksHandler(reader, &decksAccountLookup{accountID: 7, found: true})
