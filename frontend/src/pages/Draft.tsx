@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { ViewfinderCircleIcon } from '@heroicons/react/24/outline';
 import { useNavigate } from 'react-router-dom';
 import { drafts, cards, bffDraftRatings } from '@/services/api';
 import type { BffColorRating } from '@/services/api/bffDraftRatings';
@@ -765,7 +766,7 @@ const Draft: React.FC = () => {
                     </div>
                 ) : historicalState.sessions.length === 0 ? (
                     <EmptyState
-                        icon="🎯"
+                        icon={<ViewfinderCircleIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
                         heading="No Draft History"
                         subtext="Complete a Quick Draft in MTG Arena to see your draft history here."
                         variant="no-data"

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { trackEvent } from '@/services/analytics';
 import { PieChart, Pie, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { ViewfinderCircleIcon } from '@heroicons/react/24/outline';
 import { matches } from '@/services/api';
 import { models } from '@/types/models';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -14,7 +15,21 @@ interface FormatStats {
   stats: models.Statistics;
 }
 
-const COLORS = ['#4a9eff', '#7dff7d', '#ff7d7d', '#ffaa00', '#aa00ff', '#00ffaa', '#ff00aa'];
+/** Deterministic per-format color lookup — same format always gets the same color. */
+const FORMAT_COLOR: Record<string, string> = {
+  QuickDraft:   'var(--vault-sapphire)',
+  PremierDraft: 'var(--vault-sapphire-light)',
+  Ladder:       'var(--vault-success)',
+  Play:         'var(--vault-fg-secondary)',
+  Alchemy:      'var(--vault-warning)',
+  Historic:     'var(--vault-indigo)',
+  Explorer:     'var(--vault-indigo-light)',
+  Traditional:  'var(--vault-danger)',
+};
+
+function getFormatColor(format: string): string {
+  return FORMAT_COLOR[format] ?? 'var(--vault-fg-muted)';
+}
 
 // Normalize format name to extract base format (e.g., "QuickDraft_TLA_20251127" -> "QuickDraft")
 const normalizeFormat = (format: string): string => {
@@ -288,7 +303,7 @@ const FormatDistribution = () => {
 
       {!loading && !error && formatStats.length === 0 && (
         <EmptyState
-          icon="🎯"
+          icon={<ViewfinderCircleIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
           heading="No format data"
           subtext="Play matches in different formats to see your format distribution."
           variant="no-data"
@@ -311,8 +326,8 @@ const FormatDistribution = () => {
                     outerRadius={120}
                     label
                   >
-                    {chartData.map((_, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    {chartData.map((entry) => (
+                      <Cell key={entry.name} fill={getFormatColor(entry.name)} />
                     ))}
                   </Pie>
                   <Tooltip
@@ -331,7 +346,11 @@ const FormatDistribution = () => {
                     labelStyle={{ color: '#ffffff' }}
                   />
                   <Legend />
-                  <Bar dataKey="matches" fill="#4a9eff" name="Matches" />
+                  <Bar dataKey="matches" name="Matches">
+                    {chartData.map((entry) => (
+                      <Cell key={entry.name} fill={getFormatColor(entry.name)} />
+                    ))}
+                  </Bar>
                 </BarChart>
               )}
             </ResponsiveContainer>
@@ -339,11 +358,11 @@ const FormatDistribution = () => {
 
           {/* Format Cards */}
           <div className="format-grid">
-            {sortedFormats.map((item, index) => (
+            {sortedFormats.map((item) => (
               <div key={item.format} className="format-card">
                 <div className="format-header">
                   <h3 className="format-name">{item.format || 'Unknown Format'}</h3>
-                  <div className="format-color-badge" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                  <div className="format-color-badge" style={{ backgroundColor: getFormatColor(item.format) }} />
                 </div>
                 <div className="format-stats">
                   <div className="stat">

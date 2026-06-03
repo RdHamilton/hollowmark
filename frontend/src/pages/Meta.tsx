@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { trackEvent } from '@/services/analytics';
+import { ClockIcon } from '@heroicons/react/24/outline';
 import { meta } from '@/services/api';
 import { gui } from '@/types/models';
 import { useDownload } from '@/context/DownloadContext';
@@ -472,7 +473,7 @@ export default function Meta() {
            (!dashboardData.tournaments || dashboardData.tournaments.length === 0) && (
             isFormatSupported(format) ? (
               <div className="no-data" data-empty-reason="format_supported_no_data">
-                <div className="no-data-icon">⏳</div>
+                <div className="no-data-icon"><ClockIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} /></div>
                 <h3>Metagame Data Coming Soon</h3>
                 <p>
                   <strong>{META_FORMATS.find((f) => f.value === format)?.label ?? format}</strong> is

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { PresentationChartBarIcon } from '@heroicons/react/24/outline';
 import { trackEvent } from '@/services/analytics';
 import { matches } from '@/services/api';
 import { models } from '@/types/models';
@@ -180,7 +181,7 @@ const ResultBreakdown = () => {
 
       {!loading && !error && !metrics && (
         <EmptyState
-          icon="📊"
+          icon={<PresentationChartBarIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
           heading="No performance data"
           subtext="Play some matches to see your detailed performance breakdown."
           variant="no-data"

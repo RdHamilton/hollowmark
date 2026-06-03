@@ -329,3 +329,109 @@ export const Empty: Story = {
     </MemoryRouter>
   ),
 };
+
+// ─── What's Next nudge variants (v0.3.7 anti-slop) ─────────────────────────
+
+export const NudgeColdDeck: Story = {
+  name: "What's Next — Cold Deck",
+  render: () => (
+    <div className="home-page" style={{ background: '#0D1117', padding: 16, minHeight: '50vh' }}>
+      <p style={{ color: '#94A3B8', fontSize: 12, marginBottom: 8 }}>
+        Condition: this_week 2W 5L, lastDeck present. Shows "below .500" nudge.
+      </p>
+      <div className="home-whats-next" data-testid="home-whats-next-cold-deck">
+        <svg className="home-whats-next-icon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6L9 12.75l4.286-4.286a11.948 11.948 0 014.306 6.43l.776 2.898m0 0l3.182-5.511m-3.182 5.51l-5.511-3.181" />
+        </svg>
+        <div className="home-whats-next-body">
+          <span className="home-whats-next-headline">Your record is below .500 this week</span>
+          <span className="home-whats-next-detail">Try tweaking <strong>Azorius Tempo</strong> or switching decks.</span>
+          <button className="home-whats-next-cta">Edit deck &rarr;</button>
+        </div>
+      </div>
+    </div>
+  ),
+  decorators: [(Story) => <MemoryRouter><Story /></MemoryRouter>],
+};
+
+export const NudgeHotStreak: Story = {
+  name: "What's Next — Hot Streak",
+  render: () => (
+    <div className="home-page" style={{ background: '#0D1117', padding: 16, minHeight: '50vh' }}>
+      <p style={{ color: '#94A3B8', fontSize: 12, marginBottom: 8 }}>
+        Condition: 6W 2L, 75% win rate. Shows "on a roll" nudge.
+      </p>
+      <div className="home-whats-next" data-testid="home-whats-next-hot-streak">
+        <svg className="home-whats-next-icon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15.362 5.214A8.252 8.252 0 0112 21 8.25 8.25 0 016.038 7.048 8.287 8.287 0 009 9.6a8.983 8.983 0 013.361-6.867 8.21 8.21 0 003 2.48z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 18a3.75 3.75 0 00.495-7.467 5.99 5.99 0 00-1.925 3.546 5.974 5.974 0 01-2.133-1A3.75 3.75 0 0012 18z" />
+        </svg>
+        <div className="home-whats-next-body">
+          <span className="home-whats-next-headline">On a roll this week</span>
+          <span className="home-whats-next-detail">6 wins at 75.0% — you&apos;re in the zone.</span>
+          <button className="home-whats-next-cta">Start a draft &rarr;</button>
+        </div>
+      </div>
+    </div>
+  ),
+  decorators: [(Story) => <MemoryRouter><Story /></MemoryRouter>],
+};
+
+export const NudgeStale: Story = {
+  name: "What's Next — Stale (no matches)",
+  render: () => (
+    <div className="home-page" style={{ background: '#0D1117', padding: 16, minHeight: '50vh' }}>
+      <p style={{ color: '#94A3B8', fontSize: 12, marginBottom: 8 }}>
+        Condition: all-zero this_week. Shows "no matches this week" nudge.
+      </p>
+      <div className="home-whats-next" data-testid="home-whats-next-stale">
+        <svg className="home-whats-next-icon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5m-9-6h.008v.008H12v-.008zM12 15h.008v.008H12V15zm0 2.25h.008v.008H12v-.008zM9.75 15h.008v.008H9.75V15zm0 2.25h.008v.008H9.75v-.008zM7.5 15h.008v.008H7.5V15zm0 2.25h.008v.008H7.5v-.008zm6.75-4.5h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008V15zm0 2.25h.008v.008h-.008v-.008zm2.25-4.5h.008v.008H16.5v-.008zm0 2.25h.008v.008H16.5V15z" />
+        </svg>
+        <div className="home-whats-next-body">
+          <span className="home-whats-next-headline">No matches this week</span>
+          <span className="home-whats-next-detail">Ready for a draft?</span>
+          <button className="home-whats-next-cta">Start a draft &rarr;</button>
+        </div>
+      </div>
+    </div>
+  ),
+  decorators: [(Story) => <MemoryRouter><Story /></MemoryRouter>],
+};
+
+export const NudgeFormatBreakdown: Story = {
+  name: "What's Next — Most Played Format",
+  render: () => (
+    <div className="home-page" style={{ background: '#0D1117', padding: 16, minHeight: '50vh' }}>
+      <p style={{ color: '#94A3B8', fontSize: 12, marginBottom: 8 }}>
+        Condition: format_breakdown present, QuickDraft dominant (62 matches).
+      </p>
+      <div className="home-whats-next" data-testid="home-whats-next-format">
+        <svg className="home-whats-next-icon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+        </svg>
+        <div className="home-whats-next-body">
+          <span className="home-whats-next-headline">Most played format: QuickDraft</span>
+          <span className="home-whats-next-detail">62 matches at 58.1% win rate</span>
+          <button className="home-whats-next-cta">View stats &rarr;</button>
+        </div>
+      </div>
+    </div>
+  ),
+  decorators: [(Story) => <MemoryRouter><Story /></MemoryRouter>],
+};
+
+export const NudgeEmpty: Story = {
+  name: "What's Next — Empty (no conditions match)",
+  render: () => (
+    <div className="home-page" style={{ background: '#0D1117', padding: 16, minHeight: '50vh' }}>
+      <p style={{ color: '#94A3B8', fontSize: 12, marginBottom: 8 }}>
+        Condition: no nudge conditions match and no format_breakdown. Module is absent.
+      </p>
+      <p style={{ color: '#7890AA', fontSize: 11 }}>
+        (Nothing rendered here — that&apos;s correct. The What&apos;s Next module is absent.)
+      </p>
+    </div>
+  ),
+  decorators: [(Story) => <MemoryRouter><Story /></MemoryRouter>],
+};

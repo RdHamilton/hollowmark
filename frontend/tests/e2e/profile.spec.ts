@@ -69,7 +69,7 @@ test.describe('@smoke Profile page — navigation and content', () => {
 
     // Page title
     await expect(page.locator('[data-testid="profile-title"]')).toBeVisible();
-    await expect(page.locator('[data-testid="profile-title"]')).toContainText('User Profile');
+    await expect(page.locator('[data-testid="profile-title"]')).toContainText('Profile');
   });
 
   test('profile page renders display name @smoke', async ({ page }) => {
@@ -105,9 +105,9 @@ test.describe('@smoke Profile page — navigation and content', () => {
     // Avatar section is present
     await expect(page.locator('[data-testid="profile-avatar-section"]')).toBeVisible();
 
-    // No imageUrl → placeholder with the initial letter
-    await expect(page.locator('[data-testid="profile-avatar-placeholder"]')).toBeVisible();
-    await expect(page.locator('[data-testid="profile-avatar-placeholder"]')).toContainText('P');
+    // No imageUrl → VaultMTG initial-letter avatar
+    await expect(page.locator('[data-testid="profile-avatar-vault-initial"]')).toBeVisible();
+    await expect(page.locator('[data-testid="profile-avatar-vault-initial"]')).toContainText('P');
   });
 });
 

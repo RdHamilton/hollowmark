@@ -639,10 +639,38 @@ describe('Home Page Command Strip (#689)', () => {
     });
   });
 
-  // ── QUICK NAV quadrant ───────────────────────────────────
-  describe('QUICK NAV quadrant', () => {
-    it('renders quick nav in loaded state', async () => {
+  // ── WHAT'S NEXT nudge (loaded state) ────────────────────
+  describe("WHAT'S NEXT nudge", () => {
+    it('renders whats-next nudge in loaded state (hot-streak variant)', async () => {
+      // Default mockLoadedState: 8W/4L, 66.7% → hot-streak nudge fires
       mockLoadedState();
+
+      await act(async () => {
+        render(<Home />);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('home-whats-next-hot-streak')).toBeInTheDocument();
+      });
+    });
+
+    it('does NOT render home-quick-nav in loaded state', async () => {
+      mockLoadedState();
+
+      await act(async () => {
+        render(<Home />);
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('home-quick-nav')).not.toBeInTheDocument();
+      });
+    });
+  });
+
+  // ── QUICK NAV quadrant (first-run / empty state only) ────
+  describe('QUICK NAV quadrant', () => {
+    it('renders quick nav in first-run (empty) state', async () => {
+      mockEmptyState();
 
       await act(async () => {
         render(<Home />);
@@ -653,8 +681,8 @@ describe('Home Page Command Strip (#689)', () => {
       });
     });
 
-    it('renders all 4 nav tiles', async () => {
-      mockLoadedState();
+    it('renders all 4 nav tiles in first-run state', async () => {
+      mockEmptyState();
 
       await act(async () => {
         render(<Home />);
@@ -670,7 +698,7 @@ describe('Home Page Command Strip (#689)', () => {
 
     it('navigates to /match-history on Match History tile click', async () => {
       const user = userEvent.setup();
-      mockLoadedState();
+      mockEmptyState();
 
       await act(async () => {
         render(<Home />);
@@ -683,7 +711,7 @@ describe('Home Page Command Strip (#689)', () => {
 
     it('navigates to /draft on Draft tile click', async () => {
       const user = userEvent.setup();
-      mockLoadedState();
+      mockEmptyState();
 
       await act(async () => {
         render(<Home />);
@@ -696,7 +724,7 @@ describe('Home Page Command Strip (#689)', () => {
 
     it('navigates to /decks on Decks tile click', async () => {
       const user = userEvent.setup();
-      mockLoadedState();
+      mockEmptyState();
 
       await act(async () => {
         render(<Home />);
@@ -709,7 +737,7 @@ describe('Home Page Command Strip (#689)', () => {
 
     it('navigates to /collection on Collection tile click', async () => {
       const user = userEvent.setup();
-      mockLoadedState();
+      mockEmptyState();
 
       await act(async () => {
         render(<Home />);
