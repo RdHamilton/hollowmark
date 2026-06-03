@@ -39,6 +39,11 @@ class MockEventEmitter {
   clear(): void {
     this.listeners.clear();
   }
+
+  /** Number of live listeners registered for an event (test assertions). */
+  listenerCount(eventName: string): number {
+    return this.listeners.get(eventName)?.length ?? 0;
+  }
 }
 
 export const mockEventEmitter = new MockEventEmitter();

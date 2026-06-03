@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, act, render } from '@testing-library/react';
 import App from './App';
 import { mockMatches, mockSystem } from '@/test/mocks/apiMock';
-import { mockEventEmitter } from '@/test/mocks/websocketMock';
+import { mockEventEmitter, mockWailsRuntime } from '@/test/mocks/websocketMock';
 import { resetReplayState, getReplayState } from './utils/replayState';
 import { gui } from '@/types/models';
 
@@ -562,6 +562,59 @@ describe('App', () => {
       await waitFor(() => {
         expect(screen.getByTestId('draft-page')).toBeInTheDocument();
       });
+    });
+
+    // Regression guard for the ReplayEventHandler setup/teardown loop
+    // (staging 429 over-fetch incident). The handler must subscribe to each
+    // replay event exactly once on mount and never re-subscribe in response to
+    // its own state updates. Before the fix, the effect's dependency array
+    // included `hasShownDraftNotification` (mutated by the handler itself) and
+    // `navigate`, so every replay event tore down and re-registered all seven
+    // listeners — the "Cleaning up / Setting up global replay event listeners"
+    // console spam Ramone saw, and a driver of repeated cross-surface refetches.
+    it('subscribes to each replay event exactly once and does NOT re-subscribe when replay events fire (no setup/teardown loop)', async () => {
+      renderAppWithRoute('/');
+
+      const startedSubsAfterMount = mockWailsRuntime.EventsOn.mock.calls.filter(
+        ([eventName]) => eventName === 'replay:started'
+      ).length;
+
+      // One subscription per event type on mount (no StrictMode wrapper here).
+      expect(startedSubsAfterMount).toBe(1);
+
+      // Fire a burst of replay events that each previously flipped
+      // hasShownDraftNotification and/or invoked navigate, forcing re-subscription.
+      const status = new gui.ReplayStatus({
+        isActive: true,
+        isPaused: false,
+        currentEntry: 1,
+        totalEntries: 100,
+        percentComplete: 1,
+        elapsed: '00:00:01',
+        speed: 1.0,
+        filter: 'all',
+      });
+
+      await act(async () => {
+        mockEventEmitter.emit('replay:started', status);
+        mockEventEmitter.emit('replay:progress', status);
+        mockEventEmitter.emit('replay:completed', status);
+        mockEventEmitter.emit('replay:started', status);
+        mockEventEmitter.emit('replay:completed', status);
+      });
+
+      // After the burst, the listener set must NOT have grown: still exactly one
+      // subscription per replay event type. A re-subscription loop would make
+      // this count climb with every state-flipping event.
+      const startedSubsAfterBurst = mockWailsRuntime.EventsOn.mock.calls.filter(
+        ([eventName]) => eventName === 'replay:started'
+      ).length;
+      expect(startedSubsAfterBurst).toBe(1);
+
+      // And exactly one live listener remains registered on the emitter for the
+      // event (no leaked duplicates from repeated setup without teardown).
+      expect(mockEventEmitter.listenerCount('replay:started')).toBe(1);
+      expect(mockEventEmitter.listenerCount('replay:progress')).toBe(1);
     });
   });
 
