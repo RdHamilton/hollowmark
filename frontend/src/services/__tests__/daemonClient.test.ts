@@ -69,7 +69,7 @@ describe('daemonClient', () => {
       const result = await get('/drafts');
 
       expect(mockFetch).toHaveBeenCalledWith(
-        'http://localhost:9001/api/v1/drafts',
+        'http://127.0.0.1:9001/api/v1/drafts',
         expect.objectContaining({ method: 'GET' })
       );
       expect(result).toEqual({ items: [] });
@@ -105,7 +105,7 @@ describe('daemonClient', () => {
       const result = await post('/matches', { format: 'Ranked' });
 
       const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe('http://localhost:9001/api/v1/matches');
+      expect(url).toBe('http://127.0.0.1:9001/api/v1/matches');
       expect(init.method).toBe('POST');
       expect(init.body).toBe(JSON.stringify({ format: 'Ranked' }));
       expect(result).toEqual({ created: true });
