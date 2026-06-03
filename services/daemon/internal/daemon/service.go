@@ -936,11 +936,15 @@ func (s *Service) Run(ctx context.Context) error {
 	errs := poller.Errors()
 
 	// Phase 0 of the daemon-local-API plan: serve a /health endpoint on
-	// 127.0.0.1:9001 so the SPA's "daemon connected" indicator can detect
-	// this process. Non-fatal — if the port is busy (e.g. a previous daemon
-	// instance is still draining), the daemon continues with dispatch only.
+	// the channel-derived loopback port (stable=9001, staging=9011) so the
+	// SPA's "daemon connected" indicator can detect this process. Deriving
+	// the port from install.Channel (rather than the hardcoded DefaultPort)
+	// lets a staging daemon coexist with a prod daemon on the same machine
+	// without a port collision (#667 / ADR-049 Ticket 5). Non-fatal — if the
+	// port is busy (e.g. a previous daemon instance is still draining), the
+	// daemon continues with dispatch only.
 	startedAt := time.Now().UTC()
-	localAPI := localapi.New(localapi.DefaultPort, localapi.State{
+	localAPI := localapi.New(install.Identity(install.Channel).LocalAPIPort, localapi.State{
 		Version:      s.version,
 		SessionID:    s.sessionID,
 		StartedAt:    startedAt,
