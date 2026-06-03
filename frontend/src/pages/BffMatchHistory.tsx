@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@clerk/react';
+import { RectangleStackIcon } from '@heroicons/react/24/outline';
 import { getMatchHistory } from '@/services/api/bffMatchHistory';
 import type { MatchHistoryItem } from '@/services/api/bffMatchHistory';
 import { matches as matchesApi } from '@/services/api';
 import { models } from '@/types/models';
 import { EventsOn } from '@/services/websocketClient';
 import LoadingSpinner from '../components/LoadingSpinner';
+import ColorIdentity from '../components/ColorIdentity';
 import EmptyState from '../components/EmptyState';
 import MatchDetailsModal from '../components/MatchDetailsModal';
 import { normalizeHistoryFormat } from '@/utils/formatNormalization';
@@ -238,7 +240,7 @@ const BffMatchHistory = () => {
       {isEmpty && (
         <div data-testid="match-history-empty">
           <EmptyState
-            icon="🎮"
+            icon={<RectangleStackIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
             heading="No recent matches"
             subtext="Your recent matches are loading — new matches usually appear within a minute."
             variant="no-data"
@@ -268,6 +270,8 @@ const BffMatchHistory = () => {
                   const pdLabel = playDrawLabel(match.player_on_play);
                   // Treat empty string the same as absent — only render when truthy.
                   const opponentDisplay = match.opponent_name || null;
+                  // deck_color_identity: optional BFF field (planned) — null-safe, no pips if absent
+                  const colorIdentity = (match as MatchHistoryItem & { deck_color_identity?: string[] }).deck_color_identity ?? null;
                   return (
                     <tr
                       key={match.id}
@@ -278,7 +282,14 @@ const BffMatchHistory = () => {
                       data-testid="match-row"
                     >
                       <td>{formatDate(match.timestamp)}</td>
-                      <td>{displayFormat}</td>
+                      <td>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)' }}>
+                          {colorIdentity && colorIdentity.length > 0 && (
+                            <ColorIdentity colors={colorIdentity} size="sm" />
+                          )}
+                          {displayFormat}
+                        </span>
+                      </td>
                       <td>
                         <span className={`result-badge ${resultClass}`}>
                           {resultLabel}

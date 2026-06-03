@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { TrophyIcon } from '@heroicons/react/24/outline';
 import { trackEvent } from '@/services/analytics';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { matches } from '@/services/api';
@@ -220,7 +221,7 @@ const RankProgression = () => {
       {!loading && !error && timeline.length === 0 && (
         <div data-testid="rank-chart-empty">
           <EmptyState
-            icon="🏆"
+            icon={<TrophyIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
             heading="No rank progression data"
             subtext={`Play ${format === 'constructed' ? 'ranked constructed' : 'limited (draft/sealed)'} matches to track your rank progression over time.`}
             variant="no-data"

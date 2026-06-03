@@ -17,6 +17,15 @@ import DeckHistoryModal from '../components/DeckHistoryModal';
 import LegalityBanner from '../components/LegalityBanner';
 import DeckNotesPanel from '../components/DeckNotesPanel';
 import ImprovementSuggestionsPanel from '../components/ImprovementSuggestionsPanel';
+import {
+  MagnifyingGlassIcon,
+  SparklesIcon,
+  MapPinIcon,
+  ArrowPathIcon,
+  ArchiveBoxIcon,
+  ExclamationTriangleIcon,
+} from '@heroicons/react/24/outline';
+import ManaCurveBar from '../components/ManaCurveBar';
 import Tooltip from '../components/Tooltip';
 import './DeckBuilder.css';
 
@@ -850,7 +859,7 @@ export default function DeckBuilder() {
   if (error) {
     return (
       <div className="deck-builder error-state">
-        <div className="error-icon">⚠️</div>
+        <div className="error-icon"><ExclamationTriangleIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-danger)' }} /></div>
         <h2>Error Loading Deck</h2>
         <p>{error}</p>
         <button onClick={() => navigate('/decks')} className="back-button">
@@ -863,7 +872,7 @@ export default function DeckBuilder() {
   if (!deck) {
     return (
       <div className="deck-builder error-state">
-        <div className="error-icon">📦</div>
+        <div className="error-icon"><ArchiveBoxIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} /></div>
         <h2>No Deck Found</h2>
         <p>The requested deck could not be found.</p>
         <button onClick={() => navigate('/decks')} className="back-button">
@@ -886,7 +895,12 @@ export default function DeckBuilder() {
             className={`toggle-search-button ${showCardSearch ? 'active' : ''}`}
             onClick={() => setShowCardSearch(!showCardSearch)}
           >
-            {showCardSearch ? '✕ Hide Search' : '🔍 Add Cards'}
+            {showCardSearch ? '✕ Hide Search' : (
+              <>
+                <MagnifyingGlassIcon className="w-4 h-4" aria-hidden="true" style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
+                Add Cards
+              </>
+            )}
           </button>
         </div>
       </div>
@@ -991,9 +1005,9 @@ export default function DeckBuilder() {
           <Tooltip content="Total cards in sideboard (max 15)" position="top">
             <span>Sideboard: {statistics?.totalSideboard || 0}</span>
           </Tooltip>
-          <Tooltip content="Average mana cost - lower is faster, 2.5-3.5 is typical" position="top">
-            <span>Avg CMC: {statistics?.averageCMC?.toFixed(2) || 'N/A'}</span>
-          </Tooltip>
+          {statistics?.manaCurve && (
+            <ManaCurveBar manaCurve={statistics.manaCurve} size="sm" />
+          )}
         </div>
         <div className="quick-actions">
           <button
@@ -1026,7 +1040,8 @@ export default function DeckBuilder() {
               setShowRecommendations(!showRecommendations);
             }}
           >
-            ✨ Suggestions
+            <SparklesIcon className="w-4 h-4" aria-hidden="true" style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
+            Suggestions
           </button>
           <button
             className="action-button"
@@ -1034,7 +1049,17 @@ export default function DeckBuilder() {
             disabled={addingLands || (statistics?.totalMainboard || 0) < 2}
             onClick={handleAddSuggestedLands}
           >
-            {addingLands ? '⏳ Adding...' : '🏔️ Add Lands'}
+            {addingLands ? (
+              <>
+                <ArrowPathIcon className="w-4 h-4 animate-spin" aria-hidden="true" style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
+                Adding...
+              </>
+            ) : (
+              <>
+                <MapPinIcon className="w-4 h-4" aria-hidden="true" style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
+                Add Lands
+              </>
+            )}
           </button>
           <button className="action-button" title="Check deck legality for the selected format" onClick={handleValidateDeck}>
             ✓ Validate

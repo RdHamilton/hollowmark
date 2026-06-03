@@ -9,6 +9,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ViewfinderCircleIcon } from '@heroicons/react/24/outline';
+import { CheckCircleIcon } from '@heroicons/react/24/solid';
 import { useAuth } from '@clerk/react';
 import { useDraftEventStream, useDraftSession } from '@/hooks';
 import type { DraftPackPayload } from '@/hooks';
@@ -249,7 +251,7 @@ const DraftLive: React.FC = () => {
           <h1>Live Draft</h1>
         </div>
         <EmptyState
-          icon="🎯"
+          icon={<ViewfinderCircleIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
           heading="No active draft"
           subtext="Start a draft in Arena to see your live pick recommendations"
           variant="no-data"
@@ -266,7 +268,7 @@ const DraftLive: React.FC = () => {
           <h1>Live Draft</h1>
         </div>
         <EmptyState
-          icon="✅"
+          icon={<CheckCircleIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-success)' }} />}
           heading="Draft complete"
           subtext="Your draft session has ended. View your picks in Draft History."
           variant="no-data"
