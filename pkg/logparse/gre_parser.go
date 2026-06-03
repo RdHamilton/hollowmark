@@ -100,6 +100,7 @@ type GamePlayEvent struct {
 	TeamID         int    // MTGA teamId from GREPlayerState; populated for life_change events
 	ActionType     string // "play_card", "attack", "block", "land_drop", "life_change", etc.
 	CardID         int    // Arena card ID (GRPId)
+	InstanceID     int    // GRE instanceId; used for cross-pass deduplication
 	CardName       string // Will be populated later from card database
 	ZoneFrom       string
 	ZoneTo         string
@@ -967,6 +968,7 @@ func detectZoneChangesWithZones(prev, curr *GREGameStateMessage, playerConn *GRE
 			PlayerType: playerType,
 			ActionType: actionType,
 			CardID:     currObj.GRPId,
+			InstanceID: currObj.InstanceID,
 			ZoneFrom:   prevZoneName,
 			ZoneTo:     currZoneName,
 			Timestamp:  curr.Timestamp,
@@ -1634,7 +1636,9 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 			}
 			plays = append(plays, zc)
 			// Register in seenKey so the annotation pass skips this event.
-			seenKey[fmt.Sprintf("%d:%d:%s", 0, zc.TurnNumber, zc.ActionType)] = true
+			// Use the real InstanceID so the key namespace matches the annotation
+			// pass (which also keys on instanceID from affectedIDs).
+			seenKey[fmt.Sprintf("%d:%d:%s", zc.InstanceID, zc.TurnNumber, zc.ActionType)] = true
 		}
 
 		// Attacks.
