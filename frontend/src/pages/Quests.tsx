@@ -1,4 +1,8 @@
 import { useState, useEffect } from 'react';
+import { ClipboardDocumentIcon ,
+  DocumentTextIcon,
+  MagnifyingGlassIcon,
+} from '@heroicons/react/24/outline';
 import { EventsOn } from '@/services/websocketClient';
 import { quests, system } from '@/services/api';
 import { models } from '@/types/models';
@@ -379,14 +383,14 @@ const Quests = () => {
             <h2 className="section-title">Active Quests</h2>
             {activeQuests.length === 0 && !hasQuestData ? (
               <EmptyState
-                icon="📋"
+                icon={<ClipboardDocumentIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
                 heading="Waiting for quest data"
                 subtext="Launch MTGA and play a game to see your quests here."
                 variant="no-data"
               />
             ) : activeQuests.length === 0 && hasQuestData ? (
               <EmptyState
-                icon="📋"
+                icon={<ClipboardDocumentIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
                 heading="All quests completed!"
                 subtext="Check back tomorrow for new quests."
                 variant="no-data"
@@ -499,14 +503,14 @@ const Quests = () => {
 
             {questHistory.length === 0 ? (
               <EmptyState
-                icon="📜"
+                icon={<DocumentTextIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
                 heading="No quest history"
                 subtext="No completed quests found for the selected time period."
                 variant="no-data"
               />
             ) : filteredHistory.length === 0 ? (
               <EmptyState
-                icon="🔍"
+                icon={<MagnifyingGlassIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
                 heading="No matching quests"
                 subtext="No quests match your current filters."
                 variant="no-data"

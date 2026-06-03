@@ -5,8 +5,10 @@ import { gui } from '@/types/models';
 import { useRotationNotifications } from '@/hooks/useRotationNotifications';
 import { useSettings } from '@/hooks/useSettings';
 import { RotationBanner } from '@/components/RotationBanner';
+import ColorIdentity from '@/components/ColorIdentity';
 import EmptyState from '@/components/EmptyState';
 import { normalizeQueueType } from '@/utils/formatNormalization';
+import { ArchiveBoxIcon } from '@heroicons/react/24/outline';
 import './Decks.css';
 
 type ExportFormat = 'arena' | 'moxfield' | 'archidekt' | 'mtgo' | 'mtggoldfish' | 'plaintext';
@@ -277,7 +279,7 @@ export default function Decks() {
       {deckList.length === 0 ? (
         <>
           <EmptyState
-            icon="📦"
+            icon={<ArchiveBoxIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
             heading="No Decks Yet"
             subtext="Create your first deck to get started!"
             variant="no-data"
@@ -297,7 +299,12 @@ export default function Decks() {
               onClick={() => navigate(`/deck-builder/${deck.id}`)}
             >
               <div className="deck-card-header">
-                <h3>{deck.name}</h3>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                  <h3 style={{ margin: 0 }}>{deck.name}</h3>
+                  {deck.colorIdentity && (
+                    <ColorIdentity colors={deck.colorIdentity} size="sm" />
+                  )}
+                </span>
                 <div className="deck-badges">
                   {deck.primaryArchetype && (
                     <span className="archetype-badge">{deck.primaryArchetype}</span>

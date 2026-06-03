@@ -25,6 +25,10 @@ import {
   RectangleStackIcon,
   Squares2X2Icon,
   ArchiveBoxIcon,
+  FireIcon,
+  ArrowTrendingDownIcon,
+  CalendarDaysIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import ManaWheel from '../components/ManaWheel';
 import {
@@ -50,6 +54,121 @@ interface HomeData {
   activeDraft: DraftSession | null;
   lastDeck: DeckListItem | null;
 }
+/** Format breakdown entry — optional BFF field (planned, not yet live). */
+interface FormatBreakdownEntry {
+  format: string;
+  win_rate: number;
+  matches: number;
+}
+
+// ---------------------------------------------------------------------------
+// WhatsNextNudge
+// ---------------------------------------------------------------------------
+
+interface WhatsNextNudgeProps {
+  data: HomeData;
+  navigate: (path: string) => void;
+}
+
+function WhatsNextNudge({ data, navigate }: WhatsNextNudgeProps) {
+  const { summary, activeDraft, lastDeck } = data;
+
+  // Nudge 1: active draft — handled by existing strip; skip here
+  if (activeDraft !== null) return null;
+
+  // Nudge 2: cold deck — below .500 this week AND has a last deck
+  if (
+    summary.this_week.losses > summary.this_week.wins &&
+    lastDeck !== null
+  ) {
+    return (
+      <div className="home-whats-next" data-testid="home-whats-next-cold-deck">
+        <ArrowTrendingDownIcon className="home-whats-next-icon" aria-hidden="true" />
+        <div className="home-whats-next-body">
+          <span className="home-whats-next-headline">
+            Your record is below .500 this week
+          </span>
+          <span className="home-whats-next-detail">
+            Try tweaking <strong>{lastDeck.name}</strong> or switching decks.
+          </span>
+          <button
+            className="home-whats-next-cta"
+            onClick={() => navigate(`/deck-builder/${lastDeck.id}`)}
+          >
+            Edit deck &rarr;
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Nudge 3: hot streak — 5+ wins at 60%+ this week
+  if (summary.this_week.wins >= 5 && summary.this_week.win_rate >= 0.60) {
+    return (
+      <div className="home-whats-next" data-testid="home-whats-next-hot-streak">
+        <FireIcon className="home-whats-next-icon" aria-hidden="true" />
+        <div className="home-whats-next-body">
+          <span className="home-whats-next-headline">On a roll this week</span>
+          <span className="home-whats-next-detail">
+            {summary.this_week.wins} wins at{' '}
+            {(summary.this_week.win_rate * 100).toFixed(1)}% — you&apos;re in the zone.
+          </span>
+          <button className="home-whats-next-cta" onClick={() => navigate('/draft')}>
+            Start a draft &rarr;
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Nudge 4: stale — no matches today or this week
+  if (
+    summary.today.wins + summary.today.losses === 0 &&
+    summary.this_week.wins + summary.this_week.losses === 0
+  ) {
+    return (
+      <div className="home-whats-next" data-testid="home-whats-next-stale">
+        <CalendarDaysIcon className="home-whats-next-icon" aria-hidden="true" />
+        <div className="home-whats-next-body">
+          <span className="home-whats-next-headline">No matches this week</span>
+          <span className="home-whats-next-detail">
+            Ready for a draft?
+          </span>
+          <button className="home-whats-next-cta" onClick={() => navigate('/draft')}>
+            Start a draft &rarr;
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Nudge 5: most-played format from format_breakdown (future BFF field)
+  const formatBreakdown = (summary as HomeSummaryResponse & { format_breakdown?: FormatBreakdownEntry[] }).format_breakdown;
+  if (formatBreakdown && formatBreakdown.length > 0) {
+    const topFormat = formatBreakdown.reduce((a, b) => (b.matches > a.matches ? b : a));
+    return (
+      <div className="home-whats-next" data-testid="home-whats-next-format">
+        <ChartBarIcon className="home-whats-next-icon" aria-hidden="true" />
+        <div className="home-whats-next-body">
+          <span className="home-whats-next-headline">
+            Most played format: {topFormat.format}
+          </span>
+          <span className="home-whats-next-detail">
+            {topFormat.matches} matches at {(topFormat.win_rate * 100).toFixed(1)}% win rate
+          </span>
+          <button className="home-whats-next-cta" onClick={() => navigate('/format-distribution')}>
+            View stats &rarr;
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // No conditions matched — render nothing
+  return null;
+}
+
+
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -357,8 +476,8 @@ export default function Home() {
         </button>
       )}
 
-      {/* ── QUICK NAV quadrant ──────────────────────────────────── */}
-      <QuickNavStrip navigate={navigate} />
+      {/* ── WHAT'S NEXT nudge module ────────────────────────────── */}
+      <WhatsNextNudge data={data!} navigate={navigate} />
     </div>
   );
 }

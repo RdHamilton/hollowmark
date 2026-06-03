@@ -1,4 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { RectangleStackIcon ,
+  MagnifyingGlassIcon,
+} from '@heroicons/react/24/outline';
 import { EventsOn } from '@/services/websocketClient';
 import { matches as matchesApi } from '@/services/api';
 import { models } from '@/types/models';
@@ -502,14 +505,14 @@ const MatchHistory = () => {
       {!loading && !error && daemonConnected && matchList.length === 0 && (
         dateRange === 'all' && cardFormat === 'all' && queueType === 'all' && result === 'all' ? (
           <EmptyState
-            icon="🎮"
+            icon={<RectangleStackIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
             heading="No matches yet"
             subtext="Start playing MTG Arena to begin tracking your match history!"
             variant="no-data"
           />
         ) : (
           <EmptyState
-            icon="🔍"
+            icon={<MagnifyingGlassIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
             heading="No matches found"
             subtext="Try adjusting your filters to see more results."
             variant="no-data"

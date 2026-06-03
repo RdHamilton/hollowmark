@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { RectangleStackIcon } from '@heroicons/react/24/outline';
 import { EventsOn } from '@/services/websocketClient';
 import { matches } from '@/services/api';
 import type { DeckPerformanceRow } from '@/services/api/matches';
@@ -167,7 +168,7 @@ const DeckPerformance = () => {
 
       {!loading && !error && deckStats.length === 0 && (
         <EmptyState
-          icon="🃏"
+          icon={<RectangleStackIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
           heading="No deck data"
           subtext="Play matches with different decks to see your deck performance statistics."
           variant="no-data"

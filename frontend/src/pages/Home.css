@@ -337,3 +337,62 @@
     font-size: var(--text-base);
   }
 }
+
+/* ── WHAT'S NEXT nudge module ─────────────────────────────────────────── */
+.home-whats-next {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  background: var(--vault-bg-raised);
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.home-whats-next-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--vault-sapphire);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.home-whats-next-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+}
+
+.home-whats-next-headline {
+  font-family: var(--font-display-vault);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--vault-fg);
+}
+
+.home-whats-next-detail {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-fg-muted);
+}
+
+.home-whats-next-cta {
+  display: inline-block;
+  margin-top: var(--space-2);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--vault-sapphire);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.home-whats-next-cta:hover {
+  text-decoration: underline;
+}

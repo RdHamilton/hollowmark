@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { RectangleStackIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '@clerk/react';
 import { useNavigate } from 'react-router-dom';
 import { getDraftHistory } from '@/services/api/bffDraftHistory';
@@ -80,7 +81,7 @@ const BffDraftHistory = () => {
       {!loading && !error && total === 0 && (
         <div data-testid="draft-history-empty">
           <EmptyState
-            icon="🃏"
+            icon={<RectangleStackIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
             heading="No drafts yet"
             subtext="Your cloud draft history will appear here once synced."
             variant="no-data"

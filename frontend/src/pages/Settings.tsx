@@ -1,6 +1,19 @@
 import { useState } from 'react';
 import { trackEvent } from '@/services/analytics';
 import {
+  UserCircleIcon,
+  SignalIcon,
+  KeyIcon,
+  ComputerDesktopIcon,
+  Cog6ToothIcon,
+  ArchiveBoxIcon,
+  ArrowPathIcon,
+  ExclamationTriangleIcon,
+  ClipboardDocumentIcon,
+  CpuChipIcon,
+  WrenchScrewdriverIcon,
+} from '@heroicons/react/24/outline';
+import {
   DaemonConnectionSection,
   AppPreferencesSection,
   ImportExportSection,
@@ -145,13 +158,13 @@ const Settings = () => {
       {
         id: 'user-profile',
         label: 'User Profile',
-        icon: '👤',
+        icon: <UserCircleIcon className="w-4 h-4" aria-hidden="true" />,
         content: <UserProfileSection />,
       },
       {
         id: 'connection',
         label: 'Connection',
-        icon: '🔌',
+        icon: <SignalIcon className="w-4 h-4" aria-hidden="true" />,
         content: (
           <DaemonConnectionSection
             connectionStatus={connectionStatus}
@@ -161,19 +174,19 @@ const Settings = () => {
       {
         id: 'api-key',
         label: 'API Key',
-        icon: '🔑',
+        icon: <KeyIcon className="w-4 h-4" aria-hidden="true" />,
         content: <ApiKeySection />,
       },
       {
         id: 'connected-devices',
         label: 'Connected Devices',
-        icon: '🖥️',
+        icon: <ComputerDesktopIcon className="w-4 h-4" aria-hidden="true" />,
         content: <ConnectedDevicesSection />,
       },
       {
         id: 'preferences',
         label: 'Preferences',
-        icon: '⚙️',
+        icon: <Cog6ToothIcon className="w-4 h-4" aria-hidden="true" />,
         content: (
           <AppPreferencesSection
             autoRefresh={autoRefresh}
@@ -194,7 +207,7 @@ const Settings = () => {
       {
         id: 'export',
         label: 'Export',
-        icon: '📦',
+        icon: <ArchiveBoxIcon className="w-4 h-4" aria-hidden="true" />,
         content: (
           <ImportExportSection onExportData={handleExportData} />
         ),
@@ -202,7 +215,7 @@ const Settings = () => {
       {
         id: 'data-recovery',
         label: 'Data Recovery',
-        icon: '🔄',
+        icon: <ArrowPathIcon className="w-4 h-4" aria-hidden="true" />,
         content: (
           <DataRecoverySection
             isConnected={isConnected}
@@ -217,7 +230,7 @@ const Settings = () => {
       {
         id: 'danger-zone',
         label: 'Danger Zone',
-        icon: '⚠️',
+        icon: <ExclamationTriangleIcon className="w-4 h-4" aria-hidden="true" />,
         content: (
           <DangerZoneSection
             isConnected={isConnected}
@@ -234,13 +247,13 @@ const Settings = () => {
       {
         id: 'copy-diagnostics',
         label: 'Copy Diagnostics',
-        icon: '📋',
+        icon: <ClipboardDocumentIcon className="w-4 h-4" aria-hidden="true" />,
         content: <CopyDiagnosticsSection />,
       },
       {
         id: 'ml-recommendations',
         label: 'ML / AI',
-        icon: '🤖',
+        icon: <CpuChipIcon className="w-4 h-4" aria-hidden="true" />,
         content: (
           <MLSettingsSection
             mlEnabled={mlEnabled}
@@ -282,7 +295,7 @@ const Settings = () => {
       items.push({
         id: 'developer-tools',
         label: 'Developer Tools',
-        icon: '🛠️',
+        icon: <WrenchScrewdriverIcon className="w-4 h-4" aria-hidden="true" />,
         content: (
           <ReplayToolSection
             isConnected={isConnected}

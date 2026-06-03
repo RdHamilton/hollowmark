@@ -94,3 +94,53 @@ export const ColorIdentitySizes: StoryObj = {
     </div>
   ),
 };
+
+// ─── Deck-row and match-row integration stories (v0.3.7 anti-slop) ──────────
+
+export const DeckRowWithColorIdentity: StoryObj = {
+  name: 'DeckRowWithColorIdentity — inline deck list row',
+  render: () => (
+    <div style={{ background: '#161C26', padding: 16, borderRadius: 8, minWidth: 400 }}>
+      <p style={{ color: '#7890AA', fontSize: 11, marginBottom: 12 }}>Deck row: name + pips + format + record</p>
+      {(['sm', 'md', 'lg'] as ManaPipSize[]).map((size) => (
+        <div
+          key={size}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid #2A3347' }}
+        >
+          <span style={{ color: '#F1F5F9', fontWeight: 600, fontFamily: 'sans-serif', fontSize: 14 }}>
+            Azorius Tempo
+          </span>
+          <ColorIdentity colors={['W', 'U']} size={size} />
+          <span style={{ color: '#94A3B8', fontSize: 12, marginLeft: 4 }}>Standard</span>
+          <span style={{ color: '#7890AA', fontSize: 12, marginLeft: 'auto' }}>24–18</span>
+          <span style={{ color: '#7890AA', fontSize: 11, marginLeft: 4 }}>({size})</span>
+        </div>
+      ))}
+    </div>
+  ),
+};
+
+export const MatchRowWithColorIdentity: StoryObj = {
+  name: 'MatchRowWithColorIdentity — match history row',
+  render: () => (
+    <div style={{ background: '#161C26', padding: 16, borderRadius: 8, minWidth: 500 }}>
+      <p style={{ color: '#7890AA', fontSize: 11, marginBottom: 12 }}>Match rows: result + pips before archetype text</p>
+      {[
+        { result: 'WIN', color: '#22C55E', pips: ['W', 'U'] as string[], archetype: 'Azorius Tempo' },
+        { result: 'LOSS', color: '#EF4444', pips: ['B', 'R', 'G'] as string[], archetype: 'Jund Midrange' },
+      ].map((row) => (
+        <div
+          key={row.result}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid #2A3347' }}
+        >
+          <span style={{ color: row.color, fontWeight: 700, fontFamily: 'sans-serif', fontSize: 13, width: 40 }}>
+            {row.result}
+          </span>
+          <ColorIdentity colors={row.pips} size="sm" />
+          <span style={{ color: '#94A3B8', fontFamily: 'sans-serif', fontSize: 13 }}>{row.archetype}</span>
+          <span style={{ color: '#7890AA', fontSize: 12, marginLeft: 'auto' }}>2–1</span>
+        </div>
+      ))}
+    </div>
+  ),
+};
