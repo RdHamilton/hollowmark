@@ -3,16 +3,18 @@ import { renderHook, act } from '@testing-library/react';
 
 // ---------------------------------------------------------------------------
 // Clerk useAuth mock — the hook calls getToken() on every (re)connect to
-// append a fresh JWT as ?token=.  We control what it returns per test.
+// append a fresh JWT as ?token=.  We control auth state per test.
 // ---------------------------------------------------------------------------
 
 const mockGetToken = vi.fn<[], Promise<string | null>>();
+let mockIsLoaded = true;
+let mockIsSignedIn = true;
 
 vi.mock('@clerk/react', () => ({
   useAuth: () => ({
     getToken: mockGetToken,
-    isSignedIn: true,
-    isLoaded: true,
+    isLoaded: mockIsLoaded,
+    isSignedIn: mockIsSignedIn,
   }),
 }));
 
@@ -109,7 +111,9 @@ describe('useDraftEventStream', () => {
     instances = [];
     MockEventSource.mockClear();
     mockGetToken.mockReset();
-    // Default: return a stable test JWT so tests don't have to set it.
+    // Default: signed-in + Clerk loaded, with a stable test JWT.
+    mockIsLoaded = true;
+    mockIsSignedIn = true;
     mockGetToken.mockResolvedValue('clerk-test-jwt');
     vi.useFakeTimers();
   });
@@ -128,10 +132,116 @@ describe('useDraftEventStream', () => {
     });
   }
 
-  it('starts with status "connecting"', async () => {
+  // ---------------------------------------------------------------------------
+  // Auth-gate tests (primary bug fix — Clerk hydration race)
+  // ---------------------------------------------------------------------------
+
+  it('does NOT open an EventSource when isLoaded=false (Clerk still hydrating)', async () => {
+    mockIsLoaded = false;
+    mockIsSignedIn = false;
+
+    const { useDraftEventStream } = await import('./useDraftEventStream');
+    const { result } = renderHook(() => useDraftEventStream());
+    await flushConnect();
+
+    expect(instances).toHaveLength(0);
+    expect(result.current.status).toBe('waiting-for-auth');
+    expect(mockGetToken).not.toHaveBeenCalled();
+  });
+
+  it('does NOT open an EventSource when isLoaded=true but isSignedIn=false', async () => {
+    mockIsLoaded = true;
+    mockIsSignedIn = false;
+
+    const { useDraftEventStream } = await import('./useDraftEventStream');
+    const { result } = renderHook(() => useDraftEventStream());
+    await flushConnect();
+
+    expect(instances).toHaveLength(0);
+    expect(result.current.status).toBe('waiting-for-auth');
+    expect(mockGetToken).not.toHaveBeenCalled();
+  });
+
+  it('opens the EventSource once isLoaded=true and isSignedIn=true (Clerk hydration resolved)', async () => {
+    // Simulate Clerk not yet hydrated at mount.
+    mockIsLoaded = false;
+    mockIsSignedIn = false;
+    mockGetToken.mockResolvedValue('jwt-after-hydration');
+
+    const { useDraftEventStream } = await import('./useDraftEventStream');
+
+    // Start with unhydrated state — no EventSource should open.
+    const { result, rerender } = renderHook(() => useDraftEventStream());
+    await flushConnect();
+
+    expect(instances).toHaveLength(0);
+    expect(result.current.status).toBe('waiting-for-auth');
+
+    // Simulate Clerk finishing hydration — flip the module-level vars and
+    // rerender so the hook sees new values from useAuth().
+    mockIsLoaded = true;
+    mockIsSignedIn = true;
+    rerender();
+    await flushConnect();
+
+    expect(instances).toHaveLength(1);
+    const url = new URL(instances[0].url);
+    expect(url.searchParams.get('token')).toBe('jwt-after-hydration');
+  });
+
+  it('reconnect re-acquires the token via getTokenRef (null-then-token scenario)', async () => {
+    // First connect: getToken returns a valid JWT (isSignedIn gate is already
+    // satisfied, so we reach connect(); this tests that each reconnect calls
+    // the live getToken, not a stale mount-time snapshot).
+    mockGetToken
+      .mockResolvedValueOnce('jwt-first')
+      .mockResolvedValueOnce('jwt-second');
+
+    const { useDraftEventStream } = await import('./useDraftEventStream');
+    renderHook(() => useDraftEventStream());
+    await flushConnect();
+
+    expect(instances).toHaveLength(1);
+    expect(new URL(instances[0].url).searchParams.get('token')).toBe('jwt-first');
+
+    // Force a reconnect by triggering an error + advancing past backoff.
+    act(() => {
+      instances[0]._triggerError();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    await flushConnect();
+
+    // The second connection must use the freshly-acquired token, not the
+    // stale jwt-first value from the first mount-time call.
+    expect(instances).toHaveLength(2);
+    expect(new URL(instances[1].url).searchParams.get('token')).toBe('jwt-second');
+    expect(mockGetToken).toHaveBeenCalledTimes(2);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Existing connection behaviour tests
+  // ---------------------------------------------------------------------------
+
+  it('starts with status "waiting-for-auth" before Clerk is loaded', async () => {
+    mockIsLoaded = false;
+    mockIsSignedIn = false;
+
     const { useDraftEventStream } = await import('./useDraftEventStream');
     const { result } = renderHook(() => useDraftEventStream());
 
+    expect(result.current.status).toBe('waiting-for-auth');
+    expect(result.current.latestEvent).toBeNull();
+  });
+
+  it('starts with status "connecting" when Clerk is already loaded and signed in', async () => {
+    const { useDraftEventStream } = await import('./useDraftEventStream');
+    const { result } = renderHook(() => useDraftEventStream());
+
+    // Status is 'connecting' once the effect runs (isLoaded+isSignedIn=true).
+    // The async connect() hasn't resolved yet at this point so EventSource
+    // hasn't opened, but the status transitions to 'connecting' synchronously.
     expect(result.current.status).toBe('connecting');
     expect(result.current.latestEvent).toBeNull();
   });
@@ -171,7 +281,10 @@ describe('useDraftEventStream', () => {
     expect(url.searchParams.get('token')).toBe('jwt-abc-123');
   });
 
-  it('omits ?token= when getToken returns null (signed-out / Clerk still hydrating)', async () => {
+  it('opens EventSource without ?token= when getToken returns null while signed-in (mid-session rotation)', async () => {
+    // Even when signed in, if getToken() unexpectedly returns null (e.g.
+    // during a brief JWT rotation window) we still open the connection and
+    // let the backoff/retry pick up a fresh token on the next attempt.
     mockGetToken.mockResolvedValue(null);
 
     const { useDraftEventStream } = await import('./useDraftEventStream');
