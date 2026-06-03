@@ -219,6 +219,55 @@ func TestTrayCGO_RunCallsEnsurePolicy_StateUnchanged(t *testing.T) {
 	assert.False(t, app.syncInFlight)
 }
 
+// ---------------------------------------------------------------------------
+// onReady-time activation policy fix (v0.3.7 tray blocker)
+//
+// The authoritative NSApplicationActivationPolicyAccessory set was moved out of
+// the pre-systray.Run window (where it is silently dropped on macOS 13–15) into
+// the onReady setup() window via applyAccessoryPolicy. The Cocoa render path is
+// not unit-testable on a headless runner, but we CAN assert that the new shim
+// exists in the cgo build, does not panic, does not corrupt App state, and
+// returns one of the known NSApplicationActivationPolicy values.
+// ---------------------------------------------------------------------------
+
+// TestTrayCGO_ApplyAccessoryPolicy_NoPanic verifies the onReady-time policy shim
+// exists in the cgo build and does not panic. On a headless CI runner the Cocoa
+// setActivationPolicy is a no-op; on a real GUI session it promotes the process
+// to Accessory so NSStatusBar can place the menu-bar icon.
+func TestTrayCGO_ApplyAccessoryPolicy_NoPanic(t *testing.T) {
+	assert.NotPanics(t, func() { _ = applyAccessoryPolicy() })
+}
+
+// TestTrayCGO_ApplyAccessoryPolicy_ReturnsKnownPolicy verifies the shim returns
+// one of the three documented NSApplicationActivationPolicy values so the
+// setup() log line can name it. (We do not assert it equals Accessory because a
+// headless test session may not grant a WindowServer session.)
+func TestTrayCGO_ApplyAccessoryPolicy_ReturnsKnownPolicy(t *testing.T) {
+	p := applyAccessoryPolicy()
+	assert.Contains(t,
+		[]int{activationPolicyRegular, activationPolicyAccessory, activationPolicyProhibited},
+		p,
+		"applyAccessoryPolicy must return a documented NSApplicationActivationPolicy value, got %d", p)
+}
+
+// TestTrayCGO_ApplyAccessoryPolicy_StateUnchanged verifies the Objective-C shim
+// does not touch Go heap state (same contract as the pre-Run call).
+func TestTrayCGO_ApplyAccessoryPolicy_StateUnchanged(t *testing.T) {
+	app := newCGOTestApp()
+	_ = applyAccessoryPolicy()
+	assert.Equal(t, StatusStarting, app.status)
+	assert.False(t, app.syncInFlight)
+}
+
+// TestTrayCGO_ActivationPolicyName maps the documented policy values to their
+// human-readable names used in the setup() log output.
+func TestTrayCGO_ActivationPolicyName(t *testing.T) {
+	assert.Equal(t, "Regular", activationPolicyName(activationPolicyRegular))
+	assert.Equal(t, "Accessory", activationPolicyName(activationPolicyAccessory))
+	assert.Equal(t, "Prohibited", activationPolicyName(activationPolicyProhibited))
+	assert.Equal(t, "Unknown(7)", activationPolicyName(7))
+}
+
 // TestTrayCGO_CheckForUpdates_URLIsVaultMTGRepo verifies the exact URL constant
 // to prevent accidental references to the legacy repo slug (pre-rename).
 func TestTrayCGO_CheckForUpdates_URLIsVaultMTGRepo(t *testing.T) {

@@ -9,13 +9,39 @@ package tray
 import (
 	_ "embed"
 	"fmt"
+	"log"
 	"runtime"
 	"sync"
 	"time"
 
+	"fyne.io/systray"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
-	"github.com/getlantern/systray"
 )
+
+// NSApplicationActivationPolicy values, mirrored from AppKit so the
+// cross-platform setup() logging can name the policy returned by
+// applyAccessoryPolicy without importing Cocoa. Only macOS uses these at
+// runtime; the non-darwin stub reports activationPolicyAccessory.
+const (
+	activationPolicyRegular    = 0 // NSApplicationActivationPolicyRegular
+	activationPolicyAccessory  = 1 // NSApplicationActivationPolicyAccessory (desired)
+	activationPolicyProhibited = 2 // NSApplicationActivationPolicyProhibited (icon will NOT render)
+)
+
+// activationPolicyName returns a human-readable name for an
+// NSApplicationActivationPolicy value, for log output.
+func activationPolicyName(p int) string {
+	switch p {
+	case activationPolicyRegular:
+		return "Regular"
+	case activationPolicyAccessory:
+		return "Accessory"
+	case activationPolicyProhibited:
+		return "Prohibited"
+	default:
+		return fmt.Sprintf("Unknown(%d)", p)
+	}
+}
 
 //go:embed assets/icon.png
 var prodIconData []byte
@@ -144,12 +170,13 @@ func NewWithLabel(appURL, version string, openURL func(string) error, onQuit fun
 // onReady is called after the menu bar icon is ready; start the daemon event
 // loop inside it (in a new goroutine).
 func (a *App) Run(onReady func()) {
-	// Promote the process to UIElement activation policy before entering the
-	// NSRunLoop inside systray.Run. This is required when the daemon is launched
-	// by launchd as a bare executable (spawn type "daemon") rather than from a
-	// .app bundle; without it NSStatusBar silently drops the menu-bar icon.
-	// The call is a no-op on non-Darwin platforms (tray_nondarwin.go) and on
-	// headless machines (no WindowServer session).
+	// Best-effort first attempt at the UIElement activation policy before
+	// entering the NSRunLoop inside systray.Run. NOTE: on macOS 13–15 a policy
+	// set this early (before applicationDidFinishLaunching / the run loop) is
+	// silently dropped, so this call is NOT authoritative — the authoritative
+	// set happens inside the onReady callback in setup() via applyAccessoryPolicy.
+	// Retained as a harmless first attempt. No-op on non-Darwin platforms
+	// (tray_nondarwin.go) and on headless machines (no WindowServer session).
 	ensureUIElementPolicy()
 	systray.Run(func() {
 		a.setup()
@@ -264,7 +291,27 @@ func (a *App) SetLastSync(t time.Time) {
 }
 
 func (a *App) setup() {
+	log.Printf("[tray] setup: entering onReady (channel=%s label=%q)", install.Channel, a.appLabel)
+
+	// Authoritative activation-policy set. This runs inside the systray onReady
+	// window — i.e. during/after applicationDidFinishLaunching with the
+	// NSApplication run loop already up — which is the only point at which
+	// setActivationPolicy:NSApplicationActivationPolicyAccessory reliably takes
+	// effect on macOS 13–15. A policy set before systray.Run (ensureUIElementPolicy)
+	// is silently dropped on those versions, leaving the process effectively
+	// .prohibited; a .prohibited process cannot place an NSStatusItem, so the
+	// icon is created but stays invisible. We set it here and log the resulting
+	// policy so the tray lifecycle is greppable in the daemon log.
+	// On non-Darwin platforms applyAccessoryPolicy is a no-op returning Accessory.
+	policy := applyAccessoryPolicy()
+	if policy == activationPolicyAccessory {
+		log.Printf("[tray] setup: activation policy set OK -> %s (icon can render)", activationPolicyName(policy))
+	} else {
+		log.Printf("[tray] setup: WARN activation policy is %s after set attempt — menu-bar icon may not render", activationPolicyName(policy))
+	}
+
 	systray.SetIcon(iconBytes())
+	log.Printf("[tray] setup: icon set (%d bytes)", len(iconBytes()))
 	// Tooltip shows the channel-specific label so users know which channel is running.
 	systray.SetTooltip(a.appLabel)
 
