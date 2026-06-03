@@ -18,6 +18,12 @@ BEGIN
         DROP INDEX IF EXISTS idx_accounts_default;
         DROP INDEX IF EXISTS idx_accounts_is_default;
 
+        -- Drop the CHECK(is_default IN (0, 1)) constraint from migration 000002.
+        -- PostgreSQL validates check constraints against the new column type during
+        -- ALTER, so the integer-literal check must be removed first. After conversion
+        -- to BOOLEAN, the type itself enforces the same invariant.
+        ALTER TABLE accounts DROP CONSTRAINT IF EXISTS accounts_is_default_check;
+
         -- Must drop the integer DEFAULT before the type ALTER; PostgreSQL
         -- cannot auto-cast DEFAULT 0 to boolean in the same ALTER statement.
         ALTER TABLE accounts

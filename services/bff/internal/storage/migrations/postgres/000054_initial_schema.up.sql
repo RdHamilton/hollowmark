@@ -565,12 +565,25 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_accounts_is_default ON accounts(is_default);
--- Only one default account allowed
--- accounts.is_default is BOOLEAN (see column definition ~line 535); the partial-index predicate
--- MUST use TRUE/FALSE, not 1/0 -- PG16 rejects boolean = integer. Do not change this back to
--- "= 1": that is the exact error from commit c47aff5d (PR #1034) that broke Schema-000054-Compat.
--- See: https://github.com/RdHamilton/vault-mtg-tickets/issues/620
-CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_default ON accounts(is_default) WHERE is_default = TRUE;
+-- Only one default account allowed.
+-- On the fresh-init path accounts.is_default is BOOLEAN (defined above); = TRUE is correct.
+-- On the incremental path (000001→onwards) accounts.is_default is INTEGER (created by 000002);
+-- PostgreSQL validates partial-index predicates at parse time even for IF NOT EXISTS, so
+-- = TRUE fails at runtime against an INTEGER column. Guard this with a type check so that
+-- the incremental path skips the index here (000002 already created it with = 1) and migration
+-- 000104 later converts the column to BOOLEAN and recreates the index with = TRUE.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'accounts'
+          AND column_name = 'is_default'
+          AND data_type = 'boolean'
+    ) THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_default ON accounts(is_default) WHERE is_default = TRUE;
+    END IF;
+END $$;
 
 -- Link each MTGA account to an app-level user (inlined from 000051).
 -- Nullable during migration; backfill required before enforcing NOT NULL.
