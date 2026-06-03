@@ -269,6 +269,114 @@ func TestDraftsRepository_DistinctSets_BlankSetCodeExcluded(t *testing.T) {
 	}
 }
 
+// TestDraftsRepository_ListSessions_ActiveAlias verifies that
+// DraftFilter{Status: "active"} returns sessions with status "in_progress"
+// (the canonical DB value written by the projection worker).
+// DEFECT-A1-L2: before the fix, "active" ≠ "in_progress" so the query
+// returned zero rows.
+func TestDraftsRepository_ListSessions_ActiveAlias(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftsRepository(db)
+
+	accountID := insertTestAccount(t, db, "drafts-repo-active-alias-acct")
+	now := time.Now().UTC().Truncate(time.Second)
+	inProgressID := fmt.Sprintf("dr-active-alias-ip-%d", accountID)
+	completedID := fmt.Sprintf("dr-active-alias-done-%d", accountID)
+
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO draft_sessions
+			(id, account_id, event_name, set_code, draft_type, start_time, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		inProgressID, accountID, "event-"+inProgressID, "BLB", "PremierDraft", now, "in_progress",
+	)
+	if err != nil {
+		t.Fatalf("insert in_progress session: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, inProgressID)
+	})
+	_, err = db.ExecContext(
+		context.Background(),
+		`INSERT INTO draft_sessions
+			(id, account_id, event_name, set_code, draft_type, start_time, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		completedID, accountID, "event-"+completedID, "BLB", "PremierDraft", now.Add(-time.Hour), "completed",
+	)
+	if err != nil {
+		t.Fatalf("insert completed session: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, completedID)
+	})
+
+	// status="active" must return only the in_progress session.
+	rows, err := repo.ListSessions(context.Background(), accountID, repository.DraftFilter{Status: "active"})
+	if err != nil {
+		t.Fatalf("ListSessions(status=active): %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row for status=active, got %d", len(rows))
+	}
+	if rows[0].ID != inProgressID {
+		t.Errorf("want in_progress session %q, got %q", inProgressID, rows[0].ID)
+	}
+	if rows[0].Status != "in_progress" {
+		t.Errorf("Status: want in_progress, got %q", rows[0].Status)
+	}
+}
+
+// TestDraftsRepository_ListSessions_StatusCompletedFilter verifies that
+// DraftFilter{Status: "completed"} still works (no regression from the
+// "active" alias fix).
+func TestDraftsRepository_ListSessions_StatusCompletedFilter(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftsRepository(db)
+
+	accountID := insertTestAccount(t, db, "drafts-repo-status-done-acct")
+	now := time.Now().UTC().Truncate(time.Second)
+	completedID := fmt.Sprintf("dr-status-done-%d", accountID)
+	inProgressID := fmt.Sprintf("dr-status-ip-%d", accountID)
+
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO draft_sessions
+			(id, account_id, event_name, set_code, draft_type, start_time, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		completedID, accountID, "event-"+completedID, "BLB", "PremierDraft", now.Add(-time.Hour), "completed",
+	)
+	if err != nil {
+		t.Fatalf("insert completed session: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, completedID)
+	})
+	_, err = db.ExecContext(
+		context.Background(),
+		`INSERT INTO draft_sessions
+			(id, account_id, event_name, set_code, draft_type, start_time, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		inProgressID, accountID, "event-"+inProgressID, "BLB", "PremierDraft", now, "in_progress",
+	)
+	if err != nil {
+		t.Fatalf("insert in_progress session: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, inProgressID)
+	})
+
+	rows, err := repo.ListSessions(context.Background(), accountID, repository.DraftFilter{Status: "completed"})
+	if err != nil {
+		t.Fatalf("ListSessions(status=completed): %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row for status=completed, got %d", len(rows))
+	}
+	if rows[0].ID != completedID {
+		t.Errorf("want completed session %q, got %q", completedID, rows[0].ID)
+	}
+}
+
 // TestDraftsRepository_ListSessions_CrossAccountIsolation verifies that
 // ListSessions only returns sessions belonging to the queried account.
 func TestDraftsRepository_ListSessions_CrossAccountIsolation(t *testing.T) {
