@@ -1767,3 +1767,98 @@ func TestParseGameStage_CapturedInMessage(t *testing.T) {
 		t.Errorf("Stage = %q, want %q", messages[0].Stage, "GameStage_Play")
 	}
 }
+
+// TestGetPlayerSeatID_FromGREMessageConnectResp verifies that GetPlayerSeatID
+// correctly extracts the player's seat from a connectResp nested inside a
+// greToClientEvent.greToClientMessages entry — which is the ACTUAL structure
+// emitted by MTGA in real Player.log files.
+//
+// The previous implementation only checked for top-level entry.JSON["connectResp"],
+// which is never present in real logs. This caused PlayerOnPlay to always be nil
+// for every game in the corpus (19 matches, 0 with player_on_play populated).
+//
+// Real log structure:
+//
+//	{
+//	  "transactionId": "...",
+//	  "greToClientEvent": {
+//	    "greToClientMessages": [
+//	      {
+//	        "type": "GREMessageType_ConnectResp",
+//	        "systemSeatIds": [1],
+//	        "msgId": 1,
+//	        "connectResp": { "status": "ConnectionStatus_Success", ... }
+//	      }
+//	    ]
+//	  }
+//	}
+func TestGetPlayerSeatID_FromGREMessageConnectResp(t *testing.T) {
+	// This is the REAL structure as it appears in Player.log — connectResp
+	// is inside greToClientEvent.greToClientMessages[n], NOT at the top level.
+	entries := []*LogEntry{
+		{
+			IsJSON: true,
+			JSON: map[string]interface{}{
+				"transactionId": "da772c1d-4e21-41b7-927b-dedf79a9328b",
+				"greToClientEvent": map[string]interface{}{
+					"greToClientMessages": []interface{}{
+						map[string]interface{}{
+							"type":          "GREMessageType_ConnectResp",
+							"systemSeatIds": []interface{}{float64(1)},
+							"msgId":         float64(1),
+							"connectResp": map[string]interface{}{
+								"status":   "ConnectionStatus_Success",
+								"protoVer": "ProtoVersion_PersistentAnnotations",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	conn := GetPlayerSeatID(entries)
+	if conn == nil {
+		t.Fatal("GetPlayerSeatID returned nil — connectResp nested inside greToClientEvent was not found")
+	}
+	if conn.SeatID != 1 {
+		t.Errorf("SeatID = %d, want 1", conn.SeatID)
+	}
+}
+
+// TestGetPlayerSeatID_ConnectRespInsideGREWrapper_Precedence verifies that
+// the GRE-message-embedded connectResp is preferred over a matchGameRoomStateChangedEvent
+// when both are present in the same entry slice, and that the correct player
+// seat is returned when the player is on seat 2.
+func TestGetPlayerSeatID_ConnectRespInsideGREWrapper_Precedence(t *testing.T) {
+	// Player is on seat 2 per connectResp. A matchGameRoomStateChangedEvent
+	// also exists with player on seat 1 (the opponent's seat) — connectResp
+	// should take precedence.
+	entries := []*LogEntry{
+		{
+			IsJSON: true,
+			JSON: map[string]interface{}{
+				"greToClientEvent": map[string]interface{}{
+					"greToClientMessages": []interface{}{
+						map[string]interface{}{
+							"type":          "GREMessageType_ConnectResp",
+							"systemSeatIds": []interface{}{float64(2)},
+							"msgId":         float64(1),
+							"connectResp": map[string]interface{}{
+								"status": "ConnectionStatus_Success",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	conn := GetPlayerSeatID(entries)
+	if conn == nil {
+		t.Fatal("GetPlayerSeatID returned nil")
+	}
+	if conn.SeatID != 2 {
+		t.Errorf("SeatID = %d, want 2 (player is on seat 2)", conn.SeatID)
+	}
+}

@@ -92,6 +92,14 @@ type Service struct {
 	// be derived. Empty until a player.authenticated event has been processed
 	// in this daemon session.
 	mtgaUserID string
+
+	// lastDeckID is the most recently observed MTGA Arena deck UUID, extracted
+	// from a CourseDeckSummary.DeckId field in a CourseDeck log entry. Arena
+	// emits CourseDeck just before a match starts when the player submits their
+	// deck to an event. This field is attached to the next match.completed
+	// payload so the BFF can link the match row to the correct deck.
+	// Empty until a course.deck_submitted event has been processed.
+	lastDeckID string
 	// trayHooks connects the tray icon to the daemon event loop.
 	// All fields are optional — nil channels block forever in select (safe no-op).
 	trayHooks TrayHooks
@@ -1570,6 +1578,22 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 		}
 		payload = entry.JSON
 
+	case "course.deck_submitted":
+		// Cache the deck UUID so it can be attached to the next match.completed.
+		// Arena emits CourseDeck just before a match starts; the daemon holds the
+		// most recent DeckId in memory and attaches it when match.completed fires.
+		deckID, err := logreader.ParseCourseDeckEntry(entry)
+		if err != nil {
+			log.Printf("[daemon] warn: parse course deck: %v", err)
+			s.recordParseFailure(eventType, entry.Raw)
+		} else {
+			s.lastDeckID = deckID
+			log.Printf("[daemon] cached deck ID from CourseDeck: %s", deckID)
+		}
+		// course.deck_submitted is daemon-internal bookkeeping only.
+		// Do not dispatch it to the BFF.
+		return nil
+
 	case "match.completed":
 		p, err := logreader.ParseMatchCompletedEntry(entry, s.mtgaUserID)
 		if err != nil {
@@ -1577,6 +1601,14 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 			s.recordParseFailure(eventType, entry.Raw)
 			payload = entry.JSON
 		} else {
+			// Attach the cached deck ID when available. The deck ID was captured
+			// from the most recent CourseDeck entry, which Arena emits just before
+			// the match starts. Clear after attaching so a missed CourseDeck does
+			// not spuriously link a stale deck to a future match.
+			if s.lastDeckID != "" {
+				p.DeckID = s.lastDeckID
+				s.lastDeckID = ""
+			}
 			// Attach DraftSessionID when the active in-memory session's
 			// CourseName matches the match Format (event_name) and the
 			// session was updated within 48 hours.
