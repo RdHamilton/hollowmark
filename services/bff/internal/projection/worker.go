@@ -104,6 +104,13 @@ type gameIDResolver interface {
 	GameIDByMatchAndNumber(ctx context.Context, matchID string, gameNumber int) (int64, error)
 }
 
+// gameRowWriter creates the games anchor row required by game_plays.game_id FK.
+// UpsertGameRow is idempotent: ON CONFLICT (match_id, game_number) returns the
+// existing id so replaying the same event never produces duplicate rows.
+type gameRowWriter interface {
+	UpsertGameRow(ctx context.Context, matchID string, gameNumber int) (int64, error)
+}
+
 // counterStore writes counter-change rows to game_event_counters.
 type counterStore interface {
 	InsertCounters(ctx context.Context, inserts []repository.GameEventCounterInsert) error
@@ -163,6 +170,7 @@ type Worker struct {
 	gamePlays  gamePlayStore
 	cardPlays  cardPlayStore
 	gameIDs    gameIDResolver
+	gameRows   gameRowWriter
 	counters   counterStore
 	dlq        dlqStore
 	postHog    postHogClient
@@ -207,6 +215,14 @@ func (w *Worker) WithCardPlayStore(store cardPlayStore) *Worker {
 // WithGameIDResolver wires the games.id resolver into w and returns w.
 func (w *Worker) WithGameIDResolver(resolver gameIDResolver) *Worker {
 	w.gameIDs = resolver
+	return w
+}
+
+// WithGameRowWriter wires the games-row upsert writer into w and returns w.
+// When wired, projectGamePlayEvent calls UpsertGameRow to ensure the games FK
+// anchor row exists before InsertCardPlays writes per-turn game_plays rows.
+func (w *Worker) WithGameRowWriter(writer gameRowWriter) *Worker {
+	w.gameRows = writer
 	return w
 }
 
@@ -1041,16 +1057,38 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 	}
 
 	// Per-turn card play writes to game_plays (ADR-050).
-	// Requires resolving games.id from (match_id, game_number). If the
-	// match.completed event has not yet been projected (no games row), log
-	// WARN and skip — data is preserved in daemon_events.payload for
-	// retroactive projection (v0.3.8 follow-on).
-	if len(p.CardPlays) > 0 && w.cardPlays != nil && w.gameIDs != nil {
-		gameID, resolveErr := w.gameIDs.GameIDByMatchAndNumber(ctx, p.MatchID, p.GameNumber)
-		if resolveErr != nil {
-			log.Printf("[projection] projectGamePlayEvent id=%d: could not resolve games.id for match_id=%q game_number=%d — skipping card play writes (match.completed not yet projected?): %v",
-				row.ID, p.MatchID, p.GameNumber, resolveErr)
-		} else {
+	//
+	// Ensure the games anchor row exists first — game_plays.game_id is a FK
+	// into games. Before this fix the worker relied on match.completed having
+	// already projected a games row, which never happened (the match.completed
+	// projector only writes matches, not games). UpsertGameRow is idempotent so
+	// replaying the event is safe.
+	//
+	// Non-partial events with no match_id or game_number are guarded above, so
+	// we only reach here when both are valid. Partial events (no match_id) skip
+	// the card-play path entirely via the len(p.CardPlays) guard.
+	if len(p.CardPlays) > 0 && w.cardPlays != nil && !p.Partial {
+		var gameID int64
+
+		if w.gameRows != nil {
+			var upsertErr error
+			gameID, upsertErr = w.gameRows.UpsertGameRow(ctx, p.MatchID, p.GameNumber)
+			if upsertErr != nil {
+				return fmt.Errorf("UpsertGameRow: %w", upsertErr)
+			}
+		} else if w.gameIDs != nil {
+			// Fallback: read-only resolver (backward-compat; wired instances
+			// should always prefer WithGameRowWriter).
+			var resolveErr error
+			gameID, resolveErr = w.gameIDs.GameIDByMatchAndNumber(ctx, p.MatchID, p.GameNumber)
+			if resolveErr != nil {
+				log.Printf("[projection] projectGamePlayEvent id=%d: could not resolve games.id for match_id=%q game_number=%d — skipping card play writes: %v",
+					row.ID, p.MatchID, p.GameNumber, resolveErr)
+				gameID = 0
+			}
+		}
+
+		if gameID > 0 {
 			if err := w.cardPlays.InsertCardPlays(ctx, gameID, p.MatchID, p.CardPlays, row.OccurredAt); err != nil {
 				return fmt.Errorf("InsertCardPlays: %w", err)
 			}

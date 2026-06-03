@@ -895,3 +895,124 @@ func TestGamePlayRepository_InsertGamePlay_PlayerOnPlay_COALESCEPreservesKnown(t
 		t.Errorf("PlayerOnPlay = false, want true (COALESCE must preserve known value)")
 	}
 }
+
+// ─── UpsertGameRow tests (Defect A fix) ────────────────────────────────────
+
+// TestGamePlayRepository_UpsertGameRow_CreatesRow verifies that UpsertGameRow
+// inserts a games row and returns a non-zero id. This is the FK anchor required
+// by game_plays.game_id before InsertCardPlays can write per-turn rows.
+func TestGamePlayRepository_UpsertGameRow_CreatesRow(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccountForGamePlay(t, db, "upsert-game-row")
+	const matchID = "match-ugr-001"
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+
+	id, err := repo.UpsertGameRow(ctx, matchID, 1)
+	if err != nil {
+		t.Fatalf("UpsertGameRow: %v", err)
+	}
+	if id == 0 {
+		t.Error("UpsertGameRow returned id=0")
+	}
+
+	// Verify the row is readable by GameIDByMatchAndNumber.
+	resolvedID, err := repo.GameIDByMatchAndNumber(ctx, matchID, 1)
+	if err != nil {
+		t.Fatalf("GameIDByMatchAndNumber after UpsertGameRow: %v", err)
+	}
+	if resolvedID != id {
+		t.Errorf("GameIDByMatchAndNumber: want %d, got %d", id, resolvedID)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE id = $1`, id)
+	})
+}
+
+// TestGamePlayRepository_UpsertGameRow_Idempotent verifies that calling
+// UpsertGameRow twice for the same (match_id, game_number) returns the same id
+// and does not produce a duplicate row.
+func TestGamePlayRepository_UpsertGameRow_Idempotent(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccountForGamePlay(t, db, "upsert-game-row-idem")
+	const matchID = "match-ugr-idem-001"
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+
+	id1, err := repo.UpsertGameRow(ctx, matchID, 2)
+	if err != nil {
+		t.Fatalf("UpsertGameRow first: %v", err)
+	}
+
+	id2, err := repo.UpsertGameRow(ctx, matchID, 2)
+	if err != nil {
+		t.Fatalf("UpsertGameRow second: %v", err)
+	}
+
+	if id1 != id2 {
+		t.Errorf("UpsertGameRow idempotency: first id=%d, second id=%d — expected same id", id1, id2)
+	}
+
+	// Count rows — must be exactly 1.
+	var count int
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM games WHERE match_id = $1 AND game_number = $2`, matchID, 2,
+	).Scan(&count); err != nil {
+		t.Fatalf("count games rows: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("games row count after two UpsertGameRow calls: want 1, got %d", count)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE id = $1`, id1)
+	})
+}
+
+// TestGamePlayRepository_UpsertGameRow_ThenInsertCardPlays verifies the full
+// Defect A fix path: UpsertGameRow followed by InsertCardPlays succeeds and
+// writes card play rows that are countable via CountCardPlaysByGame.
+func TestGamePlayRepository_UpsertGameRow_ThenInsertCardPlays(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccountForGamePlay(t, db, "upsert-then-cp")
+	const matchID = "match-utcp-001"
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+
+	// UpsertGameRow provides the FK anchor.
+	gameID, err := repo.UpsertGameRow(ctx, matchID, 1)
+	if err != nil {
+		t.Fatalf("UpsertGameRow: %v", err)
+	}
+
+	entries := []contract.CardPlayEntry{
+		{GameNumber: 1, TurnNumber: 1, Phase: "main1", ArenaID: 90001, PlayerType: "player", ActionType: "play_card", ZoneFrom: "hand", ZoneTo: "battlefield"},
+		{GameNumber: 1, TurnNumber: 2, Phase: "main1", ArenaID: 90002, PlayerType: "opponent", ActionType: "cast_spell", ZoneFrom: "hand", ZoneTo: "stack"},
+	}
+
+	now := time.Now().UTC()
+	if err := repo.InsertCardPlays(ctx, gameID, matchID, entries, now); err != nil {
+		t.Fatalf("InsertCardPlays after UpsertGameRow: %v", err)
+	}
+
+	n, err := repo.CountCardPlaysByGame(ctx, gameID)
+	if err != nil {
+		t.Fatalf("CountCardPlaysByGame: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("game_plays count: want 2, got %d", n)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM game_plays WHERE game_id = $1`, gameID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE id = $1`, gameID)
+	})
+}

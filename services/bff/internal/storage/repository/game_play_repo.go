@@ -302,6 +302,36 @@ func (r *GamePlayRepository) CountCardPlaysByGame(ctx context.Context, gameID in
 	return n, err
 }
 
+// UpsertGameRow inserts a games row for (match_id, game_number) and returns
+// the row's id. ON CONFLICT (match_id, game_number) DO NOTHING — subsequent
+// projections of the same (match_id, game_number) pair are idempotent and
+// return the existing id.
+//
+// The games table is the legacy per-game anchor that game_plays.game_id
+// references as a foreign key. It must exist before InsertCardPlays can write
+// per-turn rows. The projection worker creates this row during match.game_ended
+// projection, immediately after writing the match_game_results row.
+//
+// result is stored as "win" by default (placeholder — the legacy games table
+// predates the match_game_results split and is only used as an FK source by
+// the per-turn game_plays rows). The column carries a NOT NULL constraint so
+// we supply a value even though the real result is derived from matches.result.
+func (r *GamePlayRepository) UpsertGameRow(ctx context.Context, matchID string, gameNumber int) (int64, error) {
+	const q = `
+		INSERT INTO games (match_id, game_number, result)
+		VALUES ($1, $2, 'win')
+		ON CONFLICT (match_id, game_number) DO UPDATE SET result = games.result
+		RETURNING id`
+
+	var id int64
+	err := r.db.QueryRowContext(ctx, q, matchID, gameNumber).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("UpsertGameRow match_id=%q game_number=%d: %w", matchID, gameNumber, err)
+	}
+
+	return id, nil
+}
+
 // GameIDByMatchAndNumber resolves games.id for the given (match_id, game_number)
 // pair. Used by the projection worker to obtain the FK required before writing
 // per-turn card plays to game_plays.
