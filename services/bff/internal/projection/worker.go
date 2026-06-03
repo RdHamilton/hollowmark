@@ -911,9 +911,6 @@ func (w *Worker) projectDraftDeck(ctx context.Context, row *repository.DaemonEve
 //
 //	"PremierDraft_BLB" → "PremierDraft BLB Draft Deck".
 func deckNameForDraft(eventName, setCode string) string {
-	if setCode != "" && eventName != "" {
-		return setCode + " Draft Deck"
-	}
 	if setCode != "" {
 		return setCode + " Draft Deck"
 	}

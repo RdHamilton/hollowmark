@@ -2825,7 +2825,7 @@ func TestProjectDraftCompleted_CreatesDraftDeck(t *testing.T) {
 	if created.AccountID != 42 {
 		t.Errorf("AccountID: want 42, got %d", created.AccountID)
 	}
-	// 4 raw card IDs → 3 unique (102470 appears twice, counts collapsed).
+	// 4 raw card IDs passed as-is (no deduplication at the projection layer).
 	if len(created.CardIDs) != 4 {
 		t.Errorf("expected 4 card IDs (raw list), got %d", len(created.CardIDs))
 	}
