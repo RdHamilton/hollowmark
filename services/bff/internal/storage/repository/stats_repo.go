@@ -63,8 +63,8 @@ func (r *StatsRepository) GetDeckPerformance(ctx context.Context, accountID int6
 	const q = `
 		SELECT
 			m.deck_id,
-			COALESCE(d.name, m.deck_id) AS deck_name,
-			COALESCE(d.format, m.format) AS format,
+			COALESCE(MIN(d.name), m.deck_id) AS deck_name,
+			COALESCE(MIN(d.format), '') AS format,
 			COUNT(*) FILTER (WHERE lower(m.result) = 'win')  AS wins,
 			COUNT(*) FILTER (WHERE lower(m.result) = 'loss') AS losses,
 			COUNT(*) FILTER (WHERE lower(m.result) = 'draw') AS draws,
@@ -73,7 +73,7 @@ func (r *StatsRepository) GetDeckPerformance(ctx context.Context, accountID int6
 		LEFT JOIN decks d ON d.id = m.deck_id AND d.account_id = m.account_id
 		WHERE m.account_id = $1
 		  AND m.deck_id IS NOT NULL
-		GROUP BY m.deck_id, d.name, d.format, m.format
+		GROUP BY m.deck_id
 		ORDER BY total_games DESC, m.deck_id ASC`
 
 	rows, err := r.db.QueryContext(ctx, q, accountID)
