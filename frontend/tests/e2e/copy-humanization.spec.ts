@@ -10,6 +10,18 @@ async function setClerkSignedIn(page: Page): Promise<void> {
 }
 
 async function mockDashboard(page: Page): Promise<void> {
+  // Return 404 for the history/summary endpoint so Profile's useEffect catch
+  // handler fires and sets summaryData to null — avoiding a render crash when
+  // the generic catch-all below returns { data: null } (which lacks the
+  // all_time field that Profile.tsx reads during render).
+  await page.route("**/api/v1/history/summary", (route) => {
+    void route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "not found" }),
+    });
+  });
+
   await page.route("**/api/v1/**", (route) => {
     void route.fulfill({
       status: 200,

@@ -426,7 +426,7 @@ const Profile = ({ useUserHook = useDefaultUser }: ProfilePageProps) => {
           <h2 className="profile-section-title">All-Time Record</h2>
           {summaryLoading && !summaryTimedOut ? (
             <p style={{ fontSize: 'var(--text-sm)', color: 'var(--vault-fg-muted)' }}>Loading stats…</p>
-          ) : summaryData && summaryData.all_time.matches > 0 ? (
+          ) : summaryData && summaryData.all_time?.matches > 0 ? (
             <div className="profile-stats-chips" data-testid="profile-stats-chips" style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
               <div style={{ background: 'var(--vault-bg-raised)', border: '1px solid var(--vault-border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3) var(--space-4)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xl)', fontWeight: 600, color: 'var(--vault-success)' }} data-testid="profile-stat-wins">
