@@ -7,7 +7,15 @@ updates:
       interval: "weekly"
       day: "monday"
       time: "09:00"
-    open-pull-requests-limit: 10
+    # Group all Go module updates into a single PR per cycle (#827).
+    # Multiple simultaneous Go module PRs conflict on overlapping go.sum entries
+    # (v0.3.7: #2872/#2869 vs #2873 all touched go.sum and could not merge).
+    # Grouping into one PR per cycle eliminates the conflict entirely.
+    groups:
+      go-modules:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
     labels:
       - "enhancement"
       - "infrastructure"
