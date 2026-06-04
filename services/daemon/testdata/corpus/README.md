@@ -110,6 +110,13 @@ The test is fast enough to not materially impact CI wall-clock time (~1ms pure J
 9. Run `go test -race ./services/daemon/testdata/corpus/...` to verify corpus loads and consistency passes.
 10. Submit a PR with Sarah security review on the fixture files (S-07 gate).
 
+## Layer-5 Corpus Rebuild History
+
+| Date | PR | Injector Run | Notes |
+|---|---|---|---|
+| 2026-06-02 | `feat/696-697-layer5-corpus-promotion` | 36 files, 12 matches, 0 game_plays | Initial corpus; GRE replay not yet supported. |
+| 2026-06-04 | `feat/808-golden-corpus-rebuild` | 36 files, 7 matches, 1128 game_plays | GRE session manager wired into replay package (#808). match-detail-timeline.json flipped to `expected_empty=false`. Draft data DLQ pending #772. |
+
 ## Layer Consumption
 
 | Layer | Consumes | Purpose |
