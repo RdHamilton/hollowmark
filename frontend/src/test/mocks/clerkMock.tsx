@@ -59,6 +59,18 @@ export const UserButton = ({ afterSignOutUrl: _afterSignOutUrl }: { afterSignOut
   );
 };
 
+// Stable module-level token function — created once so its reference never
+// changes between renders. Components that include getToken in useCallback /
+// useEffect dependency arrays (e.g. Home.tsx) would otherwise re-create their
+// callbacks on every render, causing an infinite loading loop in tests.
+//
+// The function still reads window.__CLERK_TEST_STATE__ at call time, so auth
+// state transitions mid-test work correctly.
+function stableGetToken(): Promise<string | null> {
+  const { isSignedIn } = getTestState();
+  return Promise.resolve(isSignedIn ? 'clerk-test-token-stub' : null);
+}
+
 // useAuth — returns auth state based on test state.
 // getToken() returns a deterministic test JWT so components that call
 // useAuth().getToken() receive a non-null value in test mode.
@@ -68,7 +80,7 @@ export const useAuth = () => {
     isLoaded: true,
     isSignedIn: isSignedIn ?? false,
     userId: isSignedIn ? 'user_test_123' : null,
-    getToken: () => Promise.resolve(isSignedIn ? 'clerk-test-token-stub' : null),
+    getToken: stableGetToken,
   };
 };
 
