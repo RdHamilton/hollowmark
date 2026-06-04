@@ -87,6 +87,25 @@ func (r *MetaRepository) LatestArchetypeUpdate(ctx context.Context, format strin
 	return *ts, true, nil
 }
 
+// GetMetaLastUpdated returns MAX(last_updated) from mtgzone_archetypes for the
+// given format as a pointer-to-time. This method is the MetaFreshnessChecker
+// interface implementation used by the wildcard advisor handler.
+//
+// Returns (nil, nil) when no archetypes exist for the format — the bool=false
+// path from LatestArchetypeUpdate is translated to nil rather than passed
+// through, so the handler does not need to know the boolean convention.
+// This is the canonical "no rows → nil pointer, not error" pattern.
+func (r *MetaRepository) GetMetaLastUpdated(ctx context.Context, format string) (*time.Time, error) {
+	ts, ok, err := r.LatestArchetypeUpdate(ctx, format)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return &ts, nil
+}
+
 // ArchetypeByName returns the mtgzone_archetypes row matching (format, name)
 // case-insensitively. Returns nil when the archetype does not exist for the
 // format.

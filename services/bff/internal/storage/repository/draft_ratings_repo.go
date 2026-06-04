@@ -179,6 +179,27 @@ func (r *DraftRatingsRepository) GetMaxCachedAt(ctx context.Context, setCode, dr
 	return t.Time, nil
 }
 
+// GetMaxCachedAtByFormat returns MAX(cached_at) from draft_card_ratings for
+// the given draftFormat across ALL set codes. Used by the wildcard advisor to
+// populate data_freshness.card_ratings_cached_at — the advisor is format-wide,
+// not set-specific, so querying by format only gives the correct freshness
+// signal regardless of which set was most recently synced.
+//
+// Returns (nil, nil) when no rows exist for the format (Lambda has never run
+// for this format or all rows have been deleted). The caller maps nil to an
+// empty string in the JSON response.
+func (r *DraftRatingsRepository) GetMaxCachedAtByFormat(ctx context.Context, draftFormat string) (*time.Time, error) {
+	const q = `SELECT MAX(cached_at) FROM draft_card_ratings WHERE draft_format = $1`
+	var t sql.NullTime
+	if err := r.db.QueryRowContext(ctx, q, draftFormat).Scan(&t); err != nil {
+		return nil, err
+	}
+	if !t.Valid {
+		return nil, nil
+	}
+	return &t.Time, nil
+}
+
 // GetGlobalMaxCachedAt returns MAX(cached_at) across ALL rows in
 // draft_card_ratings — the most recent successful 17Lands sync write,
 // regardless of set or format.  Returns (zero time, nil) when the table is
