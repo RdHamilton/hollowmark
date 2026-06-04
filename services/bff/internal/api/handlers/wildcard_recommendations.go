@@ -147,6 +147,10 @@ type wildcardDataFreshnessResponse struct {
 	MetaLastUpdated string `json:"meta_last_updated"`
 	// Stale is true when card_ratings_cached_at is older than 48h (ADR-045 §5).
 	Stale bool `json:"stale"`
+	// StaleReason is set when Stale=true to describe why the data is stale.
+	// Omitted from JSON when empty (ADR-045 §5).
+	// Value: "card_ratings_older_than_48h".
+	StaleReason string `json:"stale_reason,omitempty"`
 }
 
 // wildcardMissingCard represents a single card that the player needs more
@@ -292,6 +296,26 @@ func (h *WildcardRecommendationsHandler) GetWildcardRecommendations(w http.Respo
 
 	// Card ratings freshness: populate data_freshness.stale but do NOT block.
 	// Stale GIHWR data is still useful for deck-path recommendations.
+	//
+	// M1 — PremierDraft hardcode rationale:
+	//   draft_card_ratings stores 17Lands GIHWR data keyed by draft_format.
+	//   The only format the 17Lands sync Lambda currently populates is
+	//   "PremierDraft". GIHWR is used here as a card-quality signal that is
+	//   independent of the constructed-format being queried (?format=Standard,
+	//   Historic, etc.): a card with high PremierDraft GIHWR is generally a
+	//   strong card, which is relevant regardless of whether the player is
+	//   crafting for Standard or Explorer.
+	//
+	//   Therefore: freshness tracks PremierDraft data unconditionally — NOT the
+	//   ?format= param. This is intentionally different from the ADR-045 §5
+	//   wording "the requested format", which is imprecise for this signal.
+	//   Ray has been flagged for an ADR-045 §5 clarification (vmt-t#O1-follow-on).
+	//
+	//   If a Historic/Explorer query is made, card_ratings_cached_at reflects
+	//   PremierDraft freshness (the GIHWR source), not Historic draft-ratings
+	//   freshness (which does not exist). This is the correct behaviour and must
+	//   NOT 503 a Historic/Explorer query just because no Historic draft-ratings
+	//   row exists.
 	ratingsCachedAt, err := h.draftRatings.GetMaxCachedAtByFormat(r.Context(), "PremierDraft")
 	if err != nil {
 		log.Printf("[WildcardRecommendationsHandler] GetMaxCachedAtByFormat: %v", err)
@@ -300,6 +324,10 @@ func (h *WildcardRecommendationsHandler) GetWildcardRecommendations(w http.Respo
 	}
 
 	ratingsStale := ratingsCachedAt != nil && time.Since(*ratingsCachedAt) > cardRatingsStalenessThreshold
+	staleReason := ""
+	if ratingsStale {
+		staleReason = "card_ratings_older_than_48h"
+	}
 	cardRatingsCachedAtStr := ""
 	if ratingsCachedAt != nil {
 		cardRatingsCachedAtStr = ratingsCachedAt.UTC().Format(time.RFC3339)
@@ -365,6 +393,7 @@ func (h *WildcardRecommendationsHandler) GetWildcardRecommendations(w http.Respo
 			CardRatingsCachedAt: cardRatingsCachedAtStr,
 			MetaLastUpdated:     metaLastUpdatedStr,
 			Stale:               ratingsStale,
+			StaleReason:         staleReason,
 		},
 		DataQualityWarning: dataQualityWarning,
 		Recommendations:    recommendations,
