@@ -1,17 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Launcher app-bundle Info.plist template (ADR-049 channel separation).
+
+  The __VAULTMTG_*__ tokens are substituted at build time by the sign-macos job
+  in .github/workflows/daemon-release.yml (the same mechanism postinstall uses):
+    __VAULTMTG_LABEL_SUFFIX__  ""        (stable)  /  ".staging"  (staging)
+    __VAULTMTG_APP_SUFFIX__    ""        (stable)  /  " Staging"   (staging)
+    __VAULTMTG_ICON_NAME__     "vaultmtg" (stable) /  "vaultmtg-staging" (staging)
+
+  This makes the stable and staging launcher bundles carry distinct
+  CFBundleIdentifier / CFBundleName so both .app bundles coexist in
+  /Applications without colliding (the Chrome / Chrome-Canary model).
+  Stable values are bit-for-bit unchanged from the pre-template version.
+-->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key>
   <string>vaultmtg-launcher</string>
   <key>CFBundleIconFile</key>
-  <string>vaultmtg</string>
+  <string>__VAULTMTG_ICON_NAME__</string>
   <key>CFBundleIdentifier</key>
-  <string>com.vaultmtg.launcher</string>
+  <string>com.vaultmtg.launcher__VAULTMTG_LABEL_SUFFIX__</string>
   <key>CFBundleName</key>
-  <string>VaultMTG</string>
+  <string>VaultMTG__VAULTMTG_APP_SUFFIX__</string>
   <key>CFBundleDisplayName</key>
-  <string>VaultMTG</string>
+  <string>VaultMTG__VAULTMTG_APP_SUFFIX__</string>
   <key>CFBundleVersion</key>
   <string>1</string>
   <key>CFBundleShortVersionString</key>

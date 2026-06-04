@@ -16,14 +16,16 @@
  *
  * ADR-020: The SPA does NOT mint API keys. The daemon handles the full PKCE
  * flow (opens browser → captures code on localhost callback → calls BFF
- * /v1/daemon/register). The SPA only polls localhost:9001/health and redirects
- * the user to the dashboard once setup is complete.
+ * /v1/daemon/register). The SPA only polls the daemon's local /health endpoint
+ * (URL derived from VITE_DAEMON_URL via services/daemonConfig — 9001 stable,
+ * 9011 staging) and redirects the user to the dashboard once setup is complete.
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { trackEvent, type Platform } from '@/services/analytics';
 import { isDesktopApp } from '@/lib/runtimeContext';
+import { daemonHealthUrl } from '@/services/daemonConfig';
 import './Setup.css';
 
 function detectPlatform(): Platform {
@@ -39,7 +41,7 @@ function detectPlatform(): Platform {
 // Daemon health polling
 // ---------------------------------------------------------------------------
 
-const DAEMON_HEALTH_URL = 'http://localhost:9001/health';
+const DAEMON_HEALTH_URL = daemonHealthUrl;
 const POLL_INTERVAL_MS = 3_000;
 const TIMEOUT_MS = 60_000;
 
@@ -281,7 +283,7 @@ export default function Setup() {
 
     // Only probe the local daemon in the desktop app context. In browser-only
     // sessions isDesktopApp() returns false, so we skip the interval entirely
-    // to avoid ERR_CONNECTION_REFUSED noise from `http://localhost:9001/health`.
+    // to avoid ERR_CONNECTION_REFUSED noise from the daemon /health probe.
     // This matches the pattern used in useDaemonConnection.ts (#1927 AC1).
     if (!isDesktopApp()) {
       return;

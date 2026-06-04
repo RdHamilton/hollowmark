@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +84,18 @@ type deckStore interface {
 	UpsertDeck(ctx context.Context, u repository.DeckUpsert) error
 }
 
+// draftDeckCreator creates a deck row from a completed draft session's picks.
+// It is implemented by *repository.DecksRepository.
+type draftDeckCreator interface {
+	CreateDraftDeck(ctx context.Context, in repository.CreateDraftDeckInput) (*repository.DeckDetailRow, error)
+}
+
+// draftPickReader reads the picked card IDs for a session from draft_picks.
+// It is implemented by *repository.DraftSessionsRepository.
+type draftPickReader interface {
+	PickCardIDsForSession(ctx context.Context, sessionID string) ([]string, error)
+}
+
 // gamePlayStore writes per-game result records and life-change rows.
 // After ADR-050: InsertGamePlay writes to match_game_results (per-game);
 // InsertLifeChanges references match_game_result_id.
@@ -102,6 +115,13 @@ type cardPlayStore interface {
 // per-turn card plays to game_plays.
 type gameIDResolver interface {
 	GameIDByMatchAndNumber(ctx context.Context, matchID string, gameNumber int) (int64, error)
+}
+
+// gameRowWriter creates the games anchor row required by game_plays.game_id FK.
+// UpsertGameRow is idempotent: ON CONFLICT (match_id, game_number) returns the
+// existing id so replaying the same event never produces duplicate rows.
+type gameRowWriter interface {
+	UpsertGameRow(ctx context.Context, matchID string, gameNumber int) (int64, error)
 }
 
 // counterStore writes counter-change rows to game_event_counters.
@@ -156,6 +176,8 @@ type Worker struct {
 	accounts   accountStore
 	matches    matchStore
 	drafts     draftStore
+	draftDecks draftDeckCreator
+	draftPicks draftPickReader
 	collection collectionStore
 	inventory  inventoryStore
 	quests     questStore
@@ -163,6 +185,7 @@ type Worker struct {
 	gamePlays  gamePlayStore
 	cardPlays  cardPlayStore
 	gameIDs    gameIDResolver
+	gameRows   gameRowWriter
 	counters   counterStore
 	dlq        dlqStore
 	postHog    postHogClient
@@ -210,6 +233,14 @@ func (w *Worker) WithGameIDResolver(resolver gameIDResolver) *Worker {
 	return w
 }
 
+// WithGameRowWriter wires the games-row upsert writer into w and returns w.
+// When wired, projectGamePlayEvent calls UpsertGameRow to ensure the games FK
+// anchor row exists before InsertCardPlays writes per-turn game_plays rows.
+func (w *Worker) WithGameRowWriter(writer gameRowWriter) *Worker {
+	w.gameRows = writer
+	return w
+}
+
 // WithCounterStore wires the game_event_counters store into w and returns w.
 func (w *Worker) WithCounterStore(store counterStore) *Worker {
 	w.counters = store
@@ -219,6 +250,22 @@ func (w *Worker) WithCounterStore(store counterStore) *Worker {
 // WithDLQ wires the dead-letter store into w and returns w.
 func (w *Worker) WithDLQ(store dlqStore) *Worker {
 	w.dlq = store
+	return w
+}
+
+// WithDraftDeckCreator wires the draft-deck creation store into w and returns w.
+// When wired, a draft.completed event automatically creates a deck row from the
+// session's draft_picks (the draft → deck linkage per ADR-051).
+func (w *Worker) WithDraftDeckCreator(creator draftDeckCreator) *Worker {
+	w.draftDecks = creator
+	return w
+}
+
+// WithDraftPickReader wires the draft-picks reader into w and returns w.
+// Required alongside WithDraftDeckCreator — it supplies the card IDs for the
+// new deck from draft_picks.
+func (w *Worker) WithDraftPickReader(reader draftPickReader) *Worker {
+	w.draftPicks = reader
 	return w
 }
 
@@ -326,11 +373,26 @@ func (w *Worker) projectRow(ctx context.Context, row *repository.DaemonEventRow)
 			outcome = outcomeSkippedMalformed
 		}
 
-	case "draft.started", "draft.completed":
+	case "draft.started":
 		writeErr = w.projectDraftSession(ctx, row)
 		if writeErr != nil {
 			log.Printf("[projection] projectDraftSession id=%d type=%s: %v", row.ID, row.EventType, writeErr)
 			outcome = outcomeSkippedMalformed
+		}
+
+	case "draft.completed":
+		writeErr = w.projectDraftSession(ctx, row)
+		if writeErr != nil {
+			log.Printf("[projection] projectDraftSession id=%d type=%s: %v", row.ID, row.EventType, writeErr)
+			outcome = outcomeSkippedMalformed
+			break
+		}
+		// Mint a draft deck from the session's picks once the draft completes.
+		// Soft failure: if deck creation fails, the session is still projected.
+		if w.draftDecks != nil && w.draftPicks != nil {
+			if deckErr := w.projectDraftDeck(ctx, row); deckErr != nil {
+				log.Printf("[projection] projectDraftDeck id=%d: %v — draft session projected without deck", row.ID, deckErr)
+			}
 		}
 
 	case "draft.pick":
@@ -779,6 +841,87 @@ func (w *Worker) projectDraftPick(ctx context.Context, row *repository.DaemonEve
 	return nil
 }
 
+// projectDraftDeck creates a decks row from the picks accumulated in
+// draft_picks for the session that just completed. It is called as a soft
+// follow-on after projectDraftSession succeeds on a draft.completed event.
+//
+// Idempotency: CreateDraftDeck checks whether a deck already exists for the
+// (account_id, draft_session_id) pair and returns it if so — replay is safe.
+//
+// Card IDs: draft_picks.card_id is stored as TEXT (arena ID string). We parse
+// each value to int before passing to CreateDraftDeck; unparseable rows are
+// skipped with a log warning so a single bad pick does not abort deck creation.
+func (w *Worker) projectDraftDeck(ctx context.Context, row *repository.DaemonEventRow) error {
+	var p draftPayload
+	if err := json.Unmarshal(row.Payload, &p); err != nil {
+		return fmt.Errorf("unmarshal draft payload for deck creation: %w", err)
+	}
+	if p.SessionID == "" {
+		return fmt.Errorf("draft.completed payload missing session_id — cannot create deck")
+	}
+
+	accountID, err := w.accounts.GetOrCreateByClientID(ctx, row.AccountID, row.UserID)
+	if err != nil {
+		return fmt.Errorf("resolve account: %w", err)
+	}
+
+	cardIDStrs, err := w.draftPicks.PickCardIDsForSession(ctx, p.SessionID)
+	if err != nil {
+		return fmt.Errorf("PickCardIDsForSession: %w", err)
+	}
+	if len(cardIDStrs) == 0 {
+		log.Printf("[projection] projectDraftDeck: no picks found for session %s — skipping deck creation", p.SessionID)
+		return nil
+	}
+
+	cardIDs := make([]int, 0, len(cardIDStrs))
+	for _, s := range cardIDStrs {
+		n, convErr := strconv.Atoi(strings.TrimSpace(s))
+		if convErr != nil || n <= 0 {
+			log.Printf("[projection] projectDraftDeck: skip unparseable card_id %q: %v", s, convErr)
+			continue
+		}
+		cardIDs = append(cardIDs, n)
+	}
+	if len(cardIDs) == 0 {
+		log.Printf("[projection] projectDraftDeck: all card_ids unparseable for session %s — skipping", p.SessionID)
+		return nil
+	}
+
+	// Derive a human-readable deck name from the event name.
+	deckName := deckNameForDraft(p.EventName, p.SetCode)
+
+	_, createErr := w.draftDecks.CreateDraftDeck(ctx, repository.CreateDraftDeckInput{
+		AccountID:      accountID,
+		DraftSessionID: p.SessionID,
+		Name:           deckName,
+		Format:         "Limited",
+		CardIDs:        cardIDs,
+	})
+	if createErr != nil {
+		return fmt.Errorf("CreateDraftDeck session=%s: %w", p.SessionID, createErr)
+	}
+
+	log.Printf("[projection] projectDraftDeck: created deck for session %s (%d cards)", p.SessionID, len(cardIDs))
+	return nil
+}
+
+// deckNameForDraft returns a human-readable deck name for a draft deck.
+// Examples: "QuickDraft SOS" → "QuickDraft SOS Draft Deck",
+//
+//	"PremierDraft_BLB" → "PremierDraft BLB Draft Deck".
+func deckNameForDraft(eventName, setCode string) string {
+	if setCode != "" {
+		return setCode + " Draft Deck"
+	}
+	if eventName != "" {
+		// Replace underscores for display.
+		display := strings.ReplaceAll(eventName, "_", " ")
+		return display + " Draft Deck"
+	}
+	return "Draft Deck"
+}
+
 // projectCollectionUpdated applies the delta from a collection.updated event
 // to card_inventory.  Each card entry is upserted independently so a partial
 // delta (IsDelta=true) only touches the cards that changed.
@@ -1041,16 +1184,38 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 	}
 
 	// Per-turn card play writes to game_plays (ADR-050).
-	// Requires resolving games.id from (match_id, game_number). If the
-	// match.completed event has not yet been projected (no games row), log
-	// WARN and skip — data is preserved in daemon_events.payload for
-	// retroactive projection (v0.3.8 follow-on).
-	if len(p.CardPlays) > 0 && w.cardPlays != nil && w.gameIDs != nil {
-		gameID, resolveErr := w.gameIDs.GameIDByMatchAndNumber(ctx, p.MatchID, p.GameNumber)
-		if resolveErr != nil {
-			log.Printf("[projection] projectGamePlayEvent id=%d: could not resolve games.id for match_id=%q game_number=%d — skipping card play writes (match.completed not yet projected?): %v",
-				row.ID, p.MatchID, p.GameNumber, resolveErr)
-		} else {
+	//
+	// Ensure the games anchor row exists first — game_plays.game_id is a FK
+	// into games. Before this fix the worker relied on match.completed having
+	// already projected a games row, which never happened (the match.completed
+	// projector only writes matches, not games). UpsertGameRow is idempotent so
+	// replaying the event is safe.
+	//
+	// Non-partial events with no match_id or game_number are guarded above, so
+	// we only reach here when both are valid. Partial events (no match_id) skip
+	// the card-play path entirely via the len(p.CardPlays) guard.
+	if len(p.CardPlays) > 0 && w.cardPlays != nil && !p.Partial {
+		var gameID int64
+
+		if w.gameRows != nil {
+			var upsertErr error
+			gameID, upsertErr = w.gameRows.UpsertGameRow(ctx, p.MatchID, p.GameNumber)
+			if upsertErr != nil {
+				return fmt.Errorf("UpsertGameRow: %w", upsertErr)
+			}
+		} else if w.gameIDs != nil {
+			// Fallback: read-only resolver (backward-compat; wired instances
+			// should always prefer WithGameRowWriter).
+			var resolveErr error
+			gameID, resolveErr = w.gameIDs.GameIDByMatchAndNumber(ctx, p.MatchID, p.GameNumber)
+			if resolveErr != nil {
+				log.Printf("[projection] projectGamePlayEvent id=%d: could not resolve games.id for match_id=%q game_number=%d — skipping card play writes: %v",
+					row.ID, p.MatchID, p.GameNumber, resolveErr)
+				gameID = 0
+			}
+		}
+
+		if gameID > 0 {
 			if err := w.cardPlays.InsertCardPlays(ctx, gameID, p.MatchID, p.CardPlays, row.OccurredAt); err != nil {
 				return fmt.Errorf("InsertCardPlays: %w", err)
 			}

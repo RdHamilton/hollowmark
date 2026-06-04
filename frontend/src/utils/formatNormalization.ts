@@ -27,6 +27,8 @@ const FORMAT_EVENT_PATTERNS: Record<string, string> = {
   // Historic Brawl events
   'HistoricBrawl': 'Play Queue',
   'HistoricBrawl_Play': 'Play Queue',
+  // Historic Brawl with allowlist (e.g. HISTORICBRAWLWITHALLOWLIST_20260126)
+  'HistoricBrawlWithAllowlist': 'Historic Brawl',
   // Brawl events
   'Brawl': 'Play Queue',
   'Brawl_Play': 'Play Queue',
@@ -49,6 +51,28 @@ const FORMAT_EVENT_PATTERNS: Record<string, string> = {
   'Traditional_Standard': 'Traditional Standard',
   'Traditional_Standard_Play': 'Traditional Standard Play',
   'Traditional_Standard_Ladder': 'Traditional Standard Ranked',
+};
+
+/**
+ * Prefix → human-readable label for long MTGA internal format slugs.
+ * Applied when the slug contains an underscore and the prefix doesn't match
+ * any DRAFT_PREFIXES. Case-insensitive comparison is done at call site.
+ */
+const FORMAT_PREFIX_MAP: Record<string, string> = {
+  'historicbrawlwithallowlist': 'Historic Brawl',
+  'historicbrawl': 'Historic Brawl',
+  'brawl': 'Brawl',
+  'standard': 'Standard',
+  'historic': 'Historic',
+  'explorer': 'Explorer',
+  'alchemy': 'Alchemy',
+  'timeless': 'Timeless',
+  'pioneer': 'Pioneer',
+  'modern': 'Modern',
+  'legacy': 'Legacy',
+  'vintage': 'Vintage',
+  'pauper': 'Pauper',
+  'gladiator': 'Gladiator',
 };
 
 /**
@@ -86,6 +110,11 @@ export function normalizeQueueType(queueType: string): string {
     // Check if it's a mapped queue type with underscore
     if (QUEUE_TYPE_MAP[queueType]) {
       return QUEUE_TYPE_MAP[queueType];
+    }
+    // Check format prefix map (case-insensitive) for long MTGA internal slugs
+    const prefixLower = prefix.toLowerCase();
+    if (FORMAT_PREFIX_MAP[prefixLower]) {
+      return FORMAT_PREFIX_MAP[prefixLower];
     }
     // Otherwise just return the prefix
     return prefix;

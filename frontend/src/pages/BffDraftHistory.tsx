@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { RectangleStackIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '@clerk/react';
+import { useNavigate } from 'react-router-dom';
 import { getDraftHistory } from '@/services/api/bffDraftHistory';
 import type { DraftHistoryItem } from '@/services/api/bffDraftHistory';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -10,6 +12,7 @@ const PAGE_SIZE = 20;
 
 const BffDraftHistory = () => {
   const { getToken, isSignedIn } = useAuth();
+  const navigate = useNavigate();
   // Stable ref so useCallback / useEffect deps don't re-fire on every render
   const getTokenRef = useRef(getToken);
   useEffect(() => { getTokenRef.current = getToken; });
@@ -57,6 +60,10 @@ const BffDraftHistory = () => {
       day: 'numeric',
     });
 
+  const handleRowClick = (draft: DraftHistoryItem) => {
+    navigate(`/draft-analytics?session=${draft.id}&set=${encodeURIComponent(draft.set_code)}`);
+  };
+
   return (
     <div className="page-container">
       <div className="bff-draft-history-header">
@@ -74,7 +81,7 @@ const BffDraftHistory = () => {
       {!loading && !error && total === 0 && (
         <div data-testid="draft-history-empty">
           <EmptyState
-            icon="🃏"
+            icon={<RectangleStackIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
             heading="No drafts yet"
             subtext="Your cloud draft history will appear here once synced."
             variant="no-data"
@@ -96,8 +103,13 @@ const BffDraftHistory = () => {
               </thead>
               <tbody>
                 {drafts.map((draft) => (
-                  <tr key={draft.id}>
-                    <td>{formatDate(draft.drafted_at)}</td>
+                  <tr
+                    key={draft.id}
+                    data-testid="draft-history-row"
+                    onClick={() => handleRowClick(draft)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <td>{formatDate(draft.started_at)}</td>
                     <td>{draft.set_code}</td>
                     <td>{draft.wins}</td>
                     <td>{draft.losses}</td>

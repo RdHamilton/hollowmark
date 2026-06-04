@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { trackEvent } from '@/services/analytics';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { ChartBarIcon } from '@heroicons/react/24/outline';
 import { matches } from '@/services/api';
 import { storage } from '@/types/models';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -159,7 +160,7 @@ const WinRateTrend = () => {
       {!loading && !error && (!analysis || chartData.length === 0) && (
         <div data-testid="win-rate-trend-empty">
           <EmptyState
-            icon="📈"
+            icon={<ChartBarIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
             heading="Not enough data"
             subtext="Play at least 5 matches to see your win rate trends over time."
             variant="no-data"
@@ -182,6 +183,23 @@ const WinRateTrend = () => {
                     labelStyle={{ color: '#ffffff' }}
                   />
                   <Legend />
+                  {/* 50% baseline — always visible, placed before data so data renders on top */}
+                  <ReferenceLine
+                    y={50}
+                    stroke="var(--vault-fg-muted)"
+                    strokeDasharray="6 3"
+                    strokeWidth={1}
+                    label={{
+                      value: '50%',
+                      position: 'insideTopRight',
+                      fill: 'var(--vault-fg-muted)',
+                      fontSize: 11,
+                      fontFamily: 'var(--font-mono)',
+                      dx: -4,
+                      dy: 4,
+                    }}
+                    data-testid="winrate-baseline"
+                  />
                   <Line
                     type="monotone"
                     dataKey="winRate"
@@ -217,6 +235,23 @@ const WinRateTrend = () => {
                     labelStyle={{ color: '#ffffff' }}
                   />
                   <Legend />
+                  {/* 50% baseline — always visible, placed before data so data renders on top */}
+                  <ReferenceLine
+                    y={50}
+                    stroke="var(--vault-fg-muted)"
+                    strokeDasharray="6 3"
+                    strokeWidth={1}
+                    label={{
+                      value: '50%',
+                      position: 'insideTopRight',
+                      fill: 'var(--vault-fg-muted)',
+                      fontSize: 11,
+                      fontFamily: 'var(--font-mono)',
+                      dx: -4,
+                      dy: 4,
+                    }}
+                    data-testid="winrate-baseline"
+                  />
                   <Bar dataKey="winRate" fill="#4a9eff" name="Win Rate (%)" />
                   {setAnnotations.map((annotation) => (
                     <ReferenceLine
@@ -268,8 +303,22 @@ const WinRateTrend = () => {
                 </div>
                 <div className="summary-item">
                   <span className="summary-label">Trend:</span>
-                  <span className={`summary-value trend-${analysis.Trend}`}>
-                    {analysis.Trend} {analysis.TrendValue !== 0 && `(${analysis.TrendValue > 0 ? '+' : ''}${Math.round(analysis.TrendValue * 100 * 10) / 10}%)`}
+                  <span
+                    className={`summary-value trend-${analysis.Trend ?? 'unknown'}`}
+                    data-testid="trend-summary-value"
+                  >
+                    {(() => {
+                      const tv = analysis.TrendValue;
+                      const trendLabel = analysis.Trend ?? '';
+                      const trendValueValid = typeof tv === 'number' && isFinite(tv) && tv !== 0;
+                      if (!trendLabel && !trendValueValid) return '—';
+                      return (
+                        <>
+                          {trendLabel}
+                          {trendValueValid && ` (${tv > 0 ? '+' : ''}${Math.round(tv * 100 * 10) / 10}%)`}
+                        </>
+                      );
+                    })()}
                   </span>
                 </div>
                 {analysis.Overall && (

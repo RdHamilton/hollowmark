@@ -204,7 +204,10 @@ func buildWorker(db *sql.DB) *projection.Worker {
 
 	return projection.NewWorker(
 		events, accounts, matches, drafts, collection, inventory, quests, decks, gamePlays,
-	).WithDLQ(dlq)
+	).WithDLQ(dlq).
+		WithCardPlayStore(gamePlays).
+		WithGameRowWriter(gamePlays).
+		WithGameIDResolver(gamePlays)
 }
 
 // resolveAccountID calls GetOrCreateByClientID to materialise an accounts row
@@ -624,6 +627,161 @@ func TestProjectionIntegration(t *testing.T) {
 			t.Errorf("Limit: want %d, got %d", exp.Limit, got.Limit)
 		}
 	})
+}
+
+// ─── Layer 3a: player_on_play pipeline smoke (ticket #712) ─────────────────
+
+// TestProjectionIntegration_PlayerOnPlay verifies the full player_on_play
+// pipeline:
+//
+//	match.completed corpus event  → worker.RunOnce → matches row
+//	match.game_ended corpus event → worker.RunOnce → match_game_results row (player_on_play=true)
+//	GET /api/v1/history/matches   → response includes player_on_play: true for that match
+//
+// Root-cause context (#712): the ci-smoke seed only inserts match.completed
+// events, which write to matches but NOT to match_game_results. The
+// ListByAccountIDCursorFiltered LEFT JOIN on match_game_results finds no
+// game-1 row, so player_on_play is NULL on every history row regardless of
+// the column's migration state. This test gates the missing corpus fixture
+// and proves the full chain in one shot.
+func TestProjectionIntegration_PlayerOnPlay(t *testing.T) {
+	db := openIntegrationDB(t)
+	corpus := corpusDir(t)
+
+	// Corpus fixtures — match.completed must project first so the match row
+	// exists when match.game_ended arrives and resolves account_id.
+	rawMatchCompleted := mustReadCorpus(t, corpus, "daemon-emit", "match-completed.json")
+	rawGameEnded := mustReadCorpus(t, corpus, "daemon-emit", "match-game-ended.json")
+
+	// Expected DB values after projection.
+	expectedGameEnded := mustReadCorpus(t, corpus, "db-expected", "match-game-ended.json")
+
+	var expGame struct {
+		MatchID      string `json:"MatchID"`
+		GameNumber   int    `json:"GameNumber"`
+		PlayerOnPlay bool   `json:"PlayerOnPlay"`
+		Partial      bool   `json:"Partial"`
+	}
+	if err := json.Unmarshal(expectedGameEnded, &expGame); err != nil {
+		t.Fatalf("decode db-expected/match-game-ended.json: %v", err)
+	}
+
+	clientID := "test-l3a-player-on-play"
+	userID := seedUser(t, db, clientID)
+	accountID := resolveAccountID(t, db, clientID, userID)
+
+	// Insert both events. Order matters: match.completed assigns the account row
+	// used by match.game_ended's InsertGamePlay call.
+	rowCompleted := corpusDaemonEventRow(t, rawMatchCompleted, userID, clientID)
+	rowGameEnded := corpusDaemonEventRow(t, rawGameEnded, userID, clientID)
+
+	insertDaemonEvent(t, db, rowCompleted)
+	insertDaemonEvent(t, db, rowGameEnded)
+
+	w := buildWorker(db)
+	w.RunOnce(context.Background())
+
+	// --- AC1: match_game_results row exists with correct player_on_play ---
+
+	var gotGameNumber int
+	var gotPlayerOnPlay *bool
+	var gotPartial bool
+
+	err := db.QueryRowContext(
+		context.Background(),
+		`SELECT game_number, player_on_play, partial
+		 FROM match_game_results
+		 WHERE account_id = $1 AND match_id = $2 AND game_number = $3`,
+		accountID, expGame.MatchID, expGame.GameNumber,
+	).Scan(&gotGameNumber, &gotPlayerOnPlay, &gotPartial)
+	if err != nil {
+		t.Fatalf("[PlayerOnPlay] SELECT match_game_results: %v — match.game_ended event was not projected", err)
+	}
+
+	if gotGameNumber != expGame.GameNumber {
+		t.Errorf("[PlayerOnPlay] game_number: want %d, got %d", expGame.GameNumber, gotGameNumber)
+	}
+	if gotPlayerOnPlay == nil {
+		t.Error("[PlayerOnPlay] player_on_play is NULL in match_game_results — corpus fixture not carrying the field?")
+	} else if *gotPlayerOnPlay != expGame.PlayerOnPlay {
+		t.Errorf("[PlayerOnPlay] player_on_play: want %v, got %v", expGame.PlayerOnPlay, *gotPlayerOnPlay)
+	}
+	if gotPartial != expGame.Partial {
+		t.Errorf("[PlayerOnPlay] partial: want %v, got %v", expGame.Partial, gotPartial)
+	}
+
+	// --- AC2: history API response includes player_on_play for this match ---
+
+	matchesRepo := repository.NewMatchesRepository(db)
+	accountRepo := repository.NewAccountRepository(db)
+	h := handlers.NewHistoryHandler(accountRepo, matchesRepo, nil)
+
+	r := chi.NewRouter()
+	r.Get("/api/v1/history/matches", func(w http.ResponseWriter, req *http.Request) {
+		req = req.WithContext(bffmiddleware.WithUserID(req.Context(), userID))
+		h.GetMatches(w, req)
+	})
+
+	ts := httptest.NewServer(r)
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/api/v1/history/matches?limit=20")
+	if err != nil {
+		t.Fatalf("[PlayerOnPlay] GET /history/matches: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("[PlayerOnPlay] status: want 200, got %d", resp.StatusCode)
+	}
+
+	// history.go writes cursorPaginatedMatchResponse with top-level "data" array.
+	var envelope struct {
+		Data []struct {
+			ID           string `json:"id"`
+			PlayerOnPlay *bool  `json:"player_on_play"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("[PlayerOnPlay] decode history response: %v", err)
+	}
+
+	if len(envelope.Data) == 0 {
+		t.Fatal("[PlayerOnPlay] history response data is empty — match.completed not projected?")
+	}
+
+	// Find the match we projected. There may be other matches from earlier subtests
+	// if the DB is shared; look up by ID.
+	var foundMatch *struct {
+		ID           string `json:"id"`
+		PlayerOnPlay *bool  `json:"player_on_play"`
+	}
+	for i := range envelope.Data {
+		if envelope.Data[i].ID == expGame.MatchID {
+			foundMatch = &envelope.Data[i]
+			break
+		}
+	}
+	if foundMatch == nil {
+		t.Fatalf("[PlayerOnPlay] match ID %q not found in history response", expGame.MatchID)
+	}
+
+	if foundMatch.PlayerOnPlay == nil {
+		t.Error("[PlayerOnPlay] history response player_on_play is null/absent — LEFT JOIN on match_game_results returned no row (ADR-050 gap: match.game_ended not in seed)")
+	} else if *foundMatch.PlayerOnPlay != expGame.PlayerOnPlay {
+		t.Errorf("[PlayerOnPlay] history response player_on_play: want %v, got %v", expGame.PlayerOnPlay, *foundMatch.PlayerOnPlay)
+	}
+
+	// AC3: zero projection_errors.
+	var errCount int
+	_ = db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM projection_errors WHERE account_id = $1`,
+		clientID,
+	).Scan(&errCount)
+	if errCount != 0 {
+		t.Errorf("[PlayerOnPlay] projection_errors: want 0, got %d", errCount)
+	}
 }
 
 // ─── Layer 3b: BFF sync integration smoke (ADR-042 §Layer3b, closes #185) ───
@@ -1193,4 +1351,129 @@ func seedMtgzoneArchetypes(t *testing.T, db *sql.DB, name, format string) int64 
 	})
 
 	return id
+}
+
+// ─── Defect A integration test: card plays persist end-to-end ────────────────
+
+// TestIntegration_GamePlayEvent_CardPlays_PersistEndToEnd verifies Defect A:
+// projecting a match.game_ended event carrying card_plays populates game_plays
+// rows via the real path (games row created → InsertCardPlays writes).
+//
+// Before the fix, GameIDByMatchAndNumber always returned sql.ErrNoRows because
+// the projection worker never populated the games table — InsertCardPlays was
+// silently skipped for every live match. This test fails against the unfixed
+// code and passes after WithGameRowWriter is wired.
+//
+// The test also verifies the timeline endpoint returns the card plays by
+// querying GamePlaysRepository.PlaysByMatch and counting the result.
+func TestIntegration_GamePlayEvent_CardPlays_PersistEndToEnd(t *testing.T) {
+	db := openIntegrationDB(t)
+
+	userID := seedUser(t, db, "defect-a-cp")
+	const clientID = "mtga-defect-a-cardplays"
+	accountID := resolveAccountID(t, db, clientID, userID)
+
+	const matchID = "integ-defect-a-match-001"
+
+	// Step 1: seed the matches row (required FK for game_plays via games.match_id).
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO matches
+			(id, account_id, event_id, event_name, timestamp, player_wins, opponent_wins,
+			 player_team_id, format, result)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		 ON CONFLICT (id) DO NOTHING`,
+		matchID, accountID, "integ-evt-001", "Standard_BO1",
+		time.Now().UTC(), 2, 1, 1, "Standard", "win",
+	)
+	if err != nil {
+		t.Fatalf("seed match row: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE match_id = $1`, matchID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM match_game_results WHERE match_id = $1`, matchID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM matches WHERE id = $1`, matchID)
+	})
+
+	// Step 2: build the match.game_ended daemon event row carrying card_plays.
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	payload, _ := json.Marshal(map[string]interface{}{
+		"match_id":        matchID,
+		"game_number":     1,
+		"winning_team_id": 1,
+		"turn_count":      6,
+		"duration_secs":   180,
+		"partial":         false,
+		"schema_version":  2,
+		"life_changes":    []interface{}{},
+		"card_plays": []map[string]interface{}{
+			{"game_number": 1, "turn_number": 2, "phase": "main1", "arena_id": 80001, "player_type": "player", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+			{"game_number": 1, "turn_number": 3, "phase": "main1", "arena_id": 80002, "player_type": "opponent", "action_type": "cast_spell", "zone_from": "hand", "zone_to": "stack"},
+			{"game_number": 1, "turn_number": 4, "phase": "combat", "arena_id": 80003, "player_type": "player", "action_type": "attack", "zone_from": "battlefield", "zone_to": "battlefield"},
+		},
+	})
+
+	row := repository.DaemonEventRow{
+		UserID:     userID,
+		AccountID:  clientID,
+		EventType:  "match.game_ended",
+		Payload:    payload,
+		OccurredAt: now,
+		Sequence:   1,
+	}
+	insertDaemonEvent(t, db, row)
+
+	// Step 3: run the projection worker (real path — WithGameRowWriter wired in buildWorker).
+	worker := buildWorker(db)
+	worker.RunOnce(context.Background())
+
+	// Step 4: assert game_plays rows were written.
+	// AC: game_plays must have 3 rows for the match (not silently skipped).
+	gpRepo := repository.NewGamePlayRepository(db)
+	var gameID int64
+	err = db.QueryRowContext(
+		context.Background(),
+		`SELECT id FROM games WHERE match_id = $1 AND game_number = $2`,
+		matchID, 1,
+	).Scan(&gameID)
+	if err != nil {
+		t.Fatalf("games row not created by projection: %v — Defect A not fixed", err)
+	}
+
+	n, err := gpRepo.CountCardPlaysByGame(context.Background(), gameID)
+	if err != nil {
+		t.Fatalf("CountCardPlaysByGame: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("game_plays count: want 3, got %d — InsertCardPlays was silently skipped (Defect A)", n)
+	}
+
+	// Step 5: assert the timeline read path returns the card plays.
+	// This is the "timeline endpoint returns them" AC.
+	playsRepo := repository.NewGamePlaysRepository(db)
+	plays, err := playsRepo.PlaysByMatch(context.Background(), accountID, matchID)
+	if err != nil {
+		t.Fatalf("PlaysByMatch: %v", err)
+	}
+	if len(plays) != 3 {
+		t.Errorf("PlaysByMatch: want 3 rows, got %d — timeline endpoint would return empty", len(plays))
+	}
+
+	// Verify player/opponent attribution is preserved (Defect B assertion on real path).
+	playerCount := 0
+	opponentCount := 0
+	for _, p := range plays {
+		switch p.PlayerType {
+		case "player":
+			playerCount++
+		case "opponent":
+			opponentCount++
+		}
+	}
+	if playerCount != 2 {
+		t.Errorf("player plays in timeline: want 2, got %d", playerCount)
+	}
+	if opponentCount != 1 {
+		t.Errorf("opponent plays in timeline: want 1, got %d", opponentCount)
+	}
 }

@@ -26,7 +26,7 @@ function createMockDeckListItem(overrides: Record<string, any> = {}): gui.DeckLi
     colorIdentity: 'WU',
     cardCount: 60,
     matchesPlayed: 10,
-    matchWinRate: 0.6,
+    winRate: 0.6,
     modifiedAt: new Date('2024-01-15T10:00:00').toISOString(),
     lastPlayed: new Date('2024-01-14T10:00:00').toISOString(),
     tags: [],
@@ -235,6 +235,25 @@ describe('Decks', () => {
       });
       expect(screen.getByText('historic')).toBeInTheDocument();
       expect(screen.getByText('explorer')).toBeInTheDocument();
+    });
+
+    it('displays human-readable label for HISTORICBRAWLWITHALLOWLIST format slug', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'brawl-deck',
+          name: 'Brawl Deck',
+          format: 'HISTORICBRAWLWITHALLOWLIST_20260126',
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Historic Brawl')).toBeInTheDocument();
+        expect(screen.queryByText('HISTORICBRAWLWITHALLOWLIST_20260126')).not.toBeInTheDocument();
+      });
     });
 
     it('should display draft badge for draft decks', async () => {
@@ -1302,6 +1321,438 @@ describe('Decks', () => {
       // Restore URL mocks
       URL.createObjectURL = originalCreateObjectURL;
       URL.revokeObjectURL = originalRevokeObjectURL;
+    });
+  });
+
+  describe('Win-rate NaN guard (D1)', () => {
+    it('should display fallback "—" when winRate is absent from BFF payload', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-nan',
+          name: 'NaN Deck',
+          matchesPlayed: 1,
+          winRate: undefined,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('NaN Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/—/);
+    });
+
+    it('should display fallback "—" when winRate is null in BFF payload', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-null-wr',
+          name: 'Null WR Deck',
+          matchesPlayed: 3,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          winRate: null as any,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Null WR Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/—/);
+    });
+
+    it('should display fallback "—" when winRate is NaN in BFF payload (0/0 scenario)', async () => {
+      // winRate = NaN (e.g. 0/0 computed server-side and serialised as NaN)
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-nan-rate',
+          name: 'Zero Zero Deck',
+          matchesPlayed: 1,
+          winRate: NaN,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Zero Zero Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/—/);
+    });
+
+    it('should render "0%" for winRate = 0 in BFF payload (zero wins, has played)', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-zero-wins',
+          name: 'Zero Wins Deck',
+          matchesPlayed: 5,
+          winRate: 0,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Zero Wins Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/0%/);
+    });
+
+    it('should render correct percentage for valid winRate in BFF payload', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-valid',
+          name: 'Valid WR Deck',
+          matchesPlayed: 10,
+          winRate: 0.7,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Valid WR Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/70%/);
+    });
+
+    it('should not render win-rate row when matchesPlayed is 0 (existing guard)', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-no-matches',
+          name: 'No Matches Deck',
+          matchesPlayed: 0,
+          winRate: 0,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('No Matches Deck')).toBeInTheDocument();
+      });
+
+      expect(document.querySelector('[data-testid="deck-win-rate"]')).not.toBeInTheDocument();
+    });
+
+    it('DeckListItem deserializes BFF wire key "winRate" into matchWinRate', () => {
+      // Real-wire deserialization test: constructs DeckListItem from a raw BFF-shaped
+      // source object (using the actual JSON key "winRate") and asserts the class
+      // property matchWinRate is populated correctly. This catches key-contract drift
+      // between the BFF serializer (winRate) and SPA model (matchWinRate).
+      const bffPayload = {
+        id: 'wire-deck',
+        name: 'Wire Shape Deck',
+        format: 'standard',
+        source: 'manual',
+        matchesPlayed: 8,
+        winRate: 0.625, // BFF key — NOT matchWinRate
+        currentStreak: 1,
+        cardCount: 60,
+        modifiedAt: new Date('2024-01-15T10:00:00').toISOString(),
+      };
+      const item = new gui.DeckListItem(bffPayload);
+      expect(item.matchWinRate).toBe(0.625);
+    });
+
+    it('DeckListItem renders 60% from BFF wire payload with winRate: 0.6', async () => {
+      // End-to-end wire path: source object uses the real BFF key "winRate".
+      // After deserialization, Decks.tsx should render "60%".
+      mockDecks.getDecks.mockResolvedValue([
+        new gui.DeckListItem({
+          id: 'deck-wire-render',
+          name: 'Wire Render Deck',
+          format: 'standard',
+          source: 'manual',
+          matchesPlayed: 10,
+          winRate: 0.6,
+          currentStreak: 0,
+          cardCount: 60,
+          modifiedAt: new Date('2024-01-15T10:00:00').toISOString(),
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Wire Render Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/60%/);
+    });
+
+    it('renders correct win-rate from DeckListItem deserialized from BFF wire shape (winRate: 0.8)', async () => {
+      // Verifies the full render path post-fix: getDecks() maps raw BFF JSON
+      // through DeckListItem.createFrom() (see decks.ts getDecks fix), which
+      // bridges the BFF wire key "winRate" to the SPA property "matchWinRate".
+      // The service test in decks.test.ts validates the deserialization step;
+      // this test validates the render step given a correctly deserialized item.
+      mockDecks.getDecks.mockResolvedValue([
+        gui.DeckListItem.createFrom({
+          id: 'deck-deserialized',
+          name: 'Deserialized Deck',
+          format: 'standard',
+          source: 'manual',
+          matchesPlayed: 5,
+          winRate: 0.8, // BFF wire key — createFrom() maps this to matchWinRate
+          currentStreak: 0,
+          cardCount: 60,
+          modifiedAt: new Date('2024-01-15T10:00:00').toISOString(),
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Deserialized Deck')).toBeInTheDocument();
+      });
+
+      const winRateEl = document.querySelector('[data-testid="deck-win-rate"]');
+      expect(winRateEl?.textContent).not.toMatch(/NaN/);
+      expect(winRateEl?.textContent).toMatch(/80%/);
+    });
+  });
+
+  describe('Streak badge NaN guard (DEFECT-1)', () => {
+    it('does not render streak badge when currentStreak is undefined (field absent from BFF)', async () => {
+      // The BFF deckListItemResponse does not include currentStreak.
+      // DeckListItem constructor reads source["currentStreak"] which is undefined.
+      // formatStreak(undefined) must return null so no badge renders.
+      mockDecks.getDecks.mockResolvedValue([
+        new gui.DeckListItem({
+          id: 'deck-no-streak',
+          name: 'No Streak Deck',
+          format: 'standard',
+          source: 'manual',
+          matchesPlayed: 1,
+          winRate: 0,
+          cardCount: 60,
+          modifiedAt: new Date('2024-01-15T10:00:00').toISOString(),
+          // currentStreak intentionally absent — mirrors real BFF wire shape
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('No Streak Deck')).toBeInTheDocument();
+      });
+
+      // No streak badge must render; specifically no "NaN" text anywhere
+      expect(document.querySelector('[data-testid="deck-streak"]')).not.toBeInTheDocument();
+      expect(document.body.textContent).not.toMatch(/NaN/);
+    });
+
+    it('does not render streak badge when currentStreak is null', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        new gui.DeckListItem({
+          id: 'deck-null-streak',
+          name: 'Null Streak Deck',
+          format: 'standard',
+          source: 'manual',
+          matchesPlayed: 2,
+          winRate: 0.5,
+          cardCount: 60,
+          modifiedAt: new Date('2024-01-15T10:00:00').toISOString(),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          currentStreak: null as any,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Null Streak Deck')).toBeInTheDocument();
+      });
+
+      expect(document.querySelector('[data-testid="deck-streak"]')).not.toBeInTheDocument();
+      expect(document.body.textContent).not.toMatch(/NaN/);
+    });
+
+    it('does not render streak badge when currentStreak is NaN', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-nan-streak',
+          name: 'Zero Matches No Streak Deck',
+          matchesPlayed: 3,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          currentStreak: NaN as any,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Zero Matches No Streak Deck')).toBeInTheDocument();
+      });
+
+      // No streak badge rendered — NaN streak must not produce a visible badge
+      expect(document.querySelector('[data-testid="deck-streak"]')).not.toBeInTheDocument();
+      // No stray "NaN" text anywhere in the rendered output
+      expect(document.body.textContent).not.toMatch(/NaN/);
+    });
+
+    it('does not render streak badge when currentStreak is 0', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-zero-streak',
+          name: 'Zero Streak Deck',
+          matchesPlayed: 5,
+          currentStreak: 0,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Zero Streak Deck')).toBeInTheDocument();
+      });
+
+      expect(document.querySelector('[data-testid="deck-streak"]')).not.toBeInTheDocument();
+    });
+
+    it('renders a win-streak badge when currentStreak is positive', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-win-streak',
+          name: 'Win Streak Deck',
+          matchesPlayed: 5,
+          currentStreak: 3,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Win Streak Deck')).toBeInTheDocument();
+      });
+
+      const badge = document.querySelector('[data-testid="deck-streak"]');
+      expect(badge).toBeInTheDocument();
+      expect(badge?.textContent).toMatch(/3W/);
+      expect(badge?.className).toMatch(/win-streak/);
+      expect(document.body.textContent).not.toMatch(/NaN/);
+    });
+
+    it('renders a loss-streak badge when currentStreak is negative', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-loss-streak',
+          name: 'Loss Streak Deck',
+          matchesPlayed: 4,
+          currentStreak: -2,
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Loss Streak Deck')).toBeInTheDocument();
+      });
+
+      const badge = document.querySelector('[data-testid="deck-streak"]');
+      expect(badge).toBeInTheDocument();
+      expect(badge?.textContent).toMatch(/2L/);
+      expect(badge?.className).toMatch(/loss-streak/);
+      expect(document.body.textContent).not.toMatch(/NaN/);
+    });
+  });
+
+  describe('data-testid coverage (DEFECT-3)', () => {
+    it('deck cards render data-testid="deck-card-{id}"', async () => {
+      mockDecks.getDecks.mockResolvedValue(createMockDeckList());
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
+      });
+
+      expect(document.querySelector('[data-testid="deck-card-deck-1"]')).toBeInTheDocument();
+      expect(document.querySelector('[data-testid="deck-card-deck-2"]')).toBeInTheDocument();
+      expect(document.querySelector('[data-testid="deck-card-deck-3"]')).toBeInTheDocument();
+    });
+
+    it('edit buttons render data-testid="deck-edit-{id}"', async () => {
+      mockDecks.getDecks.mockResolvedValue(createMockDeckList());
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
+      });
+
+      expect(document.querySelector('[data-testid="deck-edit-deck-1"]')).toBeInTheDocument();
+    });
+
+    it('clicking deck-card navigates to /deck-builder/:id', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({ id: 'abc123', name: 'Click Me Deck' }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Click Me Deck')).toBeInTheDocument();
+      });
+
+      const card = document.querySelector('[data-testid="deck-card-abc123"]') as HTMLElement;
+      fireEvent.click(card);
+
+      expect(mockNavigate).toHaveBeenCalledWith('/deck-builder/abc123');
+    });
+
+    it('clicking deck-edit navigates to /deck-builder/:id', async () => {
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({ id: 'def456', name: 'Edit Me Deck' }),
+      ]);
+
+      renderWithRouter(<Decks />);
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Edit Me Deck')).toBeInTheDocument();
+      });
+
+      const editBtn = document.querySelector('[data-testid="deck-edit-def456"]') as HTMLElement;
+      fireEvent.click(editBtn);
+
+      expect(mockNavigate).toHaveBeenCalledWith('/deck-builder/def456');
     });
   });
 

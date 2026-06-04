@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { ViewfinderCircleIcon } from '@heroicons/react/24/outline';
 import { useNavigate } from 'react-router-dom';
 import { drafts, cards, bffDraftRatings } from '@/services/api';
 import type { BffColorRating } from '@/services/api/bffDraftRatings';
+import { getClerkToken } from '@/services/apiClient';
 import { models, pickquality, grading, gui } from '@/types/models';
 
 // Helper to get completed drafts with limit support
@@ -309,12 +311,16 @@ const Draft: React.FC = () => {
             // Load draft data
             console.log('[loadActiveDraft] Loading data for session:', session.ID, 'SetCode:', session.SetCode);
             const draftType = session.DraftType || 'PremierDraft';
+            // draft-ratings is under the BFF Clerk-auth group — thread the Clerk
+            // session token (this page has no useAuth hook in scope, so use the
+            // apiClient token provider designed for non-hook callers).
+            const clerkToken = await getClerkToken();
             const [picks, packs, setCards, ratings, colorRatingsResult] = await Promise.all([
                 drafts.getDraftPicks(session.ID),
                 getDraftPacks(session.ID),
                 cards.getSetCards(session.SetCode),
                 cards.getCardRatings(session.SetCode, draftType),
-                bffDraftRatings.getDraftRatings(session.SetCode, draftType).catch(() => null),
+                bffDraftRatings.getDraftRatings(session.SetCode, draftType, clerkToken).catch(() => null),
             ]);
             console.log('[loadActiveDraft] Data loaded successfully:');
             console.log('  - Picks:', picks?.length || 0);
@@ -664,7 +670,7 @@ const Draft: React.FC = () => {
                                                         </div>
                                                         <div>
                                                             <span className="label">GIHWR:</span>
-                                                            <span className="value">{alternatives.picked_card_gihwr.toFixed(1)}%</span>
+                                                            <span className="value">{(alternatives.picked_card_gihwr * 100).toFixed(1)}%</span>
                                                         </div>
                                                     </div>
                                                     {alternatives.alternatives && alternatives.alternatives.length > 0 && (
@@ -673,7 +679,7 @@ const Draft: React.FC = () => {
                                                             {alternatives.alternatives.slice(0, 3).map((alt: pickquality.Alternative, idx: number) => (
                                                                 <div key={idx} className="alternative-card">
                                                                     <span className="card-name">{alt.card_name}</span>
-                                                                    <span className="gihwr">{alt.gihwr.toFixed(1)}%</span>
+                                                                    <span className="gihwr">{(alt.gihwr * 100).toFixed(1)}%</span>
                                                                 </div>
                                                             ))}
                                                         </div>
@@ -765,7 +771,7 @@ const Draft: React.FC = () => {
                     </div>
                 ) : historicalState.sessions.length === 0 ? (
                     <EmptyState
-                        icon="🎯"
+                        icon={<ViewfinderCircleIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
                         heading="No Draft History"
                         subtext="Complete a Quick Draft in MTG Arena to see your draft history here."
                         variant="no-data"
@@ -1027,7 +1033,7 @@ const Draft: React.FC = () => {
                                                     </div>
                                                     <div>
                                                         <span className="label">GIHWR:</span>
-                                                        <span className="value">{alternatives.picked_card_gihwr.toFixed(1)}%</span>
+                                                        <span className="value">{(alternatives.picked_card_gihwr * 100).toFixed(1)}%</span>
                                                     </div>
                                                 </div>
                                                 {alternatives.alternatives && alternatives.alternatives.length > 0 && (
@@ -1036,7 +1042,7 @@ const Draft: React.FC = () => {
                                                         {alternatives.alternatives.slice(0, 3).map((alt: pickquality.Alternative, idx: number) => (
                                                             <div key={idx} className="alternative-card">
                                                                 <span className="card-name">{alt.card_name}</span>
-                                                                <span className="gihwr">{alt.gihwr.toFixed(1)}%</span>
+                                                                <span className="gihwr">{(alt.gihwr * 100).toFixed(1)}%</span>
                                                             </div>
                                                         ))}
                                                     </div>

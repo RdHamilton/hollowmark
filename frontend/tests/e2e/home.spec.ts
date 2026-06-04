@@ -379,10 +379,30 @@ test.describe('Feature: Home Command Strip (#689)', () => {
     });
   });
 
-  // ── QUICK NAV quadrant ─────────────────────────────────────────
-  test.describe('QUICK NAV quadrant', () => {
-    test('@smoke all 4 quick-nav tiles are visible', async ({ page }) => {
+  // ── WHAT'S NEXT nudge (loaded state) ─────────────────────────
+  test.describe("WHAT'S NEXT nudge", () => {
+    test('@smoke whats-next nudge visible in loaded state', async ({ page }) => {
+      // Default summary: 8W/4L, 66.7% → hot-streak nudge fires
       await setupSignedInHome(page);
+      await page.goto('/home');
+      await expect(page.locator('[data-testid="home-whats-next-hot-streak"]')).toBeVisible();
+    });
+
+    test('@smoke home-quick-nav is NOT visible in loaded state', async ({ page }) => {
+      await setupSignedInHome(page);
+      await page.goto('/home');
+      await expect(page.locator('[data-testid="home-quick-nav"]')).not.toBeVisible();
+    });
+  });
+
+  // ── QUICK NAV quadrant (first-run / empty state only) ─────────
+  test.describe('QUICK NAV quadrant', () => {
+    test('@smoke all 4 quick-nav tiles are visible in first-run state', async ({ page }) => {
+      // Empty state: summary 404 + no decks + no draft → isEmpty = true → QuickNavStrip renders
+      await setClerkSignedIn(page);
+      await mockSummary404(page);
+      await mockNoActiveDraft(page);
+      await mockNoDecks(page);
       await page.goto('/home');
       await expect(page.locator('[data-testid="home-quick-nav"]')).toBeVisible();
       await expect(page.locator('[data-testid="home-nav-match-history"]')).toBeVisible();
@@ -392,7 +412,10 @@ test.describe('Feature: Home Command Strip (#689)', () => {
     });
 
     test('@smoke Match History tile navigates to /match-history', async ({ page }) => {
-      await setupSignedInHome(page);
+      await setClerkSignedIn(page);
+      await mockSummary404(page);
+      await mockNoActiveDraft(page);
+      await mockNoDecks(page);
       await page.goto('/home');
       await page.locator('[data-testid="home-nav-match-history"]').click();
       await page.waitForURL('**/match-history');
@@ -400,7 +423,10 @@ test.describe('Feature: Home Command Strip (#689)', () => {
     });
 
     test('Draft tile navigates to /draft', async ({ page }) => {
-      await setupSignedInHome(page);
+      await setClerkSignedIn(page);
+      await mockSummary404(page);
+      await mockNoActiveDraft(page);
+      await mockNoDecks(page);
       await page.goto('/home');
       await page.locator('[data-testid="home-nav-draft"]').click();
       await page.waitForURL('**/draft');
@@ -408,7 +434,10 @@ test.describe('Feature: Home Command Strip (#689)', () => {
     });
 
     test('Decks tile navigates to /decks', async ({ page }) => {
-      await setupSignedInHome(page);
+      await setClerkSignedIn(page);
+      await mockSummary404(page);
+      await mockNoActiveDraft(page);
+      await mockNoDecks(page);
       await page.goto('/home');
       await page.locator('[data-testid="home-nav-decks"]').click();
       await page.waitForURL('**/decks');
@@ -416,7 +445,10 @@ test.describe('Feature: Home Command Strip (#689)', () => {
     });
 
     test('Collection tile navigates to /collection', async ({ page }) => {
-      await setupSignedInHome(page);
+      await setClerkSignedIn(page);
+      await mockSummary404(page);
+      await mockNoActiveDraft(page);
+      await mockNoDecks(page);
       await page.goto('/home');
       await page.locator('[data-testid="home-nav-collection"]').click();
       await page.waitForURL('**/collection');

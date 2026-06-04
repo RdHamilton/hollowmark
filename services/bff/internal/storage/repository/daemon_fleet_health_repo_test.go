@@ -75,12 +75,12 @@ func TestFleetHealthSnapshot_CountsSeededRows(t *testing.T) {
 	twoMinAgo := now.Add(-2 * time.Minute)
 	twoHoursAgo := now.Add(-2 * time.Hour)
 
-	// Active within 5m.
-	insertKey("fleet_test_acct_1", "device-aaaa-0001", &twoMinAgo, false)
+	// Active within 5m. device_id is UUID NOT NULL (migration 000085).
+	insertKey("fleet_test_acct_1", "00000000-aaaa-0000-0000-000000000001", &twoMinAgo, false)
 	// Active within 1h but not 5m.
-	insertKey("fleet_test_acct_2", "device-aaaa-0002", &twoHoursAgo, false)
+	insertKey("fleet_test_acct_2", "00000000-aaaa-0000-0000-000000000002", &twoHoursAgo, false)
 	// Revoked (should not appear in total_paired; counted in revoked).
-	insertKey("fleet_test_acct_3", "device-aaaa-0003", nil, true)
+	insertKey("fleet_test_acct_3", "00000000-aaaa-0000-0000-000000000003", nil, true)
 
 	snap, err := repo.FleetHealthSnapshot(ctx)
 	require.NoError(t, err)

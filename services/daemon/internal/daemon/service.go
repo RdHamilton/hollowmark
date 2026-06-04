@@ -6,6 +6,7 @@ package daemon
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,6 +94,31 @@ type Service struct {
 	// be derived. Empty until a player.authenticated event has been processed
 	// in this daemon session.
 	mtgaUserID string
+
+	// lastDeckID is the most recently observed MTGA Arena deck UUID, extracted
+	// from a CourseDeckSummary.DeckId field in a CourseDeck log entry. Arena
+	// emits CourseDeck just before a match starts when the player submits their
+	// deck to an event. This field is attached to the next match.completed
+	// payload so the BFF can link the match row to the correct deck.
+	// Empty until a course.deck_submitted event has been processed.
+	lastDeckID string
+
+	// lastCollectionHash is the content hash (sorted arena_id:count) of the most
+	// recently DISPATCHED collection.updated snapshot from the log-reader path.
+	// handleEntry skips dispatch when an incoming snapshot hashes identically —
+	// this is the dedup guard that kills the rc3 idle emit-storm (Arena
+	// re-writing an unchanged GetPlayerCardsV3 line ~1-2/sec). Only ever
+	// read/written from the single run-loop goroutine via handleEntry; the
+	// user-triggered memory-scan path (performCollectionSync) is intentionally
+	// exempt and does not touch this field.
+	lastCollectionHash string
+	// pendingBacklogCollection holds the latest collection snapshot observed
+	// during the historical-backlog drain on (re)install startup. Backlog
+	// snapshots are coalesced (not dispatched per-line) so a replay of the whole
+	// Player.log does not flood the BFF; the single held snapshot is flushed when
+	// the first live (non-backlog) collection entry arrives. Nil once flushed.
+	pendingBacklogCollection *contract.CollectionUpdatedPayload
+	pendingBacklogHash       string
 	// trayHooks connects the tray icon to the daemon event loop.
 	// All fields are optional — nil channels block forever in select (safe no-op).
 	trayHooks TrayHooks
@@ -291,7 +318,14 @@ func computeAuthStatus(cfg *config.Config, keychainErr error, authPaused bool) s
 //
 // WinningTeamID is always zero: GRE messages do not carry a final win signal.
 // The BFF projection worker cross-references the matches table at projection time.
-func (s *Service) flushGREBuffer(ctx context.Context, sessionID string, entries []json.RawMessage, partial bool) error {
+// matchID is an authoritative match id supplied by the caller (the
+// finalMatchResult.matchId from the match.completed detector). It is used only
+// as a FALLBACK: GRE-derived gameInfo.matchID keeps precedence when present.
+// GRE matchID is sparse in real logs (~8 occurrences across 196 game-state
+// lines in the real Player.log), so the explicit fallback is what anchors the
+// non-partial game-end flush to a real match (#807). It is empty ("") for the
+// threshold/stale/shutdown flush paths.
+func (s *Service) flushGREBuffer(ctx context.Context, sessionID, matchID string, entries []json.RawMessage, partial bool) error {
 	// Convert raw GRE log JSON stored in the buffer into LogEntry values that
 	// pkg/logparse functions can consume.
 	logEntries := make([]*logparse.LogEntry, 0, len(entries))
@@ -427,6 +461,14 @@ func (s *Service) flushGREBuffer(ctx context.Context, sessionID string, entries 
 	if result.FirstTurnActivePlayerSeatID > 0 && playerConn != nil {
 		onPlay := result.FirstTurnActivePlayerSeatID == playerConn.SeatID
 		payload.PlayerOnPlay = &onPlay
+	}
+
+	// Match-id fallback (#807): GRE gameInfo.matchID is sparse in real logs, so
+	// when the buffered entries did not self-resolve a match_id, fall back to the
+	// authoritative id supplied by the caller (finalMatchResult.matchId from the
+	// match.completed detector). GRE-derived match_id keeps precedence above.
+	if payload.MatchID == "" && matchID != "" {
+		payload.MatchID = matchID
 	}
 
 	// Emit gre.game_started for each distinct gameNumber found in this buffer.
@@ -909,11 +951,15 @@ func (s *Service) Run(ctx context.Context) error {
 	errs := poller.Errors()
 
 	// Phase 0 of the daemon-local-API plan: serve a /health endpoint on
-	// 127.0.0.1:9001 so the SPA's "daemon connected" indicator can detect
-	// this process. Non-fatal — if the port is busy (e.g. a previous daemon
-	// instance is still draining), the daemon continues with dispatch only.
+	// the channel-derived loopback port (stable=9001, staging=9011) so the
+	// SPA's "daemon connected" indicator can detect this process. Deriving
+	// the port from install.Channel (rather than the hardcoded DefaultPort)
+	// lets a staging daemon coexist with a prod daemon on the same machine
+	// without a port collision (#667 / ADR-049 Ticket 5). Non-fatal — if the
+	// port is busy (e.g. a previous daemon instance is still draining), the
+	// daemon continues with dispatch only.
 	startedAt := time.Now().UTC()
-	localAPI := localapi.New(localapi.DefaultPort, localapi.State{
+	localAPI := localapi.New(install.Identity(install.Channel).LocalAPIPort, localapi.State{
 		Version:      s.version,
 		SessionID:    s.sessionID,
 		StartedAt:    startedAt,
@@ -1544,9 +1590,42 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 			log.Printf("[daemon] warn: parse collection: %v", err)
 			s.recordParseFailure(eventType, entry.Raw)
 			payload = entry.JSON
-		} else {
-			payload = p
+			break
 		}
+
+		h := collectionContentHash(p)
+
+		// Historical-backlog coalescing: on a (re)install the daemon replays the
+		// whole Player.log from byte 0, surfacing every past GetPlayerCardsV3
+		// snapshot as a backlog entry. Hold only the latest one instead of
+		// dispatching each — it is flushed when the first live entry arrives.
+		if entry.FromBacklog {
+			s.pendingBacklogCollection = p
+			s.pendingBacklogHash = h
+			return nil
+		}
+
+		// First live entry: flush any coalesced backlog snapshot so the BFF
+		// learns the current collection exactly once, then fall through to dedup
+		// the live entry against it.
+		if s.pendingBacklogCollection != nil {
+			if s.pendingBacklogHash != s.lastCollectionHash {
+				if derr := s.dispatchCollection(ctx, s.pendingBacklogCollection); derr != nil {
+					return derr
+				}
+				s.lastCollectionHash = s.pendingBacklogHash
+			}
+			s.pendingBacklogCollection = nil
+			s.pendingBacklogHash = ""
+		}
+
+		// Dedup guard: skip dispatch when the snapshot is byte-for-byte the same
+		// collection as the last one we sent (the rc3 idle-storm vector).
+		if h == s.lastCollectionHash {
+			return nil
+		}
+		s.lastCollectionHash = h
+		payload = p
 	case "deck.updated":
 		p, err := logreader.ParseDeckEntry(entry)
 		if err != nil {
@@ -1570,6 +1649,22 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 		}
 		payload = entry.JSON
 
+	case "course.deck_submitted":
+		// Cache the deck UUID so it can be attached to the next match.completed.
+		// Arena emits CourseDeck just before a match starts; the daemon holds the
+		// most recent DeckId in memory and attaches it when match.completed fires.
+		deckID, err := logreader.ParseCourseDeckEntry(entry)
+		if err != nil {
+			log.Printf("[daemon] warn: parse course deck: %v", err)
+			s.recordParseFailure(eventType, entry.Raw)
+		} else {
+			s.lastDeckID = deckID
+			log.Printf("[daemon] cached deck ID from CourseDeck: %s", deckID)
+		}
+		// course.deck_submitted is daemon-internal bookkeeping only.
+		// Do not dispatch it to the BFF.
+		return nil
+
 	case "match.completed":
 		p, err := logreader.ParseMatchCompletedEntry(entry, s.mtgaUserID)
 		if err != nil {
@@ -1577,6 +1672,14 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 			s.recordParseFailure(eventType, entry.Raw)
 			payload = entry.JSON
 		} else {
+			// Attach the cached deck ID when available. The deck ID was captured
+			// from the most recent CourseDeck entry, which Arena emits just before
+			// the match starts. Clear after attaching so a missed CourseDeck does
+			// not spuriously link a stale deck to a future match.
+			if s.lastDeckID != "" {
+				p.DeckID = s.lastDeckID
+				s.lastDeckID = ""
+			}
 			// Attach DraftSessionID when the active in-memory session's
 			// CourseName matches the match Format (event_name) and the
 			// session was updated within 48 hours.
@@ -1589,6 +1692,20 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 					}
 				}
 			}
+
+			// Flush the GRE session as a non-partial game-end event, anchored to
+			// the authoritative finalMatchResult.matchId (#807). This is the
+			// first-and-only writer of game_plays card-play rows (partial flushes
+			// are discarded by the BFF projection worker), so it completes the
+			// #2943 read-side chain and populates the Match-Detail timeline.
+			// No-op when the session buffer is already empty (entries drained by
+			// an earlier threshold flush).
+			if p.MatchID != "" {
+				if flushErr := s.greManager.FlushSession(ctx, s.sessionID, p.MatchID, false); flushErr != nil {
+					log.Printf("[daemon] warn: match.completed GRE game-end flush match_id=%s: %v", p.MatchID, flushErr)
+				}
+			}
+
 			payload = p
 		}
 	case "greToClientEvent":
@@ -1627,6 +1744,43 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 	// onBFFFailure and onBFFSuccess callbacks wired to the Dispatcher in New().
 	// Do NOT call clearBFFFailureCounter here — it is called by onBFFSuccess
 	// inside SendOrBuffer on confirmed HTTP 2xx delivery.
+	return nil
+}
+
+// collectionContentHash returns a stable SHA-256 hex digest of a collection
+// snapshot's contents (sorted arena_id:count pairs). Two snapshots with the same
+// set of cards and counts produce the same hash regardless of map iteration
+// order, which is what the dedup guard relies on.
+func collectionContentHash(p *contract.CollectionUpdatedPayload) string {
+	if p == nil {
+		return ""
+	}
+	pairs := make([]string, 0, len(p.Cards))
+	for _, c := range p.Cards {
+		pairs = append(pairs, strconv.Itoa(c.ArenaID)+":"+strconv.Itoa(c.Count))
+	}
+	sort.Strings(pairs)
+	sum := sha256.Sum256([]byte(strings.Join(pairs, ",")))
+	return hex.EncodeToString(sum[:])
+}
+
+// dispatchCollection builds and sends a collection.updated event for the given
+// payload. It mirrors the dispatch tail of handleEntry but is reused for the
+// flushed backlog snapshot. Reauth handling matches handleEntry's contract.
+func (s *Service) dispatchCollection(ctx context.Context, p *contract.CollectionUpdatedPayload) error {
+	evt, err := dispatch.BuildEvent("collection.updated", s.cfg.AccountID, s.sessionID, p)
+	if err != nil {
+		return fmt.Errorf("build collection event: %w", err)
+	}
+	dispatchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := s.dispatcher.SendOrBuffer(dispatchCtx, evt); err != nil {
+		if errors.Is(err, dispatch.ErrReauthRequired) {
+			go s.dispatchAuthFailed(context.Background(), "bff_rejected")
+			return nil
+		}
+		return err
+	}
 	return nil
 }
 

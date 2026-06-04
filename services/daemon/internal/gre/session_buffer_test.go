@@ -16,6 +16,7 @@ func rawEntry(s string) json.RawMessage {
 
 type flushRecord struct {
 	sessionID string
+	matchID   string
 	entries   []json.RawMessage
 	partial   bool
 }
@@ -26,12 +27,12 @@ type fakeFlushSink struct {
 	err     error
 }
 
-func (f *fakeFlushSink) flush(ctx context.Context, sessionID string, entries []json.RawMessage, partial bool) error {
+func (f *fakeFlushSink) flush(ctx context.Context, sessionID, matchID string, entries []json.RawMessage, partial bool) error {
 	if f.err != nil {
 		return f.err
 	}
 	f.mu.Lock()
-	f.records = append(f.records, flushRecord{sessionID: sessionID, entries: entries, partial: partial})
+	f.records = append(f.records, flushRecord{sessionID: sessionID, matchID: matchID, entries: entries, partial: partial})
 	f.mu.Unlock()
 	return nil
 }
@@ -55,6 +56,86 @@ func newManager(threshold, staleMinutes int, sink *fakeFlushSink) *Manager {
 		SweepInterval:  100 * time.Millisecond, // fast for tests
 		Flush:          sink.flush,
 	})
+}
+
+// --- game-end (FlushSession) tests (#807) ---
+
+// TestFlushSession_NonPartialWithMatchID verifies the game-end flush path:
+// FlushSession drains the named session buffer, propagates the explicit
+// authoritative matchID, passes partial=false, and resets the buffer.
+func TestFlushSession_NonPartialWithMatchID(t *testing.T) {
+	sink := &fakeFlushSink{}
+	mgr := newManager(500, 15, sink)
+	ctx := context.Background()
+
+	for i := 0; i < 4; i++ {
+		if err := mgr.Append(ctx, "session-X", rawEntry("e")); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	if sink.count() != 0 {
+		t.Fatalf("no flush expected below threshold, got %d", sink.count())
+	}
+
+	const wantMatch = "22222222-0000-4000-8000-000000000099"
+	if err := mgr.FlushSession(ctx, "session-X", wantMatch, false); err != nil {
+		t.Fatalf("FlushSession: %v", err)
+	}
+
+	if sink.count() != 1 {
+		t.Fatalf("expected exactly 1 game-end flush, got %d", sink.count())
+	}
+	rec := sink.last()
+	if rec.matchID != wantMatch {
+		t.Errorf("matchID: want %q, got %q", wantMatch, rec.matchID)
+	}
+	if rec.partial {
+		t.Errorf("game-end flush must be non-partial (partial=false)")
+	}
+	if len(rec.entries) != 4 {
+		t.Errorf("entries: want 4, got %d", len(rec.entries))
+	}
+	// Buffer must be reset so a later shutdown/stale sweep does not double-flush.
+	if mgr.EntryCount("session-X") != 0 {
+		t.Errorf("after FlushSession, expected 0 buffered entries, got %d", mgr.EntryCount("session-X"))
+	}
+}
+
+// TestFlushSession_EmptyBufferIsNoOp verifies that FlushSession on a drained or
+// unknown session does not emit a flush (a game can complete with its GRE
+// entries already drained by a prior threshold flush).
+func TestFlushSession_EmptyBufferIsNoOp(t *testing.T) {
+	sink := &fakeFlushSink{}
+	mgr := newManager(500, 15, sink)
+	ctx := context.Background()
+
+	if err := mgr.FlushSession(ctx, "never-seen", "m-1", false); err != nil {
+		t.Fatalf("FlushSession unknown: %v", err)
+	}
+	if sink.count() != 0 {
+		t.Fatalf("expected no flush for unknown session, got %d", sink.count())
+	}
+
+	// Append then drain via threshold, then FlushSession must be a no-op.
+	for i := 0; i < 2; i++ {
+		_ = mgr.Append(ctx, "session-Y", rawEntry("e"))
+	}
+	if err := mgr.FlushSession(ctx, "session-Y", "m-2", false); err != nil {
+		t.Fatalf("FlushSession: %v", err)
+	}
+	rec := sink.last()
+	if rec.partial {
+		t.Errorf("game-end flush must be non-partial")
+	}
+
+	// Second FlushSession (buffer now empty) must NOT emit again.
+	before := sink.count()
+	if err := mgr.FlushSession(ctx, "session-Y", "m-2", false); err != nil {
+		t.Fatalf("FlushSession second: %v", err)
+	}
+	if sink.count() != before {
+		t.Errorf("second FlushSession on empty buffer must be a no-op; flushes went %d -> %d", before, sink.count())
+	}
 }
 
 // --- threshold flush tests ---

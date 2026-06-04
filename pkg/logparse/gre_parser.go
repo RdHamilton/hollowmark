@@ -14,8 +14,23 @@ type GREGameStateMessage struct {
 	Players       []GREPlayerState
 	GameObjects   []GREGameObject
 	Zones         map[int]*GREZone     // Zone ID to zone info mapping
+	Annotations   []GREAnnotation      // Per-event annotations; populated by parseGameStateMessage
 	PrevGameState *GREGameStateMessage // For comparing state changes
 	Timestamp     time.Time
+}
+
+// GREAnnotation is one annotation entry from a GRE GameStateMessage.
+// Annotations carry explicit action semantics (e.g. ZoneTransfer.category =
+// "CastSpell" / "PlayLand" / "Resolve") and complement the object-snapshot
+// diff used by detectZoneChangesWithZones.
+type GREAnnotation struct {
+	ID          int
+	AffectorID  int
+	AffectedIDs []int
+	Types       []string
+	// Details is a flat key→value map derived from the annotation's details
+	// array. Integer values are stored as int; string values as string.
+	Details map[string]interface{}
 }
 
 // GREZone represents a zone in the game.
@@ -85,6 +100,7 @@ type GamePlayEvent struct {
 	TeamID         int    // MTGA teamId from GREPlayerState; populated for life_change events
 	ActionType     string // "play_card", "attack", "block", "land_drop", "life_change", etc.
 	CardID         int    // Arena card ID (GRPId)
+	InstanceID     int    // GRE instanceId; used for cross-pass deduplication
 	CardName       string // Will be populated later from card database
 	ZoneFrom       string
 	ZoneTo         string
@@ -116,7 +132,47 @@ func GetPlayerSeatIDByName(entries []*LogEntry, playerScreenName string) *GRECon
 			continue
 		}
 
-		// Look for connectResp - this is reliable as it's sent directly to the player
+		// Primary: look for GREMessageType_ConnectResp inside the greToClientEvent wrapper.
+		// Real MTGA Player.log lines carry connectResp as a nested GRE message:
+		//   { "greToClientEvent": { "greToClientMessages": [
+		//       { "type": "GREMessageType_ConnectResp", "systemSeatIds": [N], "connectResp": {...} }
+		//   ]}}
+		// The systemSeatIds field at the message level (not inside connectResp) is the
+		// authoritative player seat number.
+		if greEvt, ok := entry.JSON["greToClientEvent"].(map[string]interface{}); ok {
+			if msgs, ok := greEvt["greToClientMessages"].([]interface{}); ok {
+				for _, m := range msgs {
+					msg, ok := m.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					if msg["type"] != "GREMessageType_ConnectResp" {
+						continue
+					}
+					conn := &GREConnection{}
+					// systemSeatIds is at the message level (not inside connectResp).
+					if seatIDs, ok := msg["systemSeatIds"].([]interface{}); ok && len(seatIDs) > 0 {
+						if seatID, ok := seatIDs[0].(float64); ok {
+							conn.SystemSeatID = int(seatID)
+							conn.SeatID = int(seatID)
+						}
+					}
+					// teamId may be inside connectResp.
+					if cr, ok := msg["connectResp"].(map[string]interface{}); ok {
+						if teamID, ok := cr["teamId"].(float64); ok {
+							conn.TeamID = int(teamID)
+						}
+					}
+					if conn.SeatID != 0 || conn.SystemSeatID != 0 {
+						return conn
+					}
+				}
+			}
+		}
+
+		// Legacy / test-fixture path: top-level connectResp key.
+		// Synthetic test entries may place connectResp at the top level of the JSON
+		// object for brevity. Real MTGA logs do not use this shape.
 		if connectResp, ok := entry.JSON["connectResp"]; ok {
 			connMap, ok := connectResp.(map[string]interface{})
 			if !ok {
@@ -326,7 +382,70 @@ func parseGameStateMessage(msgMap map[string]interface{}, timestamp time.Time) *
 		}
 	}
 
+	// Parse annotations — carry explicit action semantics (ZoneTransfer.category,
+	// ResolutionStart.grpid, etc.) that the object-snapshot diff can miss when
+	// only partial-state messages are present.
+	if annotations, ok := gameStateMsg["annotations"].([]interface{}); ok {
+		for _, annData := range annotations {
+			annMap, ok := annData.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			ann := parseAnnotation(annMap)
+			msg.Annotations = append(msg.Annotations, ann)
+		}
+	}
+
 	return msg
+}
+
+// parseAnnotation parses a single annotation entry from the GRE game state.
+func parseAnnotation(annMap map[string]interface{}) GREAnnotation {
+	ann := GREAnnotation{
+		Details: make(map[string]interface{}),
+	}
+	if id, ok := annMap["id"].(float64); ok {
+		ann.ID = int(id)
+	}
+	if affectorID, ok := annMap["affectorId"].(float64); ok {
+		ann.AffectorID = int(affectorID)
+	}
+	if affectedIDs, ok := annMap["affectedIds"].([]interface{}); ok {
+		for _, aid := range affectedIDs {
+			if id, ok := aid.(float64); ok {
+				ann.AffectedIDs = append(ann.AffectedIDs, int(id))
+			}
+		}
+	}
+	if types, ok := annMap["type"].([]interface{}); ok {
+		for _, t := range types {
+			if ts, ok := t.(string); ok {
+				ann.Types = append(ann.Types, ts)
+			}
+		}
+	}
+	if details, ok := annMap["details"].([]interface{}); ok {
+		for _, detData := range details {
+			detMap, ok := detData.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			key, _ := detMap["key"].(string)
+			if key == "" {
+				continue
+			}
+			if vs, ok := detMap["valueInt32"].([]interface{}); ok && len(vs) > 0 {
+				if v, ok := vs[0].(float64); ok {
+					ann.Details[key] = int(v)
+				}
+			} else if vs, ok := detMap["valueString"].([]interface{}); ok && len(vs) > 0 {
+				if v, ok := vs[0].(string); ok {
+					ann.Details[key] = v
+				}
+			}
+		}
+	}
+	return ann
 }
 
 // parseZone parses a zone from the game state.
@@ -849,6 +968,7 @@ func detectZoneChangesWithZones(prev, curr *GREGameStateMessage, playerConn *GRE
 			PlayerType: playerType,
 			ActionType: actionType,
 			CardID:     currObj.GRPId,
+			InstanceID: currObj.InstanceID,
 			ZoneFrom:   prevZoneName,
 			ZoneTo:     currZoneName,
 			Timestamp:  curr.Timestamp,
@@ -1008,6 +1128,245 @@ func detectBlocks(prev, curr *GREGameStateMessage, playerConn *GREConnection) []
 		}
 	}
 
+	return events
+}
+
+// annotationActionType maps a ZoneTransfer.category string from the GRE
+// annotations array to the canonical ActionType values used by GamePlayEvent.
+// Categories not listed here are skipped (e.g. "Draw" is intentionally
+// filtered out to match detectZoneChangesWithZones behaviour).
+var annotationActionType = map[string]string{
+	"CastSpell": "cast_spell",
+	"PlayLand":  "land_drop",
+	"Resolve":   "resolve_spell",
+	"Put":       "enter_battlefield",
+	"Exile":     "exile",
+	"Discard":   "to_graveyard",
+	"Destroy":   "to_graveyard",
+	"Mill":      "to_graveyard",
+	"Sacrifice": "to_graveyard",
+	"Return":    "zone_change",
+	"Surveil":   "zone_change",
+}
+
+// Library and hidden-zone IDs used by the capture-scope exclusions in
+// extractAnnotationPlays. These are the verified MTGA zone-type IDs from the
+// real Player.log: 31/35 = Hand, 32/36 = Library, 33/37 = Graveyard,
+// 28 = Battlefield (see ADR-046 capture-scope exclusions).
+const (
+	zoneIDOurLibrary = 32
+	zoneIDOppLibrary = 36
+)
+
+// isLibraryZoneID reports whether the given GRE zone_src/zone_dest detail ID
+// refers to a Library zone (our or the opponent's). End-of-game "Mill" plays
+// sourced from a Library zone are the engine dumping a dead player's remaining
+// deck into the graveyard — not real player actions — and are suppressed.
+func isLibraryZoneID(zoneID int) bool {
+	return zoneID == zoneIDOurLibrary || zoneID == zoneIDOppLibrary
+}
+
+// isHiddenZoneID reports whether the given GRE zone ID refers to a private,
+// non-rendered zone (Hand or Library). It is the secondary belt-and-suspenders
+// guard for the grpID==0 suppression: an unresolvable-instance ZoneTransfer
+// that lands in a hidden zone is never a player-visible play.
+func isHiddenZoneID(zoneID int) bool {
+	switch zoneID {
+	case 31, 35: // Hand (ours / opponent's)
+		return true
+	case zoneIDOurLibrary, zoneIDOppLibrary: // Library (ours / opponent's)
+		return true
+	default:
+		return false
+	}
+}
+
+// extractAnnotationPlays extracts GamePlayEvents from the annotations array of
+// a single GameStateMessage.  This complements detectZoneChangesWithZones,
+// which compares consecutive object-snapshot pairs and misses plays in
+// partial-state messages that carry annotations but omit a full gameObjects
+// snapshot (the common case in corpus logs — only 413 of 5671 consecutive
+// GameStateMessage pairs both carry gameObjects).
+//
+// Capture-scope exclusions (ADR-046; ticket #814). Two classes of annotation
+// are intentionally dropped at capture because they render as noise that erodes
+// player trust in the Match-Detail timeline without representing a real play:
+//
+//  1. Unresolvable-instance plays. An AffectedID whose instance has no
+//     resolvable gameObject in this (or the cumulative) snapshot yields grpID==0
+//     and a "zone_0" destination — a blank/unknown card on the timeline (the
+//     same failure mode as prod bug #195). Primary signal: grpID==0. Secondary
+//     confirming signal: the annotation's zone_dest is a hidden zone (Hand or
+//     Library), proving the play was never player-visible. These are NOT a
+//     #2937 capture-drop — they are genuinely unrecoverable. The suppression is
+//     narrow: an annotation whose instance DOES resolve to grpID>0 still emits,
+//     so a future real capture-drop is not masked.
+//
+//  2. End-of-game library mill. When a game ends, the engine dumps the losing
+//     player's remaining library into the graveyard as a flood of
+//     category=="Mill", zone_src==Library ZoneTransfer annotations. These are
+//     not plays. Primary signal: category=="Mill" && zone_src is a Library
+//     zone. Secondary confirming signal: the per-message GameStage_GameOver
+//     watermark suppresses any straggler ZoneTransfer plays in a GameOver-stage
+//     message. The lethal play (CastSpell / combat / Destroy) is a different
+//     category and source zone, so it is preserved.
+//
+// The function reads every AnnotationType_ZoneTransfer annotation, resolves
+// the instance's grpId from the message's gameObjects (when present), and maps
+// the annotation category to the canonical ActionType string.  "Draw" events
+// are intentionally skipped to match the existing filter in
+// detectZoneChangesWithZones.
+//
+// seenKey is a deduplication set shared with the zone-diff pass.  The key is
+// (instanceID, turnNumber, actionType); when the zone-diff already produced a
+// play for the same (instance, turn, action), the annotation play is skipped.
+func extractAnnotationPlays(
+	msg *GREGameStateMessage,
+	playerConn *GREConnection,
+	cumulativeZones map[int]*GREZone,
+	lastValidTurnNumber int,
+	currentGameNumber int,
+	seenKey map[string]bool,
+) []*GamePlayEvent {
+	if len(msg.Annotations) == 0 {
+		return nil
+	}
+
+	// Build instanceID → grpId lookup from this message's gameObjects.
+	instanceGRP := make(map[int]int, len(msg.GameObjects))
+	instanceController := make(map[int]int, len(msg.GameObjects))
+	instanceZone := make(map[int]int, len(msg.GameObjects))
+	for _, obj := range msg.GameObjects {
+		instanceGRP[obj.InstanceID] = obj.GRPId
+		instanceController[obj.InstanceID] = obj.ControllerSeatID
+		instanceZone[obj.InstanceID] = obj.ZoneID
+	}
+
+	turnNumber := lastValidTurnNumber
+	if msg.TurnInfo != nil && msg.TurnInfo.TurnNumber > 0 {
+		turnNumber = msg.TurnInfo.TurnNumber
+	}
+
+	phase := ""
+	step := ""
+	if msg.TurnInfo != nil {
+		phase = normalizePhase(msg.TurnInfo.Phase)
+		step = normalizeStep(msg.TurnInfo.Step)
+	}
+
+	gameNumber := currentGameNumber
+	if msg.GameNumber > 0 {
+		gameNumber = msg.GameNumber
+	}
+
+	var events []*GamePlayEvent
+	for _, ann := range msg.Annotations {
+		hasZoneTransfer := false
+		for _, t := range ann.Types {
+			if t == "AnnotationType_ZoneTransfer" {
+				hasZoneTransfer = true
+				break
+			}
+		}
+		if !hasZoneTransfer {
+			continue
+		}
+
+		cat, _ := ann.Details["category"].(string)
+		actionType, ok := annotationActionType[cat]
+		if !ok {
+			// Skip Draw and any unknown categories.
+			continue
+		}
+
+		// Capture-scope exclusion 2 (PRIMARY): end-of-game library mill.
+		// Drop category=="Mill" ZoneTransfer plays sourced from a Library zone —
+		// the engine dumping a dead player's remaining deck into the graveyard.
+		// Keyed on category + zone_src so it touches only the dead-deck dump;
+		// non-Mill graveyard moves (Destroy / Sacrifice / Discard — real deaths)
+		// are untouched, and the lethal play is preserved.
+		if cat == "Mill" {
+			if zoneSrc, ok := ann.Details["zone_src"].(int); ok && isLibraryZoneID(zoneSrc) {
+				continue
+			}
+		}
+
+		// Capture-scope exclusion 2 (SECONDARY / confirming): GameStage_GameOver
+		// watermark. Suppress any straggler ZoneTransfer plays carried on a
+		// GameOver-stage message. The engine emits the mill flood just BEFORE it
+		// flips the stage, so this is a belt-and-suspenders guard for teardown
+		// churn — the Mill-from-Library rule above is the primary cut.
+		if msg.Stage == "GameStage_GameOver" {
+			continue
+		}
+
+		for _, instanceID := range ann.AffectedIDs {
+			grpID := instanceGRP[instanceID]
+			controllerID := instanceController[instanceID]
+			zoneID := instanceZone[instanceID]
+
+			// Capture-scope exclusion 1: unresolvable-instance plays.
+			// PRIMARY signal: grpID==0 — the instance has no resolvable
+			// gameObject, so the play has no card to render and would surface as
+			// an arena=0 / zone_0 blank card (prod bug #195). This is the same
+			// grpID==0 discipline already used in ExtractOpponentCards. A
+			// resolvable grpID still emits, so a real #2937 capture-drop is never
+			// masked by this suppression.
+			//
+			// SECONDARY confirming signal (corroboration, not a second gate):
+			// in the real Player.log every grpID==0 case verifiably lands in a
+			// hidden zone (Hand/Library) — see isHiddenZoneID and the #814
+			// regression test. grpID==0 is sufficient on its own because a play
+			// with no resolvable card has nothing to render regardless of dest.
+			if grpID == 0 {
+				continue
+			}
+
+			// Dedup: skip if the zone-diff pass already produced this event.
+			key := fmt.Sprintf("%d:%d:%s", instanceID, turnNumber, actionType)
+			if seenKey[key] {
+				continue
+			}
+			seenKey[key] = true
+
+			playerType := "opponent"
+			if playerConn != nil && controllerID == playerConn.SeatID {
+				playerType = "player"
+			}
+
+			// Resolve zone name for the destination zone.
+			zoneTo := getZoneName(zoneID, cumulativeZones)
+			// ZoneFrom is not directly available from this annotation; derive from
+			// the category so the action is self-describing even without the pair.
+			zoneFrom := ""
+			switch cat {
+			case "CastSpell":
+				zoneFrom = "hand"
+				zoneTo = "stack"
+			case "PlayLand":
+				zoneFrom = "hand"
+				zoneTo = "battlefield"
+			case "Resolve":
+				zoneFrom = "stack"
+			case "Put":
+				zoneFrom = ""
+			}
+
+			events = append(events, &GamePlayEvent{
+				MatchID:    msg.MatchID,
+				GameNumber: gameNumber,
+				TurnNumber: turnNumber,
+				Phase:      phase,
+				Step:       step,
+				PlayerType: playerType,
+				ActionType: actionType,
+				CardID:     grpID,
+				ZoneFrom:   zoneFrom,
+				ZoneTo:     zoneTo,
+				Timestamp:  msg.Timestamp,
+			})
+		}
+	}
 	return events
 }
 
@@ -1305,6 +1664,31 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 		}
 	}
 
+	// Capture-scope exclusion 2 (ADR-046; #814): identify every instance that
+	// the engine milled from a Library zone into the graveyard. The snapshot-diff
+	// pass (detectZoneChangesWithZones) sees these same cards appear in the
+	// graveyard and would re-emit them as "to_graveyard" plays, flooding the
+	// final turns with the dead-deck dump. We collect the milled instance IDs
+	// from the authoritative Mill+Library annotations (the same primary signal
+	// extractAnnotationPlays suppresses on) and drop the diff-pass plays for
+	// those instances. This keeps the lethal and all real deaths (Destroy /
+	// Sacrifice / Discard — never category Mill, never sourced from Library).
+	milledInstanceIDs := make(map[int]bool)
+	for _, msg := range messages {
+		for _, ann := range msg.Annotations {
+			if cat, _ := ann.Details["category"].(string); cat != "Mill" {
+				continue
+			}
+			zoneSrc, ok := ann.Details["zone_src"].(int)
+			if !ok || !isLibraryZoneID(zoneSrc) {
+				continue
+			}
+			for _, instanceID := range ann.AffectedIDs {
+				milledInstanceIDs[instanceID] = true
+			}
+		}
+	}
+
 	allTrackedObjects := make(map[int]*trackedObject)
 	lifeTotals := make(map[int]int)
 	// prevCounters tracks the last-observed counter state per instanceID so we
@@ -1317,6 +1701,10 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 	seqNum := 0
 	currentGameNumber := 1
 	lastValidTurnNumber := 1
+
+	// seenKey prevents double-counting between the zone-diff pass and the
+	// annotation-based pass.  Key: "instanceID:turnNumber:actionType".
+	seenKey := make(map[string]bool)
 
 	// Seed prevCounters from the first message so the first comparison has a
 	// baseline to diff against.
@@ -1354,8 +1742,16 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 			plays = append(plays, lc)
 		}
 
-		// Zone changes.
+		// Zone changes (snapshot-diff path).
 		for _, zc := range detectZoneChangesWithZones(prev, curr, playerConn, cumulativeZones, allTrackedObjects) {
+			// Capture-scope exclusion 2 (ADR-046; #814): drop end-of-game library
+			// mill teardown that the diff pass re-derives from the graveyard
+			// snapshot. The milled instance set is built from the authoritative
+			// Mill+Library annotations; only "to_graveyard" plays for those exact
+			// instances are suppressed, so real deaths and the lethal survive.
+			if zc.ActionType == "to_graveyard" && milledInstanceIDs[zc.InstanceID] {
+				continue
+			}
 			zc.SequenceNumber = seqNum
 			seqNum++
 			if zc.GameNumber == 0 {
@@ -1365,6 +1761,10 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 				zc.TurnNumber = lastValidTurnNumber
 			}
 			plays = append(plays, zc)
+			// Register in seenKey so the annotation pass skips this event.
+			// Use the real InstanceID so the key namespace matches the annotation
+			// pass (which also keys on instanceID from affectedIDs).
+			seenKey[fmt.Sprintf("%d:%d:%s", zc.InstanceID, zc.TurnNumber, zc.ActionType)] = true
 		}
 
 		// Attacks.
@@ -1418,6 +1818,36 @@ func ParseGamePlaysResult(entries []*LogEntry, playerConn *GREConnection) (GameP
 		}
 		for _, player := range curr.Players {
 			lifeTotals[player.SeatID] = player.LifeTotal
+		}
+
+		// Annotation-based plays (per-message pass).
+		// This complements the snapshot-diff pass above — it captures card
+		// plays in partial-state messages where gameObjects are absent from
+		// one or both consecutive messages, which is the typical shape of
+		// real MTGA corpus logs.  seenKey prevents double-counting events
+		// already detected by the snapshot-diff pass.
+		for _, ap := range extractAnnotationPlays(curr, playerConn, cumulativeZones, lastValidTurnNumber, currentGameNumber, seenKey) {
+			ap.SequenceNumber = seqNum
+			seqNum++
+			plays = append(plays, ap)
+		}
+	}
+
+	// Also run the annotation pass on the first message, which is not visited
+	// as curr in the diff loop.
+	if len(messages) >= 1 {
+		first := messages[0]
+		if first.GameNumber > 0 {
+			currentGameNumber = first.GameNumber
+		}
+		firstTurn := lastValidTurnNumber
+		if first.TurnInfo != nil && first.TurnInfo.TurnNumber > 0 {
+			firstTurn = first.TurnInfo.TurnNumber
+		}
+		for _, ap := range extractAnnotationPlays(first, playerConn, cumulativeZones, firstTurn, currentGameNumber, seenKey) {
+			ap.SequenceNumber = seqNum
+			seqNum++
+			plays = append(plays, ap)
 		}
 	}
 

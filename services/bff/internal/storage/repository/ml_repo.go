@@ -487,23 +487,32 @@ func (r *MLRepository) ComputeAndWritePairStats(ctx context.Context, accountID i
 	//    migration 000098. The existing UNIQUE(card_id_1, card_id_2, deck_id,
 	//    format) constraint cannot be used here because Postgres treats NULL as
 	//    distinct, so it would never conflict on NULL deck_id rows.
+	// $4 = games_together (integer), $5 = wins_together (integer),
+	// $6 = synergy_score (float64), $7 = confidence_score (float64).
+	//
+	// Synergy and confidence are pre-computed in Go rather than via SQL
+	// expressions on the integer parameters.  Using $4/$5 in both the
+	// integer column positions AND in arithmetic CASE expressions causes
+	// Postgres's type-deduction pass to see conflicting types for the same
+	// parameter placeholder (SQLSTATE 42P08).  Passing pre-computed float
+	// values as separate parameters eliminates the ambiguity entirely.
+	//
+	// The DO UPDATE SET recalculates from the already-typed EXCLUDED columns
+	// so no parameter appears in two incompatible positions.
 	const upsertQ = `
 		INSERT INTO card_combination_stats
 			(card_id_1, card_id_2, deck_id, format,
 			 games_together, wins_together,
 			 synergy_score, confidence_score,
 			 updated_at)
-		VALUES ($1, $2, NULL, $3, $4, $5,
-			CASE WHEN $4 > 0 THEN $5::REAL / $4::REAL ELSE 0.0 END,
-			1.0 - 1.0 / ($4::REAL + 1.0),
-			NOW())
+		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, NOW())
 		ON CONFLICT (card_id_1, card_id_2, format) WHERE deck_id IS NULL
 		DO UPDATE SET
 			games_together   = card_combination_stats.games_together  + EXCLUDED.games_together,
 			wins_together    = card_combination_stats.wins_together   + EXCLUDED.wins_together,
 			synergy_score    = CASE
 				WHEN (card_combination_stats.games_together + EXCLUDED.games_together) > 0
-				THEN (card_combination_stats.wins_together + EXCLUDED.wins_together)::REAL
+				THEN (card_combination_stats.wins_together  + EXCLUDED.wins_together)::REAL
 				     / (card_combination_stats.games_together + EXCLUDED.games_together)::REAL
 				ELSE 0.0 END,
 			confidence_score = 1.0 - 1.0 / ((card_combination_stats.games_together + EXCLUDED.games_together)::REAL + 1.0),
@@ -511,10 +520,16 @@ func (r *MLRepository) ComputeAndWritePairStats(ctx context.Context, accountID i
 
 	pairsWritten := 0
 	for _, b := range accum {
+		var synergyScore float64
+		if b.gamesTogether > 0 {
+			synergyScore = float64(b.winsTogether) / float64(b.gamesTogether)
+		}
+		confidenceScore := 1.0 - 1.0/float64(b.gamesTogether+1)
 		if _, err := r.db.ExecContext(
 			ctx, upsertQ,
 			b.card1, b.card2, b.format,
 			b.gamesTogether, b.winsTogether,
+			synergyScore, confidenceScore,
 		); err != nil {
 			return nil, fmt.Errorf("upsert pair (%d,%d,%s): %w", b.card1, b.card2, b.format, err)
 		}

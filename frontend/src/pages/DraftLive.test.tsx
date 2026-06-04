@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import DraftLive from './DraftLive';
+import { gradeFromGihwr } from './draftGrade';
 import type { DraftSessionState, UseDraftSessionReturn } from '@/hooks/useDraftSession';
 import * as useFeatureFlagModule from '@/hooks/useFeatureFlag';
 import * as analyticsModule from '@/services/analytics';
@@ -43,6 +44,11 @@ vi.mock('@/services/api/bffDraftRatings', () => ({
   getDraftRatings: vi.fn(),
 }));
 
+// Base catalog adapter — used for the card-name fallback (Defect 3).
+vi.mock('@/services/api/cards', () => ({
+  getSetCards: vi.fn(),
+}));
+
 // Clerk useAuth mock
 vi.mock('@clerk/react', () => ({
   useAuth: vi.fn(() => ({ getToken: vi.fn().mockResolvedValue('test-token') })),
@@ -64,10 +70,12 @@ vi.mock('@/services/analytics', () => ({
 
 import { useDraftEventStream, useDraftSession } from '@/hooks';
 import { getDraftRatings } from '@/services/api/bffDraftRatings';
+import { getSetCards } from '@/services/api/cards';
 
 const mockUseDraftEventStream = vi.mocked(useDraftEventStream);
 const mockUseDraftSession = vi.mocked(useDraftSession);
 const mockGetDraftRatings = vi.mocked(getDraftRatings);
+const mockGetSetCards = vi.mocked(getSetCards);
 const mockUseFeatureFlag = vi.mocked(useFeatureFlagModule.useFeatureFlag);
 const mockTrackEvent = vi.mocked(analyticsModule.trackEvent);
 
@@ -80,6 +88,32 @@ function buildSession(overrides: Partial<DraftSessionState> = {}): DraftSessionS
     pickedCards: [],
     ...overrides,
   };
+}
+
+/**
+ * Build minimal SetCard catalog rows for the name-fallback path.
+ * Only ArenaID + Name are load-bearing; the rest satisfy the type shape.
+ */
+function buildCatalog(cards: { arenaId: number; name: string }[]) {
+  return cards.map((c) => ({
+    ID: c.arenaId,
+    SetCode: 'ONE',
+    ArenaID: String(c.arenaId),
+    ScryfallID: '',
+    Name: c.name,
+    ManaCost: '',
+    CMC: 0,
+    Types: [],
+    Colors: [],
+    Rarity: '',
+    Text: '',
+    Power: '',
+    Toughness: '',
+    ImageURL: '',
+    ImageURLSmall: '',
+    ImageURLArt: '',
+    FetchedAt: undefined as never,
+  }));
 }
 
 function buildRatingsResult(cards: { arena_id: number; name: string; gihwr?: number }[]) {
@@ -107,6 +141,8 @@ describe('DraftLive', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetDraftRatings.mockResolvedValue(buildRatingsResult([]));
+    // Default: empty catalog — individual tests override as needed.
+    mockGetSetCards.mockResolvedValue(buildCatalog([]));
     // Default: flag ON — preserves existing test behaviour
     mockUseFeatureFlag.mockReturnValue({ enabled: true });
   });
@@ -130,7 +166,7 @@ describe('DraftLive', () => {
       ).toBeInTheDocument();
     });
 
-    it('still shows container and stream status in idle state', () => {
+    it('shows container in idle state but no stream-status badge', () => {
       mockUseDraftEventStream.mockReturnValue({ latestEvent: null, status: 'connecting' });
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'idle' }),
@@ -140,7 +176,24 @@ describe('DraftLive', () => {
       render(<DraftLive />);
 
       expect(screen.getByTestId('draft-live-container')).toBeInTheDocument();
-      expect(screen.getByTestId('stream-status')).toHaveTextContent('connecting');
+      // Stream-status badge is intentionally absent in the idle/empty state:
+      // showing "Error" alongside "No active draft" is confusing and incorrect UX.
+      expect(screen.queryByTestId('stream-status')).not.toBeInTheDocument();
+    });
+
+    it('does NOT show error badge when session is idle (Bug 6 regression)', () => {
+      // Reproduces the staging bug: SSE error when there is no active draft
+      // must not display an error badge alongside the "No active draft" empty state.
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: null, status: 'error' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'idle' }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      expect(screen.getByText('No active draft')).toBeInTheDocument();
+      expect(screen.queryByTestId('stream-status')).not.toBeInTheDocument();
     });
   });
 
@@ -356,7 +409,8 @@ describe('DraftLive', () => {
       render(<DraftLive />);
 
       await waitFor(() => {
-        expect(mockGetDraftRatings).toHaveBeenCalledWith('ONE', 'Premier Draft');
+        // Canonical DB key — no space — and the Clerk token threaded through.
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('ONE', 'PremierDraft', 'test-token');
       });
     });
 
@@ -407,7 +461,8 @@ describe('DraftLive', () => {
 
       await waitFor(() => {
         expect(screen.getByTestId('draft-live-set')).toHaveTextContent('MKM');
-        expect(screen.getByTestId('draft-live-format')).toHaveTextContent('Quick Draft');
+        // Canonical DB key — "QuickDraft", no space.
+        expect(screen.getByTestId('draft-live-format')).toHaveTextContent('QuickDraft');
       });
     });
   });
@@ -580,6 +635,303 @@ describe('DraftLive', () => {
           expect.objectContaining({ name: 'feature_draft_advisor_pick_viewed' })
         );
       });
+    });
+  });
+
+  // ── Defect 2: canonical draft_format key mapping ──────────────────────────
+  // The string passed to the BFF MUST match the DB draft_format value the sync
+  // lambda writes EXACTLY — "PremierDraft" / "QuickDraft" / "Sealed", no spaces.
+  // MTGA's CurrentModule names QuickDraft as "BotDraft"; draft.started carries
+  // draft_type: "BotDraft" → it must map to "QuickDraft", not pass through.
+  describe('format key mapping (Defect 2)', () => {
+    function startedEvent(setCode: string, draftType: string): import('@/hooks/useDraftEventStream').DaemonEvent {
+      return {
+        type: 'draft.started',
+        account_id: 'acc1',
+        event_id: 'e0',
+        session_id: 's1',
+        sequence: 0,
+        occurred_at: '2026-05-08T00:00:00Z',
+        payload: { set_code: setCode, draft_type: draftType },
+      };
+    }
+
+    function renderWithDraftType(setCode: string, draftType: string) {
+      mockUseDraftEventStream.mockReturnValue({
+        latestEvent: startedEvent(setCode, draftType),
+        status: 'open',
+      });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active' }),
+        dispatch: vi.fn(),
+      });
+      render(<DraftLive />);
+    }
+
+    it('maps draft_type "BotDraft" → "QuickDraft" in the ratings fetch', async () => {
+      renderWithDraftType('SOS', 'BotDraft');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('SOS', 'QuickDraft', 'test-token');
+      });
+    });
+
+    it('displays "QuickDraft" (no space) in the meta bar for BotDraft', async () => {
+      renderWithDraftType('SOS', 'BotDraft');
+
+      await waitFor(() => {
+        expect(screen.getByTestId('draft-live-format')).toHaveTextContent('QuickDraft');
+      });
+    });
+
+    it('maps draft_type "QuickDraft" to the no-space key "QuickDraft"', async () => {
+      renderWithDraftType('BLB', 'QuickDraft');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('BLB', 'QuickDraft', 'test-token');
+      });
+    });
+
+    it('maps draft_type "PremierDraft" to the no-space key "PremierDraft"', async () => {
+      renderWithDraftType('ONE', 'PremierDraft');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('ONE', 'PremierDraft', 'test-token');
+      });
+    });
+
+    it('maps Traditional/Trad draft_type to "PremierDraft"', async () => {
+      renderWithDraftType('ONE', 'TradDraft');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('ONE', 'PremierDraft', 'test-token');
+      });
+    });
+
+    it('never emits a format string containing a space', async () => {
+      renderWithDraftType('SOS', 'BotDraft');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalled();
+      });
+      const formatArg = mockGetDraftRatings.mock.calls[0][1];
+      expect(formatArg).not.toContain(' ');
+    });
+  });
+
+  // ── Defect 3: base-catalog name fallback ──────────────────────────────────
+  // A player must NEVER see a raw "#<arenaId>". When ratings are unavailable for
+  // ANY reason, names resolve from the base catalog (/api/v1/cards) and the grade
+  // shows "—".
+  describe('catalog name fallback (Defect 3)', () => {
+    const startedEvent: import('@/hooks/useDraftEventStream').DaemonEvent = {
+      type: 'draft.started',
+      account_id: 'acc1',
+      event_id: 'e0',
+      session_id: 's1',
+      sequence: 0,
+      occurred_at: '2026-05-08T00:00:00Z',
+      payload: { set_code: 'SOS', draft_type: 'BotDraft' },
+    };
+
+    it('renders the catalog NAME (not "#id") when ratings are empty', async () => {
+      // Ratings empty (e.g. 401/404) but catalog has the name.
+      mockGetDraftRatings.mockResolvedValue(buildRatingsResult([]));
+      mockGetSetCards.mockResolvedValue(
+        buildCatalog([{ arenaId: 102520, name: 'Sheoldred, the Apocalypse' }])
+      );
+
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: startedEvent, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active', currentPackCards: [102520] }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('pack-card-102520')).toHaveTextContent(
+          'Sheoldred, the Apocalypse'
+        );
+      });
+      // The raw "#id" must NOT appear.
+      expect(screen.queryByText('#102520')).not.toBeInTheDocument();
+      // Grade shows "—" because ratings are absent.
+      expect(screen.getByTestId('card-grade-102520')).toHaveTextContent('—');
+    });
+
+    it('prefers the ratings name over the catalog name when both exist', async () => {
+      mockGetDraftRatings.mockResolvedValue(
+        buildRatingsResult([{ arena_id: 555, name: 'Ratings Name', gihwr: 60 }])
+      );
+      mockGetSetCards.mockResolvedValue(
+        buildCatalog([{ arenaId: 555, name: 'Catalog Name' }])
+      );
+
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: startedEvent, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active', currentPackCards: [555] }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('pack-card-555')).toHaveTextContent('Ratings Name');
+      });
+      expect(screen.queryByText('Catalog Name')).not.toBeInTheDocument();
+    });
+
+    it('falls back to "Card #id" only when neither ratings nor catalog has the name', async () => {
+      mockGetDraftRatings.mockResolvedValue(buildRatingsResult([]));
+      mockGetSetCards.mockResolvedValue(buildCatalog([])); // catalog miss too
+
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: startedEvent, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active', currentPackCards: [777] }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      // Last-resort label is the human "Card #777", never the bare "#777" the
+      // original bug produced.
+      await waitFor(() => {
+        const nameEl = screen.getByTestId('pack-card-777').querySelector('.draft-live-card-name');
+        expect(nameEl).toHaveTextContent('Card #777');
+        // The name span must not be a bare "#777".
+        expect(nameEl?.textContent).not.toBe('#777');
+      });
+    });
+  });
+
+  // ── GIHWR units regression (vault-mtg-tickets #<pending>) ──────────────────
+  // The BFF returns gihwr as a FRACTION (0.0–1.0), e.g. 0.631 for a 63.1%
+  // GIHWR card. The grade math and the win-rate display MUST agree on that
+  // unit. The original bug compared the fraction against percent thresholds
+  // (>= 65, >= 45 …) so every real card fell through to "F", and the win-rate
+  // line rendered "0.6%" instead of "63.1%". Tim observed 0.631 → red "F" on a
+  // 63% FDN bomb (Sire of Seven Deaths) on staging.
+  describe('gradeFromGihwr (fraction units)', () => {
+    it('grades a 0.631 fraction (Sire of Seven Deaths) as a bomb, not F', () => {
+      const grade = gradeFromGihwr(0.631);
+      expect(grade).not.toBe('F');
+      expect(grade.charAt(0)).toBe('A'); // 0.631 sits in the A band (0.62–0.65)
+    });
+
+    // Band table re-anchored on the ~0.55 set mean (#793): C straddles the
+    // mean, F line at 0.42, A+/A bombs unchanged (AC3). Boundaries match Bob's
+    // reanchored table in draftGrade.ts verbatim.
+    it('grades each band boundary correctly on the re-anchored fraction scale', () => {
+      // Just-above each threshold lands in the higher band; just-below drops to
+      // the next lower band.
+      expect(gradeFromGihwr(0.65)).toBe('A+');     // AC3 unchanged
+      expect(gradeFromGihwr(0.6499)).toBe('A');
+      expect(gradeFromGihwr(0.62)).toBe('A');      // AC3 unchanged
+      expect(gradeFromGihwr(0.6199)).toBe('A-');
+      expect(gradeFromGihwr(0.605)).toBe('A-');
+      expect(gradeFromGihwr(0.6049)).toBe('B+');
+      expect(gradeFromGihwr(0.59)).toBe('B+');
+      expect(gradeFromGihwr(0.5899)).toBe('B');
+      expect(gradeFromGihwr(0.575)).toBe('B');
+      expect(gradeFromGihwr(0.5749)).toBe('B-');
+      expect(gradeFromGihwr(0.5625)).toBe('B-');
+      expect(gradeFromGihwr(0.5624)).toBe('C+');
+      expect(gradeFromGihwr(0.55)).toBe('C+');     // set mean top of C+
+      expect(gradeFromGihwr(0.5499)).toBe('C');
+      expect(gradeFromGihwr(0.5375)).toBe('C');    // C band straddles ~0.55 mean (AC1)
+      expect(gradeFromGihwr(0.5374)).toBe('C-');
+      expect(gradeFromGihwr(0.525)).toBe('C-');
+      expect(gradeFromGihwr(0.5249)).toBe('D');
+      expect(gradeFromGihwr(0.42)).toBe('D');      // D spans down to the F line
+      expect(gradeFromGihwr(0.4199)).toBe('F');    // F < 0.42 (AC2)
+      expect(gradeFromGihwr(0.30)).toBe('F');
+    });
+
+    // AC4 — Bob's representative-card table on ticket #793. These are the
+    // cases Lee/Prof gate on: a set-mean card reads C, an average common is
+    // C-/D (not D/F), a maindeckable card is D (not straight F), filler is
+    // D (no longer F), and only truly unplayable cards (<0.42) grade F.
+    it('matches Bob\'s AC4 representative-card grades', () => {
+      expect(gradeFromGihwr(0.545)).toBe('C');   // set mean → C (AC1, was B)
+      expect(gradeFromGihwr(0.57)).toBe('B-');   // strong common
+      expect(gradeFromGihwr(0.51)).toBe('D');    // avg common (AC4 — C-/D, not D/F)
+      expect(gradeFromGihwr(0.525)).toBe('C-');  // AC4
+      expect(gradeFromGihwr(0.47)).toBe('D');    // maindeckable (AC4 — D, not F)
+      expect(gradeFromGihwr(0.46)).toBe('D');    // AC4
+      expect(gradeFromGihwr(0.43)).toBe('D');    // filler (AC2 — no longer F)
+      expect(gradeFromGihwr(0.41)).toBe('F');    // unplayable — below the 0.42 F line
+      expect(gradeFromGihwr(0.66)).toBe('A+');   // bomb (AC3 unchanged)
+      expect(gradeFromGihwr(0.63)).toBe('A');    // bomb (AC3 unchanged)
+    });
+
+    it('returns the em-dash placeholder for 0, undefined, and null', () => {
+      expect(gradeFromGihwr(0)).toBe('—');
+      expect(gradeFromGihwr(undefined)).toBe('—');
+      // null arrives at runtime when the BFF omits gihwr; treat like undefined.
+      expect(gradeFromGihwr(null as unknown as undefined)).toBe('—');
+    });
+  });
+
+  describe('GIHWR win-rate display (fraction → percent)', () => {
+    const startedEvent: import('@/hooks/useDraftEventStream').DaemonEvent = {
+      type: 'draft.started',
+      account_id: 'acc1',
+      event_id: 'e0',
+      session_id: 's1',
+      sequence: 0,
+      occurred_at: '2026-05-08T00:00:00Z',
+      payload: { set_code: 'FDN', draft_type: 'PremierDraft' },
+    };
+
+    it('renders 0.631 as "63.1%" and grades it non-F', async () => {
+      mockGetDraftRatings.mockResolvedValue(
+        buildRatingsResult([{ arena_id: 901, name: 'Sire of Seven Deaths', gihwr: 0.631 }])
+      );
+
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: startedEvent, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active', currentPackCards: [901] }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('pack-card-901')).toBeInTheDocument();
+      });
+
+      // Win-rate line must read 63.1%, NOT the buggy 0.6%.
+      const winRate = screen.getByTestId('card-gihwr-901');
+      expect(winRate).toHaveTextContent('63.1%');
+      expect(winRate).not.toHaveTextContent('0.6%');
+
+      // Grade must be a real grade in the A band, NOT a red F.
+      const grade = screen.getByTestId('card-grade-901');
+      expect(grade.textContent).not.toBe('F');
+      expect(grade.textContent?.charAt(0)).toBe('A');
+    });
+
+    it('renders the em-dash and no win-rate line for an unrated card', async () => {
+      mockGetDraftRatings.mockResolvedValue(
+        buildRatingsResult([{ arena_id: 902, name: 'Plains', gihwr: 0 }])
+      );
+
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: startedEvent, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active', currentPackCards: [902] }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('pack-card-902')).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId('card-grade-902')).toHaveTextContent('—');
+      // gihwr === 0 → the win-rate line is suppressed entirely.
+      expect(screen.queryByTestId('card-gihwr-902')).not.toBeInTheDocument();
     });
   });
 });
