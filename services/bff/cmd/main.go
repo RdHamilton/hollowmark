@@ -446,17 +446,19 @@ func main() {
 			waitlistHandler = waitlistHandler.WithPostHogClient(postHogClient)
 		}
 
-		// WildcardRecommendationsHandler — ADR-045 §6 (v0.3.7 scaffold, ticket #416).
-		// Returns 501 with the complete ADR-045 JSON shape and empty recommendations.
-		// The four repo interface stubs below are placeholders; #420 replaces them
-		// with real repository calls (InventoryRepository, CardInventoryRepository,
-		// DraftRatingsRepository.GetMaxCachedAt, MetaRepository.GetMetaLastUpdated).
+		// WildcardRecommendationsHandler — ADR-045 full implementation (ticket #420).
+		// Joins inventory + card_inventory + set_cards + draft_card_ratings +
+		// mtgzone_archetypes + mtgzone_archetype_cards per ADR-045 §2.
+		// cardInventoryRepoV2 was already initialised above for ListV2Handler.
+		wildcardGapRepo := repository.NewWildcardGapRepository(sqlDB)
 		wildcardRecommendationsHandler = handlers.NewWildcardRecommendationsHandler(
 			accountRepo,
-			&wildcardInventoryStub{},
-			&wildcardCardInvStub{},
-			&wildcardDraftRatingsStub{},
-			&wildcardMetaStub{},
+			repository.NewInventoryRepository(sqlDB),
+			cardInventoryRepoV2,
+			draftRatingsRepo,
+			repository.NewMetaRepository(sqlDB),
+			wildcardGapRepo,
+			wildcardGapRepo,
 		)
 
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
@@ -1498,34 +1500,4 @@ type sseBroadcast struct {
 
 func (b *sseBroadcast) BroadcastDaemonEvent(userID int64, event contract.DaemonEvent) {
 	b.broker.Publish(userID, event)
-}
-
-// ─── wildcard recommendations scaffold stubs (ticket #416, v0.3.7) ──────────
-// These no-op types satisfy the four handler.* repository interfaces used by
-// WildcardRecommendationsHandler.  They are placeholder-only for the 501 stub;
-// #420 replaces them with calls to InventoryRepository, CardInventoryRepository,
-// DraftRatingsRepository.GetMaxCachedAt, and MetaRepository.GetMetaLastUpdated.
-
-type wildcardInventoryStub struct{}
-
-func (*wildcardInventoryStub) GetWildcardCounts(_ context.Context, _ int64) (handlers.WildcardCounts, error) {
-	return handlers.WildcardCounts{}, nil
-}
-
-type wildcardCardInvStub struct{}
-
-func (*wildcardCardInvStub) HasCardInventory(_ context.Context, _ int64) (bool, error) {
-	return true, nil
-}
-
-type wildcardDraftRatingsStub struct{}
-
-func (*wildcardDraftRatingsStub) GetMaxCachedAt(_ context.Context, _ string) (*time.Time, error) {
-	return nil, nil
-}
-
-type wildcardMetaStub struct{}
-
-func (*wildcardMetaStub) GetMetaLastUpdated(_ context.Context, _ string) (*time.Time, error) {
-	return nil, nil
 }
