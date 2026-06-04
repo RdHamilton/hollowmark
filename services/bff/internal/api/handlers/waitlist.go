@@ -64,7 +64,7 @@ func (e *waitlistRateEntry) allow() bool {
 
 // waitlistRepo is the subset of WaitlistRepository used by WaitlistHandler.
 type waitlistRepo interface {
-	InsertIfNew(ctx context.Context, email string, utmSource, utmMedium, utmCampaign *string, referrer *string) (id string, created bool, err error)
+	InsertIfNew(ctx context.Context, email string, utmSource, utmMedium, utmCampaign *string, referrer *string) (id string, position int64, created bool, err error)
 	UpdateMailchimpStatus(ctx context.Context, id, status string) error
 }
 
@@ -77,12 +77,13 @@ type MailchimpClient interface {
 //
 // Public endpoint (no Clerk auth required). Rate limited at 5 req/hour per IP.
 //
-// Idempotent: a duplicate email returns 200 OK; a new email returns 201 Created.
-// Response body is {"ok": true} in both cases.
+// New email: 200 OK with {"position": N} (1-based row count at insert time).
+// Duplicate email: 409 Conflict with {"error": "This email is already registered."}.
+// Mailchimp is NOT called again on duplicate — the member is already subscribed.
 //
 // Mailchimp signup is best-effort and non-fatal: a Mailchimp 5xx results in the
 // DB row retaining mailchimp_status='failed' and the handler still returning
-// 201. A future reconciler (separate ticket) picks up failed rows.
+// 200. A future reconciler (separate ticket) picks up failed rows.
 //
 // PostHog: fires funnel_waitlist_signup_completed on the new-email path only.
 // Goroutine-dispatched so PostHog latency does not block the HTTP response.
@@ -120,9 +121,10 @@ type waitlistRequest struct {
 	Referrer    string `json:"referrer"`
 }
 
-// waitlistResponse is the JSON body returned by POST /api/v1/waitlist.
+// waitlistResponse is the JSON body returned by POST /api/v1/waitlist on a
+// successful new signup: {"position": N} where N is the 1-based row count.
 type waitlistResponse struct {
-	OK bool `json:"ok"`
+	Position int64 `json:"position"`
 }
 
 // Join handles POST /api/v1/waitlist.
@@ -160,61 +162,65 @@ func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
 	utmCampaign := nullableStr(req.UTMCampaign)
 	referrer := nullableStr(req.Referrer)
 
-	// Insert or no-op. ON CONFLICT DO NOTHING RETURNING id gives us the
-	// idempotency signal: no row returned → email already existed.
-	id, created, err := h.repo.InsertIfNew(r.Context(), email, utmSource, utmMedium, utmCampaign, referrer)
+	// Insert or no-op. ON CONFLICT DO NOTHING: no row returned → email already existed.
+	// Returns position (1-based COUNT(*)) on new insert so the SPA can show the
+	// queue position immediately without a second round-trip.
+	id, position, created, err := h.repo.InsertIfNew(r.Context(), email, utmSource, utmMedium, utmCampaign, referrer)
 	if err != nil {
 		log.Printf("[waitlist] InsertIfNew email=%s: %v", email, err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	statusCode := http.StatusOK
-	if created {
-		statusCode = http.StatusCreated
-
-		// Best-effort Mailchimp signup. Non-fatal: on any error the row keeps
-		// mailchimp_status='failed' and a future reconciler will retry.
-		if h.mailchimp != nil {
-			go func(rowID, addr string) {
-				mcCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-
-				mcErr := h.mailchimp.AddMember(mcCtx, addr)
-				if mcErr != nil {
-					log.Printf("[waitlist] mailchimp AddMember email=%s: %v (non-fatal; reconciler will retry)", addr, mcErr)
-					return
-				}
-
-				if dbErr := h.repo.UpdateMailchimpStatus(mcCtx, rowID, "subscribed"); dbErr != nil {
-					log.Printf("[waitlist] UpdateMailchimpStatus id=%s: %v", rowID, dbErr)
-				}
-			}(id, email)
-		}
-
-		// Fire PostHog funnel_waitlist_signup_completed on the new-email path only.
-		// Goroutine-dispatched: PostHog latency must not block the HTTP response.
-		// distinct_id: SHA-256 hash of email — reuses hashAccountID for PII safety.
-		go func(addr string, src, medium, campaign, ref *string) {
-			props := posthog.NewProperties().
-				Set("utm_source", strOrEmpty(src)).
-				Set("utm_medium", strOrEmpty(medium)).
-				Set("utm_campaign", strOrEmpty(campaign)).
-				Set("referrer", strOrEmpty(ref))
-
-			if err := h.postHog.Enqueue(posthog.Capture{
-				DistinctId: hashAccountID(addr),
-				Event:      "funnel_waitlist_signup_completed",
-				Properties: props,
-			}); err != nil {
-				log.Printf("[waitlist] posthog enqueue: %v", err)
-			}
-		}(email, utmSource, utmMedium, utmCampaign, referrer)
+	if !created {
+		// Duplicate email: the email is already on the waitlist. Do NOT call
+		// Mailchimp again — the member is already subscribed. Return 409 Conflict
+		// per the shipped SPA contract (Frank's PR #32).
+		writeJSONError(w, "This email is already registered.", http.StatusConflict)
+		return
 	}
 
+	// Best-effort Mailchimp signup. Non-fatal: on any error the row keeps
+	// mailchimp_status='failed' and a future reconciler will retry.
+	if h.mailchimp != nil {
+		go func(rowID, addr string) {
+			mcCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			mcErr := h.mailchimp.AddMember(mcCtx, addr)
+			if mcErr != nil {
+				log.Printf("[waitlist] mailchimp AddMember email=%s: %v (non-fatal; reconciler will retry)", addr, mcErr)
+				return
+			}
+
+			if dbErr := h.repo.UpdateMailchimpStatus(mcCtx, rowID, "subscribed"); dbErr != nil {
+				log.Printf("[waitlist] UpdateMailchimpStatus id=%s: %v", rowID, dbErr)
+			}
+		}(id, email)
+	}
+
+	// Fire PostHog funnel_waitlist_signup_completed on the new-email path only.
+	// Goroutine-dispatched: PostHog latency must not block the HTTP response.
+	// distinct_id: SHA-256 hash of email — reuses hashAccountID for PII safety.
+	go func(addr string, src, medium, campaign, ref *string) {
+		props := posthog.NewProperties().
+			Set("utm_source", strOrEmpty(src)).
+			Set("utm_medium", strOrEmpty(medium)).
+			Set("utm_campaign", strOrEmpty(campaign)).
+			Set("referrer", strOrEmpty(ref))
+
+		if err := h.postHog.Enqueue(posthog.Capture{
+			DistinctId: hashAccountID(addr),
+			Event:      "funnel_waitlist_signup_completed",
+			Properties: props,
+		}); err != nil {
+			log.Printf("[waitlist] posthog enqueue: %v", err)
+		}
+	}(email, utmSource, utmMedium, utmCampaign, referrer)
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	if err := json.NewEncoder(w).Encode(waitlistResponse{OK: true}); err != nil {
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(waitlistResponse{Position: position}); err != nil {
 		log.Printf("[waitlist] encode: %v", err)
 	}
 }
