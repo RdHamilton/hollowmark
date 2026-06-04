@@ -513,26 +513,36 @@ test.describe('Layer 5 — Surface 3: Win-Rate-Trend chart (Trends/Periods key m
       'Win-rate-trend chart must be visible for the corpus period',
     ).toBeVisible({ timeout: 20_000 });
 
-    // THE CORE VALUE ASSERTION: the chart must not display a zero win rate.
-    // A zero-filled series (divide-by-zero / off-by-one) would produce "0%"
-    // or "0.0" — either means the BFF computed the wrong value for a 1W/0L period.
+    // THE CORE VALUE ASSERTION: the trend summary must reflect a non-zero win rate.
+    //
+    // Scope note: [data-testid="win-rate-trend-chart"] is intentionally NOT used
+    // here. The chart container's concatenated text includes Y-axis ticks (0, 25,
+    // 50, 75, 100), the 50% baseline label, and "Win Rate (%)" — together those
+    // produce a "0%" substring match via "50%", making a container-level
+    // not.toContainText('0%') always false regardless of actual data values.
+    //
+    // Instead, assert on [data-testid="trend-summary-value"] which renders the
+    // TrendValue directly: WinRate 1.0 + TrendValue 1.0 → "up (+100.0%)".
+    // A zero-filled series (WinRate: 0.0, TrendValue: 0.0) renders "—" (no trend)
+    // or a near-zero percentage — neither matches /up \(\+1\d\d/.
     await expect(
-      page.locator('[data-testid="win-rate-trend-chart"]'),
-      'Win-rate-trend chart must not display "0%" — corpus period is 1 win / 1 match = 100%',
-    ).not.toContainText('0%');
+      page.locator('[data-testid="trend-summary-value"]'),
+      'Trend summary must show positive trend for 1W/0L corpus period — "up (+100.0%)" expected; a zero-filled or missing value would not match',
+    ).toHaveText(/up \(\+1\d\d/);
 
-    // Also assert the chart contains positive win-rate text (50%, 100%, etc.)
-    // A chart seeded with WinRate=1.0 must show some non-zero percentage.
-    // The Y-axis labels are integers (0, 25, 50, 75, 100) not percentages.
-    // The axis title "Win Rate (%)" confirms chart rendered with correct scale.
+    // Structural assertion: the chart container renders the Win Rate axis title.
+    // Y-axis labels are integers (0, 25, 50, 75, 100) with no % suffix; the axis
+    // title "Win Rate (%)" is the only % in the chart container DOM.
     await expect(
       page.locator('[data-testid="win-rate-trend-chart"]'),
       'Win-rate-trend chart must display Win Rate axis (axis labels are integers 0-100, not percentages)',
     ).toContainText('Win Rate'); // Y-axis title "Win Rate (%)" — integer axis labels 0/25/50/75/100 have no % suffix
 
-    // Inverse sentinel proof (documented): if you replace WinRate: 1.0 with
-    // WinRate: 0.0 in the seeded response above, the "must display 100%"
-    // assertion fails — confirming this test bites on a zero-filled series.
+    // Inverse sentinel proof (documented): if you change both WinRate: 1.0 → 0.0
+    // AND TrendValue: 1.0 → 0.0 in the seeded response above, the
+    // /up \(\+1\d\d/ assertion fails — confirming this test bites on a
+    // zero-filled series.  (TrendValue drives the summary element this assertion
+    // reads; WinRate drives the chart bar/line shape which has no text DOM node.)
   });
 
   test('win-rate-trend chart must NOT render when BFF emits Periods key (regression detection sentinel)', async ({ page }) => {
