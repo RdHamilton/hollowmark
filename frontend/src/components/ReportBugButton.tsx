@@ -4,11 +4,33 @@ import * as Sentry from '@sentry/react';
 import './ReportBugButton.css';
 
 /**
+ * Build the structured context tags for a Sentry feedback submission.
+ *
+ * Tags are indexed in Sentry and searchable, so every report automatically
+ * carries actionable context: app version, OS/UA, Clerk user_id, and the
+ * page URL from which the report was filed.
+ */
+export function buildContextTags(opts: {
+  appVersion: string;
+  userAgent: string;
+  userId: string;
+  pageUrl: string;
+}): Record<string, string> {
+  return {
+    'app.version': opts.appVersion,
+    'report.os_ua': opts.userAgent,
+    'report.user_id': opts.userId,
+    'report.page_url': opts.pageUrl,
+  };
+}
+
+/**
  * ReportBugButton — floating "Report a bug" trigger for authenticated users.
  *
- * Opens the Sentry User Feedback dialog, pre-populated with the signed-in
- * user's name and email from Clerk so CS gets full identity context alongside
- * the Sentry session / error trace.
+ * Opens the Sentry User Feedback dialog, pre-populated with:
+ *   - user name + email (from Clerk) so CS gets full identity context
+ *   - app version, OS/UA, Clerk user_id, and current page URL as Sentry tags
+ *     so every report arrives with actionable, indexed context attached
  *
  * Only rendered when the user is signed in (enforced by the parent Layout).
  */
@@ -20,12 +42,25 @@ const ReportBugButton = () => {
 
     const primaryEmail = user.emailAddresses?.[0]?.emailAddress ?? '';
     const name = user.fullName ?? [user.firstName, user.lastName].filter(Boolean).join(' ');
+    const userId = (user as { id?: string }).id ?? 'unknown';
+
+    const appVersion =
+      (import.meta.env.VITE_APP_VERSION as string | undefined) ?? 'unknown';
+    const userAgent = navigator.userAgent;
+    const pageUrl = window.location.href;
 
     // getFeedback() returns the feedbackIntegration instance (added in main.tsx).
     // If Sentry is not initialised (dev without VITE_SENTRY_DSN), getFeedback()
     // returns undefined — guard and bail silently.
     const feedback = Sentry.getFeedback();
     if (!feedback) return;
+
+    // Attach context tags to the Sentry scope so they ride along with the
+    // feedback event. Tags are searchable and indexed in the Sentry dashboard.
+    const tags = buildContextTags({ appVersion, userAgent, userId, pageUrl });
+    for (const [key, value] of Object.entries(tags)) {
+      Sentry.setTag(key, value);
+    }
 
     // Sentry v10 feedback API: createForm() returns a Promise<FeedbackDialog>.
     // The dialog must be appended to the DOM and then opened. We pre-fill the
@@ -36,6 +71,7 @@ const ReportBugButton = () => {
         name: name || '',
         email: primaryEmail || '',
       },
+      tags,
     });
     dialog.appendToDom();
     dialog.open();
