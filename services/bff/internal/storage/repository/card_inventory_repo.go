@@ -118,6 +118,20 @@ func (r *CardInventoryRepository) ListByAccountIDCursor(
 	return cards, rows.Err()
 }
 
+// HasCardInventory returns true when the account has at least one row in
+// card_inventory. Used by the wildcard advisor zero-collection guard: if the
+// player has never synced their collection the advisor returns 409 with
+// error "collection_not_synced" rather than computing 100% missing for every
+// archetype (ADR-045 §4).
+func (r *CardInventoryRepository) HasCardInventory(ctx context.Context, accountID int64) (bool, error) {
+	const q = `SELECT EXISTS(SELECT 1 FROM card_inventory WHERE account_id = $1)`
+	var exists bool
+	if err := r.db.QueryRowContext(ctx, q, accountID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 // GetByAccountAndCard retrieves a single card_inventory row for the given
 // (account_id, card_id) pair.  Returns sql.ErrNoRows when no row exists.
 func (r *CardInventoryRepository) GetByAccountAndCard(ctx context.Context, accountID int64, cardID int) (CardInventoryRow, error) {

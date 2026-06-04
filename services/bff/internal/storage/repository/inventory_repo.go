@@ -2,8 +2,19 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
+
+// WildcardCounts holds the four wildcard rarity buckets read from the inventory
+// table for a single account. These are the crafting currencies the wildcard
+// advisor uses to determine which archetype deck-paths are affordable.
+type WildcardCounts struct {
+	Common   int `json:"common"`
+	Uncommon int `json:"uncommon"`
+	Rare     int `json:"rare"`
+	Mythic   int `json:"mythic"`
+}
 
 // InventoryUpsert holds the fields written to the inventory table from an
 // inventory.updated daemon event.  AccountID is the resolved accounts.id
@@ -78,4 +89,31 @@ func (r *InventoryRepository) UpsertInventory(ctx context.Context, u InventoryUp
 	)
 
 	return err
+}
+
+// GetWildcardCounts returns the four wildcard rarity buckets for the given
+// account from the inventory table. Returns an empty WildcardCounts (all zeros)
+// when no inventory row exists for the account (i.e. the daemon has never sent
+// an inventory.updated event for this account yet).
+func (r *InventoryRepository) GetWildcardCounts(ctx context.Context, accountID int64) (WildcardCounts, error) {
+	const q = `
+		SELECT
+			COALESCE(wc_common, 0),
+			COALESCE(wc_uncommon, 0),
+			COALESCE(wc_rare, 0),
+			COALESCE(wc_mythic, 0)
+		FROM inventory
+		WHERE account_id = $1`
+
+	var wc WildcardCounts
+	err := r.db.QueryRowContext(ctx, q, accountID).Scan(
+		&wc.Common, &wc.Uncommon, &wc.Rare, &wc.Mythic,
+	)
+	if err == sql.ErrNoRows {
+		return WildcardCounts{}, nil
+	}
+	if err != nil {
+		return WildcardCounts{}, err
+	}
+	return wc, nil
 }
