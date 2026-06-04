@@ -57,6 +57,9 @@ func TestAnalyze_NoRatingDataGradesNA(t *testing.T) {
 
 func TestAnalyze_GradeBucketsByRank(t *testing.T) {
 	// Pack of 14 cards with descending GIHWR so rank is deterministic.
+	// GIHWR values are FRACTIONS (0.0–1.0) — the canonical BFF unit (#787).
+	// Ranking is scale-invariant so the rank/grade buckets are unaffected,
+	// but the fixtures must reflect the real wire unit rather than percent.
 	names := map[string]string{}
 	ratings := map[string]float64{}
 	pack := make([]string, 0, 14)
@@ -64,7 +67,7 @@ func TestAnalyze_GradeBucketsByRank(t *testing.T) {
 		id := string(rune('a' + i - 1))
 		pack = append(pack, id)
 		names[id] = id
-		ratings[id] = float64(70 - i) // 69, 68, 67, ...
+		ratings[id] = float64(70-i) / 100 // 0.69, 0.68, 0.67, ...
 	}
 	lookups := stubLookups{names: names, ratings: ratings}
 
@@ -109,7 +112,7 @@ func TestAnalyze_AlternativesCappedAt5AndExcludePicked(t *testing.T) {
 		id := string(rune('a' + i - 1))
 		pack = append(pack, id)
 		names[id] = id
-		ratings[id] = float64(70 - i)
+		ratings[id] = float64(70-i) / 100 // fractions: 0.69, 0.68, ...
 	}
 	lookups := stubLookups{names: names, ratings: ratings}
 	q, err := pickquality.Analyze("PremierDraft", pack, "a", lookups, lookups)
@@ -124,8 +127,13 @@ func TestAnalyze_AlternativesCappedAt5AndExcludePicked(t *testing.T) {
 			t.Errorf("picked card %q must not appear in Alternatives", alt.CardID)
 		}
 	}
-	if q.PackBestGIHWR != 69 {
-		t.Errorf("PackBestGIHWR = %v, want 69", q.PackBestGIHWR)
+	// #787: the GIHWR fields pass through as the original FRACTION, unscaled.
+	// 'a' is the best card at fraction 0.69 — not 69 (percent) and not 0.0069.
+	if q.PackBestGIHWR != 0.69 {
+		t.Errorf("PackBestGIHWR = %v, want 0.69 (fraction, unscaled)", q.PackBestGIHWR)
+	}
+	if q.Alternatives[0].GIHWR != 0.68 {
+		t.Errorf("Alternatives[0].GIHWR = %v, want 0.68 (fraction, unscaled)", q.Alternatives[0].GIHWR)
 	}
 }
 
@@ -134,7 +142,7 @@ func TestAnalyze_FallsBackToUnknownCardNameWhenLookupEmpty(t *testing.T) {
 		"PremierDraft",
 		[]string{"x", "y"},
 		"x",
-		stubLookups{ratings: map[string]float64{"x": 60, "y": 50}},
+		stubLookups{ratings: map[string]float64{"x": 0.60, "y": 0.50}},
 		stubLookups{},
 	)
 	if err != nil {
@@ -147,8 +155,8 @@ func TestAnalyze_FallsBackToUnknownCardNameWhenLookupEmpty(t *testing.T) {
 
 func TestSerializeRoundTrip(t *testing.T) {
 	in := []pickquality.Alternative{
-		{CardID: "1", CardName: "A", GIHWR: 60, Rank: 1},
-		{CardID: "2", CardName: "B", GIHWR: 55, Rank: 2},
+		{CardID: "1", CardName: "A", GIHWR: 0.60, Rank: 1},
+		{CardID: "2", CardName: "B", GIHWR: 0.55, Rank: 2},
 	}
 	encoded, err := pickquality.SerializeAlternatives(in)
 	if err != nil {

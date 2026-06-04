@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import DaemonDownload from './DaemonDownload';
 import { useFeatureFlag } from '@/hooks/useFeatureFlag';
@@ -477,6 +477,82 @@ describe('DaemonDownload', () => {
       );
 
       delete (import.meta.env as Record<string, string>)['VITE_DAEMON_VERSION'];
+    });
+  });
+
+  /**
+   * Channel-aware artifact naming (fixes the staging macOS 404).
+   *
+   * The daemon-release pipeline (ADR-049 §1) publishes the macOS .pkg under a
+   * channel-suffixed name on staging (vaultmtg-daemon-STAGING-darwin-universal.pkg)
+   * but unsuffixed on the stable channel (vaultmtg-daemon-darwin-universal.pkg).
+   * The bare Windows binary keeps the SAME fixed name in both channels.
+   *
+   * The component derives the channel from VITE_SENTRY_ENV via
+   * daemonArtifactChannelInfix() — the single source of truth shared with the
+   * release resolver — so these tests stub that env var.
+   */
+  describe('Channel-aware artifact naming', () => {
+    beforeEach(() => {
+      mockUseFeatureFlag.mockReturnValue({ enabled: true });
+      setDownloadBase({ downloadBase: RUNTIME_RELEASES_BASE });
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('staging: macOS link uses the -staging-suffixed .pkg asset name', () => {
+      vi.stubEnv('VITE_SENTRY_ENV', 'staging');
+      render(<DaemonDownload />);
+      const macLink = screen.getByTestId('download-link-vaultmtg-daemon-darwin-universal');
+      expect(macLink).toHaveAttribute(
+        'href',
+        `${RUNTIME_RELEASES_BASE}/vaultmtg-daemon-staging-darwin-universal.pkg`
+      );
+    });
+
+    it('staging: Windows link stays unsuffixed (binary name is fixed across channels)', () => {
+      vi.stubEnv('VITE_SENTRY_ENV', 'staging');
+      render(<DaemonDownload />);
+      const winLink = screen.getByTestId('download-link-vaultmtg-daemon-windows-amd64');
+      expect(winLink).toHaveAttribute(
+        'href',
+        `${RUNTIME_RELEASES_BASE}/vaultmtg-daemon-windows-amd64.exe`
+      );
+    });
+
+    it('production: macOS link uses the unsuffixed .pkg asset name', () => {
+      vi.stubEnv('VITE_SENTRY_ENV', 'production');
+      render(<DaemonDownload />);
+      const macLink = screen.getByTestId('download-link-vaultmtg-daemon-darwin-universal');
+      expect(macLink).toHaveAttribute(
+        'href',
+        `${RUNTIME_RELEASES_BASE}/vaultmtg-daemon-darwin-universal.pkg`
+      );
+    });
+
+    it('unknown env (fail-safe): macOS link defaults to the stable unsuffixed asset', () => {
+      vi.stubEnv('VITE_SENTRY_ENV', 'preview-xyz');
+      render(<DaemonDownload />);
+      const macLink = screen.getByTestId('download-link-vaultmtg-daemon-darwin-universal');
+      expect(macLink).toHaveAttribute(
+        'href',
+        `${RUNTIME_RELEASES_BASE}/vaultmtg-daemon-darwin-universal.pkg`
+      );
+    });
+
+    it('test selector and analytics os stay channel-stable on staging', () => {
+      vi.stubEnv('VITE_SENTRY_ENV', 'staging');
+      render(<DaemonDownload />);
+      // The DOM testid is the unsuffixed stable identity even though the href
+      // resolves to the -staging asset — selectors must not vary by channel.
+      expect(
+        screen.getByTestId('download-link-vaultmtg-daemon-darwin-universal')
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId('download-link-vaultmtg-daemon-staging-darwin-universal')
+      ).not.toBeInTheDocument();
     });
   });
 });

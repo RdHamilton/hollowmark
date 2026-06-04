@@ -17,10 +17,14 @@ import (
 
 // Alternative represents an alternative card pick with its rating.
 // JSON keys stay snake_case to match the SPA's pickquality.Alternative.
+// All GIHWR values on this and the PickQuality struct are FRACTIONS in
+// 0.0–1.0 (the BFF's canonical unit — see draftalgo.Pick.PickedCardGIHWR).
+// Consumers that render a percentage must multiply by 100 at the display
+// layer; this package never scales. (#787)
 type Alternative struct {
 	CardID   string  `json:"card_id"`
 	CardName string  `json:"card_name"`
-	GIHWR    float64 `json:"gihwr"`
+	GIHWR    float64 `json:"gihwr"` // fraction 0.0–1.0
 	Rank     int     `json:"rank"`
 }
 
@@ -29,8 +33,8 @@ type Alternative struct {
 type PickQuality struct {
 	Grade           string        `json:"grade"`             // A+, A, B, C, D, F, or N/A
 	Rank            int           `json:"rank"`              // 1-indexed position in pack
-	PackBestGIHWR   float64       `json:"pack_best_gihwr"`   // GIHWR of the best card in pack
-	PickedCardGIHWR float64       `json:"picked_card_gihwr"` // GIHWR of the picked card
+	PackBestGIHWR   float64       `json:"pack_best_gihwr"`   // fraction 0.0–1.0
+	PickedCardGIHWR float64       `json:"picked_card_gihwr"` // fraction 0.0–1.0
 	Alternatives    []Alternative `json:"alternatives"`      // Top 5 alternatives
 }
 
