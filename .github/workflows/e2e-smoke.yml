@@ -45,7 +45,12 @@ jobs:
   e2e-smoke:
     name: E2E Smoke Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Budget: Node setup + npm ci (~90s) + cold Playwright install (~4-8m) +
+    # optional BFF source build (~3-4m) + Postgres startup (~60s) + suite (~2-5m)
+    # = up to ~20m cold-cache worst case. 30 min gives headroom without over-running.
+    # Root cause of chronic cancellations: 15m cap + cold runner + needrestart hang.
+    # (#815)
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -120,11 +125,26 @@ jobs:
         restore-keys: |
           playwright-${{ runner.os }}-
 
-    - name: Install Playwright browsers
+    # On ubuntu-latest 24.04 (>=20260525.161) the apt-get needrestart post-install
+    # hook hangs indefinitely in CI without DEBIAN_FRONTEND=noninteractive.
+    # Split into two conditional steps (cache-miss = full install with system deps;
+    # cache-hit = system deps only via install-deps) so we never pay the binary
+    # download cost on a warm runner. Mirrors deploy-spa-staging.yml. (#815)
+    - name: Install Playwright browsers (cache miss — full install)
       if: steps.playwright-cache.outputs.cache-hit != 'true'
       run: |
         cd frontend
         npx playwright install chromium --with-deps
+      env:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: Install Playwright system dependencies (cache hit)
+      if: steps.playwright-cache.outputs.cache-hit == 'true'
+      run: |
+        cd frontend
+        npx playwright install-deps chromium
+      env:
+        DEBIAN_FRONTEND: noninteractive
 
     - name: Run E2E smoke tests
       run: |
