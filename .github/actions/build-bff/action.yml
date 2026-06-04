@@ -58,4 +58,13 @@ runs:
         GOARCH: ${{ inputs.goarch }}
       run: |
         cd services/bff
-        go build -ldflags="-X main.version=${{ steps.resolve-version.outputs.version }}" -o "../../${{ inputs.output-path }}" ./cmd
+        # -buildvcs=false: disable VCS stamping so `go build` does not invoke
+        # git to read HEAD/dirty status.  When this action runs inside a Docker
+        # container job (e2e-smoke.yml) the workspace is owned by a different
+        # UID than the container user, causing git to exit 128 ("dubious
+        # ownership") and aborting the build.  Version provenance is handled
+        # entirely by -ldflags above, so VCS stamping is both redundant and
+        # harmful in that context.  Safe for all callers (release.yml,
+        # ci.yml build-bff-for-e2e, deploy-bff.yml) — none embed git revision
+        # via buildvcs; they all pass an explicit version string via ldflags.
+        go build -buildvcs=false -ldflags="-X main.version=${{ steps.resolve-version.outputs.version }}" -o "../../${{ inputs.output-path }}" ./cmd
