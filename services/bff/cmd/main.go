@@ -240,6 +240,7 @@ func main() {
 		settingsHandler                   *handlers.SettingsHandler
 		waitlistHandler                   *handlers.WaitlistHandler
 		systemAccountHandler              *handlers.SystemAccountHandler
+		wildcardRecommendationsHandler    *handlers.WildcardRecommendationsHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -445,6 +446,19 @@ func main() {
 			waitlistHandler = waitlistHandler.WithPostHogClient(postHogClient)
 		}
 
+		// WildcardRecommendationsHandler — ADR-045 §6 (v0.3.7 scaffold, ticket #416).
+		// Returns 501 with the complete ADR-045 JSON shape and empty recommendations.
+		// The four repo interface stubs below are placeholders; #420 replaces them
+		// with real repository calls (InventoryRepository, CardInventoryRepository,
+		// DraftRatingsRepository.GetMaxCachedAt, MetaRepository.GetMetaLastUpdated).
+		wildcardRecommendationsHandler = handlers.NewWildcardRecommendationsHandler(
+			accountRepo,
+			&wildcardInventoryStub{},
+			&wildcardCardInvStub{},
+			&wildcardDraftRatingsStub{},
+			&wildcardMetaStub{},
+		)
+
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
 		// userRepo was created above for daemonRegisterHandler/daemonAPIKeyAuthMiddl.
 		clerkUserResolver = bffmiddleware.ClerkUserResolver(userRepo)
@@ -537,6 +551,7 @@ func main() {
 		SettingsHandler:                   settingsHandler,
 		WaitlistHandler:                   waitlistHandler,
 		SystemAccountHandler:              systemAccountHandler,
+		WildcardRecommendationsHandler:    wildcardRecommendationsHandler,
 		HealthzHandler:                    healthzHandler,
 		ClerkAuthMiddl:                    clerkAuthMiddl,
 		ClerkAuthSSEMiddl:                 clerkAuthSSEMiddl,
@@ -687,6 +702,11 @@ type RouterDeps struct {
 	// standard {"data": ...} envelope.  Fixes the SPA 404 from PR #2063.
 	// Protected by ClerkAuthMiddl (or APIKeyAuthMiddl in the fallback branch).
 	SystemAccountHandler *handlers.SystemAccountHandler
+	// WildcardRecommendationsHandler serves GET /api/v1/recommendations/wildcards.
+	// ADR-045 §6 (v0.3.7 scaffold): returns 501 with complete ADR-045 JSON shape.
+	// Full implementation in v0.3.8 ticket #420.
+	// Protected by composeClerkAuth — serves user-specific collection/inventory data.
+	WildcardRecommendationsHandler *handlers.WildcardRecommendationsHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -1134,6 +1154,19 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 		}
 	}
 
+	// ADR-045 §6 — wildcard recommendations scaffold (ticket #416, v0.3.7).
+	// GET /api/v1/recommendations/wildcards — returns 501 stub with the complete
+	// ADR-045 response shape. Full implementation in v0.3.8 ticket #420.
+	// Clerk-auth-guarded: serves user-specific collection + inventory data.
+	if deps.WildcardRecommendationsHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Get("/api/v1/recommendations/wildcards", deps.WildcardRecommendationsHandler.GetWildcardRecommendations)
+		} else {
+			log.Println("WARN: GET /api/v1/recommendations/wildcards disabled — Clerk auth middleware not configured")
+		}
+	}
+
 	// Phase 2 PR #12 — /api/v1/settings[/{key}] surface
 	// (account-scoped JSONB key/value store).
 	if deps.SettingsHandler != nil {
@@ -1464,4 +1497,34 @@ type sseBroadcast struct {
 
 func (b *sseBroadcast) BroadcastDaemonEvent(userID int64, event contract.DaemonEvent) {
 	b.broker.Publish(userID, event)
+}
+
+// ─── wildcard recommendations scaffold stubs (ticket #416, v0.3.7) ──────────
+// These no-op types satisfy the four handler.* repository interfaces used by
+// WildcardRecommendationsHandler.  They are placeholder-only for the 501 stub;
+// #420 replaces them with calls to InventoryRepository, CardInventoryRepository,
+// DraftRatingsRepository.GetMaxCachedAt, and MetaRepository.GetMetaLastUpdated.
+
+type wildcardInventoryStub struct{}
+
+func (*wildcardInventoryStub) GetWildcardCounts(_ context.Context, _ int64) (handlers.WildcardCounts, error) {
+	return handlers.WildcardCounts{}, nil
+}
+
+type wildcardCardInvStub struct{}
+
+func (*wildcardCardInvStub) HasCardInventory(_ context.Context, _ int64) (bool, error) {
+	return true, nil
+}
+
+type wildcardDraftRatingsStub struct{}
+
+func (*wildcardDraftRatingsStub) GetMaxCachedAt(_ context.Context, _ string) (*time.Time, error) {
+	return nil, nil
+}
+
+type wildcardMetaStub struct{}
+
+func (*wildcardMetaStub) GetMetaLastUpdated(_ context.Context, _ string) (*time.Time, error) {
+	return nil, nil
 }
