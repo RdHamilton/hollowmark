@@ -8,8 +8,8 @@ require (
 	github.com/aws/aws-lambda-go v1.54.0
 	github.com/aws/aws-sdk-go-v2 v1.41.11
 	github.com/aws/aws-sdk-go-v2/config v1.32.22
-	github.com/aws/aws-sdk-go-v2/service/ssm v1.68.8
-	github.com/jackc/pgx/v5 v5.9.2
+	github.com/aws/aws-sdk-go-v2/service/ssm v1.69.1
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/stretchr/testify v1.11.1
 )
 

@@ -6,7 +6,7 @@ toolchain go1.25.11
 
 require (
 	aead.dev/minisign v0.3.0
-	fyne.io/systray v1.11.0
+	fyne.io/systray v1.12.1
 	github.com/RdHamilton/vault-mtg/pkg/draftalgo v0.1.2
 	github.com/RdHamilton/vault-mtg/pkg/logparse v0.1.4
 	github.com/RdHamilton/vault-mtg/services/contract v0.1.5

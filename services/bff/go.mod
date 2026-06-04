@@ -8,15 +8,15 @@ require (
 	github.com/RdHamilton/vault-mtg/services/contract v0.1.5
 	github.com/RdHamilton/vault-mtg/services/daemon v0.0.0-20260603164737-e0e383f680c4
 	github.com/aws/aws-sdk-go-v2/config v1.32.22
-	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.7
+	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.42.1
 	github.com/clerk/clerk-sdk-go/v2 v2.6.0
 	github.com/getsentry/sentry-go v0.46.2
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-chi/cors v1.2.2
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.9.2
-	github.com/posthog/posthog-go v1.13.0
+	github.com/jackc/pgx/v5 v5.10.0
+	github.com/posthog/posthog-go v1.14.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.52.0
 )
