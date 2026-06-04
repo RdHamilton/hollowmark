@@ -38,81 +38,53 @@ on:
         type: string
         default: ''
 
+# Concurrency group: cancel redundant runs on the same ref so push-to-main
+# pileups (multiple merges in quick succession) do not stack up doomed
+# ~20-min cold-runner runs that burn CI quota. (#815 iteration 4)
+concurrency:
+  group: e2e-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
-  # -------------------------------------------------------------------------
-  # Cache-warming job: installs the Playwright chromium browser and populates
-  # the Actions cache BEFORE the smoke job starts.
-  #
-  # Root cause of run/26974923220: cold-cache download of chromium-linux.zip
-  # (~165-200 MB from cdn.playwright.dev/dbazure) took ~29 min on a throttled
-  # runner, exhausting the 30-min budget before any test ran.  The cache key
-  # is tied to package-lock.json — any lockfile change evicts the cache and
-  # triggers a full cold download.
-  #
-  # Fix: this job runs first, unconditionally.  On a cache miss it pays the
-  # download cost once and commits the populated cache.  On a cache hit it
-  # exits in seconds.  The smoke job below always declares `needs: [warm-playwright-cache]`
-  # so it starts after the cache is guaranteed populated — the smoke job's own
-  # install steps become no-ops (cache-hit path = install-deps only). (#815)
-  # -------------------------------------------------------------------------
-  warm-playwright-cache:
-    name: Warm Playwright browser cache
-    runs-on: ubuntu-latest
-    # Budget: Node setup (~15s) + npm ci (~60s) + cold chromium download+install
-    # (~5-8 min healthy CDN, up to ~15 min degraded) + zip extraction (~60s).
-    # 20 min is sufficient for the warm job; the smoke job's own 30 min budget
-    # covers the test run after the cache is warm.
-    timeout-minutes: 20
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v6
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: '24'
-        cache: 'npm'
-        cache-dependency-path: frontend/package-lock.json
-
-    - name: Install frontend dependencies
-      run: cd frontend && npm ci
-
-    - name: Cache Playwright browsers
-      id: playwright-cache
-      uses: actions/cache@v5
-      with:
-        path: ~/.cache/ms-playwright
-        key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-        restore-keys: |
-          playwright-${{ runner.os }}-
-
-    - name: Install Playwright browsers (cache miss — full install)
-      if: steps.playwright-cache.outputs.cache-hit != 'true'
-      run: cd frontend && npx playwright install chromium --with-deps
-      env:
-        DEBIAN_FRONTEND: noninteractive
-
-    - name: Install Playwright system dependencies (cache hit)
-      if: steps.playwright-cache.outputs.cache-hit == 'true'
-      run: cd frontend && npx playwright install-deps chromium
-      env:
-        DEBIAN_FRONTEND: noninteractive
-
   e2e-smoke:
     name: E2E Smoke Tests
+    # -------------------------------------------------------------------------
+    # Use the official Playwright Docker container instead of installing browsers
+    # at runtime from cdn.playwright.dev.
+    #
+    # Root cause of #815 (iterations 1-4):
+    #   The throttled GitHub Actions CDN download of Chromium (165-200 MB from
+    #   cdn.playwright.dev/dbazure) takes ~29 min on a severely rate-limited
+    #   runner.  Every prior fix (timeout bump, warm-cache job) still depended
+    #   on that download completing — the warm-cache job itself timed out at the
+    #   20-min budget, "Post Cache" was skipped, the smoke job got a cache MISS
+    #   and started its own 29-min death spiral.  Bumping timeouts is a band-aid.
+    #
+    # Fix: run the job inside mcr.microsoft.com/playwright:v1.56.1-jammy.
+    #   - Chromium + all system deps are PRE-INSTALLED in the image.
+    #   - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright is set; `npx playwright test`
+    #     finds browsers without any install step.
+    #   - No `playwright install`, no `playwright install-deps`, no cache action.
+    #   - The warm-playwright-cache job is eliminated entirely.
+    #
+    # Container pinning: the image tag MUST match the repo's @playwright/test
+    # version (1.56.1).  When upgrading @playwright/test, update this tag too.
+    #
+    # Networking: GitHub Actions creates a Docker bridge network for container
+    # jobs.  The `postgres` service below is reachable from inside the container
+    # at hostname "postgres" (the service label), NOT at "localhost".
+    # DATABASE_URL is set accordingly. (#815)
+    # -------------------------------------------------------------------------
     runs-on: ubuntu-latest
-    # Depends on the cache-warming job so this job always gets a cache HIT
-    # and the ~165-200 MB chromium download never happens here. (#815)
-    needs: [warm-playwright-cache]
-    # Budget: Node setup + npm ci (~90s) + warm-cache install-deps (~30s) +
-    # optional BFF source build (~3-4m) + Postgres startup (~60s) + suite (~2-5m)
-    # = up to ~12m warm-cache worst case. 20 min is sufficient now that the
-    # cold-download cost is paid by the warm job instead. (#815)
-    timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-jammy
+    # Budget: npm ci (~60s) + optional Go build (~3-4m) + Postgres startup (~60s)
+    # + test suite (~2-5m) = up to ~10m.  30 min is a generous ceiling; no
+    # browser download can occur, so this budget should never be approached.
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -149,6 +121,8 @@ jobs:
 
     # -----------------------------------------------------------------------
     # BFF binary — slow path: build from source (standalone / release trigger)
+    # setup-go installs Go into the container; the Playwright image is ubuntu
+    # (jammy) based and is fully compatible with the setup-go action.
     # -----------------------------------------------------------------------
     - name: Set up Go (source build only)
       if: inputs.bff_artifact_name == ''
@@ -164,47 +138,16 @@ jobs:
         output-path: bin/mtga-bff
 
     # -----------------------------------------------------------------------
-    # Frontend / Playwright setup (always required)
+    # Frontend dependencies (Node.js + npm pre-installed in the Playwright
+    # container; no setup-node needed).
     # -----------------------------------------------------------------------
-    - name: Set up Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: '24'
-        cache: 'npm'
-        cache-dependency-path: frontend/package-lock.json
-
     - name: Install frontend dependencies
       run: |
         cd frontend
         npm ci
 
-    - name: Cache Playwright browsers
-      id: playwright-cache
-      uses: actions/cache@v5
-      with:
-        path: ~/.cache/ms-playwright
-        key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-        restore-keys: |
-          playwright-${{ runner.os }}-
-
-    # warm-playwright-cache job runs first and populates the cache, so this
-    # job should always hit. The conditional install steps are a safety fallback
-    # for the rare case where the warm job's cache upload fails.
-    - name: Install Playwright browsers (cache miss fallback — should not occur)
-      if: steps.playwright-cache.outputs.cache-hit != 'true'
-      run: |
-        cd frontend
-        npx playwright install chromium --with-deps
-      env:
-        DEBIAN_FRONTEND: noninteractive
-
-    - name: Install Playwright system dependencies (cache hit — normal path)
-      if: steps.playwright-cache.outputs.cache-hit == 'true'
-      run: |
-        cd frontend
-        npx playwright install-deps chromium
-      env:
-        DEBIAN_FRONTEND: noninteractive
+    # No `playwright install` or `playwright install-deps` steps.
+    # Browsers are pre-installed in the container at /ms-playwright.
 
     - name: Run E2E smoke tests
       run: |
@@ -216,7 +159,10 @@ jobs:
         # Relying on config.Load() defaults is forbidden — the default is "production"
         # which is always wrong in CI. See services/bff/CI_ENV_CONTRACT.md. (#1668)
         MTGA_ENV: development
-        DATABASE_URL: postgres://mtga:mtga@localhost:5432/mtga_e2e?sslmode=disable
+        # In a container job, the postgres service is reachable at hostname "postgres"
+        # (the service label) — NOT at "localhost". GitHub Actions bridges the
+        # container and services on the same Docker network. (#815)
+        DATABASE_URL: postgres://mtga:mtga@postgres:5432/mtga_e2e?sslmode=disable
         CLERK_SECRET_KEY: ${{ secrets.CLERK_STAGING_SECRET_KEY }}
 
     - name: Upload test results
