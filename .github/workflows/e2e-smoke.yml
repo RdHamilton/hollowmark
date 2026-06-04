@@ -42,15 +42,77 @@ permissions:
   contents: read
 
 jobs:
+  # -------------------------------------------------------------------------
+  # Cache-warming job: installs the Playwright chromium browser and populates
+  # the Actions cache BEFORE the smoke job starts.
+  #
+  # Root cause of run/26974923220: cold-cache download of chromium-linux.zip
+  # (~165-200 MB from cdn.playwright.dev/dbazure) took ~29 min on a throttled
+  # runner, exhausting the 30-min budget before any test ran.  The cache key
+  # is tied to package-lock.json — any lockfile change evicts the cache and
+  # triggers a full cold download.
+  #
+  # Fix: this job runs first, unconditionally.  On a cache miss it pays the
+  # download cost once and commits the populated cache.  On a cache hit it
+  # exits in seconds.  The smoke job below always declares `needs: [warm-playwright-cache]`
+  # so it starts after the cache is guaranteed populated — the smoke job's own
+  # install steps become no-ops (cache-hit path = install-deps only). (#815)
+  # -------------------------------------------------------------------------
+  warm-playwright-cache:
+    name: Warm Playwright browser cache
+    runs-on: ubuntu-latest
+    # Budget: Node setup (~15s) + npm ci (~60s) + cold chromium download+install
+    # (~5-8 min healthy CDN, up to ~15 min degraded) + zip extraction (~60s).
+    # 20 min is sufficient for the warm job; the smoke job's own 30 min budget
+    # covers the test run after the cache is warm.
+    timeout-minutes: 20
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install frontend dependencies
+      run: cd frontend && npm ci
+
+    - name: Cache Playwright browsers
+      id: playwright-cache
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+        restore-keys: |
+          playwright-${{ runner.os }}-
+
+    - name: Install Playwright browsers (cache miss — full install)
+      if: steps.playwright-cache.outputs.cache-hit != 'true'
+      run: cd frontend && npx playwright install chromium --with-deps
+      env:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: Install Playwright system dependencies (cache hit)
+      if: steps.playwright-cache.outputs.cache-hit == 'true'
+      run: cd frontend && npx playwright install-deps chromium
+      env:
+        DEBIAN_FRONTEND: noninteractive
+
   e2e-smoke:
     name: E2E Smoke Tests
     runs-on: ubuntu-latest
-    # Budget: Node setup + npm ci (~90s) + cold Playwright install (~4-8m) +
+    # Depends on the cache-warming job so this job always gets a cache HIT
+    # and the ~165-200 MB chromium download never happens here. (#815)
+    needs: [warm-playwright-cache]
+    # Budget: Node setup + npm ci (~90s) + warm-cache install-deps (~30s) +
     # optional BFF source build (~3-4m) + Postgres startup (~60s) + suite (~2-5m)
-    # = up to ~20m cold-cache worst case. 30 min gives headroom without over-running.
-    # Root cause of chronic cancellations: 15m cap + cold runner + needrestart hang.
-    # (#815)
-    timeout-minutes: 30
+    # = up to ~12m warm-cache worst case. 20 min is sufficient now that the
+    # cold-download cost is paid by the warm job instead. (#815)
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -125,12 +187,10 @@ jobs:
         restore-keys: |
           playwright-${{ runner.os }}-
 
-    # On ubuntu-latest 24.04 (>=20260525.161) the apt-get needrestart post-install
-    # hook hangs indefinitely in CI without DEBIAN_FRONTEND=noninteractive.
-    # Split into two conditional steps (cache-miss = full install with system deps;
-    # cache-hit = system deps only via install-deps) so we never pay the binary
-    # download cost on a warm runner. Mirrors deploy-spa-staging.yml. (#815)
-    - name: Install Playwright browsers (cache miss — full install)
+    # warm-playwright-cache job runs first and populates the cache, so this
+    # job should always hit. The conditional install steps are a safety fallback
+    # for the rare case where the warm job's cache upload fails.
+    - name: Install Playwright browsers (cache miss fallback — should not occur)
       if: steps.playwright-cache.outputs.cache-hit != 'true'
       run: |
         cd frontend
@@ -138,7 +198,7 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
 
-    - name: Install Playwright system dependencies (cache hit)
+    - name: Install Playwright system dependencies (cache hit — normal path)
       if: steps.playwright-cache.outputs.cache-hit == 'true'
       run: |
         cd frontend
