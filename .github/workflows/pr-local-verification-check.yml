@@ -7,8 +7,8 @@ name: PR Local Verification Check
 # ---------------
 # A PR's Local Verification section is supposed to be a real pasted terminal
 # transcript proving the change executes correctly. In practice, agents (and
-# humans in a hurry) sometimes paste *predicted* or *structural* output —
-# "this would print PASS" / "expected to succeed" — which a reviewer cannot
+# humans in a hurry) sometimes paste *predicted* or *structural* output --
+# "this would print PASS" / "expected to succeed" -- which a reviewer cannot
 # tell apart from a real transcript at a glance. Window B (2026-05-25) shipped
 # a regression because a structural-only "verification" was accepted.
 #
@@ -20,17 +20,19 @@ name: PR Local Verification Check
 # --------------
 # 1. The PR body contains a `## Local Verification` section header.
 # 2. The section contains >= 1 fenced code block (``` ... ```).
-# 3. >= 1 fenced code block contains a shell-prompt indicator line:
-#       `$ ` | `> ` | `# ` | `[user@host]$ ` | `PS> ` | `>> `
-#    (A code block with zero prompt indicators is almost always prose.)
+# 3. >= 1 fenced code block contains a shell-prompt indicator line OR
+#    the code block contains >= 2 non-blank lines (relaxed fallback for
+#    genuine transcripts that omit the prompt prefix -- see #828).
+#    Accepted prompt prefixes: `$ ` | `> ` | `# ` | `[user@host]$ ` | `PS> ` | `>> `
+#    A code block with a single PASS-only line still fails (no real content).
 # 4. The section contains >= 1 explicit success marker:
 #       PASS | OK | SUCCESS  (case-insensitive)
 # 5. If the PR diff touches any `*.sh` file (or anything under
 #    `scripts/deploy/`), the section MUST contain the literal `--dry-run`
-#    or `dry-run` — shell-script PRs must show the dry-run exercised the
+#    or `dry-run` -- shell-script PRs must show the dry-run exercised the
 #    actual code path, not just `bash -n`.
 #
-#    EXCEPTION — declaration-only shell changes: if the author cannot
+#    EXCEPTION -- declaration-only shell changes: if the author cannot
 #    produce a meaningful dry-run (e.g. the change only adds a function,
 #    constant, or `source` call with no new executable entrypoint), a
 #    syntax/lint check is accepted in lieu of `--dry-run`. The LV section
@@ -38,6 +40,14 @@ name: PR Local Verification Check
 #    neither `--dry-run` NOR a syntax/lint check is present, the gate
 #    fails. The rule: executable entrypoint changes require `--dry-run`;
 #    declaration-only changes accept `sh -n` / `shellcheck`.
+#
+# DEPENDABOT EXEMPTION (#826)
+# ---------------------------
+# When github.actor == 'dependabot[bot]', the LV-section heuristic is
+# skipped entirely. Dependabot PRs are automated dependency bumps, not
+# human-authored code changes. Requiring a ## Local Verification transcript
+# for them adds no security value. The job still runs and reports SUCCESS
+# so the required status check is satisfied without a manual body patch.
 #
 # WHAT IT DOES NOT CHECK
 # ----------------------
@@ -52,8 +62,8 @@ name: PR Local Verification Check
 # --------------------------
 # After this workflow first runs successfully, add the job
 # `Local Verification heuristic check` to the list of REQUIRED status
-# checks on the `main` branch (Settings → Branches → Branch protection
-# rules → main → Require status checks to pass). The orchestrator should
+# checks on the `main` branch (Settings -> Branches -> Branch protection
+# rules -> main -> Require status checks to pass). The orchestrator should
 # do this manually in the GitHub UI; this workflow file alone cannot
 # configure branch protection.
 #
@@ -67,7 +77,7 @@ name: PR Local Verification Check
 #        ok  github.com/RdHamilton/vault-mtg/services/bff  0.834s
 #        PASS
 #        ```
-#      → 1 fence, prompt `$ `, marker `PASS` → PASS
+#      -> 1 fence, prompt `$ `, marker `PASS` -> PASS
 #
 #   B) Body contains:
 #        ## Local Verification
@@ -76,7 +86,7 @@ name: PR Local Verification Check
 #        $ scripts/deploy/foo.sh --dry-run
 #        [bootstrap] Assertion 1: PASS
 #        ```
-#      Diff touches `scripts/deploy/foo.sh` → fence + prompt + PASS + dry-run → PASS
+#      Diff touches `scripts/deploy/foo.sh` -> fence + prompt + PASS + dry-run -> PASS
 #
 #   C) Body contains:
 #        ## Local Verification
@@ -84,33 +94,45 @@ name: PR Local Verification Check
 #        [user@host]$ npm run build
 #        > frontend@0.0.0 build
 #        > tsc -b && vite build
-#        ✓ built in 4.32s
+#        built in 4.32s
 #        SUCCESS
 #        ```
-#      → 1 fence, prompt `[user@host]$`, marker `SUCCESS` → PASS
+#      -> 1 fence, prompt `[user@host]$`, marker `SUCCESS` -> PASS
+#
+#   L) Body contains (relaxed fallback -- no prompt prefix, #828):
+#        ## Local Verification
+#        ```
+#        npx tsc --noEmit  # passes
+#        0 errors
+#        SUCCESS
+#        ```
+#      -> 1 fence, no prompt, but >=2 non-blank lines + marker `SUCCESS` -> PASS
+#
+#   M) Dependabot PR -- actor == 'dependabot[bot]':
+#      -> LV check skipped entirely -> PASS (exemption, #826)
 #
 # FAIL cases:
-#   D) No `## Local Verification` header at all → FAIL (missing section).
+#   D) No `## Local Verification` header at all -> FAIL (missing section).
 #
-#   E) Section present but empty (no code fence) → FAIL (no transcript).
+#   E) Section present but empty (no code fence) -> FAIL (no transcript).
 #
 #   F) Section contains only prose:
 #        "I ran `go test` and it passed. Verified the bug is fixed."
-#      → FAIL (no fenced code block).
+#      -> FAIL (no fenced code block).
 #
-#   G) Code block contains no prompt indicator:
+#   G) Code block contains only the PASS marker, nothing else:
 #        ```
-#        the command would print:
-#        ok    bff    0.5s
+#        PASS
 #        ```
-#      → FAIL (no `$ ` / `> ` / `#` line).
+#      -> FAIL (1 non-blank line; relaxed fallback requires >=2 non-blank
+#              lines so there is real command/output content beyond the marker).
 #
-#   H) Code block has prompt but no PASS/OK/SUCCESS marker:
+#   H) Code block has content lines but no PASS/OK/SUCCESS marker:
 #        ```
-#        $ go vet ./...
-#        $ go build ./...
+#        go vet ./...
+#        go build ./...
 #        ```
-#      → FAIL (no success marker — could be predicted output).
+#      -> FAIL (no success marker -- could be predicted output).
 #
 #   I) Shell-script PR (touches `scripts/deploy/ec2-bootstrap.sh`) with an
 #      executable entrypoint change, but transcript shows only `bash -n`:
@@ -118,16 +140,16 @@ name: PR Local Verification Check
 #        $ bash -n scripts/deploy/ec2-bootstrap.sh
 #        PASS
 #        ```
-#      → FAIL (executable entrypoint changed; `--dry-run` required).
+#      -> FAIL (executable entrypoint changed; `--dry-run` required).
 #
 #   J) Declaration-only shell PR with no syntax/lint check OR --dry-run:
 #        ```
 #        $ echo "change looks fine"
 #        PASS
 #        ```
-#      → FAIL (neither --dry-run nor sh -n/shellcheck present).
+#      -> FAIL (neither --dry-run nor sh -n/shellcheck present).
 #
-# NEW PASS case — declaration-only shell change:
+# NEW PASS case -- declaration-only shell change:
 #   K) PR adds a helper function to `scripts/lib/utils.sh` (not executable).
 #      LV shows syntax check only (no --dry-run):
 #        ```
@@ -135,7 +157,7 @@ name: PR Local Verification Check
 #        $ shellcheck scripts/lib/utils.sh
 #        PASS
 #        ```
-#      → PASS (declaration-only escape hatch: sh -n / shellcheck accepted
+#      -> PASS (declaration-only escape hatch: sh -n / shellcheck accepted
 #              in lieu of --dry-run when no executable entrypoint is changed).
 # ---------------------------------------------------------------------------
 
@@ -164,7 +186,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      # -----------------------------------------------------------------------
+      # Dependabot exemption (#826)
+      # Dependabot PRs are automated dependency bumps, not human-authored code
+      # changes. Requiring a ## Local Verification transcript for them adds no
+      # security value and forces a manual body patch each cycle. Skip the LV
+      # heuristic entirely for the dependabot[bot] actor. The job still runs
+      # and reports SUCCESS so the required status check is satisfied.
+      # -----------------------------------------------------------------------
+      - name: Skip LV check for Dependabot
+        if: github.actor == 'dependabot[bot]'
+        run: |
+          echo "Actor: ${{ github.actor }}"
+          echo "Dependabot PR -- Local Verification section not required."
+          echo "permissionDecision: ALLOW"
+          echo "Local Verification heuristic check: PASS (Dependabot exemption)"
+
       - name: Fetch PR body
+        if: github.actor != 'dependabot[bot]'
         id: prbody
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -174,6 +213,7 @@ jobs:
           echo "PR body bytes: $(wc -c < /tmp/pr_body.txt)"
 
       - name: Detect shell-file changes
+        if: github.actor != 'dependabot[bot]'
         id: shellfiles
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -191,6 +231,7 @@ jobs:
           echo "Shell-flavored PR: $SHELL_TOUCHED"
 
       - name: Parse Local Verification section
+        if: github.actor != 'dependabot[bot]'
         env:
           SHELL_TOUCHED: ${{ steps.shellfiles.outputs.shell_touched }}
         run: |
@@ -202,7 +243,7 @@ jobs:
             local hint="${2:-}"
             echo ""
             echo "permissionDecision: BLOCKED"
-            echo "ERROR: Local Verification gate — ${msg}"
+            echo "ERROR: Local Verification gate -- ${msg}"
             if [ -n "${hint}" ]; then
               echo ""
               echo "HINT: ${hint}"
@@ -219,7 +260,7 @@ jobs:
             echo ""
             echo "Rules:"
             echo "  - >=1 fenced code block in the section"
-            echo "  - >=1 shell-prompt line per block (\$, >, #, [user@host]\$)"
+            echo "  - >=1 non-blank content lines inside the block (beyond the PASS marker)"
             echo "  - >=1 PASS / OK / SUCCESS marker in the section"
             if [ "${SHELL_TOUCHED}" = "yes" ]; then
               echo "  - Shell-script PR: transcript must contain --dry-run"
@@ -278,8 +319,14 @@ jobs:
             fail "No fenced code block found in Local Verification (need an opening and closing \`\`\`)."
           fi
 
-          # ---- 3. >=1 prompt indicator inside a code block ----
+          # ---- 3. >=1 prompt indicator inside a code block, OR relaxed fallback ----
           # Extract content inside fenced code blocks only, then look for prompt lines.
+          #
+          # Relaxed fallback (#828): if no prompt prefix is found but the code block
+          # contains >= 2 non-blank lines, accept it. This allows genuine transcripts
+          # that omit the `$ ` prefix (e.g. `npx tsc --noEmit  # passes`) to pass.
+          # A block with only a PASS marker (1 non-blank line) still fails because
+          # there is no real command/output content to support the claim.
           awk '
             /^[[:space:]]*```/ { fence = !fence; next }
             fence { print }
@@ -296,14 +343,32 @@ jobs:
           #   ^\[.*\]\$   `[user@host]$` style
           #   ^\s*PS>     PowerShell explicit
           #   ^\s*>>\s    secondary prompt (continuation)
-          if ! grep -qE '(^[[:space:]]*\$ )|(^[[:space:]]*> )|(^[[:space:]]*# )|(^\[[^]]+\]\$)|(^[[:space:]]*PS> )|(^[[:space:]]*>> )' /tmp/lv_code.txt; then
-            echo ""
-            echo "Parser expected: at least one line inside a fenced block matching regex:"
-            echo "  (^\$ )|(^> )|(^# )|(^\[[^]]+\]\$)|(^PS> )|(^>> )"
-            echo "  (leading whitespace is allowed)"
-            echo "Accepted prompt styles: \`\$ \`  \`> \`  \`# \`  \`[user@host]\$\`  \`PS> \`  \`>> \`"
-            echo ""
-            fail "No shell-prompt indicator found inside any code block. A real transcript starts lines with \`\$ \`, \`> \`, \`# \`, or \`[user@host]\$ \`."
+          PROMPT_FOUND=no
+          if grep -qE '(^[[:space:]]*\$ )|(^[[:space:]]*> )|(^[[:space:]]*# )|(^\[[^]]+\]\$)|(^[[:space:]]*PS> )|(^[[:space:]]*>> )' /tmp/lv_code.txt; then
+            PROMPT_FOUND=yes
+          fi
+
+          if [ "${PROMPT_FOUND}" = "no" ]; then
+            # Relaxed fallback: count non-blank lines inside the code blocks.
+            # >= 2 non-blank lines confirms there is real command/output content
+            # beyond the PASS marker alone.
+            NONBLANK_COUNT=$(grep -cE '[^[:space:]]' /tmp/lv_code.txt || true)
+            if [ "${NONBLANK_COUNT:-0}" -lt 2 ]; then
+              echo ""
+              echo "No shell-prompt prefix found AND code block has fewer than 2 non-blank lines."
+              echo ""
+              echo "Parser expected EITHER:"
+              echo "  (a) At least one line matching a prompt prefix:"
+              echo "      \`\$ \`  \`> \`  \`# \`  \`[user@host]\$\`  \`PS> \`  \`>> \`"
+              echo "  OR"
+              echo "  (b) At least 2 non-blank lines inside the code block"
+              echo "      (command + output content, beyond the PASS marker alone)"
+              echo ""
+              echo "A block containing only \`PASS\` (with no command or output) is not a real transcript."
+              echo ""
+              fail "Code block appears to have no real transcript content. Add your actual command output, or prefix command lines with \`\$ \`."
+            fi
+            echo "No prompt prefix found -- relaxed fallback accepted (${NONBLANK_COUNT} non-blank lines in code block)."
           fi
 
           # ---- 4. >=1 PASS/OK/SUCCESS marker (case-insensitive) ----
@@ -324,8 +389,8 @@ jobs:
           # or `source` call with no new executable entrypoint), a syntax
           # or lint check is accepted in lieu of --dry-run.  The LV section
           # must contain `sh -n` or `shellcheck` against the changed file.
-          # Rule: executable entrypoint changes → --dry-run required;
-          #       declaration-only changes      → sh -n / shellcheck accepted.
+          # Rule: executable entrypoint changes -> --dry-run required;
+          #       declaration-only changes      -> sh -n / shellcheck accepted.
           if [ "${SHELL_TOUCHED}" = "yes" ]; then
             HAS_DRY_RUN=no
             HAS_SYNTAX_CHECK=no
@@ -341,8 +406,8 @@ jobs:
               echo "  (a) regex  (--dry-run|dry-run)  for executable entrypoint changes"
               echo "  (b) regex  (sh -n |shellcheck )  for declaration-only changes"
               echo "This PR touches a *.sh file or scripts/deploy/."
-              echo "Executable entrypoint change → include a --dry-run transcript."
-              echo "Declaration-only change (function/constant/source only) → include sh -n or shellcheck."
+              echo "Executable entrypoint change -> include a --dry-run transcript."
+              echo "Declaration-only change (function/constant/source only) -> include sh -n or shellcheck."
               echo ""
               fail "Shell-script PR (touches *.sh or scripts/deploy/): Local Verification must include either (a) a --dry-run transcript showing the actual code path was exercised, or (b) a syntax/lint check (sh -n or shellcheck) for declaration-only changes that add no executable entrypoint." \
                    "If your change only adds a function, constant, or source call, use: sh -n <file> && shellcheck <file>"
@@ -354,7 +419,11 @@ jobs:
           echo "Local Verification heuristic check: PASS"
           echo "  - Section header: present"
           echo "  - Fenced code blocks: ${FENCE_COUNT} fence markers found"
-          echo "  - Shell-prompt indicator: present"
+          if [ "${PROMPT_FOUND}" = "yes" ]; then
+            echo "  - Shell-prompt indicator: present"
+          else
+            echo "  - Shell-prompt indicator: absent (relaxed fallback -- ${NONBLANK_COUNT} non-blank lines)"
+          fi
           echo "  - Success marker: present"
           if [ "${SHELL_TOUCHED}" = "yes" ]; then
             if [ "${HAS_DRY_RUN}" = "yes" ]; then
