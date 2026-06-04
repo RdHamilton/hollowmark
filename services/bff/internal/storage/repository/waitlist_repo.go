@@ -32,9 +32,11 @@ func NewWaitlistRepository(db waitlistDB) *WaitlistRepository {
 	return &WaitlistRepository{db: db}
 }
 
-// InsertIfNew inserts a new waitlist_entries row for email and attribution fields
-// using ON CONFLICT DO NOTHING RETURNING id. Returns (id, true, nil) when a new
-// row was created, or ("", false, nil) when the email already existed.
+// InsertIfNew inserts a new waitlist_entries row for email and attribution fields.
+// It uses a CTE to atomically insert (ON CONFLICT DO NOTHING) and then count the
+// total rows, returning the 1-based position. Returns (id, position, true, nil)
+// when a new row was created, or ("", 0, false, nil) when the email already existed
+// (ON CONFLICT DO NOTHING → no row returned from the INSERT).
 // The initial mailchimp_status is 'failed' per the table DEFAULT; the happy
 // path calls UpdateMailchimpStatus afterwards.
 func (r *WaitlistRepository) InsertIfNew(
@@ -42,20 +44,28 @@ func (r *WaitlistRepository) InsertIfNew(
 	email string,
 	utmSource, utmMedium, utmCampaign *string,
 	referrer *string,
-) (id string, created bool, err error) {
+) (id string, position int64, created bool, err error) {
+	// The CTE inserts the row (DO NOTHING on conflict) and RETURNING gives us the
+	// new id. The outer SELECT counts total rows — this is the 1-based position for
+	// the new signup. If the INSERT produces no row (conflict), the CTE is empty and
+	// QueryRowContext returns sql.ErrNoRows.
 	const q = `
-		INSERT INTO waitlist_entries (email, utm_source, utm_medium, utm_campaign, referrer)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (email) DO NOTHING
-		RETURNING id`
+		WITH inserted AS (
+			INSERT INTO waitlist_entries (email, utm_source, utm_medium, utm_campaign, referrer)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (email) DO NOTHING
+			RETURNING id
+		)
+		SELECT inserted.id, (SELECT COUNT(*) FROM waitlist_entries) AS position
+		FROM inserted`
 
 	row := r.db.QueryRowContext(ctx, q, email, utmSource, utmMedium, utmCampaign, referrer)
-	if err := row.Scan(&id); err == sql.ErrNoRows {
-		return "", false, nil
+	if err := row.Scan(&id, &position); err == sql.ErrNoRows {
+		return "", 0, false, nil
 	} else if err != nil {
-		return "", false, err
+		return "", 0, false, err
 	}
-	return id, true, nil
+	return id, position, true, nil
 }
 
 // UpdateMailchimpStatus sets mailchimp_status and bumps updated_at for the row

@@ -22,21 +22,23 @@ type waitlistUpdateCall struct {
 }
 
 type stubWaitlistRepo struct {
-	insertID      string
-	insertCreated bool
-	insertErr     error
-	updateErr     error
+	insertID       string
+	insertPosition int64
+	insertCreated  bool
+	insertErr      error
+	updateErr      error
 
 	mu          sync.Mutex
 	updateCalls []waitlistUpdateCall
 	updateDone  chan struct{}
 }
 
-func newStubWaitlistRepo(id string, created bool) *stubWaitlistRepo {
+func newStubWaitlistRepo(id string, position int64, created bool) *stubWaitlistRepo {
 	return &stubWaitlistRepo{
-		insertID:      id,
-		insertCreated: created,
-		updateDone:    make(chan struct{}, 1),
+		insertID:       id,
+		insertPosition: position,
+		insertCreated:  created,
+		updateDone:     make(chan struct{}, 1),
 	}
 }
 
@@ -47,8 +49,8 @@ func newStubWaitlistRepoErr(err error) *stubWaitlistRepo {
 	}
 }
 
-func (s *stubWaitlistRepo) InsertIfNew(_ context.Context, _ string, _, _, _ *string, _ *string) (string, bool, error) {
-	return s.insertID, s.insertCreated, s.insertErr
+func (s *stubWaitlistRepo) InsertIfNew(_ context.Context, _ string, _, _, _ *string, _ *string) (string, int64, bool, error) {
+	return s.insertID, s.insertPosition, s.insertCreated, s.insertErr
 }
 
 func (s *stubWaitlistRepo) UpdateMailchimpStatus(_ context.Context, id, status string) error {
@@ -157,37 +159,40 @@ func newWaitlistRequestWithUTM(email, utmSource, utmMedium, utmCampaign, referre
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
-// TestWaitlist_NewEmail_Returns201 verifies that a brand-new email returns 201.
-func TestWaitlist_NewEmail_Returns201(t *testing.T) {
-	repo := newStubWaitlistRepo("uuid-1", true)
-	h := handlers.NewWaitlistHandler(repo, nil)
-
-	rr := httptest.NewRecorder()
-	h.Join(rr, newWaitlistRequest("alice@example.com", ""))
-
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
-	}
-	assertWaitlistOKBody(t, rr)
-}
-
-// TestWaitlist_ExistingEmail_Returns200 verifies idempotency: duplicate email → 200.
-func TestWaitlist_ExistingEmail_Returns200(t *testing.T) {
-	repo := newStubWaitlistRepo("", false)
+// TestWaitlist_NewEmail_Returns200WithPosition verifies that a brand-new email
+// returns 200 OK with {"position": N} — matching the shipped SPA contract (PR #32).
+func TestWaitlist_NewEmail_Returns200WithPosition(t *testing.T) {
+	repo := newStubWaitlistRepo("uuid-1", 3, true)
 	h := handlers.NewWaitlistHandler(repo, nil)
 
 	rr := httptest.NewRecorder()
 	h.Join(rr, newWaitlistRequest("alice@example.com", ""))
 
 	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200 for duplicate email, got %d: %s", rr.Code, rr.Body.String())
+		t.Fatalf("expected 200 OK for new email, got %d: %s", rr.Code, rr.Body.String())
 	}
-	assertWaitlistOKBody(t, rr)
+	assertWaitlistPositionBody(t, rr, 3)
+}
+
+// TestWaitlist_DuplicateEmail_Returns409 verifies that a duplicate email returns
+// 409 Conflict with {"error": "This email is already registered."}.
+// AC3: ON CONFLICT DO NOTHING returns no row → created=false → 409.
+func TestWaitlist_DuplicateEmail_Returns409(t *testing.T) {
+	repo := newStubWaitlistRepo("", 0, false)
+	h := handlers.NewWaitlistHandler(repo, nil)
+
+	rr := httptest.NewRecorder()
+	h.Join(rr, newWaitlistRequest("alice@example.com", ""))
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for duplicate email, got %d: %s", rr.Code, rr.Body.String())
+	}
+	assertWaitlistErrorBody(t, rr, "This email is already registered.")
 }
 
 // TestWaitlist_MissingEmail_Returns400 verifies empty email is rejected.
 func TestWaitlist_MissingEmail_Returns400(t *testing.T) {
-	repo := newStubWaitlistRepo("", false)
+	repo := newStubWaitlistRepo("", 0, false)
 	h := handlers.NewWaitlistHandler(repo, nil)
 
 	rr := httptest.NewRecorder()
@@ -212,9 +217,9 @@ func TestWaitlist_DBError_Returns500(t *testing.T) {
 }
 
 // TestWaitlist_MailchimpError_NonFatal verifies that a Mailchimp 5xx leaves the
-// handler still returning 201 and does NOT call UpdateMailchimpStatus.
+// handler still returning 200 OK and does NOT call UpdateMailchimpStatus.
 func TestWaitlist_MailchimpError_NonFatal(t *testing.T) {
-	repo := newStubWaitlistRepo("uuid-fail", true)
+	repo := newStubWaitlistRepo("uuid-fail", 1, true)
 	mc := newStubMailchimpClient(fmt.Errorf("mailchimp: unexpected status 500"))
 
 	h := handlers.NewWaitlistHandler(repo, mc)
@@ -222,10 +227,10 @@ func TestWaitlist_MailchimpError_NonFatal(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.Join(rr, newWaitlistRequest("charlie@example.com", ""))
 
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("expected 201 even on Mailchimp error, got %d: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 even on Mailchimp error, got %d: %s", rr.Code, rr.Body.String())
 	}
-	assertWaitlistOKBody(t, rr)
+	assertWaitlistPositionBody(t, rr, 1)
 
 	// Wait for goroutine to finish.
 	<-mc.done
@@ -240,7 +245,7 @@ func TestWaitlist_MailchimpError_NonFatal(t *testing.T) {
 // TestWaitlist_MailchimpSuccess_SetsSubscribed verifies that on a successful
 // Mailchimp call, UpdateMailchimpStatus("subscribed") is invoked.
 func TestWaitlist_MailchimpSuccess_SetsSubscribed(t *testing.T) {
-	repo := newStubWaitlistRepo("uuid-ok", true)
+	repo := newStubWaitlistRepo("uuid-ok", 7, true)
 	mc := newStubMailchimpClient(nil) // success
 
 	h := handlers.NewWaitlistHandler(repo, mc)
@@ -248,9 +253,10 @@ func TestWaitlist_MailchimpSuccess_SetsSubscribed(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.Join(rr, newWaitlistRequest("dana@example.com", ""))
 
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
+	assertWaitlistPositionBody(t, rr, 7)
 
 	// Wait for UpdateMailchimpStatus to be called (via repo.updateDone).
 	<-repo.updateDone
@@ -270,7 +276,7 @@ func TestWaitlist_MailchimpSuccess_SetsSubscribed(t *testing.T) {
 // TestWaitlist_RateLimit_Returns429 verifies the 6th request from the same IP
 // within one hour is rejected with 429 (RC5).
 func TestWaitlist_RateLimit_Returns429(t *testing.T) {
-	repo := newStubWaitlistRepo("uuid-rl", true)
+	repo := newStubWaitlistRepo("uuid-rl", 1, true)
 	h := handlers.NewWaitlistHandler(repo, nil)
 
 	for i := 0; i < 5; i++ {
@@ -290,7 +296,7 @@ func TestWaitlist_RateLimit_Returns429(t *testing.T) {
 
 // TestWaitlist_DifferentIPs_NotRateLimited verifies rate limiting is per-IP.
 func TestWaitlist_DifferentIPs_NotRateLimited(t *testing.T) {
-	repo := newStubWaitlistRepo("uuid-ip", true)
+	repo := newStubWaitlistRepo("uuid-ip", 1, true)
 	h := handlers.NewWaitlistHandler(repo, nil)
 
 	// Exhaust IP 1.2.3.4 bucket.
@@ -310,15 +316,19 @@ func TestWaitlist_DifferentIPs_NotRateLimited(t *testing.T) {
 	}
 }
 
-// TestWaitlist_ResponseBody_OK asserts the response body shape is {"ok":true}.
-func TestWaitlist_ResponseBody_OK(t *testing.T) {
-	repo := newStubWaitlistRepo("uuid-body", true)
+// TestWaitlist_Position1_FirstSignup verifies the position counter is 1 when
+// the email is the first entry inserted (1-based count).
+func TestWaitlist_Position1_FirstSignup(t *testing.T) {
+	repo := newStubWaitlistRepo("uuid-first", 1, true)
 	h := handlers.NewWaitlistHandler(repo, nil)
 
 	rr := httptest.NewRecorder()
-	h.Join(rr, newWaitlistRequest("eve@example.com", ""))
+	h.Join(rr, newWaitlistRequest("first@example.com", ""))
 
-	assertWaitlistOKBody(t, rr)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	assertWaitlistPositionBody(t, rr, 1)
 }
 
 // ─── PostHog tests ────────────────────────────────────────────────────────────
@@ -327,7 +337,7 @@ func TestWaitlist_ResponseBody_OK(t *testing.T) {
 // is enqueued exactly once on the new-email path, with correct distinct_id and
 // UTM properties.
 func TestWaitlist_PostHog_FiredOnNewEmail(t *testing.T) {
-	repo := newStubWaitlistRepo("uuid-ph-new", true)
+	repo := newStubWaitlistRepo("uuid-ph-new", 5, true)
 	ph := newStubPostHogClient()
 	h := handlers.NewWaitlistHandler(repo, nil).WithPostHogClient(ph)
 
@@ -335,8 +345,8 @@ func TestWaitlist_PostHog_FiredOnNewEmail(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.Join(rr, req)
 
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 
 	// Wait for the PostHog goroutine to complete.
@@ -375,9 +385,9 @@ func TestWaitlist_PostHog_FiredOnNewEmail(t *testing.T) {
 }
 
 // TestWaitlist_PostHog_NotFiredOnConflict verifies that funnel_waitlist_signup_completed
-// is NOT enqueued when the email already exists (conflict / idempotent 200 path).
+// is NOT enqueued when the email already exists (conflict → 409 path).
 func TestWaitlist_PostHog_NotFiredOnConflict(t *testing.T) {
-	repo := newStubWaitlistRepo("", false) // conflict: created=false
+	repo := newStubWaitlistRepo("", 0, false) // conflict: created=false
 	ph := newStubPostHogClient()
 	h := handlers.NewWaitlistHandler(repo, nil).WithPostHogClient(ph)
 
@@ -385,17 +395,14 @@ func TestWaitlist_PostHog_NotFiredOnConflict(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.Join(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200 for conflict path, got %d: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for conflict path, got %d: %s", rr.Code, rr.Body.String())
 	}
 
 	// Give any inadvertent goroutine a moment to fire (it must not).
-	// We deliberately do NOT block on ph.done here because no event should fire.
-	// A 10ms yield is enough for the goroutine scheduler.
 	select {
 	case <-ph.done:
-		// A capture was enqueued — this is the failure case.
-		t.Error("PostHog Enqueue must NOT be called on the conflict/idempotent 200 path")
+		t.Error("PostHog Enqueue must NOT be called on the conflict/409 path")
 	default:
 		// Nothing enqueued — correct.
 	}
@@ -408,14 +415,36 @@ func TestWaitlist_PostHog_NotFiredOnConflict(t *testing.T) {
 
 // ─── assertion helpers ────────────────────────────────────────────────────────
 
-func assertWaitlistOKBody(t *testing.T, rr *httptest.ResponseRecorder) {
+// assertWaitlistPositionBody decodes the response and asserts {"position": want}.
+func assertWaitlistPositionBody(t *testing.T, rr *httptest.ResponseRecorder, want int64) {
 	t.Helper()
 	var resp map[string]any
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	ok, _ := resp["ok"].(bool)
+	pos, ok := resp["position"]
 	if !ok {
-		t.Errorf(`expected body {"ok":true}, got %v`, resp)
+		t.Fatalf(`expected body {"position": %d}, got %v`, want, resp)
+	}
+	// json.Unmarshal uses float64 for numbers.
+	posF, ok := pos.(float64)
+	if !ok {
+		t.Fatalf("position is not a number: %T %v", pos, pos)
+	}
+	if int64(posF) != want {
+		t.Errorf("position: want %d, got %d", want, int64(posF))
+	}
+}
+
+// assertWaitlistErrorBody decodes the response and asserts {"error": want}.
+func assertWaitlistErrorBody(t *testing.T, rr *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	var resp map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errMsg, _ := resp["error"].(string)
+	if errMsg != want {
+		t.Errorf(`error body: want %q, got %q (full: %v)`, want, errMsg, resp)
 	}
 }
