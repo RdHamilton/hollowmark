@@ -694,8 +694,9 @@ type RouterDeps struct {
 	// surface. Account-scoped JSONB key/value store; backs the SPA's
 	// AppSettings + per-key getters/setters. Protected by DaemonAPIKeyAuth.
 	SettingsHandler *handlers.SettingsHandler
-	// WaitlistHandler serves POST /api/v1/waitlist (Phase 1, ticket #121).
+	// WaitlistHandler serves POST /api/v1/waitlist (tickets #121, #834).
 	// Public endpoint — no Clerk auth required. Rate limited per-IP.
+	// 200 OK + {"position": N} on new email; 409 Conflict on duplicate.
 	WaitlistHandler *handlers.WaitlistHandler
 	// SystemAccountHandler serves GET /api/v1/system/account.
 	// Returns the authenticated user's MTGA account row wrapped in the
@@ -817,9 +818,9 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	))
 	r.Get("/api/v1/daemon/version", daemonVersionHandler.GetDaemonVersion)
 
-	// POST /api/v1/waitlist — Phase 1 waitlist signup (ticket #121).
+	// POST /api/v1/waitlist — waitlist signup (tickets #121, #834).
 	// Intentionally public (no Clerk auth). Rate limited at 5 req/h per IP.
-	// 201 Created on new email; 200 OK on duplicate. Body: {"ok":true} both.
+	// 200 OK on new email with {"position": N}; 409 Conflict on duplicate.
 	if deps.WaitlistHandler != nil {
 		r.Post("/api/v1/waitlist", deps.WaitlistHandler.Join)
 	}

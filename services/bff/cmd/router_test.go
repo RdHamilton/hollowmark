@@ -781,12 +781,13 @@ func TestRouter_AdminFleetHealth_RouteAbsent_WhenHandlerNil(t *testing.T) {
 // POST /api/v1/waitlist — public endpoint smoke tests (ticket #121)
 // ──────────────────────────────────────────────────────────────────────────────
 
-// stubWaitlistRepo satisfies the waitlistRepo interface used by WaitlistHandler.
-// InsertIfNew always returns a new row (created=true) so the handler returns 201.
+// stubWaitlistRouterRepo satisfies the waitlistRepo interface used by WaitlistHandler.
+// InsertIfNew always returns a new row (created=true, position=1) so the handler
+// returns 200 OK with {"position":1}.
 type stubWaitlistRouterRepo struct{}
 
-func (s *stubWaitlistRouterRepo) InsertIfNew(_ context.Context, _ string, _, _, _ *string, _ *string) (string, bool, error) {
-	return "uuid-router-test", true, nil
+func (s *stubWaitlistRouterRepo) InsertIfNew(_ context.Context, _ string, _, _, _ *string, _ *string) (string, int64, bool, error) {
+	return "uuid-router-test", 1, true, nil
 }
 
 func (s *stubWaitlistRouterRepo) UpdateMailchimpStatus(_ context.Context, _, _ string) error {
@@ -807,9 +808,9 @@ func TestRouter_Waitlist_IsPublic(t *testing.T) {
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
 
-	// 201 Created — handler was reached and InsertIfNew returned created=true.
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("POST /api/v1/waitlist: want 201, got %d: %s", rr.Code, rr.Body.String())
+	// 200 OK — handler was reached and InsertIfNew returned created=true, position=1.
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /api/v1/waitlist: want 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 

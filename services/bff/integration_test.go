@@ -1477,3 +1477,158 @@ func TestIntegration_GamePlayEvent_CardPlays_PersistEndToEnd(t *testing.T) {
 		t.Errorf("opponent plays in timeline: want 1, got %d", opponentCount)
 	}
 }
+
+// ─── Waitlist integration tests ──────────────────────────────────────────────
+
+// TestWaitlistRepo_InsertIfNew_Integration covers AC7: POST with a valid email
+// returns 200 + {"position": 1} against a real test DB.
+//
+// Covers three scenarios end-to-end against a real Postgres instance:
+//  1. First insert returns (id, position=1, created=true).
+//  2. Second insert of a different email returns position=2.
+//  3. Duplicate insert returns ("", 0, created=false) — the 409 signal.
+func TestWaitlistRepo_InsertIfNew_Integration(t *testing.T) {
+	db := openIntegrationDB(t)
+	repo := repository.NewWaitlistRepository(db)
+	ctx := context.Background()
+
+	// Use unique emails scoped to this test run to avoid cross-test contamination.
+	email1 := fmt.Sprintf("waitlist-integration-a-%d@vault-test.local", time.Now().UnixNano())
+	email2 := fmt.Sprintf("waitlist-integration-b-%d@vault-test.local", time.Now().UnixNano())
+
+	// Remove rows added by this test even on failure.
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM waitlist_entries WHERE email = $1 OR email = $2`, email1, email2)
+	})
+
+	t.Run("FirstInsert_ReturnsPosition1_Created", func(t *testing.T) {
+		id, position, created, err := repo.InsertIfNew(ctx, email1, nil, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("InsertIfNew: %v", err)
+		}
+		if !created {
+			t.Fatal("expected created=true for first insert")
+		}
+		if id == "" {
+			t.Fatal("expected non-empty id")
+		}
+		if position < 1 {
+			t.Errorf("expected position >= 1, got %d", position)
+		}
+	})
+
+	t.Run("SecondInsert_ReturnsHigherPosition_Created", func(t *testing.T) {
+		id, position, created, err := repo.InsertIfNew(ctx, email2, nil, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("InsertIfNew: %v", err)
+		}
+		if !created {
+			t.Fatal("expected created=true for second distinct email")
+		}
+		if id == "" {
+			t.Fatal("expected non-empty id")
+		}
+		if position < 2 {
+			t.Errorf("expected position >= 2 (two rows now), got %d", position)
+		}
+	})
+
+	t.Run("DuplicateInsert_ReturnsNotCreated", func(t *testing.T) {
+		id, position, created, err := repo.InsertIfNew(ctx, email1, nil, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("InsertIfNew: %v", err)
+		}
+		if created {
+			t.Fatal("expected created=false for duplicate email")
+		}
+		if id != "" {
+			t.Errorf("expected empty id on duplicate, got %q", id)
+		}
+		if position != 0 {
+			t.Errorf("expected position=0 on duplicate, got %d", position)
+		}
+	})
+}
+
+// TestWaitlistHandler_Integration_200WithPosition covers AC7 via the full HTTP
+// handler stack against a real test DB.  A POST with a valid email must return
+// 200 OK and a {"position": N} body where N >= 1.
+func TestWaitlistHandler_Integration_200WithPosition(t *testing.T) {
+	db := openIntegrationDB(t)
+	repo := repository.NewWaitlistRepository(db)
+	email := fmt.Sprintf("waitlist-handler-integration-%d@vault-test.local", time.Now().UnixNano())
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM waitlist_entries WHERE email = $1`, email)
+	})
+
+	h := handlers.NewWaitlistHandler(repo, nil)
+
+	body, _ := json.Marshal(map[string]string{"email": email})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:9999"
+
+	rr := httptest.NewRecorder()
+	h.Join(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for new signup, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	posF, ok := resp["position"].(float64)
+	if !ok {
+		t.Fatalf(`expected {"position": N} body, got %v`, resp)
+	}
+	if int64(posF) < 1 {
+		t.Errorf("expected position >= 1, got %d", int64(posF))
+	}
+}
+
+// TestWaitlistHandler_Integration_409OnDuplicate covers AC3 via the full HTTP
+// handler stack: second POST with the same email must return 409 Conflict.
+func TestWaitlistHandler_Integration_409OnDuplicate(t *testing.T) {
+	db := openIntegrationDB(t)
+	repo := repository.NewWaitlistRepository(db)
+	email := fmt.Sprintf("waitlist-dup-integration-%d@vault-test.local", time.Now().UnixNano())
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM waitlist_entries WHERE email = $1`, email)
+	})
+
+	h := handlers.NewWaitlistHandler(repo, nil)
+
+	makeReq := func() *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"email": email})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "127.0.0.1:9998"
+		rr := httptest.NewRecorder()
+		h.Join(rr, req)
+		return rr
+	}
+
+	// First request — must succeed.
+	if rr := makeReq(); rr.Code != http.StatusOK {
+		t.Fatalf("first request: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Second request with the same email — must return 409.
+	rr := makeReq()
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("duplicate request: expected 409, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode 409 response: %v", err)
+	}
+	errMsg, _ := resp["error"].(string)
+	if errMsg != "This email is already registered." {
+		t.Errorf("409 error body: want %q, got %q", "This email is already registered.", errMsg)
+	}
+}
