@@ -287,6 +287,7 @@ func TestWildcardRecommendations_NilMeta_Returns503(t *testing.T) {
 // TestWildcardRecommendations_StaleRatings_StillReturns200 verifies that stale
 // card ratings (>48h) produce a 200 with data_freshness.stale=true, not a 503.
 // Stale GIHWR data is still useful per ADR-045 §5.
+// Also verifies stale_reason is set to "card_ratings_older_than_48h" (M2 — ADR-045 §5).
 func TestWildcardRecommendations_StaleRatings_StillReturns200(t *testing.T) {
 	staleRatings := time.Now().Add(-72 * time.Hour) // 3 days ago
 	h := handlers.NewWildcardRecommendationsHandler(
@@ -312,6 +313,45 @@ func TestWildcardRecommendations_StaleRatings_StillReturns200(t *testing.T) {
 	stale, _ := freshness["stale"].(bool)
 	if !stale {
 		t.Error("expected data_freshness.stale=true for ratings older than 48h")
+	}
+	// M2: stale_reason must be set when stale.
+	staleReason, _ := freshness["stale_reason"].(string)
+	if staleReason != "card_ratings_older_than_48h" {
+		t.Errorf("expected stale_reason=%q, got %q", "card_ratings_older_than_48h", staleReason)
+	}
+}
+
+// TestWildcardRecommendations_FreshRatings_NoStaleReason verifies that
+// stale_reason is absent (omitempty) when ratings are fresh (ADR-045 §5 M2).
+func TestWildcardRecommendations_FreshRatings_NoStaleReason(t *testing.T) {
+	freshRatings := time.Now().Add(-1 * time.Hour) // 1 hour ago — fresh
+	h := handlers.NewWildcardRecommendationsHandler(
+		&wildcardAccountLookup{accountID: 7, found: true},
+		&stubInventoryReader{},
+		&stubCardInventoryChecker{has: true},
+		&stubDraftRatingsMaxCacheChecker{cachedAt: &freshRatings},
+		&stubMetaFreshnessChecker{lastUpdated: recentMeta()},
+		&stubGapQueryRunner{},
+		&stubGapQueryRunner{},
+	)
+	req := authedWildcardRequest(t, http.MethodGet, "/api/v1/recommendations/wildcards", 42)
+	rr := httptest.NewRecorder()
+	h.GetWildcardRecommendations(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 with fresh ratings, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	resp := decodeWildcardEnvelope(t, rr.Body.Bytes())
+	freshness, ok := resp["data_freshness"].(map[string]any)
+	if !ok {
+		t.Fatal("data_freshness missing")
+	}
+	stale, _ := freshness["stale"].(bool)
+	if stale {
+		t.Error("expected data_freshness.stale=false for fresh ratings")
+	}
+	// stale_reason must be absent (omitempty) when not stale.
+	if val, exists := freshness["stale_reason"]; exists {
+		t.Errorf("stale_reason must be omitted when not stale, got %v", val)
 	}
 }
 
