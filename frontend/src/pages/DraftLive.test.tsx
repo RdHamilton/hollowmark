@@ -819,30 +819,50 @@ describe('DraftLive', () => {
       expect(grade.charAt(0)).toBe('A'); // 0.631 sits in the A band (0.62–0.65)
     });
 
-    it('grades each band boundary correctly on the fraction scale', () => {
+    // Band table re-anchored on the ~0.55 set mean (#793): C straddles the
+    // mean, F line at 0.42, A+/A bombs unchanged (AC3). Boundaries match Bob's
+    // reanchored table in draftGrade.ts verbatim.
+    it('grades each band boundary correctly on the re-anchored fraction scale', () => {
       // Just-above each threshold lands in the higher band; just-below drops to
       // the next lower band.
-      expect(gradeFromGihwr(0.65)).toBe('A+');
+      expect(gradeFromGihwr(0.65)).toBe('A+');     // AC3 unchanged
       expect(gradeFromGihwr(0.6499)).toBe('A');
-      expect(gradeFromGihwr(0.62)).toBe('A');
+      expect(gradeFromGihwr(0.62)).toBe('A');      // AC3 unchanged
       expect(gradeFromGihwr(0.6199)).toBe('A-');
-      expect(gradeFromGihwr(0.59)).toBe('A-');
-      expect(gradeFromGihwr(0.5899)).toBe('B+');
-      expect(gradeFromGihwr(0.57)).toBe('B+');
-      expect(gradeFromGihwr(0.5699)).toBe('B');
-      expect(gradeFromGihwr(0.55)).toBe('B');
-      expect(gradeFromGihwr(0.5499)).toBe('B-');
-      expect(gradeFromGihwr(0.53)).toBe('B-');
-      expect(gradeFromGihwr(0.5299)).toBe('C+');
-      expect(gradeFromGihwr(0.51)).toBe('C+');
-      expect(gradeFromGihwr(0.5099)).toBe('C');
-      expect(gradeFromGihwr(0.49)).toBe('C');
-      expect(gradeFromGihwr(0.4899)).toBe('C-');
-      expect(gradeFromGihwr(0.47)).toBe('C-');
-      expect(gradeFromGihwr(0.4699)).toBe('D');
-      expect(gradeFromGihwr(0.45)).toBe('D');
-      expect(gradeFromGihwr(0.4499)).toBe('F');
+      expect(gradeFromGihwr(0.605)).toBe('A-');
+      expect(gradeFromGihwr(0.6049)).toBe('B+');
+      expect(gradeFromGihwr(0.59)).toBe('B+');
+      expect(gradeFromGihwr(0.5899)).toBe('B');
+      expect(gradeFromGihwr(0.575)).toBe('B');
+      expect(gradeFromGihwr(0.5749)).toBe('B-');
+      expect(gradeFromGihwr(0.5625)).toBe('B-');
+      expect(gradeFromGihwr(0.5624)).toBe('C+');
+      expect(gradeFromGihwr(0.55)).toBe('C+');     // set mean top of C+
+      expect(gradeFromGihwr(0.5499)).toBe('C');
+      expect(gradeFromGihwr(0.5375)).toBe('C');    // C band straddles ~0.55 mean (AC1)
+      expect(gradeFromGihwr(0.5374)).toBe('C-');
+      expect(gradeFromGihwr(0.525)).toBe('C-');
+      expect(gradeFromGihwr(0.5249)).toBe('D');
+      expect(gradeFromGihwr(0.42)).toBe('D');      // D spans down to the F line
+      expect(gradeFromGihwr(0.4199)).toBe('F');    // F < 0.42 (AC2)
       expect(gradeFromGihwr(0.30)).toBe('F');
+    });
+
+    // AC4 — Bob's representative-card table on ticket #793. These are the
+    // cases Lee/Prof gate on: a set-mean card reads C, an average common is
+    // C-/D (not D/F), a maindeckable card is D (not straight F), filler is
+    // D (no longer F), and only truly unplayable cards (<0.42) grade F.
+    it('matches Bob\'s AC4 representative-card grades', () => {
+      expect(gradeFromGihwr(0.545)).toBe('C');   // set mean → C (AC1, was B)
+      expect(gradeFromGihwr(0.57)).toBe('B-');   // strong common
+      expect(gradeFromGihwr(0.51)).toBe('D');    // avg common (AC4 — C-/D, not D/F)
+      expect(gradeFromGihwr(0.525)).toBe('C-');  // AC4
+      expect(gradeFromGihwr(0.47)).toBe('D');    // maindeckable (AC4 — D, not F)
+      expect(gradeFromGihwr(0.46)).toBe('D');    // AC4
+      expect(gradeFromGihwr(0.43)).toBe('D');    // filler (AC2 — no longer F)
+      expect(gradeFromGihwr(0.41)).toBe('F');    // unplayable — below the 0.42 F line
+      expect(gradeFromGihwr(0.66)).toBe('A+');   // bomb (AC3 unchanged)
+      expect(gradeFromGihwr(0.63)).toBe('A');    // bomb (AC3 unchanged)
     });
 
     it('returns the em-dash placeholder for 0, undefined, and null', () => {
