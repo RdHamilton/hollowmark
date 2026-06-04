@@ -538,66 +538,23 @@ jobs:
         if-no-files-found: error
 
   # -------------------------------------------------------------------------
-  # Cache-warming job: populates the Playwright browser cache before the
-  # sharded E2E runners start.  Mirrors the warm job in e2e-smoke.yml.
-  #
-  # The 4 parallel shard runners share the same cache key but each starts a
-  # fresh runner — without a warm job one of them pays the cold-download cost
-  # (~29 min on a throttled runner) and the other 3 race the same key before
-  # the winning runner's cache upload completes.  Running the warm job first
-  # guarantees all 4 shards get a cache HIT.  (#815)
-  # -------------------------------------------------------------------------
-  warm-playwright-cache:
-    name: Warm Playwright browser cache (E2E)
-    needs: detect-changes
-    if: needs.detect-changes.outputs.frontend == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v6
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: '24'
-        cache: 'npm'
-        cache-dependency-path: frontend/package-lock.json
-
-    - name: Install frontend dependencies
-      run: cd frontend && npm ci
-
-    - name: Cache Playwright browsers
-      id: playwright-cache
-      uses: actions/cache@v5
-      with:
-        path: ~/.cache/ms-playwright
-        key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-        restore-keys: |
-          playwright-${{ runner.os }}-
-
-    - name: Install Playwright browsers (cache miss — full install)
-      if: steps.playwright-cache.outputs.cache-hit != 'true'
-      run: cd frontend && npx playwright install chromium --with-deps
-      env:
-        DEBIAN_FRONTEND: noninteractive
-
-    - name: Install Playwright system dependencies (cache hit)
-      if: steps.playwright-cache.outputs.cache-hit == 'true'
-      run: cd frontend && npx playwright install-deps chromium
-      env:
-        DEBIAN_FRONTEND: noninteractive
-
-  # -------------------------------------------------------------------------
   # Frontend E2E sharded across 4 parallel runners.
   # Wall-clock target: ~10-12 min (vs. 38-42 min unsharded).
+  #
+  # Runs inside mcr.microsoft.com/playwright:v1.56.1-jammy so Chromium + all
+  # system deps are pre-installed — no cdn.playwright.dev download, no cache
+  # action, no warm-playwright-cache job needed.  (#815 iteration 4)
+  #
+  # Container pinning: tag MUST match the repo's @playwright/test version
+  # (1.56.1).  Update this tag when upgrading @playwright/test.
   # -------------------------------------------------------------------------
   frontend-e2e:
     name: Frontend E2E Tests (shard ${{ matrix.shard }}/4)
-    needs: [detect-changes, build-bff-for-e2e, warm-playwright-cache]
+    needs: [detect-changes, build-bff-for-e2e]
     if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-jammy
     timeout-minutes: 18
 
     strategy:
@@ -618,38 +575,11 @@ jobs:
     - name: Make BFF binary executable
       run: chmod +x bin/mtga-bff
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: '24'
-        cache: 'npm'
-        cache-dependency-path: frontend/package-lock.json
-
     - name: Install dependencies
       run: cd frontend && npm ci
 
-    - name: Cache Playwright browsers
-      id: playwright-cache
-      uses: actions/cache@v5
-      with:
-        path: ~/.cache/ms-playwright
-        key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-        restore-keys: |
-          playwright-${{ runner.os }}-
-
-    # warm-playwright-cache job runs first — shards should always hit.
-    # Safety fallback in case the warm job's cache upload failed. (#815)
-    - name: Install Playwright browsers (cache miss fallback — should not occur)
-      if: steps.playwright-cache.outputs.cache-hit != 'true'
-      run: cd frontend && npx playwright install chromium --with-deps
-      env:
-        DEBIAN_FRONTEND: noninteractive
-
-    - name: Install Playwright system deps (cache hit — normal path)
-      if: steps.playwright-cache.outputs.cache-hit == 'true'
-      run: cd frontend && npx playwright install-deps chromium
-      env:
-        DEBIAN_FRONTEND: noninteractive
+    # No `playwright install` or `playwright install-deps` steps.
+    # Browsers are pre-installed in the container at /ms-playwright.
 
     - name: Run E2E tests (shard ${{ matrix.shard }}/4)
       run: cd frontend && npm run test:e2e:pipeline -- --shard=${{ matrix.shard }}/4 --reporter=blob
