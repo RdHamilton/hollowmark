@@ -412,6 +412,122 @@ func TestDispatcher_OnBFFSuccess_NotFiredOnFailure(t *testing.T) {
 		"onBFFSuccess must NOT be called when buffering on terminal failure")
 }
 
+// ---------------------------------------------------------------------------
+// SendBatch tests (#788 L1-b)
+// ---------------------------------------------------------------------------
+
+// TestDispatcher_SendBatch_Success verifies that SendBatch POSTs a JSON array
+// to the BFF, fires onBFFSuccess, and returns nil on a 202 response.
+func TestDispatcher_SendBatch_Success(t *testing.T) {
+	var receivedBody []byte
+	var requestCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		receivedBody = body
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	var successCalls atomic.Int32
+	buf := dispatch.NewRingBuffer(10)
+	d := dispatch.New(srv.URL, "/v1/ingest/events", "test-tok").
+		WithBuffer(buf).
+		WithOnBFFSuccess(func() { successCalls.Add(1) })
+
+	events := []contract.DaemonEvent{
+		{Type: "match.started", AccountID: "acc", SessionID: "sess", Sequence: 1},
+		{Type: "draft.pick", AccountID: "acc", SessionID: "sess", Sequence: 2},
+		{Type: "match.game_ended", AccountID: "acc", SessionID: "sess", Sequence: 3},
+	}
+
+	err := d.SendBatch(context.Background(), events)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, requestCount.Load(), "BFF must be hit exactly once")
+	assert.EqualValues(t, 1, successCalls.Load(), "onBFFSuccess must fire exactly once on success")
+
+	// Verify the body is a JSON array containing all 3 events.
+	var decoded []contract.DaemonEvent
+	require.NoError(t, json.Unmarshal(receivedBody, &decoded),
+		"body must be a valid JSON array")
+	require.Len(t, decoded, 3)
+	assert.Equal(t, "match.started", decoded[0].Type)
+	assert.Equal(t, "draft.pick", decoded[1].Type)
+	assert.Equal(t, "match.game_ended", decoded[2].Type)
+}
+
+// TestDispatcher_SendBatch_RetryExhaustion_ReEnqueuesPerEvent verifies that
+// when SendBatch exhausts all retries, each event in the batch is individually
+// re-enqueued in the RingBuffer (not as a single batch blob).
+func TestDispatcher_SendBatch_RetryExhaustion_ReEnqueuesPerEvent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	buf := dispatch.NewRingBuffer(10)
+	d := dispatch.New(srv.URL, "/v1/ingest/events", "tok").WithBuffer(buf)
+
+	events := []contract.DaemonEvent{
+		{Type: "event.a", AccountID: "acc", SessionID: "sess", Sequence: 1},
+		{Type: "event.b", AccountID: "acc", SessionID: "sess", Sequence: 2},
+		{Type: "event.c", AccountID: "acc", SessionID: "sess", Sequence: 3},
+	}
+
+	err := d.SendBatch(context.Background(), events)
+	// SendBatch returns an error on retry exhaustion (unlike SendOrBuffer which silences it).
+	assert.Error(t, err, "SendBatch must return an error on retry exhaustion")
+
+	// Buffer must contain 3 individual event slots — not 1 batch blob.
+	drained := buf.Drain()
+	require.Len(t, drained, 3, "each event must be individually re-enqueued in the ring buffer")
+
+	// Each slot must decode as a single DaemonEvent (not an array).
+	for i, b := range drained {
+		var e contract.DaemonEvent
+		require.NoError(t, json.Unmarshal(b, &e), "slot %d must be a single DaemonEvent", i)
+		assert.NotEmpty(t, e.Type, "slot %d must have a non-empty event type", i)
+	}
+}
+
+// TestDispatcher_SendBatch_InheritsDoSend429Backoff verifies that SendBatch
+// inherits the 429-aware backoff from doSend — on a 429 with Retry-After: 1,
+// the dispatcher waits ~1s before retrying, and the second attempt succeeds.
+func TestDispatcher_SendBatch_InheritsDoSend429Backoff(t *testing.T) {
+	var requestCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := requestCount.Add(1)
+		if n == 1 {
+			// First attempt: return 429 with Retry-After: 1s.
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		// Second attempt: succeed.
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	buf := dispatch.NewRingBuffer(10)
+	d := dispatch.New(srv.URL, "/v1/ingest/events", "tok").
+		WithBuffer(buf).
+		With429MaxBackoff(2 * time.Second)
+
+	events := []contract.DaemonEvent{
+		{Type: "test.event", AccountID: "acc", SessionID: "sess", Sequence: 1},
+	}
+
+	start := time.Now()
+	err := d.SendBatch(context.Background(), events)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "SendBatch must succeed on 2nd attempt after 429 backoff")
+	assert.EqualValues(t, 2, requestCount.Load(), "BFF must be hit exactly twice")
+	assert.GreaterOrEqual(t, elapsed, 1*time.Second,
+		"429 backoff must hold for at least 1s (Retry-After: 1)")
+}
+
 // TestSetToken verifies that SetToken updates the bearer token used on next send.
 func TestSetToken(t *testing.T) {
 	var lastAuth string
