@@ -29,6 +29,16 @@ import * as path from 'path';
 
 const BASE_URL = process.env.STAGING_SPA_URL || 'https://stg-app.vaultmtg.app';
 const FAPI_BASE = 'https://clerk.stg-app.vaultmtg.app';
+
+/**
+ * Guard: skip the entire describe block when STAGING_SPA_URL is not set.
+ * These tests require live staging infrastructure (SSE injection, Clerk backend
+ * key, daemon inject binary) that does not exist in the local/CI E2E environment.
+ * They are intentional post-merge staging-verify specs (PR #2963) — they must
+ * not run in the CI smoke suite.  Set STAGING_SPA_URL to opt-in.
+ * Tracked: vault-mtg-tickets#815
+ */
+const STAGING_ONLY = !process.env.STAGING_SPA_URL;
 const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY ?? '';
 const CI_SMOKE_USER_ID = 'user_3EamRFdUZdQl1yYPf4Yg7OIQqm4';
 const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR ?? `${process.env.HOME}/vaultmtg-2963-verify/`;
@@ -112,6 +122,11 @@ test.describe('PR #2963 draft-ratings fix — live pack grid names+grades', () =
   test.setTimeout(120_000);
 
   test.beforeEach(async ({ context }) => {
+    // Skip when STAGING_SPA_URL is not set — these tests require live staging
+    // infrastructure (Clerk backend key, SSE inject binary) absent in local/CI.
+    // Set STAGING_SPA_URL to run these during post-merge staging verification.
+    // Tracked: vault-mtg-tickets#815
+    test.skip(STAGING_ONLY, 'STAGING_SPA_URL not set — staging-only spec, skipped in local/CI smoke');
     await authenticate(context);
   });
 

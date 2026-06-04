@@ -34,12 +34,26 @@ import { test, expect } from '@playwright/test';
 const BASE_URL = process.env.R17_BASE_URL || 'https://stg-app.vaultmtg.app';
 const BFF_URL = process.env.R17_BFF_URL || 'https://staging-api.vaultmtg.app';
 
+/**
+ * Guard: skip all R-17 smoke tests when R17_BASE_URL is not set.
+ * These tests hit the live staging environment (stg-app.vaultmtg.app) and are
+ * intentional post-EC2-rebuild staging-verify specs — they must not run in the
+ * local/CI smoke suite which targets localhost:3000.
+ * Set R17_BASE_URL to opt-in during post-merge staging verification.
+ * Tracked: vault-mtg-tickets#815
+ */
+const STAGING_ONLY = !process.env.R17_BASE_URL;
+
 // ---------------------------------------------------------------------------
 // Assertion 1 — SPA loads at root
 // ---------------------------------------------------------------------------
 
 test.describe('R-17 SMOKE-4: SPA loads at root', () => {
   test('root / — SPA shell renders, no blank page, no JS console error @smoke', async ({ page }) => {
+    // Skip when R17_BASE_URL is not set — requires live staging environment.
+    // Set R17_BASE_URL to run during post-EC2-rebuild staging verification.
+    // Tracked: vault-mtg-tickets#815
+    test.skip(STAGING_ONLY, 'R17_BASE_URL not set — staging-only spec, skipped in local/CI smoke');
     const consoleErrors: string[] = [];
 
     page.on('console', (msg) => {
@@ -117,6 +131,10 @@ test.describe('R-17 SMOKE-4: SPA loads at root', () => {
 
 test.describe('R-17 SMOKE-4: /sign-in renders Clerk sign-in form', () => {
   test('/sign-in — Clerk sign-in form is visible @smoke', async ({ page }) => {
+    // Skip when R17_BASE_URL is not set — requires live staging environment.
+    // Set R17_BASE_URL to run during post-EC2-rebuild staging verification.
+    // Tracked: vault-mtg-tickets#815
+    test.skip(STAGING_ONLY, 'R17_BASE_URL not set — staging-only spec, skipped in local/CI smoke');
     await page.goto(BASE_URL + '/sign-in', { waitUntil: 'domcontentloaded' });
 
     // Wait for React to mount.
@@ -154,6 +172,10 @@ test.describe('R-17 SMOKE-4: /sign-in renders Clerk sign-in form', () => {
 
 test.describe('R-17 SMOKE-4: BFF /healthz reachable from SPA origin (CORS)', () => {
   test('fetch() /healthz from inside the page — 200 proves CORS preflight passes @smoke', async ({ page }) => {
+    // Skip when R17_BASE_URL is not set — requires live staging environment.
+    // Set R17_BASE_URL to run during post-EC2-rebuild staging verification.
+    // Tracked: vault-mtg-tickets#815
+    test.skip(STAGING_ONLY, 'R17_BASE_URL not set — staging-only spec, skipped in local/CI smoke');
     await page.goto(BASE_URL + '/', { waitUntil: 'domcontentloaded' });
 
     // Wait for React to mount before running the in-page fetch.
@@ -190,6 +212,10 @@ test.describe('R-17 SMOKE-4: BFF /healthz reachable from SPA origin (CORS)', () 
 
 test.describe('R-17 SMOKE-4: Clerk middleware rejects unauthenticated API call', () => {
   test('fetch /api/v1/health/daemon with no auth — 401 (Clerk middleware regression check) @smoke', async ({ page }) => {
+    // Skip when R17_BASE_URL is not set — requires live staging environment.
+    // Set R17_BASE_URL to run during post-EC2-rebuild staging verification.
+    // Tracked: vault-mtg-tickets#815
+    test.skip(STAGING_ONLY, 'R17_BASE_URL not set — staging-only spec, skipped in local/CI smoke');
     await page.goto(BASE_URL + '/', { waitUntil: 'domcontentloaded' });
 
     // Wait for React to mount.
