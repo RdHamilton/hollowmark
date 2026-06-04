@@ -1,25 +1,30 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type BrowserContext } from '@playwright/test';
 
 /**
- * Staging SPA Smoke Suite (#1933, updated #678)
+ * Staging SPA Smoke Suite (#1933, updated #678, real-credential auth 2026-06-02)
  *
- * Authenticates via Clerk testing tokens and navigates every SPA route at
- * stg-app.vaultmtg.app, asserting no blank screen and no React error boundary.
+ * Authenticates via Backend API sign-in-token + FAPI and navigates every SPA
+ * route at stg-app.vaultmtg.app, asserting no blank screen and no React error
+ * boundary.
  *
- * Authentication:
- *   Uses Clerk's official testing token API (CLERK_SECRET_KEY) to establish a
- *   session programmatically without going through the sign-in UI, without
- *   requiring a dedicated smoke user account, and without creating billable MAU
- *   sessions.
+ * Authentication approach (FAPI sign-in-token):
+ *   The staging Clerk instance is environment_type=production (pk_live_*).
+ *   Testing tokens (POST /v1/testing_tokens) are dev-instance only and fail on
+ *   pk_live_* instances. The correct headless auth chain for production instances:
+ *
+ *   1. POST /v1/sign_in_tokens (Backend API) → one-time ticket for ci-smoke user
+ *   2. POST /v1/client/sign_ins?strategy=ticket (FAPI) → session cookies
+ *   3. Inject __client + __client_uat cookies into Playwright browser context
+ *   4. Navigate — Clerk JS reads the cookies and establishes the session
+ *
+ *   The ci-smoke@vaultmtg.app account (user_3EamRFdUZdQl1yYPf4Yg7OIQqm4) is the
+ *   dedicated headless smoke account. It has no match/draft data on staging;
+ *   data-driven surfaces show empty states (authenticated rendering still verified).
  *
  * Auth-enforcement policy (#678):
  *   If CLERK_SECRET_KEY is absent, the suite reports INCONCLUSIVE and FAILS —
- *   it does NOT silently skip and report PASS. A smoke that skips all
- *   authenticated surfaces is worse than no test: it produces false confidence.
- *   The CI workflow (deploy-spa-staging.yml) always supplies CLERK_SECRET_KEY
- *   from secrets; absence in CI indicates a secrets misconfiguration and must
- *   surface as a hard failure. Local developers who genuinely lack the key will
- *   see the INCONCLUSIVE failure message, not a silent green result.
+ *   it does NOT silently skip and report PASS. The CI workflow always supplies
+ *   CLERK_SECRET_KEY from secrets; absence indicates a secrets misconfiguration.
  *
  * waitUntil strategy (#1949):
  *   All page.goto() calls use 'domcontentloaded' instead of 'networkidle'.
@@ -27,17 +32,15 @@ import { test, expect, type Page } from '@playwright/test';
  *   on GitHub-hosted runners, causing intermittent 30 s timeouts.
  *
  * Verdict reporting (#678):
- *   The final test in every protected-routes describe emits a structured verdict
- *   banner that explicitly names which surfaces were exercised (AUTHENTICATED)
- *   and which were not, so CI log readers can tell at a glance what was covered.
- *   Verdict: PASS (authenticated) = all surfaces reached.
- *   Verdict: INCONCLUSIVE (unauthenticated) = auth unavailable → hard FAIL.
+ *   The final test in the protected-routes describe emits a structured verdict
+ *   banner naming surfaces exercised (AUTHENTICATED) vs not, so CI log readers
+ *   can tell at a glance what was covered.
  *
  * Required environment variables:
- *   CLERK_SECRET_KEY  — Clerk Backend API secret key (sk_*) used to generate
- *                       testing tokens; never exposed in the browser bundle.
+ *   CLERK_SECRET_KEY  — Clerk Backend API secret key (sk_live_* for staging).
  *                       REQUIRED. Absence causes INCONCLUSIVE hard failure.
- *   STAGING_SPA_URL   — override staging SPA base URL (optional)
+ *   STAGING_SPA_URL   — Override staging SPA base URL (optional).
+ *   CI_SMOKE_USER_ID  — Override ci-smoke Clerk user ID (optional).
  */
 
 // ---------------------------------------------------------------------------
@@ -49,6 +52,8 @@ const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY ?? '';
 // default. `??` only falls back on `undefined`/`null`, which left
 // BASE_URL = '' when STAGING_SPA_URL was set-but-empty in CI (#1933).
 const BASE_URL = process.env.STAGING_SPA_URL || 'https://stg-app.vaultmtg.app';
+const FAPI_BASE = 'https://clerk.stg-app.vaultmtg.app';
+const CI_SMOKE_USER_ID = process.env.CI_SMOKE_USER_ID || 'user_3EamRFdUZdQl1yYPf4Yg7OIQqm4';
 const API_BASE_URL = 'staging-api.vaultmtg.app';
 
 // ---------------------------------------------------------------------------
@@ -159,45 +164,143 @@ async function assertPageIsHealthy(page: Page, route: string): Promise<void> {
 }
 
 /**
- * Establish a Clerk session using a testing token.
+ * Establish a real Clerk session via Backend API sign-in-token + FAPI.
  *
- * Testing tokens are Clerk's official CI/E2E pattern — they authenticate a
- * session programmatically without going through the sign-in UI, without
- * requiring a dedicated smoke user account, and without creating billable MAU
- * sessions. The token is injected into the browser via a URL query parameter
- * that Clerk JS picks up automatically.
+ * This is the correct headless auth approach for production-type Clerk instances
+ * (pk_live_*). Testing tokens (POST /v1/testing_tokens) work on dev instances
+ * only and return 422 on production instances.
  *
- * Requires CLERK_SECRET_KEY (sk_*) to be set in the environment.
+ * Flow:
+ *   1. Create a sign-in token for ci-smoke@vaultmtg.app via Backend API
+ *   2. Process the token via FAPI (strategy=ticket) to get session cookies
+ *   3. Inject __client and __client_uat cookies into the browser context
+ *   4. Navigate to /home — Clerk JS reads cookies and activates the session
+ *
+ * Requires CLERK_SECRET_KEY (sk_live_*) to be set in the environment.
  * Callers must call requireAuthOrFail() before this function.
  */
 async function signIn(page: Page): Promise<void> {
-  // Generate a testing token via Clerk Backend API.
-  // Testing tokens establish a session without the sign-in UI and do not
-  // count toward MAU billing — they are Clerk's official CI/E2E pattern.
-  const tokenRes = await fetch('https://api.clerk.com/v1/testing_tokens', {
+  // Step 1: Create a sign-in token for the ci-smoke account
+  const tokenRes = await fetch('https://api.clerk.com/v1/sign_in_tokens', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${CLERK_SECRET_KEY}` },
+    headers: {
+      Authorization: `Bearer ${CLERK_SECRET_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ user_id: CI_SMOKE_USER_ID, expires_in_seconds: 300 }),
   });
   if (!tokenRes.ok) {
-    throw new Error(`Clerk testing token request failed: ${tokenRes.status} ${await tokenRes.text()}`);
+    throw new Error(`Clerk sign_in_tokens failed: ${tokenRes.status} ${await tokenRes.text()}`);
   }
-  const { token } = await tokenRes.json() as { token: string };
+  const { token: ticketToken } = await tokenRes.json() as { token: string };
 
-  // Inject the token into the browser to establish a Clerk session.
-  // Navigate to the app with the testing token in the URL — Clerk JS picks it
-  // up automatically and sets the session without any UI interaction.
-  await page.goto(`${BASE_URL}/?__clerk_testing_token=${token}`, { waitUntil: 'domcontentloaded' });
+  // Step 2: Create a FAPI client (get initial cookies)
+  const clientRes = await fetch(
+    `${FAPI_BASE}/v1/client?__clerk_api_version=2025-11-10&_clerk_js_version=6.12.1`,
+    { headers: { Origin: BASE_URL } },
+  );
+  const clientSetCookieRaw = clientRes.headers.get('set-cookie') ?? '';
+  const clientCookieHeader = clientSetCookieRaw.split(';')[0];
 
-  // In CI, DOMContentLoaded fires before the JS bundle executes because Vite
-  // emits <script type="module"> which Chromium headless treats as async.
-  // Explicitly wait for React to mount before checking the URL — otherwise
-  // waitForURL times out because the root <Navigate> hasn't rendered yet.
+  // Step 3: Sign in with the ticket strategy via FAPI
+  const signInRes = await fetch(
+    `${FAPI_BASE}/v1/client/sign_ins?__clerk_api_version=2025-11-10&_clerk_js_version=6.12.1`,
+    {
+      method: 'POST',
+      headers: {
+        Origin: BASE_URL,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Cookie: clientCookieHeader,
+      },
+      body: `strategy=ticket&ticket=${ticketToken}`,
+    },
+  );
+  if (!signInRes.ok) {
+    throw new Error(`FAPI sign_in failed: ${signInRes.status} ${await signInRes.text()}`);
+  }
+  const signInData = await signInRes.json() as {
+    response: { status: string; created_session_id: string };
+  };
+  if (signInData.response.status !== 'complete') {
+    throw new Error(`FAPI sign_in status: ${signInData.response.status} (expected complete)`);
+  }
+
+  // Extract session cookies from the sign-in response
+  // Clerk returns multiple Set-Cookie headers; raw() gives us all of them
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rawCookies: string = (signInRes.headers as any).raw?.()?.['set-cookie']?.join('\n') ?? signInRes.headers.get('set-cookie') ?? '';
+  const clientCookieMatch = rawCookies.match(/__client=([^;\s]+)/);
+  const clientUatMatch = rawCookies.match(/__client_uat=(\d+)/);
+  const clientUatHkdsMatch = rawCookies.match(/__client_uat_hKdSwoMR=(\d+)/);
+
+  const clientCookie = clientCookieMatch ? clientCookieMatch[1] : '';
+  const clientUat = clientUatMatch ? clientUatMatch[1] : String(Math.floor(Date.now() / 1000));
+  const clientUatHkds = clientUatHkdsMatch ? clientUatHkdsMatch[1] : clientUat;
+
+  // Step 4: Inject session cookies into the browser context
+  const expiry = Math.floor(Date.now() / 1000) + 86400 * 30;
+  const context: BrowserContext = page.context();
+
+  const cookiesToAdd = [
+    {
+      name: '__client_uat',
+      value: clientUat,
+      domain: '.vaultmtg.app',
+      path: '/',
+      httpOnly: false,
+      secure: true,
+      sameSite: 'None' as const,
+      expires: expiry,
+    },
+    {
+      name: '__client_uat_hKdSwoMR',
+      value: clientUatHkds,
+      domain: '.vaultmtg.app',
+      path: '/',
+      httpOnly: false,
+      secure: true,
+      sameSite: 'None' as const,
+      expires: expiry,
+    },
+  ];
+
+  if (clientCookie) {
+    cookiesToAdd.push({
+      name: '__client',
+      value: clientCookie,
+      domain: '.clerk.stg-app.vaultmtg.app',
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'None' as const,
+      expires: expiry,
+    });
+  }
+
+  await context.addCookies(cookiesToAdd);
+
+  // Step 5: Navigate to the app — Clerk JS reads the injected cookies and
+  // activates the session. Wait 12 s for Clerk JS to fully initialize and
+  // fire the first authenticated API requests.
+  await page.goto(`${BASE_URL}/home`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#root > *', { timeout: 30_000 });
+  await page.waitForTimeout(12_000);
 
-  // Wait for Clerk to process the token and the session to be established.
-  // The root redirect takes us to /home once authenticated.
-  await page.waitForURL((url) => url.pathname !== '/', { timeout: 15_000 });
-  await page.waitForSelector('[data-testid]', { timeout: 15_000 });
+  // Verify the session is active: __client_uat must be non-zero
+  const cookies = await context.cookies([BASE_URL]);
+  const uat = cookies.find(c => c.name === '__client_uat');
+  if (!uat || parseInt(uat.value) === 0) {
+    throw new Error(
+      'FAPI sign-in: __client_uat is 0 after cookie injection — session not established.\n' +
+      'The Clerk JS SDK may have reset the cookie. Check domain/SameSite configuration.',
+    );
+  }
+
+  // Verify we are NOT on the sign-in page
+  const currentPath = new URL(page.url()).pathname;
+  if (currentPath.startsWith('/sign-in')) {
+    throw new Error(`FAPI sign-in: page redirected to ${currentPath} — session rejected by Clerk JS`);
+  }
 }
 
 // ---------------------------------------------------------------------------
