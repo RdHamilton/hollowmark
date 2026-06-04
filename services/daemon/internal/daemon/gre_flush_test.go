@@ -52,7 +52,7 @@ func TestFlushGREBuffer_LifeChangesPopulated(t *testing.T) {
 	})
 
 	entries := greFlushTestEntries()
-	err := s.flushGREBuffer(context.Background(), s.sessionID, entries, true)
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "", entries, true)
 	require.NoError(t, err)
 
 	assert.Equal(t, "match.game_ended", received.Type)
@@ -90,7 +90,7 @@ func TestFlushGREBuffer_CardPlaysPopulated(t *testing.T) {
 		AccountID:   "acct-cardplay",
 	})
 
-	err := s.flushGREBuffer(context.Background(), s.sessionID,
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "",
 		[]json.RawMessage{json.RawMessage(e0), json.RawMessage(e1)}, false)
 	require.NoError(t, err)
 
@@ -124,7 +124,7 @@ func TestFlushGREBuffer_OpponentCardsPopulated(t *testing.T) {
 	})
 
 	// Single entry: ExtractOpponentCards only needs one message (no diff required)
-	err := s.flushGREBuffer(context.Background(), s.sessionID,
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "",
 		[]json.RawMessage{json.RawMessage(e0)}, false)
 	require.NoError(t, err)
 
@@ -153,7 +153,7 @@ func TestFlushGREBuffer_EmptyEntries(t *testing.T) {
 		AccountID:   "acct-empty",
 	})
 
-	err := s.flushGREBuffer(context.Background(), s.sessionID, nil, true)
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "", nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, "match.game_ended", received.Type)
 }
@@ -182,7 +182,7 @@ func TestFlushGREBuffer_NilPlayerConn(t *testing.T) {
 		AccountID:   "acct-nilseat",
 	})
 
-	err := s.flushGREBuffer(context.Background(), s.sessionID,
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "",
 		[]json.RawMessage{json.RawMessage(e0), json.RawMessage(e1)}, true)
 	require.NoError(t, err)
 
@@ -215,7 +215,7 @@ func TestFlushGREBuffer_SchemaVersion2(t *testing.T) {
 	})
 
 	// Even an empty flush must set SchemaVersion == 2.
-	err := s.flushGREBuffer(context.Background(), s.sessionID, nil, false)
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "", nil, false)
 	require.NoError(t, err)
 
 	assert.Equal(t, "match.game_ended", received.Type)
@@ -255,7 +255,7 @@ func TestFlushGREBuffer_CounterChangesPopulated(t *testing.T) {
 		AccountID:   "acct-counter",
 	})
 
-	err := s.flushGREBuffer(context.Background(), s.sessionID,
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "",
 		[]json.RawMessage{json.RawMessage(e0), json.RawMessage(e1)}, false)
 	require.NoError(t, err)
 
@@ -315,7 +315,7 @@ func TestFlushGREBuffer_MulliganPopulated(t *testing.T) {
 		json.RawMessage(ePre1),
 		json.RawMessage(eGame),
 	}
-	err := s.flushGREBuffer(context.Background(), s.sessionID, entries, false)
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "", entries, false)
 	require.NoError(t, err)
 
 	require.Equal(t, "match.game_ended", received.Type)
@@ -379,7 +379,7 @@ func TestFlushGREBuffer_PlayerOnPlay_RealLogStructure(t *testing.T) {
 		json.RawMessage(eGame1),
 		json.RawMessage(eGame2),
 	}
-	err := s.flushGREBuffer(context.Background(), s.sessionID, entries, false)
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "", entries, false)
 	require.NoError(t, err)
 
 	require.Equal(t, "match.game_ended", received.Type)
