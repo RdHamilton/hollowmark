@@ -66,10 +66,11 @@ func TestDraftPickPayload_SessionIDAttached(t *testing.T) {
 	expectedSessionID := sess.ID
 
 	// Capture what the daemon sends to the BFF.
-	var captured contract.DaemonEvent
+	// Uses eventCapture for goroutine-safe access (ADR-053 async batch dispatch).
+	var cap eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &captured)
+		cap.capture(body)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -77,6 +78,8 @@ func TestDraftPickPayload_SessionIDAttached(t *testing.T) {
 	svc := newTestServiceWithStore(t, srv.URL, store)
 
 	// Emit a BotDraft pick entry. CardIds are strings on the wire.
+	// draft.pick is a boundary event — FlushNow is called after Add so the
+	// batch reaches the BFF without waiting for the 750ms interval.
 	pickEntry := &logreader.LogEntry{
 		IsJSON: true,
 		Raw:    `{}`,
@@ -88,6 +91,10 @@ func TestDraftPickPayload_SessionIDAttached(t *testing.T) {
 	err := svc.handleEntry(context.Background(), pickEntry)
 	require.NoError(t, err)
 
+	// Allow the async batch flush to complete.
+	time.Sleep(100 * time.Millisecond)
+
+	captured := cap.get()
 	require.Equal(t, "draft.pick", captured.Type)
 
 	var pickPayload logreader.DraftPickPayload
@@ -122,10 +129,10 @@ func TestMatchCompletedPayload_DraftSessionIDAttached(t *testing.T) {
 	require.True(t, ok)
 	expectedSessionID := sess.ID
 
-	var captured contract.DaemonEvent
+	var cap1 eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &captured)
+		cap1.capture(body)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -137,9 +144,15 @@ func TestMatchCompletedPayload_DraftSessionIDAttached(t *testing.T) {
 	err := svc.handleEntry(context.Background(), matchEntry)
 	require.NoError(t, err)
 
-	require.Equal(t, "match.completed", captured.Type)
+	// Allow the async batch flush to complete (match.completed is not a
+	// forced-flush event; wait for the 750ms interval or trigger explicitly).
+	svc.batchBuffer.FlushNow()
+	time.Sleep(100 * time.Millisecond)
+
+	captured1 := cap1.get()
+	require.Equal(t, "match.completed", captured1.Type)
 	var matchPayload contract.MatchCompletedPayload
-	require.NoError(t, json.Unmarshal(captured.Payload, &matchPayload))
+	require.NoError(t, json.Unmarshal(captured1.Payload, &matchPayload))
 	require.NotNil(t, matchPayload.DraftSessionID, "match.completed must carry DraftSessionID when format matches active session")
 	assert.Equal(t, expectedSessionID, *matchPayload.DraftSessionID)
 }
@@ -161,10 +174,10 @@ func TestMatchCompletedPayload_NoDraftSessionID_NonDraftFormat(t *testing.T) {
 		},
 	})
 
-	var captured contract.DaemonEvent
+	var cap2 eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &captured)
+		cap2.capture(body)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -176,8 +189,13 @@ func TestMatchCompletedPayload_NoDraftSessionID_NonDraftFormat(t *testing.T) {
 	err := svc.handleEntry(context.Background(), matchEntry)
 	require.NoError(t, err)
 
+	// Flush and wait for async batch dispatch to complete.
+	svc.batchBuffer.FlushNow()
+	time.Sleep(100 * time.Millisecond)
+
+	captured2 := cap2.get()
 	var matchPayload contract.MatchCompletedPayload
-	require.NoError(t, json.Unmarshal(captured.Payload, &matchPayload))
+	require.NoError(t, json.Unmarshal(captured2.Payload, &matchPayload))
 	assert.Nil(t, matchPayload.DraftSessionID, "Ladder match must not carry DraftSessionID")
 }
 
