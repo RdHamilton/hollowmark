@@ -45,6 +45,37 @@ function isStaging(): boolean {
   return import.meta.env.VITE_SENTRY_ENV === 'staging';
 }
 
+/**
+ * Release channel for the current build. Single source of truth — derived from
+ * the same VITE_SENTRY_ENV signal as the prerelease selection in isCandidate().
+ * Consumers (e.g. DaemonDownload) MUST import this rather than re-deriving the
+ * channel, so the download asset name and the resolved release tag can never
+ * disagree (CLAUDE.md rule 4 — single channel coupling point).
+ *
+ * Evaluated at call time (not module load) so vi.stubEnv() works in tests.
+ */
+export function daemonChannel(): 'staging' | 'stable' {
+  return isStaging() ? 'staging' : 'stable';
+}
+
+/**
+ * Channel-aware infix inserted into the daemon artifact base name.
+ *
+ * The daemon-release pipeline (ADR-049 §1) parameterizes the macOS .pkg name by
+ * channel: the staging build publishes `vaultmtg-daemon-staging-darwin-universal.pkg`
+ * while the stable build publishes `vaultmtg-daemon-darwin-universal.pkg`.
+ *   - staging → "-staging"  → "vaultmtg-daemon-staging-darwin-universal"
+ *   - stable  → ""          → "vaultmtg-daemon-darwin-universal"
+ *
+ * NOTE: the bare Windows binary (`vaultmtg-daemon-windows-amd64.exe`) is NOT
+ * channel-parameterized — GoReleaser publishes it under the same fixed name in
+ * both channels (.goreleaser.yml archives id: windows-amd64) — so this infix is
+ * applied only to artifacts whose name carries the channel suffix.
+ */
+export function daemonArtifactChannelInfix(): string {
+  return daemonChannel() === 'staging' ? '-staging' : '';
+}
+
 export interface DaemonReleaseInfo {
   /** Full tag name, e.g. "daemon/v0.3.2" */
   tag: string;
