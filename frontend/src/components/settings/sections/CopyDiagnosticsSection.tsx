@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import LoadingButton from '../../LoadingButton';
 import { showToast } from '../../ToastContainer';
+import { daemonApiBaseUrl } from '../../../services/daemonConfig';
 
-const DIAGNOSTICS_URL = 'http://127.0.0.1:9001/api/v1/system/diagnostics';
+const DIAGNOSTICS_URL = `${daemonApiBaseUrl}/system/diagnostics`;
 
 /**
  * Minimal typed shape of the daemon diagnostics response

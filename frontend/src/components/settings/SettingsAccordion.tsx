@@ -7,7 +7,9 @@ import './SettingsAccordion.css';
 export interface SettingsAccordionItem {
   id: string;
   label: string;
-  icon?: string;
+  /** Icon shown beside the section label. Pass a ReactNode (Heroicon) — string
+   *  (legacy emoji) is still accepted for backward compatibility. */
+  icon?: ReactNode | string;
   content: ReactNode;
 }
 
@@ -27,7 +29,6 @@ export function SettingsAccordion({
   const sections: AccordionSection[] = items.map((item) => ({
     id: item.id,
     label: item.label,
-    icon: item.icon,
   }));
 
   const {

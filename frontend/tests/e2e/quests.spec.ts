@@ -195,4 +195,54 @@ test.describe('Quests', () => {
       ).toHaveLength(0);
     });
   });
+
+});
+
+// Request-budget regression guard for the staging 429 over-fetch incident.
+// Kept in its own describe (no navigating beforeEach) so the test owns the
+// single cold navigation it measures. A single cold Quests load must fire each
+// BFF endpoint AT MOST once. Before the fix (two duplicate loadQuestData
+// effects + no in-flight de-dupe + the ReplayEventHandler setup/teardown loop)
+// these endpoints were requested multiple times per load, which tripped the
+// deliberately-conservative staging rate limit (HTTP 429).
+test.describe('Quests — request budget (over-fetch regression #staging-429)', () => {
+  test('fires each BFF endpoint at most once on a cold Quests load', async ({ page }) => {
+    await setClerkSignedIn(page);
+    await mockQuestsEndpoints(page);
+
+    // Count GET requests per BFF endpoint path (ignore query strings).
+    const counts = new Map<string, number>();
+    page.on('request', (request) => {
+      if (request.method() !== 'GET') return;
+      const url = request.url();
+      const match = url.match(/\/api\/v1\/(quests\/active|quests\/history|quests\/wins\/daily|quests\/wins\/weekly|system\/account)/);
+      if (match) {
+        const key = match[1];
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    });
+
+    await page.goto('/');
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+    await page.click('a[href="/quests"]');
+    await page.waitForURL('**/quests');
+    await expect(page.locator('h1')).toContainText('Quests');
+
+    // Let all mount-time fetches settle.
+    await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {/* ignore timeout */});
+
+    for (const endpoint of [
+      'quests/active',
+      'quests/history',
+      'quests/wins/daily',
+      'quests/wins/weekly',
+      'system/account',
+    ]) {
+      const n = counts.get(endpoint) ?? 0;
+      expect(
+        n,
+        `Quests cold load requested /${endpoint} ${n} times — expected at most 1 (over-fetch regression)`
+      ).toBeLessThanOrEqual(1);
+    }
+  });
 });

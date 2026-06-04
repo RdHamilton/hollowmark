@@ -457,6 +457,119 @@ func TestRouter_SSE_ValidJWT_ResolverDBError_Returns500(t *testing.T) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// SSE endpoint — ClerkAuthSSEMiddl (?token= query-param path) — issue #778
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// The browser EventSource API cannot set Authorization headers, so the SPA
+// appends the Clerk JWT as ?token= on every (re)connect.  These tests exercise
+// the ClerkAuthSSEMiddl path (RequireClerkAuthForSSE) through the full router.
+
+// depsWithClerkSSE builds RouterDeps with both ClerkAuthMiddl and
+// ClerkAuthSSEMiddl populated (the production configuration).
+func depsWithClerkSSE(t *testing.T) RouterDeps {
+	t.Helper()
+	broker := sse.NewWithHeartbeat(0)
+	ingest := handlers.NewIngestHandler(&noopBroadcaster{})
+	return RouterDeps{
+		Broker:            broker,
+		IngestHandler:     ingest,
+		ClerkAuthMiddl:    bffmiddleware.RequireClerkAuth("test-secret-key"),
+		ClerkAuthSSEMiddl: bffmiddleware.RequireClerkAuthForSSE("test-secret-key"),
+		ClerkUserResolver: bffmiddleware.ClerkUserResolver(&stubUserRepo{}),
+	}
+}
+
+// TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_NoToken verifies that when
+// ClerkAuthSSEMiddl is configured (production path), a request with no token
+// at all returns 401 — not 200 with stream headers.
+func TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_NoToken(t *testing.T) {
+	r := BuildRouter(minimalConfig(), depsWithClerkSSE(t))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/v1/events ClerkAuthSSEMiddl no token: want 401, got %d — body: %s",
+			rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); ct == "text/event-stream" {
+		t.Error("headers must NOT include text/event-stream when auth fails before stream opens")
+	}
+}
+
+// TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_EmptyQueryToken verifies that
+// ?token= with an empty value returns 401 and does not open an SSE stream.
+// This is the case Frank's frontend fix addresses: getToken() returns null,
+// EventSource URL is opened as /api/v1/events?token= (or no ?token at all).
+func TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_EmptyQueryToken(t *testing.T) {
+	r := BuildRouter(minimalConfig(), depsWithClerkSSE(t))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?token=", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/v1/events?token= empty: want 401, got %d — body: %s",
+			rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); ct == "text/event-stream" {
+		t.Error("headers must NOT include text/event-stream when auth fails before stream opens")
+	}
+}
+
+// TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_InvalidQueryToken verifies that
+// ?token=<garbage> (e.g. the literal string "null" from a JavaScript null
+// coerce, or a structurally invalid value) returns 401.
+func TestRouter_SSE_ClerkAuthSSEMiddl_Returns401_InvalidQueryToken(t *testing.T) {
+	r := BuildRouter(minimalConfig(), depsWithClerkSSE(t))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?token=null", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/v1/events?token=null: want 401, got %d — body: %s",
+			rr.Code, rr.Body.String())
+	}
+}
+
+// TestRouter_SSE_ClerkAuthSSEMiddl_ValidQueryToken_PassesAuth verifies that a
+// valid Clerk JWT passed via ?token= is accepted by ClerkAuthSSEMiddl and the
+// request reaches the SSE handler (200 + text/event-stream headers).
+//
+// Uses httptest.NewServer + a real HTTP client so the streaming SSE handler
+// does not block httptest.NewRecorder.
+func TestRouter_SSE_ClerkAuthSSEMiddl_ValidQueryToken_PassesAuth(t *testing.T) {
+	jwt := setupClerkBackend(t)
+
+	r := BuildRouter(minimalConfig(), depsWithClerkSSE(t))
+	ts := httptest.NewServer(r)
+	t.Cleanup(ts.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		ts.URL+"/api/v1/events?token="+jwt, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	// No Authorization header — only ?token= to simulate EventSource.
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/events?token=<jwt>: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Fatal("valid ?token= JWT: ClerkAuthSSEMiddl rejected the token — it should have passed through")
+	}
+	// Deferred cancel() terminates the SSE connection; ts.Close() then completes cleanly.
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // E2EUnguardedSSE — pipeline E2E bypass
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -803,4 +916,118 @@ func TestRouter_DaemonRegister_Returns503_WhenOAuthMiddlNil(t *testing.T) {
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("POST /api/v1/daemon/register with nil ClerkOAuthMiddl: want 503, got %d", rr.Code)
 	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// CORS credentials — Access-Control-Allow-Credentials (#777)
+//
+// The browser EventSource API connects with withCredentials:true, which
+// requires the server to respond with:
+//   - Access-Control-Allow-Credentials: true
+//   - Access-Control-Allow-Origin: <specific-origin>  (never "*")
+//
+// These tests guard the fix for the third sequential SSE bug: ACAO was present
+// but ACAC was absent because cors.Options{AllowCredentials: true} was missing.
+// ──────────────────────────────────────────────────────────────────────────────
+
+// corsConfig returns a Config with a specific allowed origin suitable for
+// credentialed CORS tests.  The wildcard from minimalConfig() cannot be used
+// because go-chi/cors will not emit ACAO:"*" when AllowCredentials is true.
+func corsConfig() *config.Config {
+	return &config.Config{
+		Env:                                 "development",
+		AllowedOrigins:                      []string{"https://stg-app.vaultmtg.app"},
+		DraftRatingsStalenessThresholdHours: 48,
+		DaemonLatestVersion:                 "0.1.0",
+	}
+}
+
+// TestRouter_CORS_SSE_IncludesAllowCredentials verifies that a cross-origin GET
+// to /api/v1/events with a valid allowed Origin receives
+// Access-Control-Allow-Credentials:true on the 401 response (the token is
+// absent so auth fails, but CORS headers must be present before the auth check
+// rejects the request — the CORS middleware runs first in the chain).
+func TestRouter_CORS_SSE_IncludesAllowCredentials(t *testing.T) {
+	r := BuildRouter(corsConfig(), depsWithClerk(t))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	req.Header.Set("Origin", "https://stg-app.vaultmtg.app")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	// Auth fails (no token), so we expect 401 — but CORS must have run first.
+	if got := rr.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("Access-Control-Allow-Credentials: want \"true\", got %q (was ACAC missing from cors.Options?)", got)
+	}
+
+	acao := rr.Header().Get("Access-Control-Allow-Origin")
+	if acao != "https://stg-app.vaultmtg.app" {
+		t.Errorf("Access-Control-Allow-Origin: want %q, got %q (must be specific origin, not wildcard, when credentials allowed)",
+			"https://stg-app.vaultmtg.app", acao)
+	}
+}
+
+// TestRouter_CORS_SSE_RejectsWildcardOriginWithCredentials verifies that an
+// origin NOT in the allowed list does not receive ACAO or ACAC headers — the
+// browser must be blocked from connecting with credentials to an unrecognised
+// origin.
+func TestRouter_CORS_SSE_RejectsWildcardOriginWithCredentials(t *testing.T) {
+	r := BuildRouter(corsConfig(), depsWithClerk(t))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	req.Header.Set("Origin", "https://evil.example.com")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	// The disallowed origin must not receive an ACAO header.
+	if acao := rr.Header().Get("Access-Control-Allow-Origin"); acao != "" {
+		t.Errorf("Access-Control-Allow-Origin: want empty for disallowed origin, got %q", acao)
+	}
+}
+
+// TestRouter_CORS_SSE_ValidJWT_StreamResponseHasCredentialHeaders verifies that
+// when a credentialed EventSource connects with a valid JWT and a recognised
+// Origin, the actual streaming 200 response carries ACAO and ACAC headers.
+//
+// Uses httptest.NewServer + a real HTTP client (same pattern as the existing
+// TestRouter_SSE_ValidJWT_WithResolver_ReachesHandler) so the SSE handler does
+// not block on httptest.NewRecorder.
+func TestRouter_CORS_SSE_ValidJWT_StreamResponseHasCredentialHeaders(t *testing.T) {
+	jwt := setupClerkBackend(t)
+
+	deps := depsWithClerkSSE(t)
+	r := BuildRouter(corsConfig(), deps)
+
+	ts := httptest.NewServer(r)
+	t.Cleanup(ts.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		ts.URL+"/api/v1/events?token="+jwt, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Origin", "https://stg-app.vaultmtg.app")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Fatal("valid ?token= JWT with CORS origin: unexpected 401")
+	}
+
+	if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("streaming 200: Access-Control-Allow-Credentials: want \"true\", got %q", got)
+	}
+
+	acao := resp.Header.Get("Access-Control-Allow-Origin")
+	if acao != "https://stg-app.vaultmtg.app" {
+		t.Errorf("streaming 200: Access-Control-Allow-Origin: want %q, got %q", "https://stg-app.vaultmtg.app", acao)
+	}
+	// Deferred cancel() terminates the SSE connection; ts.Close() then completes cleanly.
 }

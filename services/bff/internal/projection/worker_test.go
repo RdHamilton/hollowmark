@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/vault-mtg/services/contract"
 )
 
 // --- fakes ---
@@ -144,6 +145,40 @@ type fakeDeckStore struct {
 
 func (f *fakeDeckStore) UpsertDeck(_ context.Context, _ repository.DeckUpsert) error {
 	return f.err
+}
+
+type fakeDraftDeckCreator struct {
+	createdDecks []repository.CreateDraftDeckInput
+	returnDeck   *repository.DeckDetailRow
+	err          error
+}
+
+func (f *fakeDraftDeckCreator) CreateDraftDeck(_ context.Context, in repository.CreateDraftDeckInput) (*repository.DeckDetailRow, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.createdDecks = append(f.createdDecks, in)
+	if f.returnDeck != nil {
+		return f.returnDeck, nil
+	}
+	// Return a minimal stub so callers don't panic on nil dereference.
+	return &repository.DeckDetailRow{
+		DeckSummaryRow: repository.DeckSummaryRow{
+			ID:     "deck_stub",
+			Name:   in.Name,
+			Format: in.Format,
+			Source: "draft",
+		},
+	}, nil
+}
+
+type fakeDraftPickReader struct {
+	cardIDs []string
+	err     error
+}
+
+func (f *fakeDraftPickReader) PickCardIDsForSession(_ context.Context, _ string) ([]string, error) {
+	return f.cardIDs, f.err
 }
 
 // --- helpers ---
@@ -2378,6 +2413,328 @@ func TestProjectDraftSession_IsTrophy_SixWins(t *testing.T) {
 	}
 }
 
+// ─── Defect A: game_plays persist end-to-end (fakeGameRowWriter) ─────────────
+
+// fakeGameRowWriter captures UpsertGameRow calls and returns a predictable id.
+type fakeGameRowWriter struct {
+	upserts []struct {
+		matchID    string
+		gameNumber int
+	}
+	nextID int64
+	err    error
+}
+
+func (f *fakeGameRowWriter) UpsertGameRow(_ context.Context, matchID string, gameNumber int) (int64, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	f.upserts = append(f.upserts, struct {
+		matchID    string
+		gameNumber int
+	}{matchID, gameNumber})
+	f.nextID++
+	return f.nextID, nil
+}
+
+// fakeCardPlayStore captures InsertCardPlays calls.
+type fakeCardPlayStoreCapturing struct {
+	calls []struct {
+		gameID  int64
+		matchID string
+		entries []contract.CardPlayEntry
+	}
+	err error
+}
+
+func (f *fakeCardPlayStoreCapturing) InsertCardPlays(_ context.Context, gameID int64, matchID string, entries []contract.CardPlayEntry, _ time.Time) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.calls = append(f.calls, struct {
+		gameID  int64
+		matchID string
+		entries []contract.CardPlayEntry
+	}{gameID, matchID, entries})
+	return nil
+}
+
+// TestRunOnce_GamePlayEvent_CardPlays_PersistedViaGameRowWriter verifies
+// Defect A fix: when card_plays are present on a non-partial match.game_ended
+// event, the worker calls UpsertGameRow to create the games FK anchor, then
+// InsertCardPlays to write the per-turn rows.
+//
+// Before the fix, GameIDByMatchAndNumber always returned sql.ErrNoRows because
+// the projection worker never populated the games table — causing InsertCardPlays
+// to be silently skipped for every live match.
+func TestRunOnce_GamePlayEvent_CardPlays_PersistedViaGameRowWriter(t *testing.T) {
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":        "match-cardplay-persist-001",
+		"game_number":     1,
+		"winning_team_id": 1,
+		"turn_count":      8,
+		"duration_secs":   180,
+		"partial":         false,
+		"life_changes":    []map[string]interface{}{},
+		"card_plays": []map[string]interface{}{
+			{"game_number": 1, "turn_number": 2, "phase": "main1", "arena_id": 80001, "player_type": "player", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+			{"game_number": 1, "turn_number": 3, "phase": "main1", "arena_id": 80002, "player_type": "opponent", "action_type": "cast_spell", "zone_from": "hand", "zone_to": "stack"},
+			{"game_number": 1, "turn_number": 4, "phase": "combat", "arena_id": 80003, "player_type": "player", "action_type": "attack", "zone_from": "battlefield", "zone_to": "battlefield"},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	grw := &fakeGameRowWriter{}
+	cp := &fakeCardPlayStoreCapturing{}
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 900, UserID: 1, AccountID: "acct-persist", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 70}
+
+	w := newWorkerWithGamePlay(events, accounts, gp)
+	w.WithGameRowWriter(grw)
+	w.WithCardPlayStore(cp)
+
+	w.RunOnce(context.Background())
+
+	// AC1: match_game_results row must be written.
+	if len(gp.gamePlayInserts) != 1 {
+		t.Fatalf("expected 1 game_play (match_game_results) insert, got %d", len(gp.gamePlayInserts))
+	}
+
+	// AC2: UpsertGameRow must have been called with the correct (match_id, game_number).
+	if len(grw.upserts) != 1 {
+		t.Fatalf("expected 1 UpsertGameRow call, got %d", len(grw.upserts))
+	}
+	if grw.upserts[0].matchID != "match-cardplay-persist-001" {
+		t.Errorf("UpsertGameRow match_id: want match-cardplay-persist-001, got %q", grw.upserts[0].matchID)
+	}
+	if grw.upserts[0].gameNumber != 1 {
+		t.Errorf("UpsertGameRow game_number: want 1, got %d", grw.upserts[0].gameNumber)
+	}
+
+	// AC3: InsertCardPlays must have been called with the game_id returned by UpsertGameRow.
+	if len(cp.calls) != 1 {
+		t.Fatalf("expected 1 InsertCardPlays call, got %d — card plays were silently skipped", len(cp.calls))
+	}
+	if cp.calls[0].gameID != 1 {
+		t.Errorf("InsertCardPlays game_id: want 1 (from fakeGameRowWriter), got %d", cp.calls[0].gameID)
+	}
+	if len(cp.calls[0].entries) != 3 {
+		t.Errorf("InsertCardPlays entries: want 3, got %d", len(cp.calls[0].entries))
+	}
+
+	// AC4: event marked projected.
+	if len(events.projected) != 1 || events.projected[0] != 900 {
+		t.Errorf("expected row 900 marked projected, got %v", events.projected)
+	}
+}
+
+// TestRunOnce_GamePlayEvent_CardPlays_PartialSkipsGameRowUpsert verifies that
+// partial events (no confirmed match_id/game_number) do NOT call UpsertGameRow
+// or InsertCardPlays — partial flushes may carry card plays but must not create
+// spurious games rows for unconfirmed matches.
+func TestRunOnce_GamePlayEvent_CardPlays_PartialSkipsGameRowUpsert(t *testing.T) {
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":     "match-partial-cp-001",
+		"game_number":  1,
+		"partial":      true, // GRE buffer flush — game not yet confirmed complete
+		"life_changes": []map[string]interface{}{},
+		"card_plays": []map[string]interface{}{
+			{"game_number": 1, "turn_number": 1, "phase": "main1", "arena_id": 80001, "player_type": "player", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	grw := &fakeGameRowWriter{}
+	cp := &fakeCardPlayStoreCapturing{}
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 901, UserID: 1, AccountID: "acct-partial-cp", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 2},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 71}
+
+	w := newWorkerWithGamePlay(events, accounts, gp)
+	w.WithGameRowWriter(grw)
+	w.WithCardPlayStore(cp)
+
+	w.RunOnce(context.Background())
+
+	// match_game_results still written (partial flag stored there).
+	if len(gp.gamePlayInserts) != 1 {
+		t.Fatalf("expected 1 game_play insert for partial event, got %d", len(gp.gamePlayInserts))
+	}
+	if !gp.gamePlayInserts[0].Partial {
+		t.Errorf("Partial: want true on insert, got false")
+	}
+
+	// UpsertGameRow must NOT be called for partial events.
+	if len(grw.upserts) != 0 {
+		t.Errorf("UpsertGameRow must not be called for partial events, got %d calls", len(grw.upserts))
+	}
+	// InsertCardPlays must NOT be called for partial events.
+	if len(cp.calls) != 0 {
+		t.Errorf("InsertCardPlays must not be called for partial events, got %d calls", len(cp.calls))
+	}
+
+	if len(events.projected) != 1 || events.projected[0] != 901 {
+		t.Errorf("expected row 901 marked projected, got %v", events.projected)
+	}
+}
+
+// TestRunOnce_GamePlayEvent_CardPlays_NoCardPlays_GameRowNotUpserted verifies that
+// UpsertGameRow is NOT called when card_plays is empty — no FK anchor needed.
+func TestRunOnce_GamePlayEvent_CardPlays_NoCardPlays_GameRowNotUpserted(t *testing.T) {
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":     "match-no-cp-001",
+		"game_number":  1,
+		"partial":      false,
+		"life_changes": []map[string]interface{}{},
+		// card_plays intentionally absent
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	grw := &fakeGameRowWriter{}
+	cp := &fakeCardPlayStoreCapturing{}
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 902, UserID: 1, AccountID: "acct-no-cp", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 3},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 72}
+
+	w := newWorkerWithGamePlay(events, accounts, gp)
+	w.WithGameRowWriter(grw)
+	w.WithCardPlayStore(cp)
+
+	w.RunOnce(context.Background())
+
+	if len(gp.gamePlayInserts) != 1 {
+		t.Fatalf("expected 1 game_play insert, got %d", len(gp.gamePlayInserts))
+	}
+	// No card plays → no games row upsert needed.
+	if len(grw.upserts) != 0 {
+		t.Errorf("UpsertGameRow must not be called when card_plays is empty, got %d calls", len(grw.upserts))
+	}
+	if len(cp.calls) != 0 {
+		t.Errorf("InsertCardPlays must not be called when card_plays is empty, got %d calls", len(cp.calls))
+	}
+
+	if len(events.projected) != 1 || events.projected[0] != 902 {
+		t.Errorf("expected row 902 marked projected, got %v", events.projected)
+	}
+}
+
+// ─── Defect B: seat attribution preserved through projection ─────────────────
+
+// TestRunOnce_GamePlayEvent_CardPlays_SeatAttributionPreserved verifies that
+// player_type values set by the daemon are passed verbatim through the BFF
+// projection to InsertCardPlays.
+//
+// Match 66587027 had all 70 plays attributed to "opponent" because the daemon's
+// GRE buffer window did not contain the connectResp (nil-seat degradation).
+// The BFF projection must preserve whatever player_type the daemon sent — it
+// does not re-derive attribution. The daemon #2940 fix ensures correct
+// attribution for live captures going forward.
+//
+// This test asserts: given a payload where player_type is mixed ("player" and
+// "opponent"), the projection passes all entries to InsertCardPlays with their
+// player_type values intact — no re-attribution, no silent conversion.
+func TestRunOnce_GamePlayEvent_CardPlays_SeatAttributionPreserved(t *testing.T) {
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":        "match-seat-attr-001",
+		"game_number":     1,
+		"winning_team_id": 1,
+		"turn_count":      10,
+		"partial":         false,
+		"life_changes":    []map[string]interface{}{},
+		// Known-seat fixture: 4 player plays and 4 opponent plays (matches 418e657a ratio).
+		"card_plays": []map[string]interface{}{
+			{"game_number": 1, "turn_number": 1, "phase": "main1", "arena_id": 80001, "player_type": "player", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+			{"game_number": 1, "turn_number": 2, "phase": "main1", "arena_id": 80002, "player_type": "opponent", "action_type": "cast_spell", "zone_from": "hand", "zone_to": "stack"},
+			{"game_number": 1, "turn_number": 3, "phase": "combat", "arena_id": 80003, "player_type": "player", "action_type": "attack", "zone_from": "battlefield", "zone_to": "battlefield"},
+			{"game_number": 1, "turn_number": 3, "phase": "combat", "arena_id": 80004, "player_type": "opponent", "action_type": "block", "zone_from": "battlefield", "zone_to": "battlefield"},
+			{"game_number": 1, "turn_number": 4, "phase": "main1", "arena_id": 80005, "player_type": "player", "action_type": "land_drop", "zone_from": "hand", "zone_to": "battlefield"},
+			{"game_number": 1, "turn_number": 4, "phase": "main1", "arena_id": 80006, "player_type": "opponent", "action_type": "land_drop", "zone_from": "hand", "zone_to": "battlefield"},
+			{"game_number": 1, "turn_number": 5, "phase": "main2", "arena_id": 80007, "player_type": "player", "action_type": "cast_spell", "zone_from": "hand", "zone_to": "stack"},
+			{"game_number": 1, "turn_number": 5, "phase": "main2", "arena_id": 80008, "player_type": "opponent", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	grw := &fakeGameRowWriter{}
+	cp := &fakeCardPlayStoreCapturing{}
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 903, UserID: 1, AccountID: "acct-seat-attr", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 5},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 73}
+
+	w := newWorkerWithGamePlay(events, accounts, gp)
+	w.WithGameRowWriter(grw)
+	w.WithCardPlayStore(cp)
+
+	w.RunOnce(context.Background())
+
+	if len(gp.gamePlayInserts) != 1 {
+		t.Fatalf("expected 1 game_play insert, got %d", len(gp.gamePlayInserts))
+	}
+	if len(cp.calls) != 1 {
+		t.Fatalf("expected 1 InsertCardPlays call, got %d", len(cp.calls))
+	}
+
+	entries := cp.calls[0].entries
+	if len(entries) != 8 {
+		t.Fatalf("InsertCardPlays entries: want 8, got %d", len(entries))
+	}
+
+	// Count player vs opponent plays in the entries passed to InsertCardPlays.
+	playerPlays := 0
+	opponentPlays := 0
+	for _, e := range entries {
+		switch e.PlayerType {
+		case "player":
+			playerPlays++
+		case "opponent":
+			opponentPlays++
+		default:
+			t.Errorf("unexpected player_type %q in entry", e.PlayerType)
+		}
+	}
+
+	// Correct attribution: 4 player and 4 opponent plays must be preserved as sent.
+	if playerPlays != 4 {
+		t.Errorf("player plays: want 4, got %d — seat attribution not preserved", playerPlays)
+	}
+	if opponentPlays != 4 {
+		t.Errorf("opponent plays: want 4, got %d — seat attribution not preserved", opponentPlays)
+	}
+
+	// Specific arena IDs must be preserved (no reordering that changes attribution).
+	for i, e := range entries {
+		expectedArenaID := 80001 + i
+		if e.ArenaID != expectedArenaID {
+			t.Errorf("entries[%d] ArenaID: want %d, got %d", i, expectedArenaID, e.ArenaID)
+		}
+	}
+
+	if len(events.projected) != 1 || events.projected[0] != 903 {
+		t.Errorf("expected row 903 marked projected, got %v", events.projected)
+	}
+}
+
 // TestProjectDraftSession_IsTrophy_DraftStarted_NotQueried verifies that
 // GetWinsForSession is NOT called for draft.started events — trophy is only
 // computed on draft.completed.
@@ -2414,5 +2771,137 @@ func TestProjectDraftSession_IsTrophy_DraftStarted_NotQueried(t *testing.T) {
 	}
 	if len(events.projected) != 1 || events.projected[0] != 702 {
 		t.Errorf("expected row 702 marked projected, got %v", events.projected)
+	}
+}
+
+// TestProjectDraftCompleted_CreatesDraftDeck verifies that when draft.completed
+// is projected and WithDraftDeckCreator + WithDraftPickReader are wired, a deck
+// row is created from the session's picks.
+func TestProjectDraftCompleted_CreatesDraftDeck(t *testing.T) {
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{{
+			ID:        801,
+			AccountID: "acct-draft-1",
+			EventType: "draft.completed",
+			Payload: makePayload(t, map[string]interface{}{
+				"session_id": "sess-draft-001",
+				"event_name": "QuickDraft_SOS_20260526",
+				"set_code":   "SOS",
+				"draft_type": "BotDraft",
+				"status":     "completed",
+			}),
+			OccurredAt: time.Now(),
+		}},
+	}
+	drafts := &fakeDraftStore{winsForSession: 3}
+	accounts := &fakeAccountStore{accountID: 42}
+	deckCreator := &fakeDraftDeckCreator{}
+	pickReader := &fakeDraftPickReader{
+		cardIDs: []string{"102470", "102471", "102472", "102470"}, // 102470 appears twice
+	}
+
+	worker := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	worker.WithDraftDeckCreator(deckCreator)
+	worker.WithDraftPickReader(pickReader)
+
+	worker.RunOnce(context.Background())
+
+	// draft.completed should project the session.
+	if len(drafts.upserts) == 0 {
+		t.Fatal("expected draft session upsert from draft.completed")
+	}
+	if drafts.upserts[0].Status != "completed" {
+		t.Errorf("expected status=completed, got %q", drafts.upserts[0].Status)
+	}
+
+	// A deck should have been created for the session.
+	if len(deckCreator.createdDecks) != 1 {
+		t.Fatalf("expected 1 CreateDraftDeck call, got %d", len(deckCreator.createdDecks))
+	}
+	created := deckCreator.createdDecks[0]
+	if created.DraftSessionID != "sess-draft-001" {
+		t.Errorf("DraftSessionID: want %q, got %q", "sess-draft-001", created.DraftSessionID)
+	}
+	if created.AccountID != 42 {
+		t.Errorf("AccountID: want 42, got %d", created.AccountID)
+	}
+	// 4 raw card IDs passed as-is (no deduplication at the projection layer).
+	if len(created.CardIDs) != 4 {
+		t.Errorf("expected 4 card IDs (raw list), got %d", len(created.CardIDs))
+	}
+	if created.Format != "Limited" {
+		t.Errorf("Format: want %q, got %q", "Limited", created.Format)
+	}
+}
+
+// TestProjectDraftCompleted_NoPicks_SkipsDeckCreation verifies that when there
+// are no picks for the session, deck creation is skipped gracefully.
+func TestProjectDraftCompleted_NoPicks_SkipsDeckCreation(t *testing.T) {
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{{
+			ID:        802,
+			AccountID: "acct-draft-2",
+			EventType: "draft.completed",
+			Payload: makePayload(t, map[string]interface{}{
+				"session_id": "sess-draft-002",
+				"event_name": "QuickDraft_SOS_20260526",
+				"set_code":   "SOS",
+				"status":     "completed",
+			}),
+			OccurredAt: time.Now(),
+		}},
+	}
+	drafts := &fakeDraftStore{}
+	accounts := &fakeAccountStore{accountID: 43}
+	deckCreator := &fakeDraftDeckCreator{}
+	pickReader := &fakeDraftPickReader{cardIDs: nil} // no picks
+
+	worker := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	worker.WithDraftDeckCreator(deckCreator)
+	worker.WithDraftPickReader(pickReader)
+
+	worker.RunOnce(context.Background())
+
+	// Session should still be projected.
+	if len(drafts.upserts) == 0 {
+		t.Fatal("expected session upsert even with no picks")
+	}
+	// No deck should be created.
+	if len(deckCreator.createdDecks) != 0 {
+		t.Errorf("expected no deck creation when picks are empty, got %d", len(deckCreator.createdDecks))
+	}
+}
+
+// TestProjectDraftCompleted_WithoutDeckCreator_NoError verifies that when
+// WithDraftDeckCreator is not wired, draft.completed still projects the session
+// without error (backward compatibility).
+func TestProjectDraftCompleted_WithoutDeckCreator_NoError(t *testing.T) {
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{{
+			ID:        803,
+			AccountID: "acct-draft-3",
+			EventType: "draft.completed",
+			Payload: makePayload(t, map[string]interface{}{
+				"session_id": "sess-draft-003",
+				"event_name": "QuickDraft_SOS_20260526",
+				"set_code":   "SOS",
+				"status":     "completed",
+			}),
+			OccurredAt: time.Now(),
+		}},
+	}
+	drafts := &fakeDraftStore{}
+	accounts := &fakeAccountStore{accountID: 44}
+
+	worker := newWorker(events, accounts, &fakeMatchStore{}, drafts)
+	// Intentionally NOT wiring WithDraftDeckCreator.
+
+	worker.RunOnce(context.Background())
+
+	if len(drafts.upserts) == 0 {
+		t.Fatal("expected session upsert even without deck creator")
+	}
+	if len(events.projected) != 1 || events.projected[0] != 803 {
+		t.Errorf("expected row 803 marked projected, got %v", events.projected)
 	}
 }

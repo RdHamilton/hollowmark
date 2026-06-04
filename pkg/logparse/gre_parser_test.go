@@ -1569,6 +1569,160 @@ func makeHandObjects(ownerSeatID, handZoneID int, grpIDs []int) []GREGameObject 
 	return objs
 }
 
+// TestParseGamePlaysResult_ZoneDiffAndAnnotationOverlap_NoDuplication is the
+// regression test for the cross-pass dedup bug.
+//
+// Root cause: the zone-diff pass (detectZoneChangesWithZones) registered its
+// seenKey entries with a hardcoded instanceID of 0:
+//
+//	seenKey[fmt.Sprintf("%d:%d:%s", 0, zc.TurnNumber, zc.ActionType)] = true
+//
+// The annotation pass keys on the REAL instanceID:
+//
+//	key := fmt.Sprintf("%d:%d:%s", instanceID, turnNumber, actionType)
+//
+// These two namespaces never intersect → for consecutive GameStateMessage pairs
+// that BOTH carry full gameObjects snapshots (triggering detectZoneChangesWithZones)
+// AND carry a matching AnnotationType_ZoneTransfer annotation, both passes emit
+// events for the same play → double-count.
+//
+// This test MUST FAIL before the fix (two plays emitted for one action) and
+// PASS after (exactly one play emitted).
+func TestParseGamePlaysResult_ZoneDiffAndAnnotationOverlap_NoDuplication(t *testing.T) {
+	// Zone IDs used in this fixture. Both messages carry an explicit "zones"
+	// array so zone names resolve via the ZoneType map (not the fallback modulo
+	// method). instanceID=42, grpID=99001, controllerSeatID=1 (local player).
+	const (
+		handZoneID  = 31
+		stackZoneID = 27
+		instanceID  = 42
+		grpID       = 99001
+		turnNumber  = 3
+	)
+
+	zones := []interface{}{
+		map[string]interface{}{
+			"zoneId": float64(handZoneID),
+			"type":   "ZoneType_Hand",
+		},
+		map[string]interface{}{
+			"zoneId": float64(stackZoneID),
+			"type":   "ZoneType_Stack",
+		},
+	}
+
+	// Message 1 (prev): instanceID=42 in hand. No annotations.
+	prevEntry := &LogEntry{
+		IsJSON:    true,
+		Timestamp: "2026-06-03 10:00:00",
+		JSON: map[string]interface{}{
+			"greToClientEvent": map[string]interface{}{
+				"greToClientMessages": []interface{}{
+					map[string]interface{}{
+						"type": "GREMessageType_GameStateMessage",
+						"gameStateMessage": map[string]interface{}{
+							"turnInfo": map[string]interface{}{
+								"turnNumber":   float64(turnNumber),
+								"phase":        "Phase_Main1",
+								"activePlayer": float64(1),
+							},
+							"zones": zones,
+							"gameObjects": []interface{}{
+								map[string]interface{}{
+									"instanceId":       float64(instanceID),
+									"grpId":            float64(grpID),
+									"controllerSeatId": float64(1),
+									"zoneId":           float64(handZoneID),
+									"cardTypes":        []interface{}{"CardType_Instant"},
+								},
+							},
+							"gameInfo": map[string]interface{}{
+								"matchID":    "match-overlap-test",
+								"gameNumber": float64(1),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Message 2 (curr): instanceID=42 has moved to stack (zone-diff fires:
+	// hand→stack = cast_spell). The message ALSO carries an
+	// AnnotationType_ZoneTransfer with category=CastSpell for the same
+	// instanceID (annotation pass also wants to emit cast_spell).
+	// After the fix, seenKey must block the annotation-pass duplicate.
+	currEntry := &LogEntry{
+		IsJSON:    true,
+		Timestamp: "2026-06-03 10:00:01",
+		JSON: map[string]interface{}{
+			"greToClientEvent": map[string]interface{}{
+				"greToClientMessages": []interface{}{
+					map[string]interface{}{
+						"type": "GREMessageType_GameStateMessage",
+						"gameStateMessage": map[string]interface{}{
+							"turnInfo": map[string]interface{}{
+								"turnNumber":   float64(turnNumber),
+								"phase":        "Phase_Main1",
+								"activePlayer": float64(1),
+							},
+							"zones": zones,
+							"gameObjects": []interface{}{
+								map[string]interface{}{
+									"instanceId":       float64(instanceID),
+									"grpId":            float64(grpID),
+									"controllerSeatId": float64(1),
+									"zoneId":           float64(stackZoneID),
+									"cardTypes":        []interface{}{"CardType_Instant"},
+								},
+							},
+							// Annotation mirrors the zone-diff event: same instanceID,
+							// same turn, same action (CastSpell → cast_spell).
+							"annotations": []interface{}{
+								map[string]interface{}{
+									"id":          float64(1),
+									"affectorId":  float64(instanceID),
+									"affectedIds": []interface{}{float64(instanceID)},
+									"type":        []interface{}{"AnnotationType_ZoneTransfer"},
+									"details": []interface{}{
+										map[string]interface{}{
+											"key":         "category",
+											"valueString": []interface{}{"CastSpell"},
+										},
+									},
+								},
+							},
+							"gameInfo": map[string]interface{}{
+								"matchID":    "match-overlap-test",
+								"gameNumber": float64(1),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	playerConn := &GREConnection{SeatID: 1, SystemSeatID: 1}
+	result, err := ParseGamePlaysResult([]*LogEntry{prevEntry, currEntry}, playerConn)
+	if err != nil {
+		t.Fatalf("ParseGamePlaysResult: %v", err)
+	}
+
+	// Count cast_spell plays — must be exactly 1 (zone-diff OR annotation, not both).
+	castSpellCount := 0
+	for _, p := range result.Plays {
+		if p.ActionType == "cast_spell" {
+			castSpellCount++
+		}
+	}
+	t.Logf("Total plays: %d, cast_spell plays: %d", len(result.Plays), castSpellCount)
+
+	if castSpellCount != 1 {
+		t.Errorf("cast_spell play count = %d, want exactly 1 — cross-pass dedup is broken (instanceID=0 hardcoded in seenKey registration)", castSpellCount)
+	}
+}
+
 // Benchmarks
 
 func BenchmarkParseGREMessages(b *testing.B) {
@@ -1765,5 +1919,100 @@ func TestParseGameStage_CapturedInMessage(t *testing.T) {
 	}
 	if messages[0].Stage != "GameStage_Play" {
 		t.Errorf("Stage = %q, want %q", messages[0].Stage, "GameStage_Play")
+	}
+}
+
+// TestGetPlayerSeatID_FromGREMessageConnectResp verifies that GetPlayerSeatID
+// correctly extracts the player's seat from a connectResp nested inside a
+// greToClientEvent.greToClientMessages entry — which is the ACTUAL structure
+// emitted by MTGA in real Player.log files.
+//
+// The previous implementation only checked for top-level entry.JSON["connectResp"],
+// which is never present in real logs. This caused PlayerOnPlay to always be nil
+// for every game in the corpus (19 matches, 0 with player_on_play populated).
+//
+// Real log structure:
+//
+//	{
+//	  "transactionId": "...",
+//	  "greToClientEvent": {
+//	    "greToClientMessages": [
+//	      {
+//	        "type": "GREMessageType_ConnectResp",
+//	        "systemSeatIds": [1],
+//	        "msgId": 1,
+//	        "connectResp": { "status": "ConnectionStatus_Success", ... }
+//	      }
+//	    ]
+//	  }
+//	}
+func TestGetPlayerSeatID_FromGREMessageConnectResp(t *testing.T) {
+	// This is the REAL structure as it appears in Player.log — connectResp
+	// is inside greToClientEvent.greToClientMessages[n], NOT at the top level.
+	entries := []*LogEntry{
+		{
+			IsJSON: true,
+			JSON: map[string]interface{}{
+				"transactionId": "da772c1d-4e21-41b7-927b-dedf79a9328b",
+				"greToClientEvent": map[string]interface{}{
+					"greToClientMessages": []interface{}{
+						map[string]interface{}{
+							"type":          "GREMessageType_ConnectResp",
+							"systemSeatIds": []interface{}{float64(1)},
+							"msgId":         float64(1),
+							"connectResp": map[string]interface{}{
+								"status":   "ConnectionStatus_Success",
+								"protoVer": "ProtoVersion_PersistentAnnotations",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	conn := GetPlayerSeatID(entries)
+	if conn == nil {
+		t.Fatal("GetPlayerSeatID returned nil — connectResp nested inside greToClientEvent was not found")
+	}
+	if conn.SeatID != 1 {
+		t.Errorf("SeatID = %d, want 1", conn.SeatID)
+	}
+}
+
+// TestGetPlayerSeatID_ConnectRespInsideGREWrapper_Precedence verifies that
+// the GRE-message-embedded connectResp is preferred over a matchGameRoomStateChangedEvent
+// when both are present in the same entry slice, and that the correct player
+// seat is returned when the player is on seat 2.
+func TestGetPlayerSeatID_ConnectRespInsideGREWrapper_Precedence(t *testing.T) {
+	// Player is on seat 2 per connectResp. A matchGameRoomStateChangedEvent
+	// also exists with player on seat 1 (the opponent's seat) — connectResp
+	// should take precedence.
+	entries := []*LogEntry{
+		{
+			IsJSON: true,
+			JSON: map[string]interface{}{
+				"greToClientEvent": map[string]interface{}{
+					"greToClientMessages": []interface{}{
+						map[string]interface{}{
+							"type":          "GREMessageType_ConnectResp",
+							"systemSeatIds": []interface{}{float64(2)},
+							"msgId":         float64(1),
+							"connectResp": map[string]interface{}{
+								"status": "ConnectionStatus_Success",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	conn := GetPlayerSeatID(entries)
+	if conn == nil {
+		t.Fatal("GetPlayerSeatID returned nil")
+	}
+	if conn.SeatID != 2 {
+		t.Errorf("SeatID = %d, want 2 (player is on seat 2)", conn.SeatID)
 	}
 }

@@ -179,10 +179,10 @@ ON CONFLICT (quest_id, assigned_at) DO NOTHING;
 -- ============================================================================
 -- DRAFT SESSIONS
 -- ============================================================================
-INSERT INTO draft_sessions (id, event_name, set_code, draft_type, start_time, end_time, status, total_picks, overall_grade, overall_score, pick_quality_score, color_discipline_score)
+INSERT INTO draft_sessions (id, account_id, event_name, set_code, draft_type, start_time, end_time, status, total_picks, overall_grade, overall_score, pick_quality_score, color_discipline_score)
 VALUES
-    ('draft-001', 'QuickDraft_DSK', 'DSK', 'quick_draft', '2024-10-20 13:00:00', '2024-10-20 13:45:00', 'completed', 45, 'B+', 82, 78.5, 85.0),
-    ('draft-002', 'QuickDraft_BLB', 'BLB', 'quick_draft', '2024-10-15 14:00:00', '2024-10-15 14:30:00', 'completed', 45, 'A-', 88, 85.0, 90.0)
+    ('draft-001', 1, 'QuickDraft_DSK', 'DSK', 'quick_draft', '2024-10-20 13:00:00', '2024-10-20 13:45:00', 'completed', 45, 'B+', 82, 78.5, 85.0),
+    ('draft-002', 1, 'QuickDraft_BLB', 'BLB', 'quick_draft', '2024-10-15 14:00:00', '2024-10-15 14:30:00', 'completed', 45, 'A-', 88, 85.0, 90.0)
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================================

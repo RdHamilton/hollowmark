@@ -917,7 +917,7 @@ export namespace gui {
 	        this.primaryArchetype = source["primaryArchetype"];
 	        this.cardCount = source["cardCount"];
 	        this.matchesPlayed = source["matchesPlayed"];
-	        this.matchWinRate = source["matchWinRate"];
+	        this.matchWinRate = source["winRate"];
 	        this.modifiedAt = this.convertValues(source["modifiedAt"], time.Time);
 	        this.lastPlayed = this.convertValues(source["lastPlayed"], time.Time);
 	        this.tags = source["tags"];

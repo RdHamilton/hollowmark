@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import Quests from './Quests';
 import { mockQuests, mockSystem } from '@/test/mocks/apiMock';
+import { mockEventEmitter } from '@/test/mocks/websocketMock';
+import { act } from '@testing-library/react';
 import { AppProvider } from '../context/AppContext';
 import { models } from '@/types/models';
 import type { ActiveQuestsResponse } from '@/services/api/quests';
@@ -1164,6 +1166,75 @@ describe('Quests', () => {
         // 1h 30m — only renders correctly when first_seen_at is read
         expect(screen.getByText('1h 30m')).toBeInTheDocument();
       });
+    });
+  });
+
+  // Regression guard for the staging 429 over-fetch incident.
+  // The page previously had two near-identical loadQuestData effects, so a
+  // single cold load fired its endpoint set TWICE. These tests pin the
+  // per-load request budget so the duplication can never silently return.
+  describe('Request budget — over-fetch regression (#staging-429)', () => {
+    beforeEach(() => {
+      mockEventEmitter.clear();
+      mockQuests.getActiveQuests.mockResolvedValue(createActiveQuestsResponse([], true));
+      mockQuests.getQuestHistory.mockResolvedValue([]);
+      mockSystem.getCurrentAccount.mockResolvedValue(createMockAccount());
+      mockQuests.getDailyWins.mockResolvedValue({ wins: 0, goal: 15 });
+      mockQuests.getWeeklyWins.mockResolvedValue({ wins: 0, goal: 15 });
+    });
+
+    it('fires each endpoint exactly once on a cold page load (not 2N)', async () => {
+      renderWithProvider(<Quests />);
+
+      await waitFor(() => {
+        expect(screen.getByText('All quests completed!')).toBeInTheDocument();
+      });
+      // Let any second effect / microtask settle before counting.
+      await waitFor(() => {
+        expect(mockQuests.getActiveQuests).toHaveBeenCalled();
+      });
+
+      expect(mockQuests.getActiveQuests).toHaveBeenCalledTimes(1);
+      expect(mockQuests.getQuestHistory).toHaveBeenCalledTimes(1);
+      expect(mockSystem.getCurrentAccount).toHaveBeenCalledTimes(1);
+      expect(mockQuests.getDailyWins).toHaveBeenCalledTimes(1);
+      expect(mockQuests.getWeeklyWins).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not duplicate the request set when a stats:updated/quest:updated burst arrives mid-load (in-flight dedup)', async () => {
+      // Hold getActiveQuests open so the load is in flight when events arrive.
+      let resolveActive: (value: ActiveQuestsResponse) => void;
+      mockQuests.getActiveQuests.mockReturnValue(
+        new Promise<ActiveQuestsResponse>((resolve) => {
+          resolveActive = resolve;
+        })
+      );
+
+      renderWithProvider(<Quests />);
+
+      // Fire a burst of real-time events while the initial load is still in flight.
+      await act(async () => {
+        mockEventEmitter.emit('stats:updated', {});
+        mockEventEmitter.emit('quest:updated', {});
+        mockEventEmitter.emit('stats:updated', {});
+      });
+
+      // The in-flight guard must have collapsed the burst: still one active-quests call.
+      expect(mockQuests.getActiveQuests).toHaveBeenCalledTimes(1);
+
+      // Complete the initial load.
+      await act(async () => {
+        resolveActive!(createActiveQuestsResponse([], true));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('All quests completed!')).toBeInTheDocument();
+      });
+
+      // After the load completes, the whole set was still requested exactly once.
+      expect(mockQuests.getActiveQuests).toHaveBeenCalledTimes(1);
+      expect(mockQuests.getQuestHistory).toHaveBeenCalledTimes(1);
+      expect(mockSystem.getCurrentAccount).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -67,13 +67,20 @@ const CommunityComparison: React.FC<CommunityComparisonProps> = ({
     }
   };
 
-  const formatPercent = (value: number): string => {
+  const formatPercent = (value: number | null | undefined): string => {
+    if (value == null || !isFinite(value)) return '–';
     return `${Math.round(value * 100)}%`;
   };
 
-  const formatDelta = (value: number): string => {
+  const formatDelta = (value: number | null | undefined): string => {
+    if (value == null || !isFinite(value)) return '–';
     const percent = Math.round(value * 100);
     return percent >= 0 ? `+${percent}%` : `${percent}%`;
+  };
+
+  const formatPercentile = (value: number | null | undefined): string => {
+    if (value == null || !isFinite(value)) return '–';
+    return `${Math.round(value)}th percentile`;
   };
 
   if (loading) {
@@ -97,7 +104,7 @@ const CommunityComparison: React.FC<CommunityComparisonProps> = ({
   if (!comparison || comparison.sampleSize === 0) {
     return (
       <div className="community-comparison community-comparison--empty" data-testid="community-comparison-empty">
-        <span>No draft data available for {setCode}. Complete some drafts to see your comparison.</span>
+        <span>Need more drafts in this set to compare. Complete some {setCode} drafts to see your community comparison.</span>
       </div>
     );
   }
@@ -113,7 +120,7 @@ const CommunityComparison: React.FC<CommunityComparisonProps> = ({
         <div className={`community-comparison__rank ${getRankClass(comparison.rank)}`} data-testid="community-comparison-rank">
           <span className="community-comparison__rank-label">{comparison.rank}</span>
           <span className="community-comparison__percentile">
-            {Math.round(comparison.percentileRank)}th percentile
+            {formatPercentile(comparison.percentileRank)}
           </span>
         </div>
 
@@ -134,7 +141,7 @@ const CommunityComparison: React.FC<CommunityComparisonProps> = ({
             <span className="community-comparison__stat-label">Difference</span>
             <span
               className={`community-comparison__stat-value ${
-                comparison.winRateDelta >= 0
+                (comparison.winRateDelta ?? 0) >= 0
                   ? 'community-comparison__stat-value--positive'
                   : 'community-comparison__stat-value--negative'
               }`}
@@ -171,11 +178,13 @@ interface ArchetypeRowProps {
 }
 
 const ArchetypeRow: React.FC<ArchetypeRowProps> = ({ archetype }) => {
-  const formatPercent = (value: number): string => {
+  const formatPercent = (value: number | null | undefined): string => {
+    if (value == null || !isFinite(value)) return '–';
     return `${Math.round(value * 100)}%`;
   };
 
-  const formatDelta = (value: number): string => {
+  const formatDelta = (value: number | null | undefined): string => {
+    if (value == null || !isFinite(value)) return '–';
     const percent = Math.round(value * 100);
     return percent >= 0 ? `+${percent}%` : `${percent}%`;
   };

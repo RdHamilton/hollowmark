@@ -104,8 +104,14 @@ func (r *DecksRepository) ListDecks(ctx context.Context, accountID int64, f Deck
 		clauses = append(clauses, "d.id IN (SELECT deck_id FROM deck_tags WHERE lower(tag) = ANY($"+strconv.Itoa(next)+"))")
 		args = append(args, lowerSlice(f.Tags))
 	}
+	// matches_played and matches_won are derived by counting rows in the
+	// matches table keyed on deck_id. The denormalized decks.matches_played
+	// column is never incremented by the projection worker and is always 0;
+	// computing live counts fixes the /decks list returning matchesPlayed:0.
 	q := `SELECT d.id, d.name, d.format, d.source, d.draft_session_id,
-	             d.matches_played, d.matches_won, d.games_played, d.games_won,
+	             COALESCE(mc.matches_played, 0),
+	             COALESCE(mc.matches_won, 0),
+	             d.games_played, d.games_won,
 	             d.is_app_created, d.created_at, d.modified_at, d.last_played,
 	             d.color_identity, d.description, d.created_method, d.seed_card_id,
 	             COALESCE(cc.card_count, 0) AS card_count
@@ -115,6 +121,14 @@ func (r *DecksRepository) ListDecks(ctx context.Context, accountID int64, f Deck
 	          FROM deck_cards
 	          GROUP BY deck_id
 	      ) cc ON cc.deck_id = d.id
+	      LEFT JOIN (
+	          SELECT deck_id,
+	                 COUNT(*)                                      AS matches_played,
+	                 COUNT(*) FILTER (WHERE lower(result) = 'win') AS matches_won
+	          FROM matches
+	          WHERE account_id = $1
+	          GROUP BY deck_id
+	      ) mc ON mc.deck_id = d.id
 	      WHERE ` + strings.Join(clauses, " AND ") + `
 	      ORDER BY d.modified_at DESC
 	      LIMIT 200`
@@ -757,6 +771,94 @@ func generateDeckID(accountID int64, name string) string {
 	src := strconv.FormatInt(accountID, 10) + ":" + name + ":" + strconv.FormatInt(now, 10)
 	sum := sha256.Sum256([]byte(src))
 	return "deck_" + hex.EncodeToString(sum[:8])
+}
+
+// CreateDraftDeckInput holds the data needed to mint a deck from a completed
+// draft session. CardIDs are arena IDs (TEXT) drawn from draft_picks.card_id
+// for the session. The deck is created with source='draft' and
+// draft_session_id set so GET /decks/by-draft/{sessionId} can find it.
+type CreateDraftDeckInput struct {
+	AccountID      int64
+	DraftSessionID string
+	Name           string
+	Format         string
+	// CardIDs are the arena IDs of picked cards (one per pick row, duplicates
+	// allowed — they are collapsed into quantities automatically).
+	CardIDs []int
+}
+
+// CreateDraftDeck creates a decks row with source='draft' and inserts
+// deck_cards rows with from_draft_pick=TRUE for each picked card.
+// The operation is idempotent at the deck level:
+//   - If a deck already exists for this draft_session_id + account_id, it is
+//     returned as-is (no error, no duplicate).
+//
+// Card quantities are computed by counting duplicates in CardIDs.
+func (r *DecksRepository) CreateDraftDeck(ctx context.Context, in CreateDraftDeckInput) (*DeckDetailRow, error) {
+	// Idempotency check: return existing deck if one already links this session.
+	existing, err := r.GetDeckByDraftEvent(ctx, in.AccountID, in.DraftSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("CreateDraftDeck idempotency check: %w", err)
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	txer, ok := r.db.(interface {
+		BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("CreateDraftDeck: DB does not support transactions")
+	}
+	tx, err := txer.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("CreateDraftDeck begin tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	deckID := generateDeckID(in.AccountID, in.Name)
+	const insertDeck = `
+		INSERT INTO decks (
+			id, account_id, name, format, source, draft_session_id,
+			is_app_created, created_method, created_at, modified_at
+		) VALUES ($1, $2, $3, $4, 'draft', $5, TRUE, 'draft_completion', NOW(), NOW())
+		ON CONFLICT (id) DO NOTHING`
+	if _, err = tx.ExecContext(
+		ctx, insertDeck,
+		deckID, in.AccountID, in.Name, in.Format, in.DraftSessionID,
+	); err != nil {
+		return nil, fmt.Errorf("CreateDraftDeck insert deck: %w", err)
+	}
+
+	// Aggregate card quantities from the flat pick list.
+	counts := make(map[int]int, len(in.CardIDs))
+	for _, id := range in.CardIDs {
+		counts[id]++
+	}
+
+	const insertCard = `
+		INSERT INTO deck_cards (deck_id, card_id, quantity, board, from_draft_pick)
+		VALUES ($1, $2, $3, 'main', TRUE)
+		ON CONFLICT (deck_id, card_id, board) DO UPDATE
+			SET quantity = EXCLUDED.quantity`
+	for cardID, qty := range counts {
+		if cardID <= 0 || qty <= 0 {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, insertCard, deckID, cardID, qty); err != nil {
+			return nil, fmt.Errorf("CreateDraftDeck insert card %d: %w", cardID, err)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("CreateDraftDeck commit: %w", err)
+	}
+
+	return r.GetDeck(ctx, in.AccountID, deckID)
 }
 
 // ParsePermutationCards returns the deck cards stored on a permutation.

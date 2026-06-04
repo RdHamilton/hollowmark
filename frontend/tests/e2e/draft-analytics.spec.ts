@@ -115,10 +115,9 @@ test.describe('Draft Analytics', () => {
       const contentState = page.locator('.draft-analytics__content');
       const hasContent = await contentState.isVisible({ timeout: 10000 }).catch(() => false);
 
-      if (hasContent) {
-        const setSelect = page.locator('select#set-select');
-        await expect(setSelect).toBeVisible();
-      }
+      expect(hasContent, 'draft-analytics__content not visible — fixture draft_sessions rows may be missing account_id').toBe(true);
+      const setSelect = page.locator('select#set-select');
+      await expect(setSelect).toBeVisible();
     });
 
     test('should display Format filter dropdown when data available', async ({ page }) => {
@@ -129,10 +128,9 @@ test.describe('Draft Analytics', () => {
       const contentState = page.locator('.draft-analytics__content');
       const hasContent = await contentState.isVisible({ timeout: 10000 }).catch(() => false);
 
-      if (hasContent) {
-        const formatSelect = page.locator('select#format-select');
-        await expect(formatSelect).toBeVisible();
-      }
+      expect(hasContent, 'draft-analytics__content not visible — fixture draft_sessions rows may be missing account_id').toBe(true);
+      const formatSelect = page.locator('select#format-select');
+      await expect(formatSelect).toBeVisible();
     });
 
     test('should allow changing set filter', async ({ page }) => {
@@ -143,20 +141,19 @@ test.describe('Draft Analytics', () => {
       const contentState = page.locator('.draft-analytics__content');
       const hasContent = await contentState.isVisible({ timeout: 10000 }).catch(() => false);
 
-      if (hasContent) {
-        const setSelect = page.locator('select#set-select');
-        await expect(setSelect).toBeVisible();
+      expect(hasContent, 'draft-analytics__content not visible — fixture draft_sessions rows may be missing account_id').toBe(true);
+      const setSelect = page.locator('select#set-select');
+      await expect(setSelect).toBeVisible();
 
-        // Get available options
-        const options = await setSelect.locator('option').allTextContents();
-        if (options.length > 1) {
-          // Select a different option
-          await setSelect.selectOption({ index: 1 });
+      // Get available options
+      const options = await setSelect.locator('option').allTextContents();
+      if (options.length > 1) {
+        // Select a different option
+        await setSelect.selectOption({ index: 1 });
 
-          // Verify change
-          const selectedValue = await setSelect.inputValue();
-          expect(selectedValue).toBeTruthy();
-        }
+        // Verify change
+        const selectedValue = await setSelect.inputValue();
+        expect(selectedValue).toBeTruthy();
       }
     });
 
@@ -168,20 +165,19 @@ test.describe('Draft Analytics', () => {
       const contentState = page.locator('.draft-analytics__content');
       const hasContent = await contentState.isVisible({ timeout: 10000 }).catch(() => false);
 
-      if (hasContent) {
-        const formatSelect = page.locator('select#format-select');
-        await expect(formatSelect).toBeVisible();
+      expect(hasContent, 'draft-analytics__content not visible — fixture draft_sessions rows may be missing account_id').toBe(true);
+      const formatSelect = page.locator('select#format-select');
+      await expect(formatSelect).toBeVisible();
 
-        // Should have Premier Draft selected by default
-        const defaultValue = await formatSelect.inputValue();
-        expect(defaultValue).toBe('PremierDraft');
+      // Should have Premier Draft selected by default
+      const defaultValue = await formatSelect.inputValue();
+      expect(defaultValue).toBe('PremierDraft');
 
-        // Select Quick Draft
-        await formatSelect.selectOption('QuickDraft');
+      // Select Quick Draft
+      await formatSelect.selectOption('QuickDraft');
 
-        const newValue = await formatSelect.inputValue();
-        expect(newValue).toBe('QuickDraft');
-      }
+      const newValue = await formatSelect.inputValue();
+      expect(newValue).toBe('QuickDraft');
     });
 
     test('should not display per-page auto-refresh checkbox (#2023)', async ({ page }) => {
@@ -203,11 +199,10 @@ test.describe('Draft Analytics', () => {
       const contentState = page.locator('.draft-analytics__content');
       const hasContent = await contentState.isVisible({ timeout: 10000 }).catch(() => false);
 
-      if (hasContent) {
-        // Check for TemporalTrends component (may be loading or have content)
-        const temporalTrends = page.locator('.temporal-trends');
-        await expect(temporalTrends).toBeVisible({ timeout: 5000 });
-      }
+      expect(hasContent, 'draft-analytics__content not visible — fixture draft_sessions rows may be missing account_id').toBe(true);
+      // Check for TemporalTrends component (may be loading or have content)
+      const temporalTrends = page.locator('.temporal-trends');
+      await expect(temporalTrends).toBeVisible({ timeout: 5000 });
     });
 
     test('should display Community Comparison component section when data available', async ({ page }) => {
@@ -218,11 +213,10 @@ test.describe('Draft Analytics', () => {
       const contentState = page.locator('.draft-analytics__content');
       const hasContent = await contentState.isVisible({ timeout: 10000 }).catch(() => false);
 
-      if (hasContent) {
-        // Check for CommunityComparison component
-        const communityComparison = page.locator('.community-comparison');
-        await expect(communityComparison).toBeVisible({ timeout: 5000 });
-      }
+      expect(hasContent, 'draft-analytics__content not visible — fixture draft_sessions rows may be missing account_id').toBe(true);
+      // Check for CommunityComparison component
+      const communityComparison = page.locator('.community-comparison');
+      await expect(communityComparison).toBeVisible({ timeout: 5000 });
     });
 
     test('should display Format Insights component section when data available', async ({ page }) => {
@@ -233,11 +227,10 @@ test.describe('Draft Analytics', () => {
       const contentState = page.locator('.draft-analytics__content');
       const hasContent = await contentState.isVisible({ timeout: 10000 }).catch(() => false);
 
-      if (hasContent) {
-        // Check for FormatInsights component
-        const formatInsights = page.locator('.format-insights');
-        await expect(formatInsights).toBeVisible({ timeout: 5000 });
-      }
+      expect(hasContent, 'draft-analytics__content not visible — fixture draft_sessions rows may be missing account_id').toBe(true);
+      // Check for FormatInsights component
+      const formatInsights = page.locator('.format-insights');
+      await expect(formatInsights).toBeVisible({ timeout: 5000 });
     });
   });
 

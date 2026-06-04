@@ -101,6 +101,26 @@ test.describe('DraftLive', () => {
     ).toBeVisible();
   });
 
+  // Bug 6 regression: the "Error" stream-status badge must NOT appear alongside
+  // "No active draft". The SSE connection may fail simply because the daemon is
+  // not running — that is an expected state, not a page-level error.
+  test('@smoke no error badge when SSE errors and session is idle', async ({ page }) => {
+    // Abort every SSE request so the stream always errors (mimics staging where
+    // the daemon is not connected and the SSE endpoint is unreachable).
+    await page.route('**/api/v1/events*', async (route) => {
+      await route.abort();
+    });
+
+    await page.goto('/draft/live');
+
+    // Empty state renders correctly.
+    await expect(page.locator('[data-testid="draft-live-container"]')).toBeVisible();
+    await expect(page.getByText('No active draft')).toBeVisible();
+
+    // No stream-status badge at all in the idle state.
+    await expect(page.locator('[data-testid="stream-status"]')).not.toBeVisible();
+  });
+
   // ── Active draft — pack display ────────────────────────────────────────────
 
   // NOT @smoke (#2178): the top-pick-badge assertion depends on the BFF
@@ -124,10 +144,11 @@ test.describe('DraftLive', () => {
           set_code: 'ONE',
           draft_format: 'PremierDraft',
           cached_at: '2026-01-01T00:00:00Z',
+          // gihwr is a FRACTION (0.0–1.0) — the canonical BFF unit.
           card_ratings: [
-            { arena_id: 101, name: 'Elesh Norn', gihwr: 68 },
-            { arena_id: 102, name: 'Plains', gihwr: 50 },
-            { arena_id: 103, name: 'Swamp', gihwr: 48 },
+            { arena_id: 101, name: 'Elesh Norn', gihwr: 0.68 },
+            { arena_id: 102, name: 'Plains', gihwr: 0.5 },
+            { arena_id: 103, name: 'Swamp', gihwr: 0.48 },
           ],
           color_ratings: [],
         }),
@@ -189,9 +210,10 @@ test.describe('DraftLive', () => {
           set_code: 'BLB',
           draft_format: 'QuickDraft',
           cached_at: '2026-01-01T00:00:00Z',
+          // gihwr is a FRACTION (0.0–1.0) — the canonical BFF unit.
           card_ratings: [
-            { arena_id: 201, name: 'Mosswood Dreadknight', gihwr: 63 },
-            { arena_id: 202, name: 'Forest', gihwr: 46 },
+            { arena_id: 201, name: 'Mosswood Dreadknight', gihwr: 0.63 },
+            { arena_id: 202, name: 'Forest', gihwr: 0.46 },
           ],
           color_ratings: [],
         }),

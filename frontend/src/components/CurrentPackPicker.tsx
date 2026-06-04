@@ -180,7 +180,7 @@ const CurrentPackPicker: React.FC<CurrentPackPickerProps> = ({ sessionID, onRefr
                             <div className="card-stats">
                                 {renderColorIndicator(card.colors)}
                                 <span className="gihwr" title="Games In Hand Win Rate">
-                                    {card.gihwr?.toFixed(1)}%
+                                    {card.gihwr ? `${(card.gihwr * 100).toFixed(1)}%` : '—'}
                                 </span>
                                 <span className="alsa" title="Average Last Seen At">
                                     ALSA: {card.alsa?.toFixed(1)}

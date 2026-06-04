@@ -1,4 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { ClipboardDocumentIcon ,
+  DocumentTextIcon,
+  MagnifyingGlassIcon,
+} from '@heroicons/react/24/outline';
 import { EventsOn } from '@/services/websocketClient';
 import { quests, system } from '@/services/api';
 import { models } from '@/types/models';
@@ -32,8 +36,21 @@ const Quests = () => {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
 
-  useEffect(() => {
-    const loadQuestData = async () => {
+  // Guards against overlapping loads. Both the initial/filter-change load and
+  // the SSE-event reload share one loader; this ref dedupes in-flight calls so
+  // a burst of stats:updated / quest:updated events (or a StrictMode
+  // double-invoke) cannot fan out into N concurrent request sets. This page
+  // previously had two near-identical loadQuestData effects, so every cold load
+  // fired getActiveQuests + getQuestHistory + getCurrentAccount TWICE.
+  const loadingRef = useRef(false);
+
+  const loadQuestData = useCallback(async () => {
+    if (loadingRef.current) {
+      // A load is already in flight — skip this trigger rather than duplicating
+      // the full request set.
+      return;
+    }
+    loadingRef.current = true;
     try {
       setLoading(true);
       setError(null);
@@ -114,81 +131,18 @@ const Quests = () => {
       console.error('Error loading quest data:', err);
     } finally {
       setLoading(false);
+      loadingRef.current = false;
     }
-  };
-
-    loadQuestData();
   }, [dateRange, customStartDate, customEndDate, historyLimit]);
 
-  // Listen for real-time updates
+  // Initial load + reload when the history filters change.
   useEffect(() => {
-    const loadQuestData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
+    loadQuestData();
+  }, [loadQuestData]);
 
-        // Build date range for history and stats
-        let startDate = '';
-        let endDate = '';
-
-        if (dateRange === 'custom') {
-          startDate = customStartDate;
-          endDate = customEndDate;
-        } else if (dateRange !== 'all') {
-          const now = new Date();
-          const start = new Date();
-
-          switch (dateRange) {
-            case '7days':
-              start.setDate(now.getDate() - 7);
-              break;
-            case '30days':
-              start.setDate(now.getDate() - 30);
-              break;
-            case '90days':
-              start.setDate(now.getDate() - 90);
-              break;
-          }
-
-          startDate = start.toISOString().split('T')[0];
-          endDate = now.toISOString().split('T')[0];
-        }
-
-        // Load quest data sequentially with better error reporting
-        try {
-          const activeResponse = await quests.getActiveQuests();
-          setActiveQuests(activeResponse.quests || []);
-          setHasQuestData(activeResponse.has_quest_data);
-        } catch (activeErr) {
-          console.error('Error loading active quests:', activeErr);
-          throw new Error(`Failed to load active quests: ${activeErr instanceof Error ? activeErr.message : String(activeErr)}`);
-        }
-
-        try {
-          console.log('Loading quest history with dates:', startDate, endDate, historyLimit);
-          const history = await quests.getQuestHistory(startDate, endDate, historyLimit);
-          console.log('Quest history loaded:', history?.length || 0, 'quests');
-          setQuestHistory(history || []);
-        } catch (historyErr) {
-          console.error('Error loading quest history:', historyErr);
-          throw new Error(`Failed to load quest history: ${historyErr instanceof Error ? historyErr.message : String(historyErr)}`);
-        }
-
-        try {
-          const account = await system.getCurrentAccount();
-          setCurrentAccount(account);
-        } catch (accountErr) {
-          console.error('Error loading current account:', accountErr);
-          // Don't throw - account data is optional
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load quest data');
-        console.error('Error loading quest data:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
+  // Listen for real-time updates. Subscribe once on mount and reuse the shared
+  // loader; the in-flight guard collapses event bursts into a single reload.
+  useEffect(() => {
     const unsubscribeStats = EventsOn('stats:updated', () => {
       console.log('Stats updated event received - reloading quest data');
       loadQuestData();
@@ -203,7 +157,7 @@ const Quests = () => {
       if (unsubscribeStats) unsubscribeStats();
       if (unsubscribeQuests) unsubscribeQuests();
     };
-  }, [dateRange, customStartDate, customEndDate, historyLimit]);
+  }, [loadQuestData]);
 
   const formatDate = (timestamp: unknown) => {
     return new Date(String(timestamp)).toLocaleDateString();
@@ -324,7 +278,7 @@ const Quests = () => {
         <ErrorState
           message="Failed to load quest data"
           error={error}
-          helpText="Make sure detailed logging is enabled in MTGA: Options → View Account → Detailed Logs (Plugin Support)"
+          helpText="The service may be temporarily unavailable. Please try refreshing the page."
         />
       )}
 
@@ -379,14 +333,14 @@ const Quests = () => {
             <h2 className="section-title">Active Quests</h2>
             {activeQuests.length === 0 && !hasQuestData ? (
               <EmptyState
-                icon="📋"
+                icon={<ClipboardDocumentIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
                 heading="Waiting for quest data"
                 subtext="Launch MTGA and play a game to see your quests here."
                 variant="no-data"
               />
             ) : activeQuests.length === 0 && hasQuestData ? (
               <EmptyState
-                icon="📋"
+                icon={<ClipboardDocumentIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
                 heading="All quests completed!"
                 subtext="Check back tomorrow for new quests."
                 variant="no-data"
@@ -499,14 +453,14 @@ const Quests = () => {
 
             {questHistory.length === 0 ? (
               <EmptyState
-                icon="📜"
+                icon={<DocumentTextIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
                 heading="No quest history"
                 subtext="No completed quests found for the selected time period."
                 variant="no-data"
               />
             ) : filteredHistory.length === 0 ? (
               <EmptyState
-                icon="🔍"
+                icon={<MagnifyingGlassIcon className="w-12 h-12" aria-hidden="true" style={{ color: 'var(--vault-fg-muted)' }} />}
                 heading="No matching quests"
                 subtext="No quests match your current filters."
                 variant="no-data"

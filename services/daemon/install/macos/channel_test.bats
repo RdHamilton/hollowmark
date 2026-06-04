@@ -475,6 +475,11 @@ INFOPLIST
       # Skip common_test.bats — it legitimately asserts the exact constant values
       # to verify common.sh emits them correctly (ADR-049 §2 cross-check).
       [[ "${file}" == *common_test.bats ]] && continue
+      # Skip *_test.bats generally — test files legitimately assert the exact
+      # channel identity strings to prove the scripts emit them (the same reason
+      # common_test.bats is exempt).  The fitness function targets the SHIPPED
+      # scripts, not the tests that verify them.
+      [[ "${file}" == *_test.bats ]] && continue
 
       # Strip comment lines (lines starting with optional whitespace + #) before
       # checking for identity literals.  Comments documenting expected values

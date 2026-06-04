@@ -6,7 +6,7 @@
     {
       "surface": "match-list",
       "bff_endpoint": "/api/v1/history/matches",
-      "notes": "BFF returns cursor-paginated shape: { data: [...], has_more, limit }. The SPA reads data.data (not data.matches). A field rename that breaks this shape would produce an empty table.",
+      "notes": "BFF returns cursor-paginated shape: { data: [...], has_more, limit }. The SPA reads data.data (not data.matches). A field rename that breaks this shape would produce an empty table. player_on_play is null for all rows in the layer5 corpus replay because the historical logs predate match.game_ended events (0 game_plays projected); player_on_play pipeline correctness is gated by TestProjectionIntegration_PlayerOnPlay (daemon-emit corpus fixtures, ticket #712).",
       "fields": {
         "response_shape": "cursor_paginated",
         "data_key": "data",

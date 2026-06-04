@@ -29,6 +29,11 @@ vi.mock('@/services/api/bffDraftRatings', () => ({
   ),
 }));
 
+// Base catalog fetch (name fallback) — stub to keep the fetch deterministic.
+vi.mock('@/services/api/cards', () => ({
+  getSetCards: vi.fn(() => Promise.resolve([])),
+}));
+
 vi.mock('@/hooks', async (importActual) => {
   const actual = await importActual<typeof import('@/hooks')>();
   return {

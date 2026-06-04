@@ -114,3 +114,48 @@ func ParseDeckEntry(entry *LogEntry) (*contract.DeckUpdatedPayload, error) {
 
 	return p, nil
 }
+
+// IsCourseDeckEntry reports whether the log entry is a CourseDeck event.
+//
+// MTGA emits a CourseDeck log line just before a match starts whenever the
+// player submits their deck to an event (Ladder, Play, draft, etc.). The entry
+// has a top-level "CourseDeck" key and a "CourseDeckSummary" key whose "DeckId"
+// field carries the Arena deck UUID.
+//
+// This event is the only reliable source of deck_id linkage to a match because
+// matchGameRoomStateChangedEvent does not carry a deckId field.
+func IsCourseDeckEntry(entry *LogEntry) bool {
+	if entry == nil || !entry.IsJSON {
+		return false
+	}
+	if _, ok := entry.JSON["CourseDeck"]; !ok {
+		return false
+	}
+	summary, _ := entry.JSON["CourseDeckSummary"].(map[string]interface{})
+	if summary == nil {
+		return false
+	}
+	deckID, _ := summary["DeckId"].(string)
+	return deckID != ""
+}
+
+// ParseCourseDeckEntry extracts the deck UUID from a CourseDeck log entry.
+// Returns the deck ID string, or an error if the entry is not a valid
+// CourseDeck event or the deck ID cannot be extracted.
+func ParseCourseDeckEntry(entry *LogEntry) (string, error) {
+	if entry == nil || !entry.IsJSON {
+		return "", fmt.Errorf("entry is not JSON")
+	}
+	if _, ok := entry.JSON["CourseDeck"]; !ok {
+		return "", fmt.Errorf("entry does not contain CourseDeck key")
+	}
+	summary, ok := entry.JSON["CourseDeckSummary"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("CourseDeckSummary is missing or not an object")
+	}
+	deckID, ok := summary["DeckId"].(string)
+	if !ok || deckID == "" {
+		return "", fmt.Errorf("CourseDeckSummary.DeckId is missing or empty")
+	}
+	return deckID, nil
+}

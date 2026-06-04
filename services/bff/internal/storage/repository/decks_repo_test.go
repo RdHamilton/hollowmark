@@ -59,7 +59,7 @@ func insertTestDeckCardAsInteger(t *testing.T, db *sql.DB, deckID string, cardID
 	_, err := db.ExecContext(
 		context.Background(),
 		`INSERT INTO deck_cards (deck_id, card_id, quantity, board, from_draft_pick)
-		 VALUES ($1, $2, 1, 'main', $3::boolean)
+		 VALUES ($1, $2, 1, 'main', ($3::int)::boolean)
 		 ON CONFLICT (deck_id, card_id, board) DO NOTHING`,
 		deckID, cardID, fromDraftPickInt,
 	)
@@ -507,5 +507,89 @@ func TestDecksRepository_CloneDeck_ConflictRollback(t *testing.T) {
 	}
 	if cardCount != 2 {
 		t.Errorf("deck_cards count: got %d want 2", cardCount)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// DecksRepository.ListDecks — matchesPlayed derived from matches table
+// ----------------------------------------------------------------------------
+
+// TestDecksRepository_ListDecks_MatchesPlayedFromMatchesTable verifies that
+// ListDecks returns matchesPlayed derived by counting matches.deck_id rather
+// than reading the stale decks.matches_played column.
+//
+// insertTestMatchWithDeck is defined in stats_repo_test.go (same package).
+//
+// Regression for: /api/v1/decks list returning matchesPlayed:0 for a deck
+// that /api/v1/decks/{id}/performance correctly reports as having 3 matches.
+func TestDecksRepository_ListDecks_MatchesPlayedFromMatchesTable(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "list-decks-matches-played")
+	deckID := insertTestDeck(t, db, accountID, "matches-played")
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// Insert 3 matches: 2 wins, 1 loss — linked to the deck via deck_id.
+	// Uses the shared insertTestMatchWithDeck helper from stats_repo_test.go:
+	// signature is (t, db, matchID, accountID, format, ts, deckID, result).
+	insertTestMatchWithDeck(t, db, "ldmp-match-1", accountID, "Standard", now, deckID, "win")
+	insertTestMatchWithDeck(t, db, "ldmp-match-2", accountID, "Standard", now.Add(-time.Minute), deckID, "win")
+	insertTestMatchWithDeck(t, db, "ldmp-match-3", accountID, "Standard", now.Add(-2*time.Minute), deckID, "loss")
+
+	rows, err := repo.ListDecks(ctx, accountID, repository.DeckListFilter{})
+	if err != nil {
+		t.Fatalf("ListDecks: %v", err)
+	}
+
+	var found *repository.DeckSummaryRow
+	for i := range rows {
+		if rows[i].ID == deckID {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("deck %q not returned by ListDecks", deckID)
+	}
+
+	if found.MatchesPlayed != 3 {
+		t.Errorf("MatchesPlayed: got %d, want 3 (derived from matches table)", found.MatchesPlayed)
+	}
+	if found.MatchesWon != 2 {
+		t.Errorf("MatchesWon: got %d, want 2", found.MatchesWon)
+	}
+}
+
+// TestDecksRepository_ListDecks_MatchesPlayedZeroWithNoMatches verifies that a
+// deck with no matches in the matches table reports matchesPlayed=0.
+func TestDecksRepository_ListDecks_MatchesPlayedZeroWithNoMatches(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "list-decks-no-matches")
+	deckID := insertTestDeck(t, db, accountID, "no-matches")
+
+	rows, err := repo.ListDecks(ctx, accountID, repository.DeckListFilter{})
+	if err != nil {
+		t.Fatalf("ListDecks: %v", err)
+	}
+
+	var found *repository.DeckSummaryRow
+	for i := range rows {
+		if rows[i].ID == deckID {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("deck %q not returned by ListDecks", deckID)
+	}
+
+	if found.MatchesPlayed != 0 {
+		t.Errorf("MatchesPlayed: got %d, want 0 for deck with no matches", found.MatchesPlayed)
 	}
 }

@@ -471,8 +471,13 @@ func main() {
 			)
 			worker.WithCounterStore(gameEventCountersRepo)
 			worker.WithCardPlayStore(gamePlayRepo)
+			worker.WithGameRowWriter(gamePlayRepo)
 			worker.WithGameIDResolver(gamePlayRepo)
 			worker.WithDLQ(projectionErrorsRepo)
+			// Wire draft → deck creation (ADR-051 deck linkage).
+			decksRepo := repository.NewDecksRepository(sqlDB)
+			worker.WithDraftDeckCreator(decksRepo)
+			worker.WithDraftPickReader(draftSessionsRepo)
 			if postHogClient != nil {
 				worker.WithPostHogClient(postHogClient)
 			}
@@ -750,10 +755,18 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// AllowedOrigins is configured via the ALLOWED_ORIGINS environment variable
 	// (comma-separated list).  See ADR-006 for the full connectivity design.
 	// Defaults to localhost-only values when the variable is not set.
+	//
+	// AllowCredentials must be true so that browser EventSource connections
+	// using withCredentials:true receive Access-Control-Allow-Credentials:true
+	// on the streaming 200 response.  Without it the browser blocks the SSE
+	// connection even when Access-Control-Allow-Origin is a specific origin.
+	// AllowedOrigins must remain a list of exact origins (never "*") when
+	// AllowCredentials is true — go-chi/cors enforces this at runtime.
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: cfg.AllowedOrigins,
-		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Authorization", "Content-Type", "X-Request-ID"},
+		AllowedOrigins:   cfg.AllowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Request-ID"},
+		AllowCredentials: true,
 	}))
 
 	// ── Public routes ────────────────────────────────────────────────────────
@@ -779,7 +792,8 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	daemonVersionHandler.WithFetcher(handlers.NewReleaseFetcher(
 		"https://api.github.com/repos/RdHamilton/vault-mtg/releases",
 		5*time.Minute,
-		nil, // use default http.Client with 10s timeout
+		cfg.GitHubToken, // optional GitHub token (BFF_GITHUB_TOKEN); anonymous when empty
+		nil,             // use default http.Client with 10s timeout
 	))
 	r.Get("/api/v1/daemon/version", daemonVersionHandler.GetDaemonVersion)
 

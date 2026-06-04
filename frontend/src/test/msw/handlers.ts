@@ -3,12 +3,16 @@
  * These handlers return realistic API responses matching the actual backend.
  */
 import { http, HttpResponse } from 'msw';
+import { daemonApiBaseUrl } from '../../services/daemonConfig';
 
 // Routes still served by the daemon localapi (Phase 2 hasn't migrated them
 // yet) live under DAEMON_BASE; routes that have been migrated to the BFF
 // (matches, collection) live under BFF_BASE. Per-test handler overrides
 // must use the matching base so MSW intercepts correctly.
-const DAEMON_BASE = 'http://localhost:9001/api/v1';
+// Derive DAEMON_BASE from the same source-of-truth the daemon client uses
+// (services/daemonConfig — normalizes the host to 127.0.0.1) so the mock URL
+// can never drift from the URL the client actually requests.
+const DAEMON_BASE = daemonApiBaseUrl;
 const BFF_BASE = 'http://localhost:8080/api/v1';
 
 // API_BASE retained as the daemon-side alias so older mocks keep working
@@ -701,6 +705,25 @@ export const handlers = [
         },
       ],
       total: 1,
+    });
+  }),
+
+  // History summary endpoint — returns a returning-user response by default
+  // so Layout tests do not pop the onboarding modal accidentally.
+  // Tests that want to exercise the new-user path should override this handler.
+  http.get(`${BFF_BASE}/history/summary`, () => {
+    return HttpResponse.json({
+      today: { wins: 2, losses: 1, win_rate: 0.667 },
+      this_week: { wins: 10, losses: 9, win_rate: 0.526, matches: 19 },
+      all_time: {
+        wins: 10,
+        losses: 9,
+        win_rate: 0.526,
+        matches: 19,
+        current_streak: 1,
+        streak_type: 'W',
+      },
+      last_match: { result: 'win', opponent_archetype: null, elapsed_seconds: 600 },
     });
   }),
 

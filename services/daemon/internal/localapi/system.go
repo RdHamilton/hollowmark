@@ -116,7 +116,10 @@ func (s *Server) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
 		Connected: true,
 		Mode:      "live",
 		URL:       st.CloudAPIURL,
-		Port:      DefaultPort,
+		// Report the port this server actually bound (channel-derived:
+		// stable=9001, staging=9011) rather than the hardcoded DefaultPort,
+		// so staging diagnostics reflect the real loopback port (#667).
+		Port: s.boundPort(),
 	})
 }
 

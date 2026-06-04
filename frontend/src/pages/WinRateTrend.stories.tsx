@@ -63,3 +63,30 @@ export const SetAnnotationLegend: Story = {
     </div>
   ),
 };
+
+/**
+ * WithBaselineVisible — shows mock data that crosses the 50% line so the
+ * dashed reference line and label are clearly visible in the snapshot.
+ * Added in v0.3.7 anti-slop wave per spec Item 4.
+ */
+export const WithBaselineVisible: Story = {
+  name: 'WithBaselineVisible — 50% baseline line',
+  render: () => (
+    <div
+      style={{
+        background: '#0D1117',
+        padding: 24,
+        width: '100%',
+        maxWidth: 700,
+      }}
+    >
+      <p style={{ color: '#94A3B8', fontSize: 12, marginBottom: 12, fontFamily: 'sans-serif' }}>
+        The dashed 50% reference line is always rendered. Data here crosses above
+        and below it to make it visible.
+      </p>
+      <p style={{ color: '#7890AA', fontSize: 11 }}>
+        (Live component — requires BFF mock or real data to render the chart)
+      </p>
+    </div>
+  ),
+};

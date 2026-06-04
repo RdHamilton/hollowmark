@@ -52,7 +52,7 @@ func TestFlushGREBuffer_LifeChangesPopulated(t *testing.T) {
 	})
 
 	entries := greFlushTestEntries()
-	err := s.flushGREBuffer(context.Background(), s.sessionID, entries, true)
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "", entries, true)
 	require.NoError(t, err)
 
 	assert.Equal(t, "match.game_ended", received.Type)
@@ -90,7 +90,7 @@ func TestFlushGREBuffer_CardPlaysPopulated(t *testing.T) {
 		AccountID:   "acct-cardplay",
 	})
 
-	err := s.flushGREBuffer(context.Background(), s.sessionID,
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "",
 		[]json.RawMessage{json.RawMessage(e0), json.RawMessage(e1)}, false)
 	require.NoError(t, err)
 
@@ -124,7 +124,7 @@ func TestFlushGREBuffer_OpponentCardsPopulated(t *testing.T) {
 	})
 
 	// Single entry: ExtractOpponentCards only needs one message (no diff required)
-	err := s.flushGREBuffer(context.Background(), s.sessionID,
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "",
 		[]json.RawMessage{json.RawMessage(e0)}, false)
 	require.NoError(t, err)
 
@@ -153,7 +153,7 @@ func TestFlushGREBuffer_EmptyEntries(t *testing.T) {
 		AccountID:   "acct-empty",
 	})
 
-	err := s.flushGREBuffer(context.Background(), s.sessionID, nil, true)
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "", nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, "match.game_ended", received.Type)
 }
@@ -182,7 +182,7 @@ func TestFlushGREBuffer_NilPlayerConn(t *testing.T) {
 		AccountID:   "acct-nilseat",
 	})
 
-	err := s.flushGREBuffer(context.Background(), s.sessionID,
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "",
 		[]json.RawMessage{json.RawMessage(e0), json.RawMessage(e1)}, true)
 	require.NoError(t, err)
 
@@ -215,7 +215,7 @@ func TestFlushGREBuffer_SchemaVersion2(t *testing.T) {
 	})
 
 	// Even an empty flush must set SchemaVersion == 2.
-	err := s.flushGREBuffer(context.Background(), s.sessionID, nil, false)
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "", nil, false)
 	require.NoError(t, err)
 
 	assert.Equal(t, "match.game_ended", received.Type)
@@ -255,7 +255,7 @@ func TestFlushGREBuffer_CounterChangesPopulated(t *testing.T) {
 		AccountID:   "acct-counter",
 	})
 
-	err := s.flushGREBuffer(context.Background(), s.sessionID,
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "",
 		[]json.RawMessage{json.RawMessage(e0), json.RawMessage(e1)}, false)
 	require.NoError(t, err)
 
@@ -315,7 +315,7 @@ func TestFlushGREBuffer_MulliganPopulated(t *testing.T) {
 		json.RawMessage(ePre1),
 		json.RawMessage(eGame),
 	}
-	err := s.flushGREBuffer(context.Background(), s.sessionID, entries, false)
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "", entries, false)
 	require.NoError(t, err)
 
 	require.Equal(t, "match.game_ended", received.Type)
@@ -327,4 +327,68 @@ func TestFlushGREBuffer_MulliganPopulated(t *testing.T) {
 	assert.Equal(t, 6, payload.Mulligan.OpeningHandSize, "kept hand size is 6")
 	assert.Len(t, payload.Mulligan.KeptCardIDs, 6, "6 cards in kept hand")
 	assert.Equal(t, 2, payload.SchemaVersion)
+}
+
+// TestFlushGREBuffer_PlayerOnPlay_RealLogStructure verifies that PlayerOnPlay is
+// correctly derived when the GRE buffer contains a GREMessageType_ConnectResp
+// entry using the REAL MTGA Player.log structure, where systemSeatIds lives at
+// the message level inside greToClientEvent.greToClientMessages[n].
+//
+// Before the fix, GetPlayerSeatID only looked for a top-level "connectResp" key
+// which never appears in real logs. As a result, playerConn was always nil and
+// PlayerOnPlay was always nil for all 19 corpus matches.
+//
+// The fix extends GetPlayerSeatIDByName to also walk
+// entry.JSON["greToClientEvent"]["greToClientMessages"] for a
+// GREMessageType_ConnectResp message and read systemSeatIds from that message.
+func TestFlushGREBuffer_PlayerOnPlay_RealLogStructure(t *testing.T) {
+	// Real MTGA log structure: connectResp is a GRE message inside the wrapper,
+	// NOT at the top-level JSON. Player is on seat 1.
+	eConnect := `{"transactionId":"da772c1d","greToClientEvent":{"greToClientMessages":[{"type":"GREMessageType_ConnectResp","systemSeatIds":[1],"msgId":1,"connectResp":{"status":"ConnectionStatus_Success"}}]}}`
+
+	// Pre-game message: turnNumber absent (= 0) — mulligan phase.
+	ePre := `{"greToClientEvent":{"greToClientMessages":[{"type":"GREMessageType_GameStateMessage","gameStateMessage":{"gameInfo":{"matchID":"m-onplay","gameNumber":1},"players":[{"seatId":1,"lifeTotal":20,"teamId":1,"maxHandSize":7},{"seatId":2,"lifeTotal":20,"teamId":2,"maxHandSize":7}],"zones":[],"gameObjects":[]}}]}}`
+
+	// First in-game message: turnNumber=1, stage=GameStage_Play, activePlayer=1 (player on play).
+	eGame1 := `{"greToClientEvent":{"greToClientMessages":[{"type":"GREMessageType_GameStateMessage","gameStateMessage":{"gameInfo":{"matchID":"m-onplay","gameNumber":1,"stage":"GameStage_Play"},"players":[{"seatId":1,"lifeTotal":20,"teamId":1},{"seatId":2,"lifeTotal":20,"teamId":2}],"turnInfo":{"turnNumber":1,"phase":"Phase_Main1","activePlayer":1},"zones":[],"gameObjects":[]}}]}}`
+
+	// Second in-game message: turn 3, opponent takes 5 damage.
+	eGame2 := `{"greToClientEvent":{"greToClientMessages":[{"type":"GREMessageType_GameStateMessage","gameStateMessage":{"gameInfo":{"matchID":"m-onplay","gameNumber":1},"players":[{"seatId":1,"lifeTotal":20,"teamId":1},{"seatId":2,"lifeTotal":15,"teamId":2}],"turnInfo":{"turnNumber":3,"phase":"Phase_Main1","activePlayer":1},"zones":[],"gameObjects":[]}}]}}`
+
+	var received contract.DaemonEvent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var evt contract.DaemonEvent
+		if err := json.Unmarshal(body, &evt); err == nil && evt.Type == "match.game_ended" {
+			received = evt
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	s := New(&config.Config{
+		CloudAPIURL: srv.URL,
+		IngestPath:  "/v1/ingest/events",
+		AccountID:   "acct-onplay-real",
+	})
+
+	entries := []json.RawMessage{
+		json.RawMessage(eConnect),
+		json.RawMessage(ePre),
+		json.RawMessage(eGame1),
+		json.RawMessage(eGame2),
+	}
+	err := s.flushGREBuffer(context.Background(), s.sessionID, "", entries, false)
+	require.NoError(t, err)
+
+	require.Equal(t, "match.game_ended", received.Type)
+	var payload contract.GamePlayPayload
+	require.NoError(t, json.Unmarshal(received.Payload, &payload))
+
+	// PlayerOnPlay must be non-nil and true (player on seat 1 is the active player on turn 1).
+	require.NotNil(t, payload.PlayerOnPlay,
+		"PlayerOnPlay must not be nil — connectResp in real log structure (inside greToClientEvent) was not recognised before the fix")
+	assert.True(t, *payload.PlayerOnPlay,
+		"PlayerOnPlay must be true: player (seat 1) is the active player on turn 1")
 }
