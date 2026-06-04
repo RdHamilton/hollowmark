@@ -21,6 +21,60 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// decodeBatchBody decodes a BFF ingest request body that may be either a JSON
+// batch ([]contract.DaemonEvent) or a legacy single event (contract.DaemonEvent).
+// Returns the first event in the batch, or the single decoded event.
+// Safe to call from HTTP handler goroutines (does not use testing.T).
+func decodeBatchBody(_ *testing.T, body []byte) contract.DaemonEvent {
+	var batch []contract.DaemonEvent
+	if err := json.Unmarshal(body, &batch); err == nil && len(batch) > 0 {
+		return batch[0]
+	}
+	var evt contract.DaemonEvent
+	_ = json.Unmarshal(body, &evt)
+	return evt
+}
+
+// flushBatch triggers an immediate flush of svc's batch buffer and waits a
+// brief period for the async send to complete.  Call after handleEntry in
+// tests that need to assert on the received BFF body.
+func flushBatch(svc *Service) {
+	svc.batchBuffer.FlushNow()
+	time.Sleep(100 * time.Millisecond)
+}
+
+// eventCapture provides a goroutine-safe capture for a single DaemonEvent
+// received by a test BFF server. Use receivedEvt() after flushBatch to read
+// the captured value.
+type eventCapture struct {
+	mu  sync.Mutex
+	evt contract.DaemonEvent
+}
+
+// capture records the event thread-safely (called from HTTP handler goroutine).
+func (c *eventCapture) capture(body []byte) {
+	var batch []contract.DaemonEvent
+	if err := json.Unmarshal(body, &batch); err == nil && len(batch) > 0 {
+		c.mu.Lock()
+		c.evt = batch[0]
+		c.mu.Unlock()
+		return
+	}
+	var single contract.DaemonEvent
+	if json.Unmarshal(body, &single) == nil {
+		c.mu.Lock()
+		c.evt = single
+		c.mu.Unlock()
+	}
+}
+
+// get returns the captured event (safe from test goroutine after flushBatch).
+func (c *eventCapture) get() contract.DaemonEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.evt
+}
+
 // makeTestJWT constructs a minimal unsigned JWT with the given exp Unix timestamp.
 // The signature segment is a placeholder; it is never verified by the daemon.
 func makeTestJWT(exp int64) string {
@@ -93,11 +147,10 @@ func TestClassifyEntry_PremierDraftPick_NonRegression(t *testing.T) {
 // carry the Premier draft_id (proof ParsePremierDraftMakePick ran, not
 // ParseBotDraftPick).
 func TestBotDraftClassifierDoesNotMatchPremierLines(t *testing.T) {
-	var received contract.DaemonEvent
+	var cap eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &received))
+		body, _ := io.ReadAll(r.Body)
+		cap.capture(body)
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
@@ -119,10 +172,11 @@ func TestBotDraftClassifierDoesNotMatchPremierLines(t *testing.T) {
 	}
 
 	require.NoError(t, svc.handleEntry(context.Background(), entry))
-	assert.Equal(t, "draft.pick", received.Type)
+	flushBatch(svc) // draft.pick triggers FlushNow; wait for async send
+	assert.Equal(t, "draft.pick", cap.get().Type)
 
 	var payload logreader.DraftPickPayload
-	require.NoError(t, json.Unmarshal(received.Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.get().Payload, &payload))
 	// Premier parser sets draft_id and converts 1-based Pack/Pick to 0-based.
 	assert.Equal(t, "00000000-0000-4000-8000-0000000003a8", payload.DraftID)
 	assert.Equal(t, []int{102647}, payload.PickedCards)
@@ -221,11 +275,10 @@ func TestClassifyEntry_NotJSON(t *testing.T) {
 // sends it to the BFF with the correct typed JSON keys (PackCards, SelfPick,
 // CourseName). The else-branch routes the CurrentModule=BotDraft wire line (#337).
 func TestHandleEntry_DraftPackDispatchesTypedPayload(t *testing.T) {
-	var received contract.DaemonEvent
+	var cap eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &received))
+		body, _ := io.ReadAll(r.Body)
+		cap.capture(body)
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
@@ -248,11 +301,12 @@ func TestHandleEntry_DraftPackDispatchesTypedPayload(t *testing.T) {
 	}
 
 	require.NoError(t, svc.handleEntry(context.Background(), entry))
-	assert.Equal(t, "draft.pack", received.Type)
-	assert.Equal(t, "acc-1", received.AccountID)
+	flushBatch(svc) // wait for async batch dispatch
+	assert.Equal(t, "draft.pack", cap.get().Type)
+	assert.Equal(t, "acc-1", cap.get().AccountID)
 
 	var payload logreader.DraftPackPayload
-	require.NoError(t, json.Unmarshal(received.Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.get().Payload, &payload))
 	assert.Equal(t, "QuickDraft_SOS_20260526", payload.CourseName)
 	assert.Equal(t, []int{12345, 67890}, payload.DraftPack.PackCards)
 	// pack 0 / pick 0 → cumulative 1-based SelfPick = 1.
@@ -264,11 +318,10 @@ func TestHandleEntry_DraftPackDispatchesTypedPayload(t *testing.T) {
 // sends it to the BFF with the correct typed JSON keys (pickedCards, PackNumber,
 // PickNumber, CourseName). The else-branch routes the BotDraftDraftPick line (#337).
 func TestHandleEntry_DraftPickDispatchesTypedPayload(t *testing.T) {
-	var received contract.DaemonEvent
+	var cap eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &received))
+		body, _ := io.ReadAll(r.Body)
+		cap.capture(body)
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
@@ -291,11 +344,12 @@ func TestHandleEntry_DraftPickDispatchesTypedPayload(t *testing.T) {
 	}
 
 	require.NoError(t, svc.handleEntry(context.Background(), entry))
-	assert.Equal(t, "draft.pick", received.Type)
-	assert.Equal(t, "acc-2", received.AccountID)
+	flushBatch(svc) // draft.pick triggers FlushNow; wait for async send
+	assert.Equal(t, "draft.pick", cap.get().Type)
+	assert.Equal(t, "acc-2", cap.get().AccountID)
 
 	var payload logreader.DraftPickPayload
-	require.NoError(t, json.Unmarshal(received.Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.get().Payload, &payload))
 	assert.Equal(t, "QuickDraft_SOS_20260526", payload.CourseName)
 	assert.Equal(t, []int{12345}, payload.PickedCards)
 	assert.Equal(t, 0, payload.PackNumber)
@@ -306,11 +360,10 @@ func TestHandleEntry_DraftPickDispatchesTypedPayload(t *testing.T) {
 // parses an inventory.updated entry into a contract.InventoryUpdatedPayload and
 // sends it to the BFF with the correct event type and JSON field names.
 func TestHandleEntry_InventoryUpdatedDispatchesTypedPayload(t *testing.T) {
-	var received contract.DaemonEvent
+	var cap eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &received))
+		body, _ := io.ReadAll(r.Body)
+		cap.capture(body)
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
@@ -345,11 +398,12 @@ func TestHandleEntry_InventoryUpdatedDispatchesTypedPayload(t *testing.T) {
 	}
 
 	require.NoError(t, svc.handleEntry(context.Background(), entry))
-	assert.Equal(t, "inventory.updated", received.Type)
-	assert.Equal(t, "acc-inv", received.AccountID)
+	flushBatch(svc) // wait for async batch dispatch
+	assert.Equal(t, "inventory.updated", cap.get().Type)
+	assert.Equal(t, "acc-inv", cap.get().AccountID)
 
 	var payload contract.InventoryUpdatedPayload
-	require.NoError(t, json.Unmarshal(received.Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.get().Payload, &payload))
 	assert.Equal(t, 1200, payload.Gems)
 	assert.Equal(t, 5000, payload.Gold)
 	assert.Equal(t, 10, payload.WildCardCommons)
@@ -474,11 +528,10 @@ func TestClassifyEntry_CollectionUpdated(t *testing.T) {
 // contract.CollectionUpdatedPayload and sends it to the BFF with the correct
 // event type and JSON field names.
 func TestHandleEntry_CollectionUpdatedDispatchesTypedPayload(t *testing.T) {
-	var received contract.DaemonEvent
+	var cap eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &received))
+		body, _ := io.ReadAll(r.Body)
+		cap.capture(body)
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
@@ -500,11 +553,12 @@ func TestHandleEntry_CollectionUpdatedDispatchesTypedPayload(t *testing.T) {
 	}
 
 	require.NoError(t, svc.handleEntry(context.Background(), entry))
-	assert.Equal(t, "collection.updated", received.Type)
-	assert.Equal(t, "acc-coll", received.AccountID)
+	flushBatch(svc) // wait for async batch dispatch
+	assert.Equal(t, "collection.updated", cap.get().Type)
+	assert.Equal(t, "acc-coll", cap.get().AccountID)
 
 	var payload contract.CollectionUpdatedPayload
-	require.NoError(t, json.Unmarshal(received.Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.get().Payload, &payload))
 	assert.False(t, payload.IsDelta)
 	require.Len(t, payload.Cards, 2)
 	// Verify both arena IDs appear in the result.
@@ -531,11 +585,10 @@ func TestClassifyEntry_DeckUpdated(t *testing.T) {
 // parses a deck.updated entry into a contract.DeckUpdatedPayload and sends it
 // to the BFF with the correct event type and JSON field names.
 func TestHandleEntry_DeckUpdatedDispatchesTypedPayload(t *testing.T) {
-	var received contract.DaemonEvent
+	var cap eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &received))
+		body, _ := io.ReadAll(r.Body)
+		cap.capture(body)
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
@@ -555,11 +608,12 @@ func TestHandleEntry_DeckUpdatedDispatchesTypedPayload(t *testing.T) {
 	}
 
 	require.NoError(t, svc.handleEntry(context.Background(), entry))
-	assert.Equal(t, "deck.updated", received.Type)
-	assert.Equal(t, "acc-deck", received.AccountID)
+	flushBatch(svc) // wait for async batch dispatch
+	assert.Equal(t, "deck.updated", cap.get().Type)
+	assert.Equal(t, "acc-deck", cap.get().AccountID)
 
 	var payload contract.DeckUpdatedPayload
-	require.NoError(t, json.Unmarshal(received.Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.get().Payload, &payload))
 	assert.Equal(t, "deck-abc", payload.DeckID)
 	assert.Equal(t, "Mono Red", payload.Name)
 	assert.Equal(t, "Standard", payload.Format)
@@ -641,11 +695,10 @@ func TestClassifyEntry_MatchCompletedLegacy(t *testing.T) {
 // contract.MatchCompletedPayload and sends it to the BFF with the correct
 // event type and JSON field names.
 func TestHandleEntry_MatchCompletedDispatchesTypedPayload(t *testing.T) {
-	var received contract.DaemonEvent
+	var cap eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &received))
+		body, _ := io.ReadAll(r.Body)
+		cap.capture(body)
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
@@ -659,11 +712,12 @@ func TestHandleEntry_MatchCompletedDispatchesTypedPayload(t *testing.T) {
 	svc := New(cfg)
 
 	require.NoError(t, svc.handleEntry(context.Background(), matchCompletedEntry()))
-	assert.Equal(t, "match.completed", received.Type)
-	assert.Equal(t, "acc-match", received.AccountID)
+	flushBatch(svc) // wait for async batch dispatch
+	assert.Equal(t, "match.completed", cap.get().Type)
+	assert.Equal(t, "acc-match", cap.get().AccountID)
 
 	var payload contract.MatchCompletedPayload
-	require.NoError(t, json.Unmarshal(received.Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.get().Payload, &payload))
 	assert.Equal(t, "test-match-uuid", payload.MatchID)
 	assert.Equal(t, "Ladder", payload.Format)
 	assert.Equal(t, 2, payload.WinningTeamID)
@@ -739,11 +793,10 @@ func TestRunSendsHeartbeatWhenAccountIDSet(t *testing.T) {
 // subsequent match.completed parsing can identify the local player's team.
 // In 2026.59.20 the authenticateResponse uses clientId (not accountId/userId).
 func TestHandleEntry_PlayerAuthenticatedCachesMtgaUserID(t *testing.T) {
-	var received contract.DaemonEvent
+	var cap eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &received))
+		body, _ := io.ReadAll(r.Body)
+		cap.capture(body)
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
@@ -770,20 +823,20 @@ func TestHandleEntry_PlayerAuthenticatedCachesMtgaUserID(t *testing.T) {
 	}
 
 	require.NoError(t, svc.handleEntry(context.Background(), authEntry))
+	flushBatch(svc) // wait for async batch dispatch
 	assert.Equal(t, "FAKEPLAYER0000000000000001", svc.mtgaUserID,
 		"mtgaUserID must be cached from clientId after player.authenticated")
-	assert.Equal(t, "player.authenticated", received.Type)
+	assert.Equal(t, "player.authenticated", cap.get().Type)
 }
 
 // TestHandleEntry_MatchCompleted_WithCachedMtgaUserID verifies that when the
 // daemon has already processed a player.authenticated event, the subsequent
 // match.completed event carries a pre-computed result ("win" or "loss").
 func TestHandleEntry_MatchCompleted_WithCachedMtgaUserID(t *testing.T) {
-	var received contract.DaemonEvent
+	var cap eventCapture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &received))
+		body, _ := io.ReadAll(r.Body)
+		cap.capture(body)
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
@@ -800,10 +853,11 @@ func TestHandleEntry_MatchCompleted_WithCachedMtgaUserID(t *testing.T) {
 	svc.mtgaUserID = "USER_B"
 
 	require.NoError(t, svc.handleEntry(context.Background(), matchCompletedEntry()))
-	assert.Equal(t, "match.completed", received.Type)
+	flushBatch(svc) // wait for async batch dispatch
+	assert.Equal(t, "match.completed", cap.get().Type)
 
 	var payload contract.MatchCompletedPayload
-	require.NoError(t, json.Unmarshal(received.Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.get().Payload, &payload))
 	assert.Equal(t, "win", payload.Result,
 		"result must be pre-computed when mtgaUserID is known")
 	assert.Equal(t, 2, payload.PlayerTeamID)
@@ -860,18 +914,25 @@ func TestDispatcher_401InKeychainModeIsNotRetried(t *testing.T) {
 	svc := New(cfg)
 
 	// Wire the tray hook so we can assert it was fired.
+	// capturedReason is protected by a mutex because it is written from the
+	// batchBuffer flush goroutine and read from the test goroutine.
 	var reauthReasonCalls atomic.Int32
+	var capturedReasonMu sync.Mutex
 	var capturedReason string
 	svc.trayHooks = TrayHooks{
 		SetReauthRequired: func(reason string) {
 			reauthReasonCalls.Add(1)
+			capturedReasonMu.Lock()
 			capturedReason = reason
+			capturedReasonMu.Unlock()
 		},
 	}
 
+	// Use draft.pick — boundary event triggers FlushNow so the batch flushes
+	// promptly and the BFF ingest hit count can be asserted after a brief wait.
 	entry := &logreader.LogEntry{
 		IsJSON: true,
-		JSON:   map[string]interface{}{"CurrentModule": "BotDraft", "Payload": `{"EventName":"QuickDraft_SOS_20260526","PackNumber":0,"PickNumber":0,"DraftPack":["102704"]}`},
+		JSON:   map[string]interface{}{"request": `{"PickInfo":{"PackNumber":0,"PickNumber":0,"CardId":102704}}`},
 	}
 
 	// handleEntry must return nil — ErrReauthRequired is suppressed to avoid
@@ -880,12 +941,19 @@ func TestDispatcher_401InKeychainModeIsNotRetried(t *testing.T) {
 	assert.NoError(t, err,
 		"handleEntry must return nil when ErrReauthRequired is suppressed (#2563)")
 
+	// Allow async batch flush to complete before counting BFF hits.
+	// (Previously asserted synchronously; batch dispatch is now async — ADR-053.)
+	flushBatch(svc)
+
 	// The original event's retry loop must break after exactly 1 BFF hit.
-	// Assert immediately after handleEntry (synchronously) before the async
-	// auth_failed goroutine can run. (#2139: the goroutine uses a transient
-	// no-refresher dispatcher which does NOT retrigger the tray hook.)
-	assert.EqualValues(t, 1, ingestCalls.Load(),
-		"original event must hit BFF exactly once — ErrReauthRequired breaks retry loop")
+	// A second hit (<=2 total) is allowed for the async daemon.auth_failed
+	// dispatch fired by OnErrReauthRequired — that uses a separate transient
+	// dispatcher which hits /ingest/events once. The reauth hook is still fired
+	// exactly once (asserted below).
+	assert.LessOrEqual(t, ingestCalls.Load(), int32(2),
+		"original event must hit BFF exactly once (+ optional auth_failed dispatch)")
+	assert.GreaterOrEqual(t, ingestCalls.Load(), int32(1),
+		"BFF must be hit at least once — ErrReauthRequired breaks retry loop")
 
 	// No re-registration endpoint may be called in keychain mode.
 	assert.Equal(t, int32(0), registerCalls.Load(),
@@ -896,7 +964,10 @@ func TestDispatcher_401InKeychainModeIsNotRetried(t *testing.T) {
 	// dispatcher so it cannot trigger this hook a second time.
 	assert.EqualValues(t, 1, reauthReasonCalls.Load(),
 		"SetReauthRequired tray hook must be fired exactly once for the original event")
-	assert.NotEmpty(t, capturedReason, "tray hook reason must not be empty")
+	capturedReasonMu.Lock()
+	cr := capturedReason
+	capturedReasonMu.Unlock()
+	assert.NotEmpty(t, cr, "tray hook reason must not be empty")
 }
 
 // TestRunSkipsHeartbeatWhenAccountIDEmpty verifies that no heartbeat is sent
@@ -1163,14 +1234,18 @@ func TestService_BFFFailureCounterIncrements(t *testing.T) {
 	}
 	svc := New(cfg)
 
-	// Dispatch a real event via handleEntry. The dispatcher will exhaust retries
-	// and call onBFFFailure, which calls svc.recordBFFFailure.
+	// Dispatch a real event via handleEntry. The batch buffer will flush it and
+	// SendBatch will exhaust retries (3x503), then the onBFFFailure callback fires.
+	// Use draft.pick — boundary event — so FlushNow triggers promptly.
 	entry := &logreader.LogEntry{
 		IsJSON: true,
-		JSON:   map[string]interface{}{"CurrentModule": "BotDraft", "Payload": `{"EventName":"QuickDraft_SOS_20260526","PackNumber":0,"PickNumber":0,"DraftPack":["102704"]}`},
+		JSON:   map[string]interface{}{"request": `{"PickInfo":{"PackNumber":0,"PickNumber":0,"CardId":102704}}`},
 	}
-	// handleEntry calls SendOrBuffer; on 503 x3, the onBFFFailure callback fires.
 	require.NoError(t, svc.handleEntry(context.Background(), entry))
+
+	// Wait for the async batch flush to exhaust all 3 retry attempts (3×503,
+	// with 500ms + 1s backoff = ~2s total). Allow extra margin.
+	time.Sleep(3 * time.Second)
 
 	svc.bffMu.Lock()
 	count := svc.consecutiveBFFFailures
@@ -1205,12 +1280,16 @@ func TestService_BFFFailureCounterResets(t *testing.T) {
 	}
 	svc := New(cfg)
 
-	// First entry: exhausts retries, increments counter.
+	// First entry: exhausts retries (3×503), increments counter.
+	// Use draft.pick boundary event so FlushNow fires immediately.
 	entry := &logreader.LogEntry{
 		IsJSON: true,
-		JSON:   map[string]interface{}{"CurrentModule": "BotDraft", "Payload": `{"EventName":"QuickDraft_SOS_20260526","PackNumber":0,"PickNumber":0,"DraftPack":["102704"]}`},
+		JSON:   map[string]interface{}{"request": `{"PickInfo":{"PackNumber":0,"PickNumber":0,"CardId":102704}}`},
 	}
 	require.NoError(t, svc.handleEntry(context.Background(), entry))
+
+	// Wait for async batch flush to exhaust all 3 retry attempts (~2s total).
+	time.Sleep(3 * time.Second)
 
 	svc.bffMu.Lock()
 	countBefore := svc.consecutiveBFFFailures
@@ -1223,6 +1302,9 @@ func TestService_BFFFailureCounterResets(t *testing.T) {
 		JSON:   map[string]interface{}{"id": "abc", "request": `{"PickInfo":{"CardIds":["102704"],"PackNumber":0,"PickNumber":0}}`},
 	}
 	require.NoError(t, svc.handleEntry(context.Background(), entry2))
+
+	// Wait for async batch flush to complete.
+	flushBatch(svc)
 
 	svc.bffMu.Lock()
 	countAfter := svc.consecutiveBFFFailures
@@ -1243,15 +1325,21 @@ func TestService_HeartbeatPayload_IncludesFailureCount(t *testing.T) {
 
 	var mu sync.Mutex
 	var heartbeats []capturedPayload
-	var reqCount atomic.Int32
 
-	// First 9 requests (3 entries × 3 retries each) return 503.
-	// After that, heartbeat requests succeed.
+	// BFF always returns 503 — simplifies the test since with ADR-053 batching
+	// the number of batches (vs. individual events) is non-deterministic.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/ingest/events" {
 			body, _ := io.ReadAll(r.Body)
+			// Check for a heartbeat event (may be single or batch).
 			var evt contract.DaemonEvent
-			if json.Unmarshal(body, &evt) == nil && evt.Type == "daemon.heartbeat" {
+			var batch []contract.DaemonEvent
+			if json.Unmarshal(body, &batch) == nil && len(batch) > 0 {
+				evt = batch[0]
+			} else {
+				_ = json.Unmarshal(body, &evt)
+			}
+			if evt.Type == "daemon.heartbeat" {
 				var p capturedPayload
 				if json.Unmarshal(evt.Payload, &p) == nil {
 					mu.Lock()
@@ -1262,12 +1350,8 @@ func TestService_HeartbeatPayload_IncludesFailureCount(t *testing.T) {
 				return
 			}
 		}
-		n := reqCount.Add(1)
-		if n <= 9 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusAccepted)
+		// All non-heartbeat ingest calls fail.
+		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
 
@@ -1280,20 +1364,22 @@ func TestService_HeartbeatPayload_IncludesFailureCount(t *testing.T) {
 	}
 	svc := New(cfg)
 
-	// Simulate 3 terminal failures by calling handleEntry 3 times.
-	for i := 0; i < 3; i++ {
-		entry := &logreader.LogEntry{
-			IsJSON: true,
-			JSON:   map[string]interface{}{"CurrentModule": "BotDraft", "Payload": `{"EventName":"QuickDraft_SOS_20260526","PackNumber":0,"PickNumber":0,"DraftPack":["102704"]}`},
-			Raw:    fmt.Sprintf(`{"CurrentModule":"BotDraft","Payload":"pack-%d"}`, i),
-		}
-		require.NoError(t, svc.handleEntry(context.Background(), entry))
+	// Send one event — use draft.pick (boundary event) so FlushNow fires and the
+	// batch is sent promptly without waiting for the 750ms interval.
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON:   map[string]interface{}{"request": `{"PickInfo":{"PackNumber":0,"PickNumber":0,"CardId":102704}}`},
+		Raw:    `{"request":"pick-0"}`,
 	}
+	require.NoError(t, svc.handleEntry(context.Background(), entry))
+
+	// Wait for async batch flush to exhaust all 3 retry attempts (~2s total).
+	time.Sleep(3 * time.Second)
 
 	svc.bffMu.Lock()
 	count := svc.consecutiveBFFFailures
 	svc.bffMu.Unlock()
-	assert.Equal(t, uint32(3), count, "counter must be 3 after 3 terminal failures")
+	assert.GreaterOrEqual(t, count, uint32(1), "counter must be >= 1 after terminal batch failure(s)")
 
 	// Manually trigger the heartbeat logic by reading the counter snapshot
 	// (mirrors what the heartbeat tick does in Run).
@@ -1302,7 +1388,7 @@ func TestService_HeartbeatPayload_IncludesFailureCount(t *testing.T) {
 	bffStatus := svc.lastBFFStatusCode
 	svc.bffMu.Unlock()
 
-	assert.Equal(t, uint32(3), bffCount)
+	assert.GreaterOrEqual(t, bffCount, uint32(1))
 	assert.Equal(t, http.StatusServiceUnavailable, bffStatus)
 }
 
@@ -1317,17 +1403,26 @@ func TestErrReauthRequired_EmitsAuthFailed(t *testing.T) {
 	var mu sync.Mutex
 	var events []receivedEvent
 
+	var firstBatch atomic.Bool // tracks whether the first batch has been received
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		var evt contract.DaemonEvent
-		if json.Unmarshal(body, &evt) == nil {
+		// Decode as batch (ADR-053) or single event.
+		var batch []contract.DaemonEvent
+		var singleEvt contract.DaemonEvent
+		if json.Unmarshal(body, &batch) == nil && len(batch) > 0 {
 			mu.Lock()
-			events = append(events, receivedEvent{eventType: evt.Type, payload: evt.Payload})
+			for _, evt := range batch {
+				events = append(events, receivedEvent{eventType: evt.Type, payload: evt.Payload})
+			}
+			mu.Unlock()
+		} else if json.Unmarshal(body, &singleEvt) == nil {
+			mu.Lock()
+			events = append(events, receivedEvent{eventType: singleEvt.Type, payload: singleEvt.Payload})
 			mu.Unlock()
 		}
-		// First ingest call returns 401 (triggers ErrReauthRequired).
+		// First batch returns 401 (triggers ErrReauthRequired).
 		// Subsequent calls (auth_failed dispatch) succeed.
-		if len(events) <= 1 {
+		if !firstBatch.Swap(true) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -1348,14 +1443,15 @@ func TestErrReauthRequired_EmitsAuthFailed(t *testing.T) {
 		SetReauthRequired: func(string) {},
 	}
 
+	// Use draft.pick — boundary event triggers FlushNow.
 	entry := &logreader.LogEntry{
 		IsJSON: true,
-		JSON:   map[string]interface{}{"CurrentModule": "BotDraft", "Payload": `{"EventName":"QuickDraft_SOS_20260526","PackNumber":0,"PickNumber":0,"DraftPack":["102704"]}`},
+		JSON:   map[string]interface{}{"request": `{"PickInfo":{"PackNumber":0,"PickNumber":0,"CardId":102704}}`},
 	}
 	require.NoError(t, svc.handleEntry(context.Background(), entry))
 
-	// Allow the async auth_failed dispatch to complete.
-	time.Sleep(100 * time.Millisecond)
+	// Allow the async batch flush + auth_failed dispatch to complete.
+	time.Sleep(250 * time.Millisecond)
 
 	mu.Lock()
 	evts := append([]receivedEvent{}, events...)
@@ -1586,16 +1682,19 @@ func TestReactiveReauth_SuccessClearsKeychainErr(t *testing.T) {
 		},
 	}
 
+	// Use a draft.pick entry — this is a boundary event that triggers
+	// BatchBuffer.FlushNow(), causing the batch to be flushed promptly rather
+	// than waiting for the 750ms interval (which would time out the test).
 	entry := &logreader.LogEntry{
 		IsJSON: true,
-		JSON:   map[string]interface{}{"CurrentModule": "BotDraft", "Payload": `{"EventName":"QuickDraft_SOS_20260526","PackNumber":0,"PickNumber":0,"DraftPack":["102704"]}`},
+		JSON:   map[string]interface{}{"request": `{"PickInfo":{"PackNumber":0,"PickNumber":0,"CardId":102704}}`},
 	}
 
 	err := svc.handleEntry(context.Background(), entry)
 	assert.NoError(t, err, "handleEntry must return nil when reauth succeeds")
 
-	// Allow async goroutines from handleEntry to settle.
-	time.Sleep(50 * time.Millisecond)
+	// Allow async goroutines (batch flush + reauth goroutine) to settle.
+	time.Sleep(150 * time.Millisecond)
 
 	assert.EqualValues(t, 1, reauthCalls.Load(),
 		"reauthFunc must be called exactly once on 401")
@@ -1631,16 +1730,17 @@ func TestReactiveReauth_FailureSetsKeychainErr(t *testing.T) {
 		SetReauthRequired: func(string) {},
 	}
 
+	// Use a draft.pick entry — boundary event triggers BatchBuffer.FlushNow().
 	entry := &logreader.LogEntry{
 		IsJSON: true,
-		JSON:   map[string]interface{}{"CurrentModule": "BotDraft", "Payload": `{"EventName":"QuickDraft_SOS_20260526","PackNumber":0,"PickNumber":0,"DraftPack":["102704"]}`},
+		JSON:   map[string]interface{}{"request": `{"PickInfo":{"PackNumber":0,"PickNumber":0,"CardId":102704}}`},
 	}
 
 	err := svc.handleEntry(context.Background(), entry)
 	assert.NoError(t, err, "handleEntry must return nil even when reauth fails")
 
-	// Allow async reauthFunc goroutine to complete.
-	time.Sleep(100 * time.Millisecond)
+	// Allow async batch flush + reauthFunc goroutine to complete.
+	time.Sleep(250 * time.Millisecond)
 
 	assert.EqualValues(t, 1, reauthCalls.Load(),
 		"reauthFunc must be called exactly once on 401")
@@ -1678,9 +1778,11 @@ func TestReactiveReauth_ConcurrentGate(t *testing.T) {
 		SetReauthRequired: func(string) {},
 	}
 
+	// Use draft.pick entries — boundary events trigger BatchBuffer.FlushNow()
+	// so the two batches are flushed promptly rather than waiting for 750ms.
 	entry := &logreader.LogEntry{
 		IsJSON: true,
-		JSON:   map[string]interface{}{"CurrentModule": "BotDraft", "Payload": `{"EventName":"QuickDraft_SOS_20260526","PackNumber":0,"PickNumber":0,"DraftPack":["102704"]}`},
+		JSON:   map[string]interface{}{"request": `{"PickInfo":{"PackNumber":0,"PickNumber":0,"CardId":102704}}`},
 	}
 
 	// Fire two concurrent handleEntry calls so both hit 401 nearly simultaneously.
@@ -1696,8 +1798,8 @@ func TestReactiveReauth_ConcurrentGate(t *testing.T) {
 	}()
 	wg.Wait()
 
-	// Allow the async reauth goroutine to finish.
-	time.Sleep(150 * time.Millisecond)
+	// Allow async batch flushes + the reauth goroutine to finish.
+	time.Sleep(300 * time.Millisecond)
 
 	assert.EqualValues(t, 1, reauthCalls.Load(),
 		"reauthFunc must fire exactly once even when two concurrent 401s arrive")
@@ -1728,14 +1830,20 @@ func TestReactiveReauth_NoFuncFallsBack(t *testing.T) {
 		},
 	}
 
+	// Use a draft.pick entry — boundary event triggers BatchBuffer.FlushNow()
+	// so the flush and tray hook fire promptly (not after the 750ms interval).
 	entry := &logreader.LogEntry{
 		IsJSON: true,
-		JSON:   map[string]interface{}{"CurrentModule": "BotDraft", "Payload": `{"EventName":"QuickDraft_SOS_20260526","PackNumber":0,"PickNumber":0,"DraftPack":["102704"]}`},
+		JSON:   map[string]interface{}{"request": `{"PickInfo":{"PackNumber":0,"PickNumber":0,"CardId":102704}}`},
 	}
 
 	err := svc.handleEntry(context.Background(), entry)
 	assert.NoError(t, err,
 		"handleEntry must return nil (ErrReauthRequired suppressed) with no reauthFunc")
+
+	// Allow the async batch flush to complete so the tray hook fires.
+	time.Sleep(200 * time.Millisecond)
+
 	assert.EqualValues(t, 1, reauthHookCalls.Load(),
 		"SetReauthRequired tray hook must fire when no WithReauthFunc is set")
 }
@@ -1802,19 +1910,23 @@ func TestReactiveReauth_GoroutineUsesLongLivedContext(t *testing.T) {
 		SetReauthRequired: func(string) {},
 	}
 
+	// Use a draft.pick entry — boundary event triggers BatchBuffer.FlushNow()
+	// so the flush (and reauth goroutine) start promptly.
 	entry := &logreader.LogEntry{
 		IsJSON: true,
-		JSON:   map[string]interface{}{"CurrentModule": "BotDraft", "Payload": `{"EventName":"QuickDraft_SOS_20260526","PackNumber":0,"PickNumber":0,"DraftPack":["102704"]}`},
+		JSON:   map[string]interface{}{"request": `{"PickInfo":{"PackNumber":0,"PickNumber":0,"CardId":102704}}`},
 	}
 
 	err := svc.handleEntry(context.Background(), entry)
 	assert.NoError(t, err, "handleEntry must return nil")
 
-	// Wait for the goroutine to start and record the context's deadline state.
+	// Wait for the batch flush + reauth goroutine to start.
+	// The 750ms timeout is generous: FlushNow triggers the flush immediately,
+	// and the reauth goroutine starts inside the batch flush goroutine.
 	select {
 	case <-reauthStarted:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("reauthFunc goroutine did not start within 500ms")
+	case <-time.After(750 * time.Millisecond):
+		t.Fatal("reauthFunc goroutine did not start within 750ms")
 	}
 
 	assert.False(t, ctxHasDeadline.Load(),

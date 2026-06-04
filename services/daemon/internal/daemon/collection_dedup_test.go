@@ -2,12 +2,15 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/config"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
@@ -44,12 +47,24 @@ func collectionEntryWith(cards map[int]int, fromBacklog bool) *logreader.LogEntr
 }
 
 // countingIngest returns a test server that counts collection.updated dispatches.
+// It handles both single-event and batch (ADR-053 array) payloads, counting
+// each collection.updated event individually.
 func countingIngest(t *testing.T, collectionCount *int32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := make([]byte, r.ContentLength)
-		_, _ = r.Body.Read(body)
-		if strings.Contains(string(body), `"collection.updated"`) {
+		body, _ := io.ReadAll(r.Body)
+		// Try batch first.
+		var batch []struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(body, &batch); err == nil {
+			for _, e := range batch {
+				if e.Type == "collection.updated" {
+					atomic.AddInt32(collectionCount, 1)
+				}
+			}
+		} else if strings.Contains(string(body), `"collection.updated"`) {
+			// Legacy single-event fallback.
 			atomic.AddInt32(collectionCount, 1)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -72,6 +87,11 @@ func TestCollectionDedup_UnchangedSnapshotNotRedispatched(t *testing.T) {
 		entry := collectionEntryWith(cards, false)
 		require.NoError(t, svc.handleEntry(context.Background(), entry))
 	}
+
+	// Flush the batch buffer so the single queued event reaches the BFF before
+	// the assertion fires (event dispatch is now async via BatchBuffer, ADR-053).
+	svc.batchBuffer.FlushNow()
+	time.Sleep(100 * time.Millisecond)
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&count),
 		"50 identical collection snapshots must dispatch exactly once")
@@ -97,6 +117,10 @@ func TestCollectionDedup_RealChangeRedispatched(t *testing.T) {
 	// New card added — real change.
 	require.NoError(t, svc.handleEntry(context.Background(),
 		collectionEntryWith(map[int]int{67108: 4, 73778: 3, 79426: 1}, false)))
+
+	// Flush and wait for async batch dispatch to complete.
+	svc.batchBuffer.FlushNow()
+	time.Sleep(100 * time.Millisecond)
 
 	assert.Equal(t, int32(3), atomic.LoadInt32(&count),
 		"three distinct snapshots (1st + 2 real changes) must dispatch three times")
@@ -161,6 +185,10 @@ func TestCollectionStartupCoalesce_DispatchesLatestBacklogThenLive(t *testing.T)
 	// A genuine live change after startup must dispatch.
 	require.NoError(t, svc.handleEntry(context.Background(),
 		collectionEntryWith(map[int]int{67108: 4, 73778: 2, 79426: 1}, false)))
+
+	// Flush and wait for async batch dispatch to complete.
+	svc.batchBuffer.FlushNow()
+	time.Sleep(100 * time.Millisecond)
 
 	assert.Equal(t, int32(2), atomic.LoadInt32(&count),
 		"expect one coalesced-backlog dispatch + one live-change dispatch")
