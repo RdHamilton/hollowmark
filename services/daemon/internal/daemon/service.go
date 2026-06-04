@@ -184,6 +184,12 @@ type Service struct {
 	// Reading or setting this field from application state logic is a bug.
 	reauthInProgress atomic.Bool
 
+	// batchBuffer coalesces events from handleEntry into batches before
+	// dispatching to the BFF via dispatcher.SendBatch.  Size=25 / 750ms interval
+	// per ADR-053.  Forced flushes are triggered for match.game_ended and
+	// draft.pick boundary events.  Started by Run; drained by Close in shutdown.
+	batchBuffer *dispatch.BatchBuffer
+
 	// bffMu guards the two BFF-failure tracking fields below.
 	// recordBFFFailure and clearBFFFailureCounter acquire this lock.
 	bffMu sync.Mutex
@@ -270,6 +276,29 @@ func New(cfg *config.Config) *Service {
 	// onBFFFailure fires only on "all retries exhausted" — NOT on context
 	// cancellation. onBFFSuccess fires only on an actual HTTP 2xx delivery.
 	d.WithOnBFFFailure(svc.recordBFFFailure).WithOnBFFSuccess(svc.clearBFFFailureCounter)
+
+	// Build the batch buffer (ADR-053).  The stamp function increments the
+	// Dispatcher's monotonic sequence counter and stamps it into the event at
+	// Add time — satisfying ADR-013's "sequence stamped at emission" requirement.
+	// The flush function calls d.SendBatch which inherits the 429-aware backoff
+	// from doSend (PR #816) and re-enqueues per-event on retry exhaustion.
+	// Start is called here (not in Run) so the buffer is active for the
+	// lifetime of the Service — including in tests that call handleEntry
+	// directly without going through Run.  Close is called in Run's shutdown
+	// path to drain any remaining queued events before exit.
+	svc.batchBuffer = dispatch.NewBatchBuffer(dispatch.BatchBufferConfig{
+		Size:     25,
+		Interval: 750 * time.Millisecond,
+		FlushFn:  d.SendBatch,
+		Stamp:    func(e *contract.DaemonEvent) { e.Sequence = d.StampSeq() },
+		// OnErrReauthRequired fires when SendBatch receives ErrReauthRequired.
+		// It dispatches a daemon.auth_failed event (fire-and-forget, same as the
+		// legacy handleEntry ErrReauthRequired branch) so PostHog records the 401.
+		OnErrReauthRequired: func() {
+			go svc.dispatchAuthFailed(context.Background(), "bff_rejected")
+		},
+	})
+	svc.batchBuffer.Start(context.Background())
 
 	return svc
 }
@@ -1020,6 +1049,11 @@ func (s *Service) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			poller.Stop()
+			// Drain the batch buffer before flushing GRE buffers so any
+			// in-flight log entries reach the BFF before the session ends.
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			s.batchBuffer.Close(shutdownCtx)
+			shutdownCancel()
 			// Flush all non-empty GRE session buffers before exit.
 			flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			s.greManager.FlushAll(flushCtx)
@@ -1724,26 +1758,24 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 		return fmt.Errorf("build event: %w", err)
 	}
 
-	dispatchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	// Enqueue into the batch buffer (ADR-053).  The buffer assigns the sequence
+	// number, coalesces events into size=25 / 750ms batches, and flushes via
+	// dispatcher.SendBatch.  Add is non-blocking — the actual HTTP send is
+	// handled by the batch buffer's background goroutine.
+	s.batchBuffer.Add(evt)
 
-	if err := s.dispatcher.SendOrBuffer(dispatchCtx, evt); err != nil {
-		if errors.Is(err, dispatch.ErrReauthRequired) {
-			// ErrReauthRequired: the BFF returned 401/403 in keychain mode.
-			// Fire a dedicated daemon.auth_failed dispatch event in a goroutine
-			// (fire-and-forget) so the BFF can emit to PostHog with low latency.
-			// Runs in a goroutine so the run-loop entry is not blocked by
-			// additional dispatch retries. Uses a transient no-refresher
-			// dispatcher so the auth-failure tray hook is not re-triggered.
-			go s.dispatchAuthFailed(context.Background(), "bff_rejected")
-			return nil
-		}
-		return err
+	// Boundary events: force an immediate flush so the BFF receives the batch
+	// promptly without waiting for the next size or interval trigger.
+	// match.game_ended — game result just produced (player expects UI update).
+	// draft.pick       — pick made; grade-pick / win-probability must see it fast.
+	if eventType == "match.game_ended" || eventType == "draft.pick" {
+		s.batchBuffer.FlushNow()
 	}
-	// NOTE: the BFF failure/success counter is managed entirely via the
-	// onBFFFailure and onBFFSuccess callbacks wired to the Dispatcher in New().
-	// Do NOT call clearBFFFailureCounter here — it is called by onBFFSuccess
-	// inside SendOrBuffer on confirmed HTTP 2xx delivery.
+
+	// NOTE: ErrReauthRequired is no longer surfaced here because Add is
+	// non-blocking.  The Dispatcher's onBFFFailure callback still fires on
+	// terminal failures; 401 recovery is handled inside the keychainRefresherAdapter
+	// wired to the Dispatcher in New().
 	return nil
 }
 

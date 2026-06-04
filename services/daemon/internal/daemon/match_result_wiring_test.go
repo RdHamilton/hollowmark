@@ -24,6 +24,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/RdHamilton/vault-mtg/services/contract"
 	"github.com/RdHamilton/vault-mtg/services/daemon/internal/config"
@@ -82,19 +83,28 @@ func captureMatchCompleted(
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		var evt contract.DaemonEvent
-		if json.Unmarshal(body, &evt) == nil && evt.Type == "match.completed" {
-			var p contract.MatchCompletedPayload
-			if json.Unmarshal(evt.Payload, &p) == nil {
-				mu.Lock()
-				if captured == nil {
-					captured = &p
-					select {
-					case gotEvent <- struct{}{}:
-					default:
+		// Decode as batch (ADR-053) or single event.
+		var evts []contract.DaemonEvent
+		if json.Unmarshal(body, &evts) != nil || len(evts) == 0 {
+			var single contract.DaemonEvent
+			if json.Unmarshal(body, &single) == nil {
+				evts = []contract.DaemonEvent{single}
+			}
+		}
+		for _, evt := range evts {
+			if evt.Type == "match.completed" {
+				var p contract.MatchCompletedPayload
+				if json.Unmarshal(evt.Payload, &p) == nil {
+					mu.Lock()
+					if captured == nil {
+						captured = &p
+						select {
+						case gotEvent <- struct{}{}:
+						default:
+						}
 					}
+					mu.Unlock()
 				}
-				mu.Unlock()
 			}
 		}
 		w.WriteHeader(http.StatusAccepted)
@@ -115,10 +125,15 @@ func captureMatchCompleted(
 	// Feed match.completed — this should use s.mtgaUserID to derive result.
 	require.NoError(t, svc.handleEntry(context.Background(), matchEntry))
 
+	// Flush the batch buffer and wait for the async dispatch to reach the BFF.
+	// match.completed is not a forced-flush boundary event, so we trigger manually.
+	svc.batchBuffer.FlushNow()
+
 	select {
 	case <-gotEvent:
-	default:
-		// match.completed dispatch may be synchronous; check captured directly.
+		// batch sent promptly.
+	case <-time.After(500 * time.Millisecond):
+		// timed out — will fail at require.NotNil below.
 	}
 
 	mu.Lock()
@@ -204,19 +219,28 @@ func TestHandleEntry_CourseDeck_AttachesDeckIDToMatchCompleted(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		var evt contract.DaemonEvent
-		if json.Unmarshal(body, &evt) == nil && evt.Type == "match.completed" {
-			var p contract.MatchCompletedPayload
-			if json.Unmarshal(evt.Payload, &p) == nil {
-				mu.Lock()
-				if captured == nil {
-					captured = &p
-					select {
-					case gotEvent <- struct{}{}:
-					default:
+		// Decode batch or single event (ADR-053).
+		var evts []contract.DaemonEvent
+		if json.Unmarshal(body, &evts) != nil || len(evts) == 0 {
+			var single contract.DaemonEvent
+			if json.Unmarshal(body, &single) == nil {
+				evts = []contract.DaemonEvent{single}
+			}
+		}
+		for _, evt := range evts {
+			if evt.Type == "match.completed" {
+				var p contract.MatchCompletedPayload
+				if json.Unmarshal(evt.Payload, &p) == nil {
+					mu.Lock()
+					if captured == nil {
+						captured = &p
+						select {
+						case gotEvent <- struct{}{}:
+						default:
+						}
 					}
+					mu.Unlock()
 				}
-				mu.Unlock()
 			}
 		}
 		w.WriteHeader(http.StatusAccepted)
@@ -242,10 +266,13 @@ func TestHandleEntry_CourseDeck_AttachesDeckIDToMatchCompleted(t *testing.T) {
 	// Step 3: match.completed → deck ID must be attached and cache must be cleared.
 	require.NoError(t, svc.handleEntry(context.Background(), matchEntry))
 
+	// Flush and wait for the async batch dispatch to reach the BFF.
+	svc.batchBuffer.FlushNow()
 	select {
 	case <-gotEvent:
-	default:
-		// synchronous dispatch; check captured directly
+		// sent promptly
+	case <-time.After(500 * time.Millisecond):
+		// will fail at require.NotNil below
 	}
 
 	mu.Lock()

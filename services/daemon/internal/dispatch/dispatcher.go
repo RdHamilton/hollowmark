@@ -415,6 +415,139 @@ func (d *Dispatcher) doSend(ctx context.Context, body []byte) (int, http.Header,
 	return resp.StatusCode, resp.Header, nil
 }
 
+// StampSeq increments the per-session sequence counter and returns the new
+// value.  It is intended for use by BatchBuffer's stamp closure so the
+// sequence is stamped at Add() time (ADR-013 monotonic guarantee) without
+// exposing the seq field directly.
+func (d *Dispatcher) StampSeq() uint64 {
+	return d.seq.Add(1)
+}
+
+// SendBatch marshals events as a JSON array and POSTs it to the ingest
+// endpoint using the same doSend (and its 429-aware Retry-After backoff from
+// PR #816) as SendOrBuffer.
+//
+// On 429, doSend returns the response headers so parse429Wait can compute the
+// correct hold duration — this is how SendBatch inherits the #816 backoff.
+//
+// On retry exhaustion the batch is decomposed and each event is individually
+// enqueued to the RingBuffer via reEnqueueBatch: the RingBuffer is
+// single-event-oriented (one []byte slot per event), and sequence numbers are
+// already stamped at BatchBuffer.Add time, so verbatim re-enqueue is safe.
+// SendBatch returns an error on retry exhaustion (unlike SendOrBuffer which
+// silences it with the ring buffer); the BatchBuffer's FlushFn is already
+// error-tolerant and logs the failure.
+//
+// Sequence numbers must be stamped on each event before calling SendBatch.
+func (d *Dispatcher) SendBatch(ctx context.Context, events []contract.DaemonEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	body, err := json.Marshal(events)
+	if err != nil {
+		return fmt.Errorf("marshal batch: %w", err)
+	}
+
+	var lastErr error
+	var lastStatus int
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		var statusCode int
+		var respHeader http.Header
+		statusCode, respHeader, lastErr = d.doSend(ctx, body)
+		if lastErr == nil {
+			log.Printf("[dispatch] batch of %d events sent (attempt %d)", len(events), attempt)
+			if d.onBFFSuccess != nil {
+				d.onBFFSuccess()
+			}
+			// Drain the ring buffer on success — same path as SendOrBuffer.
+			if d.buffer != nil {
+				for _, item := range d.buffer.Drain() {
+					if _, _, drainErr := d.doSend(ctx, item); drainErr != nil {
+						log.Printf("[dispatch] batch: drain replay failed: %v", drainErr)
+					}
+				}
+			}
+			return nil
+		}
+		lastStatus = statusCode
+
+		// On 429, honor Retry-After (captured via respHeader) and hold in the
+		// retry loop.  This mirrors SendOrBuffer's 429 handling exactly — both
+		// call parse429Wait(respHeader, d.backoff429Max).
+		if statusCode == http.StatusTooManyRequests {
+			wait := parse429Wait(respHeader, d.backoff429Max)
+			log.Printf("[dispatch] batch: 429 received (attempt %d/%d); backing off %s",
+				attempt, maxAttempts, wait)
+			if attempt < maxAttempts {
+				select {
+				case <-ctx.Done():
+					d.reEnqueueBatch(events)
+					return ctx.Err()
+				case <-time.After(wait):
+				}
+			}
+			continue
+		}
+
+		// On 401, attempt to refresh the token before retrying — same path as
+		// SendOrBuffer so the keychainRefresherAdapter fires correctly.
+		if statusCode == http.StatusUnauthorized && d.refresher != nil {
+			log.Printf("[dispatch] batch: 401 received; attempting token refresh")
+			newToken, refreshErr := d.refresher.Refresh(ctx)
+			if errors.Is(refreshErr, ErrReauthRequired) {
+				log.Printf("[dispatch] batch: reauth required; aborting retry loop")
+				d.reEnqueueBatch(events)
+				return ErrReauthRequired
+			}
+			if refreshErr != nil {
+				log.Printf("[dispatch] batch: token refresh failed: %v", refreshErr)
+			} else {
+				d.SetToken(newToken)
+				log.Printf("[dispatch] batch: token refreshed; retrying")
+			}
+		}
+
+		if attempt < maxAttempts {
+			backoff := retryBase * time.Duration(attempt)
+			log.Printf("[dispatch] batch: attempt %d/%d failed: %v; retrying in %s",
+				attempt, maxAttempts, lastErr, backoff)
+			select {
+			case <-ctx.Done():
+				d.reEnqueueBatch(events)
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+
+	// All attempts failed — re-enqueue per-event to the ring buffer.
+	d.reEnqueueBatch(events)
+	if d.onBFFFailure != nil {
+		d.onBFFFailure(lastStatus)
+	}
+	return fmt.Errorf("SendBatch: all %d attempts failed: %w", maxAttempts, lastErr)
+}
+
+// reEnqueueBatch individually marshals and enqueues each event from a failed
+// batch into the RingBuffer.  The RingBuffer is single-event-oriented (one
+// []byte slot per event), so batch-granularity re-enqueue is not possible.
+// Sequence numbers are already stamped, so bytes are stored verbatim.
+func (d *Dispatcher) reEnqueueBatch(events []contract.DaemonEvent) {
+	if d.buffer == nil {
+		return
+	}
+	for _, e := range events {
+		b, err := json.Marshal(e)
+		if err != nil {
+			log.Printf("[dispatch] reEnqueueBatch: marshal error seq=%d: %v", e.Sequence, err)
+			continue
+		}
+		d.buffer.Enqueue(b)
+		log.Printf("[dispatch] reEnqueueBatch: re-enqueued event seq=%d type=%s", e.Sequence, e.Type)
+	}
+}
+
 // BuildEvent constructs a contract.DaemonEvent from raw log entry data.
 //
 // eventType: semantic event type, e.g. "draft.pick"
