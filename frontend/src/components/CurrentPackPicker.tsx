@@ -10,7 +10,7 @@ interface CurrentPackPickerProps {
     onRefresh?: () => void;
 }
 
-const CARD_BACK_URL = 'https://backs.scryfall.io/large/59/5/597b79b3-7d77-4261-871a-96d8dba8c93f.jpg?1562636924';
+const CARD_BACK_URL = '/back.png';
 
 const CurrentPackPicker: React.FC<CurrentPackPickerProps> = ({ sessionID, onRefresh }) => {
     const [packData, setPackData] = useState<gui.CurrentPackResponse | null>(null);
