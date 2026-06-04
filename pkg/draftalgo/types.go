@@ -29,8 +29,11 @@ type Pick struct {
 	PickNumber int
 
 	// PickedCardGIHWR is the 17Lands "games in hand win rate" for the
-	// card actually picked (0–100). nil when no rating data is
-	// available.
+	// card actually picked, expressed as a FRACTION in 0.0–1.0 (e.g.
+	// 0.631 for a 63.1% card). This is the canonical unit served by the
+	// BFF /api/v1/draft-ratings endpoint and consumed verbatim by the
+	// daemon — no caller multiplies by 100. nil when no rating data is
+	// available. (#787)
 	PickedCardGIHWR *float64
 
 	// PickQualityGrade is a letter grade for the pick, computed by
@@ -62,7 +65,9 @@ type CardLookup interface {
 // /api/v1/draft-ratings/{set}/{format} endpoint.
 type RatingsLookup interface {
 	// GIHWR returns the 17Lands "games in hand win rate" for the card
-	// in the given format. The bool is false when no rating is on file.
+	// in the given format, as a FRACTION in 0.0–1.0 (the BFF's canonical
+	// unit — see Pick.PickedCardGIHWR). The bool is false when no rating
+	// is on file. (#787)
 	GIHWR(arenaID string, format string) (float64, bool)
 }
 

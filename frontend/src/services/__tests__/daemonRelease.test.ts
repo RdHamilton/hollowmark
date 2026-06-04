@@ -24,6 +24,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   fetchLatestDaemonRelease,
   FALLBACK_DOWNLOAD_BASE,
+  daemonChannel,
+  daemonArtifactChannelInfix,
 } from '../daemonRelease';
 
 const GITHUB_REPO = 'RdHamilton/vault-mtg';
@@ -457,5 +459,42 @@ describe('fetchLatestDaemonRelease', () => {
       expect(result).toBeNull();
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+/**
+ * Channel helpers — single source of truth for the download-asset channel.
+ *
+ * These back the staging-macOS-404 fix in DaemonDownload: the channel must be
+ * derived from the same VITE_SENTRY_ENV signal used to select prereleases, so
+ * the resolved release tag and the asset filename can never disagree.
+ */
+describe('daemonChannel / daemonArtifactChannelInfix', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('staging env → channel "staging", infix "-staging"', () => {
+    vi.stubEnv('VITE_SENTRY_ENV', 'staging');
+    expect(daemonChannel()).toBe('staging');
+    expect(daemonArtifactChannelInfix()).toBe('-staging');
+  });
+
+  it('production env → channel "stable", infix ""', () => {
+    vi.stubEnv('VITE_SENTRY_ENV', 'production');
+    expect(daemonChannel()).toBe('stable');
+    expect(daemonArtifactChannelInfix()).toBe('');
+  });
+
+  it('unknown env value → fail-safe to stable (no prerelease asset leak)', () => {
+    vi.stubEnv('VITE_SENTRY_ENV', 'preview-xyz');
+    expect(daemonChannel()).toBe('stable');
+    expect(daemonArtifactChannelInfix()).toBe('');
+  });
+
+  it('undefined env → fail-safe to stable', () => {
+    vi.stubEnv('VITE_SENTRY_ENV', '');
+    expect(daemonChannel()).toBe('stable');
+    expect(daemonArtifactChannelInfix()).toBe('');
   });
 });
