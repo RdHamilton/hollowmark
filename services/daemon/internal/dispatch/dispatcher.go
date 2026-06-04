@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,6 +27,21 @@ var ErrReauthRequired = errors.New("reauth required: user interaction needed")
 const (
 	maxAttempts = 3
 	retryBase   = 500 * time.Millisecond
+
+	// max429Backoff is the default ceiling for the 429-aware hold-in-loop wait.
+	// It matches the per-account replenishment window used by the BFF's nginx
+	// rate-limit zone (60 s), making the constant self-documenting. Override per
+	// test via With429MaxBackoff.
+	max429Backoff = 60 * time.Second
+
+	// retryAfterCap is the absolute maximum the dispatcher will wait on a
+	// Retry-After header value, regardless of what the server sends (RFC 7231
+	// §10.6.30 safety guidance). A header above this value is clamped.
+	retryAfterCap = 300 * time.Second
+
+	// retryAfterFloor is the minimum 429 wait even when Retry-After: 0 is
+	// returned (floor(max(header, 1s)) per Ray's PLAN_VERDICT ruling).
+	retryAfterFloor = 1 * time.Second
 )
 
 // Refresher is implemented by any component that can obtain a fresh daemon JWT.
@@ -67,6 +83,10 @@ type Dispatcher struct {
 	// Send is safe for concurrent callers.  Reset to 0 on daemon restart
 	// because the Dispatcher itself is recreated on restart.
 	seq atomic.Uint64
+
+	// backoff429Max is the ceiling for the hold-in-loop wait on a 429 response.
+	// Defaults to max429Backoff (60 s). Override via With429MaxBackoff for tests.
+	backoff429Max time.Duration
 }
 
 // New creates a Dispatcher.
@@ -82,7 +102,50 @@ func New(cloudAPIURL, ingestPath, apiKey string) *Dispatcher {
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		backoff429Max: max429Backoff,
 	}
+}
+
+// With429MaxBackoff overrides the default ceiling for the 429-aware
+// hold-in-loop wait. Intended for test configurability (Ray's required option).
+// In production, the default max429Backoff constant (60 s) should be used.
+func (d *Dispatcher) With429MaxBackoff(dur time.Duration) *Dispatcher {
+	d.backoff429Max = dur
+	return d
+}
+
+// parse429Wait parses the Retry-After header from a 429 response and returns
+// the duration the dispatcher should wait before the next attempt.
+//
+// Rules (Ray's PLAN_VERDICT):
+//   - Delta-seconds only (RFC 7231 §7.1.3); HTTP-date format is not supported
+//     by our BFF and is treated as absent.
+//   - floor: max(parsed, 1s) — a Retry-After: 0 becomes 1 s.
+//   - cap:   min(wait, maxBackoff) — header values above maxBackoff are clamped.
+//   - absent/unparseable: returns maxBackoff (the configured ceiling).
+func parse429Wait(header http.Header, maxBackoff time.Duration) time.Duration {
+	ra := header.Get("Retry-After")
+	if ra == "" {
+		return maxBackoff
+	}
+	secs, err := strconv.ParseInt(ra, 10, 64)
+	if err != nil || secs < 0 {
+		// Unparseable or negative value — use the configured ceiling.
+		return maxBackoff
+	}
+	wait := time.Duration(secs) * time.Second
+	// Apply floor.
+	if wait < retryAfterFloor {
+		wait = retryAfterFloor
+	}
+	// Apply cap (clamped to min(wait, retryAfterCap, maxBackoff)).
+	if wait > retryAfterCap {
+		wait = retryAfterCap
+	}
+	if wait > maxBackoff {
+		wait = maxBackoff
+	}
+	return wait
 }
 
 // WithRefresher attaches a Refresher that will be called when the BFF returns 401.
@@ -140,7 +203,9 @@ func (d *Dispatcher) Token() string {
 // as JSON, and POSTs it to the BFF with up to 3 attempts.
 // Retries on transport errors or non-2xx responses with 500ms * attempt backoff.
 // On a 401 response, calls the Refresher (if set) to obtain a new token before
-// the next retry.
+// the next retry. On a 429 response, honors Retry-After (delta-seconds, floored
+// to 1 s, capped to min(header, 300 s, backoff429Max)) and holds in the retry
+// loop rather than immediately moving to the next attempt.
 func (d *Dispatcher) Send(ctx context.Context, event contract.DaemonEvent) error {
 	// Assign per-session sequence (ADR-013).  Add(1) returns the new value, so
 	// the first call yields 1 — matching the "starts at 1" requirement.
@@ -154,10 +219,26 @@ func (d *Dispatcher) Send(ctx context.Context, event contract.DaemonEvent) error
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		var statusCode int
-		statusCode, lastErr = d.doSend(ctx, body)
+		var respHeader http.Header
+		statusCode, respHeader, lastErr = d.doSend(ctx, body)
 		if lastErr == nil {
 			log.Printf("[dispatch] event %q sent (session=%s)", event.Type, event.SessionID)
 			return nil
+		}
+		// On 429, hold in the retry loop for the Retry-After duration (or the
+		// configured max429Backoff ceiling when the header is absent/invalid).
+		// This prevents 3x-amplifying request volume against the per-IP limit.
+		if statusCode == http.StatusTooManyRequests {
+			wait := parse429Wait(respHeader, d.backoff429Max)
+			log.Printf("[dispatch] 429 received (attempt %d/%d); backing off %s", attempt, maxAttempts, wait)
+			if attempt < maxAttempts {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(wait):
+				}
+			}
+			continue
 		}
 		// On 401, attempt to refresh the token before retrying.
 		if statusCode == http.StatusUnauthorized && d.refresher != nil {
@@ -212,7 +293,8 @@ func (d *Dispatcher) SendOrBuffer(ctx context.Context, event contract.DaemonEven
 	var lastStatusCode int
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		var statusCode int
-		statusCode, lastErr = d.doSend(ctx, body)
+		var respHeader http.Header
+		statusCode, respHeader, lastErr = d.doSend(ctx, body)
 		if lastErr == nil {
 			log.Printf("[dispatch] event %q sent (session=%s)", event.Type, event.SessionID)
 			// Notify the service of a confirmed BFF success before draining the
@@ -226,7 +308,7 @@ func (d *Dispatcher) SendOrBuffer(ctx context.Context, event contract.DaemonEven
 			// discarded — no re-enqueue to avoid thundering-herd / livelock).
 			if d.buffer != nil {
 				for _, item := range d.buffer.Drain() {
-					if _, drainErr := d.doSend(ctx, item); drainErr != nil {
+					if _, _, drainErr := d.doSend(ctx, item); drainErr != nil {
 						log.Printf("[dispatch] drain replay failed: %v", drainErr)
 					}
 				}
@@ -234,6 +316,26 @@ func (d *Dispatcher) SendOrBuffer(ctx context.Context, event contract.DaemonEven
 			return nil
 		}
 		lastStatusCode = statusCode
+		// On 429, hold in the retry loop for the Retry-After duration (or the
+		// configured max429Backoff ceiling when the header is absent/invalid).
+		// If maxAttempts are exhausted, falls through to the ring-buffer enqueue
+		// below (event not lost). On ctx-cancel during the wait, buffer + return.
+		if statusCode == http.StatusTooManyRequests {
+			wait := parse429Wait(respHeader, d.backoff429Max)
+			log.Printf("[dispatch] 429 received (attempt %d/%d); backing off %s", attempt, maxAttempts, wait)
+			if attempt < maxAttempts {
+				select {
+				case <-ctx.Done():
+					if d.buffer != nil {
+						d.buffer.Enqueue(body)
+						log.Printf("[dispatch] context cancelled during 429 wait; buffered event seq=%d", event.Sequence)
+					}
+					return ctx.Err()
+				case <-time.After(wait):
+				}
+			}
+			continue
+		}
 		// On 401, attempt to refresh the token before retrying.
 		if statusCode == http.StatusUnauthorized && d.refresher != nil {
 			log.Printf("[dispatch] 401 received; attempting token refresh")
@@ -286,12 +388,14 @@ func (d *Dispatcher) SendOrBuffer(ctx context.Context, event contract.DaemonEven
 }
 
 // doSend performs a single POST of body to the ingest endpoint.
-// Returns the HTTP status code (0 on transport failure) and any error.
-func (d *Dispatcher) doSend(ctx context.Context, body []byte) (int, error) {
+// Returns the HTTP status code (0 on transport failure), the response headers
+// (nil on transport failure), and any error. Callers use the headers to read
+// Retry-After on 429 responses.
+func (d *Dispatcher) doSend(ctx context.Context, body []byte) (int, http.Header, error) {
 	url := d.cloudAPIURL + d.ingestPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return 0, fmt.Errorf("create request: %w", err)
+		return 0, nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if tok := d.Token(); tok != "" {
@@ -300,15 +404,15 @@ func (d *Dispatcher) doSend(ctx context.Context, body []byte) (int, error) {
 
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("post event: %w", err)
+		return 0, nil, fmt.Errorf("post event: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resp.StatusCode, fmt.Errorf("BFF returned %d", resp.StatusCode)
+		return resp.StatusCode, resp.Header, fmt.Errorf("BFF returned %d", resp.StatusCode)
 	}
 
-	return resp.StatusCode, nil
+	return resp.StatusCode, resp.Header, nil
 }
 
 // BuildEvent constructs a contract.DaemonEvent from raw log entry data.

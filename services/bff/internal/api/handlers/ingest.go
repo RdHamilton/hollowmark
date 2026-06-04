@@ -2,8 +2,10 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -18,6 +20,20 @@ import (
 // PostHog event. Defined BFF-side so the threshold can be tuned without a
 // daemon redeploy (per Ray's PLAN_VERDICT §architectural notes point 6).
 const dispatchDegradedThreshold = uint32(3)
+
+// maxBatchSize is the maximum number of events accepted in a single batched
+// POST body. Requests exceeding this cap are rejected with 413 as a defence
+// against malformed or hostile daemon payloads (ADR-053 §5). The honest
+// daemon caps at N=25, so this limit is not expected to fire in production.
+const maxBatchSize = 100
+
+// maxIngestBodyBytes is the maximum number of bytes read from any ingest
+// request body (single or batch). Bodies truncated by io.LimitReader cause a
+// JSON decode error which is surfaced as 413 Request Entity Too Large.
+// 1 MiB is generous for a 25-event honest batch and blocks absurdly large
+// payloads before JSON decode allocates memory for them (ADR-053 §5, Ray's
+// required named constant).
+const maxIngestBodyBytes = 1 * 1024 * 1024 // 1 MiB
 
 // EventBroadcaster is implemented by any type that can broadcast a daemon event
 // to connected clients (e.g. an SSE broker).  userID scopes delivery to the
@@ -95,6 +111,14 @@ func (h *IngestHandler) WithPostHogClient(client PostHogClient) *IngestHandler {
 // IngestEvent handles POST /v1/ingest/events.
 // Authentication is enforced by APIKeyAuth middleware upstream.
 // By the time this handler runs, UserIDFromContext is set on the request context.
+//
+// Dual-shape body detection (ADR-053 §5, backward-compatible — no new MIME type):
+//   - Body starting with '{' → single DaemonEvent (existing wire format; old daemons).
+//   - Body starting with '[' → JSON array of DaemonEvents (batch, new in v0.3.8+).
+//
+// Both shapes are accepted on the same endpoint so old daemons (pre-batch)
+// remain fully functional without a flag day. Per-body size is limited to
+// maxIngestBodyBytes; batch size is capped at maxBatchSize events.
 func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	userID, ok := bffmiddleware.UserIDFromContext(r.Context())
 	if !ok {
@@ -102,8 +126,58 @@ func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read the full body up to maxIngestBodyBytes + 1 so we can detect an
+	// over-size body and return 413 rather than silently truncating.
+	limited := io.LimitReader(r.Body, maxIngestBodyBytes+1)
+	rawBody, err := io.ReadAll(limited)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	if int64(len(rawBody)) > maxIngestBodyBytes {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	// Detect body shape by the first non-whitespace byte.
+	trimmed := bytes.TrimSpace(rawBody)
+	if len(trimmed) == 0 {
+		http.Error(w, "empty body", http.StatusBadRequest)
+		return
+	}
+
+	if trimmed[0] == '[' {
+		// Batch path (ADR-053 §5).
+		var events []contract.DaemonEvent
+		if err := json.Unmarshal(rawBody, &events); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if len(events) == 0 {
+			http.Error(w, "batch must contain at least one event", http.StatusBadRequest)
+			return
+		}
+		if len(events) > maxBatchSize {
+			http.Error(w, "batch exceeds maximum allowed size", http.StatusRequestEntityTooLarge)
+			return
+		}
+		for _, event := range events {
+			// Accept-and-skip malformed events per ADR-039 projection resilience.
+			// Logged at DEBUG so the skip is observable without polluting INFO.
+			if event.Type == "" {
+				slog.Debug("[IngestHandler] skipping batch event: missing type",
+					"account_id_hash", hashAccountID(event.AccountID))
+				continue
+			}
+			h.processEvent(r.Context(), userID, event)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	// Single-event path — body starts with '{' (or any other non-'[' token).
 	var event contract.DaemonEvent
-	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+	if err := json.Unmarshal(rawBody, &event); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -113,11 +187,21 @@ func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.processEvent(r.Context(), userID, event)
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// processEvent persists, gap-checks, emits PostHog observability signals, and
+// broadcasts a single DaemonEvent. It is called by both the single-event and
+// batch paths of IngestEvent so behavior is identical regardless of the wire
+// shape. No behavioral change is made to the single-event path — this is a
+// pure extraction refactor to share the gap-detector + PostHog heartbeat logic.
+func (h *IngestHandler) processEvent(ctx context.Context, userID int64, event contract.DaemonEvent) {
 	// Persist the event before broadcasting. A persistence failure is logged
 	// but does not drop the live event — the broadcast still proceeds so the
 	// frontend receives the event even when the database is degraded.
 	if h.repo != nil {
-		if err := h.repo.Insert(r.Context(), userID, event.AccountID, event.Type, event.Payload, event.OccurredAt, event.EventID, event.Sequence); err != nil {
+		if err := h.repo.Insert(ctx, userID, event.AccountID, event.Type, event.Payload, event.OccurredAt, event.EventID, event.Sequence); err != nil {
 			slog.Error(
 				"[IngestHandler] ERROR persisting event",
 				"type", event.Type,
@@ -262,6 +346,4 @@ func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 		"account_id_hash", hashAccountID(event.AccountID),
 		"userID", userID,
 	)
-
-	w.WriteHeader(http.StatusAccepted)
 }
