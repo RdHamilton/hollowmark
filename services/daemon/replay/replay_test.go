@@ -196,10 +196,12 @@ func TestParseLogFile_ClientIDExtraction(t *testing.T) {
 	assert.Empty(t, result.Events, "player.authenticated must not produce a daemon event")
 }
 
-// TestParseLogFile_GREEventsSkipped verifies that greToClientEvent entries
-// are skipped without error (GRE buffering is stateful — not supported in
-// the stateless replay injector).
-func TestParseLogFile_GREEventsSkipped(t *testing.T) {
+// TestParseLogFile_GREEventsBuffered verifies that greToClientEvent entries are
+// buffered through the GRE session manager (not inserted individually) and may
+// produce a match.game_ended event on flush (#808 — GRE replay support).
+// A single incomplete GRE line produces no CardPlays but still increments
+// GREEventCount and may produce an empty-CardPlays match.game_ended on flush.
+func TestParseLogFile_GREEventsBuffered(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Player.log")
 	line := `{"greToClientEvent":{"type":"GREMessageType_GameStateMessage","msgId":1}}`
@@ -208,7 +210,14 @@ func TestParseLogFile_GREEventsSkipped(t *testing.T) {
 	result, err := ParseLogFile(path)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Empty(t, result.Events, "greToClientEvent must be skipped by the stateless injector")
+	// GRE event must be counted, not silently dropped.
+	assert.Equal(t, 1, result.GREEventCount,
+		"greToClientEvent must be counted in GREEventCount")
+	// Any match.game_ended produced by the flush is a match.game_ended event.
+	for _, evt := range result.Events {
+		assert.Equal(t, "match.game_ended", evt.EventType,
+			"only match.game_ended events may be produced from GRE buffering")
+	}
 }
 
 // ─── WrapEvents unit tests ───────────────────────────────────────────────────

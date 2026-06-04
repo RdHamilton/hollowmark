@@ -1,30 +1,32 @@
 {
   "corpus_mtga_version": "2026.59.20.4846.1277160",
   "corpus_provenance": "REAL",
-  "expected_empty": true,
+  "expected_empty": false,
   "assertions": [
     {
       "surface": "match-detail-timeline",
       "bff_endpoint": "/api/v1/matches/{match_id}/plays/timeline",
-      "notes": "12 matches project; 0 game_plays (GRE path not built). PlaysByMatch returns empty not 500.",
+      "notes": "7 matches project; 1128 game_plays produced by GRE session manager flush (#807 fix + #808 replay support). PlaysByMatch returns non-empty timeline. The game_plays > 0 assertion in TestLayer5ReplayInjector_Reconstruct guards against the #807 regression class (partial GRE flush with no match_id) going undetected.",
       "fields": {
         "must_not_500": true,
         "error_element_must_not_render": true,
         "error_testid": "game-timeline-error",
-        "empty_element_may_render": true,
+        "empty_element_must_not_render": true,
         "empty_testid": "game-timeline-empty",
-        "corpus_match_count": 12
+        "corpus_match_count": 7,
+        "game_plays_count": 1128
       }
     }
   ],
   "corpus_promotion": {
-    "promoted_at": "2026-06-02",
-    "pr": "feat/696-697-layer5-corpus-promotion",
+    "promoted_at": "2026-06-04",
+    "pr": "feat/808-golden-corpus-rebuild",
     "injector_run": {
       "files_scanned": 36,
-      "matches_projected": 12,
-      "game_plays_projected": 0
+      "matches_projected": 7,
+      "game_plays_projected": 1128,
+      "gre_events_buffered": true
     },
-    "note": "12 match rows project; 0 game_plays \u2014 GRE ingest path not yet built."
+    "note": "Rebuilt post-#807: GRE session manager wired into replay package; 1128 game_plays projected from 36 raw log files. Draft data (draft.started/draft.completed/draft.pick) DLQ with missing session_id pending #772."
   }
 }
