@@ -670,7 +670,7 @@ const Draft: React.FC = () => {
                                                         </div>
                                                         <div>
                                                             <span className="label">GIHWR:</span>
-                                                            <span className="value">{alternatives.picked_card_gihwr.toFixed(1)}%</span>
+                                                            <span className="value">{(alternatives.picked_card_gihwr * 100).toFixed(1)}%</span>
                                                         </div>
                                                     </div>
                                                     {alternatives.alternatives && alternatives.alternatives.length > 0 && (
@@ -679,7 +679,7 @@ const Draft: React.FC = () => {
                                                             {alternatives.alternatives.slice(0, 3).map((alt: pickquality.Alternative, idx: number) => (
                                                                 <div key={idx} className="alternative-card">
                                                                     <span className="card-name">{alt.card_name}</span>
-                                                                    <span className="gihwr">{alt.gihwr.toFixed(1)}%</span>
+                                                                    <span className="gihwr">{(alt.gihwr * 100).toFixed(1)}%</span>
                                                                 </div>
                                                             ))}
                                                         </div>
@@ -1033,7 +1033,7 @@ const Draft: React.FC = () => {
                                                     </div>
                                                     <div>
                                                         <span className="label">GIHWR:</span>
-                                                        <span className="value">{alternatives.picked_card_gihwr.toFixed(1)}%</span>
+                                                        <span className="value">{(alternatives.picked_card_gihwr * 100).toFixed(1)}%</span>
                                                     </div>
                                                 </div>
                                                 {alternatives.alternatives && alternatives.alternatives.length > 0 && (
@@ -1042,7 +1042,7 @@ const Draft: React.FC = () => {
                                                         {alternatives.alternatives.slice(0, 3).map((alt: pickquality.Alternative, idx: number) => (
                                                             <div key={idx} className="alternative-card">
                                                                 <span className="card-name">{alt.card_name}</span>
-                                                                <span className="gihwr">{alt.gihwr.toFixed(1)}%</span>
+                                                                <span className="gihwr">{(alt.gihwr * 100).toFixed(1)}%</span>
                                                             </div>
                                                         ))}
                                                     </div>
