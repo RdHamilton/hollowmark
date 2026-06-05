@@ -4,14 +4,14 @@
    ============================================================ */
 
 .wildcard-advisor {
-  background: var(--vault-bg-raised, #161C26);
-  border: 1px solid var(--vault-border, #2A3347);
-  border-radius: var(--radius-md, 8px);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  padding: var(--space-4, 16px);
+  background: var(--vault-bg-raised);
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--vault-shadow-inset-white-4);
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-4, 16px);
+  gap: var(--space-4);
 }
 
 /* Header */
@@ -22,10 +22,10 @@
 }
 
 .wildcard-advisor__title {
-  font-family: var(--font-display-vault, 'Space Grotesk', sans-serif);
-  font-size: var(--text-xl, 20px);
+  font-family: var(--font-display-vault);
+  font-size: var(--text-xl);
   font-weight: 700;
-  color: var(--vault-fg, #F1F5F9);
+  color: var(--vault-fg);
   margin: 0;
   letter-spacing: -0.01em;
 }
@@ -33,26 +33,26 @@
 .wildcard-advisor__close {
   background: transparent;
   border: none;
-  color: var(--vault-fg-muted, #4E6080);
+  color: var(--vault-fg-muted);
   cursor: pointer;
   font-size: 20px;
   line-height: 1;
   padding: 4px 8px;
-  border-radius: var(--radius-sm, 4px);
-  transition: color var(--transition-fast, 150ms ease);
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast);
 }
 
 .wildcard-advisor__close:hover {
-  color: var(--vault-fg, #F1F5F9);
+  color: var(--vault-fg);
 }
 
 /* Format toggle — segmented control */
 .wildcard-advisor__format-toggle {
   display: flex;
-  gap: var(--space-1, 4px);
-  background: var(--vault-bg, #0D1117);
-  border: 1px solid var(--vault-border, #2A3347);
-  border-radius: var(--radius-md, 8px);
+  gap: var(--space-1);
+  background: var(--vault-bg);
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-md);
   padding: 3px;
 }
 
@@ -61,48 +61,48 @@
   background: transparent;
   border: none;
   border-radius: 6px;
-  color: var(--vault-fg-secondary, #94A3B8);
+  color: var(--vault-fg-secondary);
   cursor: pointer;
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-sm, 13px);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
   font-weight: 500;
   padding: 6px 10px;
   text-align: center;
-  transition: all var(--transition-fast, 150ms ease);
+  transition: all var(--transition-fast);
   white-space: nowrap;
 }
 
 .wildcard-advisor__format-btn:hover {
-  background: var(--vault-bg-raised, #161C26);
-  color: var(--vault-fg, #F1F5F9);
+  background: var(--vault-bg-raised);
+  color: var(--vault-fg);
 }
 
 .wildcard-advisor__format-btn--active {
-  background: var(--vault-bg-raised, #161C26);
-  color: var(--vault-sapphire, #4A90D9);
+  background: var(--vault-bg-raised);
+  color: var(--vault-sapphire);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--vault-shadow-card);
 }
 
 /* Loading skeleton */
 .wildcard-advisor__loading {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2, 8px);
-  padding: var(--space-2, 8px) 0;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
 }
 
 .wildcard-advisor__skeleton-row {
   height: 44px;
   background: linear-gradient(
     90deg,
-    var(--vault-border, #2A3347) 0%,
-    var(--vault-bg-overlay, #1E2636) 50%,
-    var(--vault-border, #2A3347) 100%
+    var(--vault-border) 0%,
+    var(--vault-bg-overlay) 50%,
+    var(--vault-border) 100%
   );
   background-size: 200% 100%;
   animation: shimmer 1.6s ease-in-out infinite;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
 }
 
 @keyframes shimmer {
@@ -112,32 +112,32 @@
 
 /* Stale-data warning banner */
 .wildcard-advisor__stale-banner {
-  background: var(--vault-warning-dim, rgba(234, 179, 8, 0.15));
-  border: 1px solid var(--vault-warning, #EAB308);
+  background: var(--vault-warning-dim);
+  border: 1px solid var(--vault-warning);
   border-left-width: 3px;
-  border-radius: var(--radius-sm, 4px);
-  color: var(--vault-warning, #EAB308);
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-sm, 13px);
-  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border-radius: var(--radius-sm);
+  color: var(--vault-warning);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-3);
 }
 
 /* Wildcard budget header */
 .wildcard-advisor__budget {
   display: flex;
   align-items: center;
-  gap: var(--space-3, 12px);
-  padding: var(--space-3, 12px);
-  background: var(--vault-bg, #0D1117);
-  border: 1px solid var(--vault-border, #2A3347);
-  border-radius: var(--radius-sm, 4px);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--vault-bg);
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-sm);
 }
 
 .wildcard-advisor__budget-label {
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-xs, 11px);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
   font-weight: 600;
-  color: var(--vault-fg-muted, #4E6080);
+  color: var(--vault-fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   white-space: nowrap;
@@ -145,15 +145,15 @@
 
 .wildcard-advisor__budget-gems {
   display: flex;
-  gap: var(--space-3, 12px);
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
 .wildcard-advisor__budget-gem {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1, 4px);
-  color: var(--gem-color, #F1F5F9);
+  gap: var(--space-1);
+  color: var(--gem-color, var(--vault-fg));
 }
 
 .wildcard-advisor__budget-gem-icon {
@@ -161,49 +161,49 @@
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--gem-color, #4E6080);
+  background: var(--gem-color, var(--vault-fg-muted));
   flex-shrink: 0;
 }
 
 .wildcard-advisor__budget-gem-count {
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  font-size: var(--text-sm, 13px);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
   font-weight: 500;
 }
 
 .wildcard-advisor__budget-gem-label {
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-xs, 11px);
-  color: var(--vault-fg-secondary, #94A3B8);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-secondary);
 }
 
 /* Sections */
 .wildcard-advisor__section {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
 }
 
 .wildcard-advisor__section-title {
-  font-family: var(--font-display-vault, 'Space Grotesk', sans-serif);
-  font-size: var(--text-base, 15px);
+  font-family: var(--font-display-vault);
+  font-size: var(--text-base);
   font-weight: 600;
   margin: 0;
   letter-spacing: -0.01em;
 }
 
 .wildcard-advisor__section-title--affordable {
-  color: var(--vault-success, #22C55E);
+  color: var(--vault-success);
 }
 
 .wildcard-advisor__section-title--aspirational {
-  color: var(--vault-fg-secondary, #94A3B8);
+  color: var(--vault-fg-secondary);
 }
 
 .wildcard-advisor__section-subtitle {
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-xs, 11px);
-  color: var(--vault-fg-muted, #4E6080);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-muted);
   margin: 0;
 }
 
@@ -218,8 +218,8 @@
 .wildcard-advisor__rec-card {
   background: transparent;
   border-left: 3px solid transparent;
-  border-bottom: 1px solid var(--vault-border-subtle, #1F2A3C);
-  transition: background var(--transition-fast, 150ms ease);
+  border-bottom: 1px solid var(--vault-border-subtle);
+  transition: background var(--transition-fast);
 }
 
 .wildcard-advisor__rec-card:last-child {
@@ -227,26 +227,26 @@
 }
 
 .wildcard-advisor__rec-card:hover {
-  background: var(--vault-bg-overlay, #1E2636);
+  background: var(--vault-bg-overlay);
 }
 
 .wildcard-advisor__rec-card--affordable {
-  border-left-color: var(--vault-success, #22C55E);
+  border-left-color: var(--vault-success);
 }
 
 .wildcard-advisor__rec-card--aspirational {
-  border-left-color: var(--vault-fg-muted, #4E6080);
+  border-left-color: var(--vault-fg-muted);
 }
 
 .wildcard-advisor__rec-main {
   display: flex;
   align-items: center;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
   width: 100%;
   background: transparent;
   border: none;
   cursor: pointer;
-  padding: var(--space-2, 8px) var(--space-3, 12px);
+  padding: var(--space-2) var(--space-3);
   text-align: left;
 }
 
@@ -260,10 +260,10 @@
 
 .wildcard-advisor__rec-name {
   flex: 1;
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-sm, 13px);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
   font-weight: 500;
-  color: var(--vault-fg, #F1F5F9);
+  color: var(--vault-fg);
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -271,51 +271,51 @@
 }
 
 .wildcard-advisor__rec-missing {
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  font-size: var(--text-xs, 11px);
-  color: var(--vault-fg-muted, #4E6080);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-muted);
   flex-shrink: 0;
 }
 
 .wildcard-advisor__rec-gihwr {
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  font-size: var(--text-xs, 11px);
-  color: var(--vault-fg-secondary, #94A3B8);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-secondary);
   flex-shrink: 0;
   min-width: 44px;
   text-align: right;
 }
 
 .wildcard-advisor__rec-gihwr--positive {
-  color: var(--vault-success, #22C55E);
+  color: var(--vault-success);
 }
 
 .wildcard-advisor__rec-gihwr--negative {
-  color: var(--vault-danger, #EF4444);
+  color: var(--vault-danger);
 }
 
 .wildcard-advisor__rec-expand-icon {
-  color: var(--vault-fg-muted, #4E6080);
+  color: var(--vault-fg-muted);
   font-size: 10px;
   flex-shrink: 0;
 }
 
 /* Drill-down detail section */
 .wildcard-advisor__rec-drill-down {
-  padding: var(--space-2, 8px) var(--space-3, 12px) var(--space-3, 12px) 28px;
-  border-top: 1px solid var(--vault-border-subtle, #1F2A3C);
+  padding: var(--space-2) var(--space-3) var(--space-3) 28px;
+  border-top: 1px solid var(--vault-border-subtle);
 }
 
 .wildcard-advisor__rec-details {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2, 8px) var(--space-4, 16px);
+  gap: var(--space-2) var(--space-4);
   margin: 0;
 }
 
 .wildcard-advisor__rec-detail-row {
   display: flex;
-  gap: var(--space-1, 4px);
+  gap: var(--space-1);
 }
 
 .wildcard-advisor__rec-detail-row--full {
@@ -323,23 +323,23 @@
 }
 
 .wildcard-advisor__rec-detail-row dt {
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-xs, 11px);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
   font-weight: 600;
-  color: var(--vault-fg-muted, #4E6080);
+  color: var(--vault-fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .wildcard-advisor__rec-detail-row dd {
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  font-size: var(--text-xs, 11px);
-  color: var(--vault-fg-secondary, #94A3B8);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-secondary);
   margin: 0;
 }
 
 .wildcard-advisor__rec-detail-row--full dd {
-  font-family: var(--font-body, 'Inter', sans-serif);
+  font-family: var(--font-body);
 }
 
 /* Sync CTA state */
@@ -348,35 +348,35 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: var(--space-8, 32px) var(--space-4, 16px);
-  gap: var(--space-3, 12px);
+  padding: var(--space-8) var(--space-4);
+  gap: var(--space-3);
 }
 
 .wildcard-advisor__sync-cta-icon {
   font-size: 36px;
-  color: var(--vault-fg-muted, #4E6080);
+  color: var(--vault-fg-muted);
 }
 
 .wildcard-advisor__sync-cta-title {
-  font-family: var(--font-display-vault, 'Space Grotesk', sans-serif);
-  font-size: var(--text-xl, 20px);
+  font-family: var(--font-display-vault);
+  font-size: var(--text-xl);
   font-weight: 600;
-  color: var(--vault-fg, #F1F5F9);
+  color: var(--vault-fg);
   margin: 0;
 }
 
 .wildcard-advisor__sync-cta-body {
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-sm, 13px);
-  color: var(--vault-fg-secondary, #94A3B8);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-fg-secondary);
   max-width: 320px;
   margin: 0;
 }
 
 .wildcard-advisor__sync-cta-hint {
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-xs, 11px);
-  color: var(--vault-fg-muted, #4E6080);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-muted);
   margin: 0;
 }
 
@@ -386,22 +386,22 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: var(--space-8, 32px) var(--space-4, 16px);
-  gap: var(--space-2, 8px);
+  padding: var(--space-8) var(--space-4);
+  gap: var(--space-2);
 }
 
 .wildcard-advisor__empty-title {
-  font-family: var(--font-display-vault, 'Space Grotesk', sans-serif);
-  font-size: var(--text-xl, 20px);
+  font-family: var(--font-display-vault);
+  font-size: var(--text-xl);
   font-weight: 600;
-  color: var(--vault-fg, #F1F5F9);
+  color: var(--vault-fg);
   margin: 0;
 }
 
 .wildcard-advisor__empty-body {
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-sm, 13px);
-  color: var(--vault-fg-secondary, #94A3B8);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-fg-secondary);
   max-width: 320px;
   margin: 0;
 }
@@ -412,31 +412,31 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: var(--space-6, 24px) var(--space-4, 16px);
-  gap: var(--space-3, 12px);
+  padding: var(--space-6) var(--space-4);
+  gap: var(--space-3);
 }
 
 .wildcard-advisor__error-msg {
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-sm, 13px);
-  color: var(--vault-danger, #EF4444);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-danger);
   margin: 0;
 }
 
 .wildcard-advisor__retry-btn {
   background: transparent;
-  border: 1px solid var(--vault-border, #2A3347);
-  border-radius: var(--radius-md, 8px);
-  color: var(--vault-fg, #F1F5F9);
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-md);
+  color: var(--vault-fg);
   cursor: pointer;
-  font-family: var(--font-body, 'Inter', sans-serif);
-  font-size: var(--text-sm, 13px);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
   font-weight: 500;
   padding: 6px 16px;
-  transition: background var(--transition-fast, 150ms ease), border-color var(--transition-fast, 150ms ease);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .wildcard-advisor__retry-btn:hover {
-  background: var(--vault-bg-raised, #161C26);
-  border-color: var(--vault-sapphire, #4A90D9);
+  background: var(--vault-bg-raised);
+  border-color: var(--vault-sapphire);
 }
