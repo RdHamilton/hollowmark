@@ -267,13 +267,16 @@ export type AnalyticsEvent =
       name: 'feature_ml_suggestions_viewed';
       properties: {
         suggestion_count: number;
-        context: 'deck_builder' | 'draft';
+        context: 'deck_builder' | 'draft' | 'collection';
       };
     }
   | {
       name: 'wildcard_recommendation_clicked';
       properties: {
-        suggestion_type: 'add' | 'remove' | 'swap';
+        /** Present when fired from MLSuggestionsPanel (deck-builder context). */
+        suggestion_type?: 'add' | 'remove' | 'swap';
+        /** Present when fired from WildcardAdvisorPanel (collection context). */
+        rarity?: 'common' | 'uncommon' | 'rare' | 'mythic';
         suggestion_count: number;
       };
     }
