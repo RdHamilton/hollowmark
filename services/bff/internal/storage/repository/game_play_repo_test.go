@@ -567,7 +567,7 @@ func TestGamePlayRepository_InsertCardPlays_WritesToGamePlays(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	if err := repo.InsertCardPlays(ctx, gameID, matchID, entries, now); err != nil {
+	if err := repo.InsertCardPlays(ctx, accountID, gameID, matchID, entries, now); err != nil {
 		t.Fatalf("InsertCardPlays: %v", err)
 	}
 
@@ -577,6 +577,19 @@ func TestGamePlayRepository_InsertCardPlays_WritesToGamePlays(t *testing.T) {
 	}
 	if n != 3 {
 		t.Errorf("game_plays count: want 3, got %d", n)
+	}
+
+	// AC: game_plays.account_id must be populated (ticket #820).
+	var storedAccountID int64
+	err = db.QueryRowContext(
+		ctx,
+		`SELECT account_id FROM game_plays WHERE game_id = $1 LIMIT 1`, gameID,
+	).Scan(&storedAccountID)
+	if err != nil {
+		t.Fatalf("read game_plays.account_id: %v", err)
+	}
+	if storedAccountID != accountID {
+		t.Errorf("game_plays.account_id: want %d, got %d — InsertCardPlays must populate account_id", accountID, storedAccountID)
 	}
 }
 
@@ -601,11 +614,11 @@ func TestGamePlayRepository_InsertCardPlays_Idempotent(t *testing.T) {
 	}
 	now := time.Now().UTC()
 
-	if err := repo.InsertCardPlays(ctx, gameID, matchID, []contract.CardPlayEntry{entry}, now); err != nil {
+	if err := repo.InsertCardPlays(ctx, accountID, gameID, matchID, []contract.CardPlayEntry{entry}, now); err != nil {
 		t.Fatalf("InsertCardPlays first: %v", err)
 	}
 	// Replay — must not error or produce a duplicate.
-	if err := repo.InsertCardPlays(ctx, gameID, matchID, []contract.CardPlayEntry{entry}, now); err != nil {
+	if err := repo.InsertCardPlays(ctx, accountID, gameID, matchID, []contract.CardPlayEntry{entry}, now); err != nil {
 		t.Fatalf("InsertCardPlays replay: %v", err)
 	}
 
@@ -625,10 +638,10 @@ func TestGamePlayRepository_InsertCardPlays_Empty(t *testing.T) {
 	repo := repository.NewGamePlayRepository(db)
 	ctx := context.Background()
 
-	if err := repo.InsertCardPlays(ctx, 0, "", nil, time.Now().UTC()); err != nil {
+	if err := repo.InsertCardPlays(ctx, 0, 0, "", nil, time.Now().UTC()); err != nil {
 		t.Errorf("InsertCardPlays(nil): want no error, got %v", err)
 	}
-	if err := repo.InsertCardPlays(ctx, 0, "", []contract.CardPlayEntry{}, time.Now().UTC()); err != nil {
+	if err := repo.InsertCardPlays(ctx, 0, 0, "", []contract.CardPlayEntry{}, time.Now().UTC()); err != nil {
 		t.Errorf("InsertCardPlays(empty): want no error, got %v", err)
 	}
 }
@@ -999,7 +1012,7 @@ func TestGamePlayRepository_UpsertGameRow_ThenInsertCardPlays(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	if err := repo.InsertCardPlays(ctx, gameID, matchID, entries, now); err != nil {
+	if err := repo.InsertCardPlays(ctx, accountID, gameID, matchID, entries, now); err != nil {
 		t.Fatalf("InsertCardPlays after UpsertGameRow: %v", err)
 	}
 

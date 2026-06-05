@@ -2440,22 +2440,24 @@ func (f *fakeGameRowWriter) UpsertGameRow(_ context.Context, matchID string, gam
 // fakeCardPlayStore captures InsertCardPlays calls.
 type fakeCardPlayStoreCapturing struct {
 	calls []struct {
-		gameID  int64
-		matchID string
-		entries []contract.CardPlayEntry
+		accountID int64
+		gameID    int64
+		matchID   string
+		entries   []contract.CardPlayEntry
 	}
 	err error
 }
 
-func (f *fakeCardPlayStoreCapturing) InsertCardPlays(_ context.Context, gameID int64, matchID string, entries []contract.CardPlayEntry, _ time.Time) error {
+func (f *fakeCardPlayStoreCapturing) InsertCardPlays(_ context.Context, accountID int64, gameID int64, matchID string, entries []contract.CardPlayEntry, _ time.Time) error {
 	if f.err != nil {
 		return f.err
 	}
 	f.calls = append(f.calls, struct {
-		gameID  int64
-		matchID string
-		entries []contract.CardPlayEntry
-	}{gameID, matchID, entries})
+		accountID int64
+		gameID    int64
+		matchID   string
+		entries   []contract.CardPlayEntry
+	}{accountID, gameID, matchID, entries})
 	return nil
 }
 
@@ -2517,9 +2519,13 @@ func TestRunOnce_GamePlayEvent_CardPlays_PersistedViaGameRowWriter(t *testing.T)
 		t.Errorf("UpsertGameRow game_number: want 1, got %d", grw.upserts[0].gameNumber)
 	}
 
-	// AC3: InsertCardPlays must have been called with the game_id returned by UpsertGameRow.
+	// AC3: InsertCardPlays must have been called with the game_id returned by UpsertGameRow
+	// and the account_id resolved by GetOrCreateByClientID (ticket #820: account_id populated).
 	if len(cp.calls) != 1 {
 		t.Fatalf("expected 1 InsertCardPlays call, got %d — card plays were silently skipped", len(cp.calls))
+	}
+	if cp.calls[0].accountID != 70 {
+		t.Errorf("InsertCardPlays account_id: want 70 (from fakeAccountStore), got %d", cp.calls[0].accountID)
 	}
 	if cp.calls[0].gameID != 1 {
 		t.Errorf("InsertCardPlays game_id: want 1 (from fakeGameRowWriter), got %d", cp.calls[0].gameID)
