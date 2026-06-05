@@ -32,10 +32,23 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "[create-staging-db] Fetching RDS connection details from SSM..."
 
+# DB_ENDPOINT: the PROD/shared RDS host — used for DDL (CREATE DATABASE / GRANT)
+# because vaultmtg_staging is a logical DB that lives on the shared production
+# RDS instance. DDL must run as the master user against the prod host.
 DB_ENDPOINT=$(aws ssm get-parameter \
     --profile "$PROFILE" \
     --region  "$REGION" \
     --name    "$SSM_PROD_DB_ENDPOINT" \
+    --query   "Parameter.Value" \
+    --output  text)
+
+# STAGING_DB_HOST: the DEDICATED staging RDS host — used only for building the
+# DATABASE_URL that the staging BFF reads at runtime. The BFF connects to
+# vaultmtg_staging on the staging instance, not the shared/prod instance.
+STAGING_DB_HOST=$(aws ssm get-parameter \
+    --profile "$PROFILE" \
+    --region  "$REGION" \
+    --name    "$SSM_STAGING_DB_ENDPOINT" \
     --query   "Parameter.Value" \
     --output  text)
 
@@ -79,7 +92,8 @@ aws ssm put-parameter \
     > /dev/null
 
 # Also store a full DATABASE_URL for use by the BFF and migration tooling.
-STAGING_DB_URL="postgres://${DB_STAGING_APP_ROLE}:${STAGING_PASSWORD}@${DB_ENDPOINT}:${DB_PORT}/${DB_STAGING_NAME}?${DB_SSL_MODE}"
+# Uses STAGING_DB_HOST (vaultmtg-postgres-staging), NOT DB_ENDPOINT (prod host).
+STAGING_DB_URL="postgres://${DB_STAGING_APP_ROLE}:${STAGING_PASSWORD}@${STAGING_DB_HOST}:${DB_PORT}/${DB_STAGING_NAME}?${DB_SSL_MODE}"
 aws ssm put-parameter \
     --profile  "$PROFILE" \
     --region   "$REGION" \
