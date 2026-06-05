@@ -21,6 +21,20 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e/staging',
 
+  // Exclude visual/screenshot specs and visual data verify specs — they require
+  // CLERK_SECRET_KEY + SCREENSHOT_DIR and run as separate steps in CI.
+  // wildcard-panel-visual-424 is a screenshot capture spec (not an API smoke test).
+  // visual-auth-smoke and visual-auth-data-verify are SPA browser specs, not BFF.
+  testIgnore: [
+    /visual-auth-smoke/,
+    /visual-auth-data-verify/,
+    /wildcard-panel-visual/,
+    /r17-smoke/,
+    /projection-golden-smoke/,
+    /staging-spa-smoke/,
+    /draft-ratings-.*-verify/,
+  ],
+
   // Individual test timeout — keep the suite well under 60 s total.
   timeout: 20 * 1000,
 
