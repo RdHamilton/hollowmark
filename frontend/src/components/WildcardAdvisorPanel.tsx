@@ -12,13 +12,15 @@
  *  5. stale-warning   — 200 OK but X-Cache-Degraded + >24h old.
  *  6. 503 error-retry — BFF degraded; show retry button.
  *
- * PostHog telemetry is EXCLUDED (#422).
+ * PostHog telemetry: #422 — feature_ml_suggestions_viewed on load with recs,
+ * wildcard_recommendation_clicked on row expand.
  * Coupling note: format values must match the BFF contract in ADR-045 / #420.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@clerk/react';
 import { ArrowPathIcon, ChevronRightIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
+import { trackEvent } from '@/services/analytics';
 import { bffWildcardAdvisor } from '@/services/api';
 import { ApiRequestError } from '@/services/apiClient';
 import type {
@@ -127,9 +129,10 @@ function BudgetGem({ rarity, count }: BudgetGemProps) {
 interface RecommendationCardProps {
   rec: WildcardRecommendation;
   affordable: boolean;
+  totalCount: number;
 }
 
-function RecommendationCard({ rec, affordable }: RecommendationCardProps) {
+function RecommendationCard({ rec, affordable, totalCount }: RecommendationCardProps) {
   const [expanded, setExpanded] = useState(false);
 
   const tierLabel = formatTier(rec.tier);
@@ -144,7 +147,20 @@ function RecommendationCard({ rec, affordable }: RecommendationCardProps) {
     >
       <button
         className="wildcard-advisor__rec-main"
-        onClick={() => setExpanded((prev) => !prev)}
+        onClick={() => {
+          const wasExpanded = expanded;
+          setExpanded((prev) => !prev);
+          // #422 telemetry: fire on expand only, not on collapse.
+          if (!wasExpanded) {
+            trackEvent({
+              name: 'wildcard_recommendation_clicked',
+              properties: {
+                rarity: rec.rarity,
+                suggestion_count: totalCount,
+              },
+            });
+          }
+        }}
         aria-expanded={expanded}
       >
         <span
@@ -288,6 +304,29 @@ export default function WildcardAdvisorPanel({ onClose }: WildcardAdvisorPanelPr
 
     return () => { cancelled = true; };
   }, [format, getToken, retryCount]);
+
+  // #422 telemetry: fire feature_ml_suggestions_viewed once per (format, result)
+  // when recommendations load with count > 0.
+  // Keyed on format+count to avoid re-firing on re-renders while guarding
+  // against the same result triggering twice. Uses a ref (not state) so the
+  // comparison does NOT trigger another render cycle — prevents the infinite
+  // render loop that caused the OOM in #2996.
+  const lastViewedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (state.kind !== 'data') return;
+    const recs = state.result.data.recommendations;
+    if (recs.length === 0) return;
+    const key = `${format}/${recs.length}`;
+    if (lastViewedKeyRef.current === key) return;
+    lastViewedKeyRef.current = key;
+    trackEvent({
+      name: 'feature_ml_suggestions_viewed',
+      properties: {
+        suggestion_count: recs.length,
+        context: 'collection',
+      },
+    });
+  }, [format, state]);
 
   const handleFormatChange = (newFormat: WildcardAdvisorFormat) => {
     setFormat(newFormat);
@@ -501,6 +540,7 @@ export default function WildcardAdvisorPanel({ onClose }: WildcardAdvisorPanelPr
                           key={`${rec.arena_id}-${rec.rarity}`}
                           rec={rec}
                           affordable
+                          totalCount={recs.length}
                         />
                       ))}
                     </div>
@@ -521,6 +561,7 @@ export default function WildcardAdvisorPanel({ onClose }: WildcardAdvisorPanelPr
                           key={`${rec.arena_id}-${rec.rarity}`}
                           rec={rec}
                           affordable={false}
+                          totalCount={recs.length}
                         />
                       ))}
                     </div>
