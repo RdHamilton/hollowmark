@@ -79,7 +79,8 @@ func TestCurrentPack_ReturnsLiveSession(t *testing.T) {
 	})
 	srv.SetDraftLookups(
 		stubCards{"100": "Card A", "200": "Card B", "300": "Card C"},
-		stubRatings{"100": 60.0, "200": 50.0, "300": 45.0},
+		// #787: gihwr is a fraction (0.0–1.0) matching the BFF wire unit.
+		stubRatings{"100": 0.60, "200": 0.50, "300": 0.45},
 	)
 
 	resp, err := http.Get("http://" + srv.Addr() + "/api/v1/drafts/current/current-pack")
@@ -124,17 +125,18 @@ func TestCurrentPack_ReturnsLiveSession(t *testing.T) {
 	if len(body.Cards) != 3 {
 		t.Fatalf("Cards len = %d, want 3", len(body.Cards))
 	}
-	// Card A has highest GIHWR (60.0) so it must be recommended.
+	// Card A has highest GIHWR (0.60 fraction) so it must be recommended.
 	// The response preserves the original pack card order, so verify by
 	// scanning for arena_id "100".
+	// #787: gihwr passes through as a fraction (0.0–1.0), not percent.
 	foundA := false
 	for _, c := range body.Cards {
 		if c.ArenaID == "100" {
 			if c.Name != "Card A" {
 				t.Errorf("card 100 Name = %q, want %q", c.Name, "Card A")
 			}
-			if c.GIHWR != 60.0 {
-				t.Errorf("card 100 GIHWR = %v, want 60.0", c.GIHWR)
+			if c.GIHWR != 0.60 {
+				t.Errorf("card 100 GIHWR = %v, want 0.60 (fraction, #787)", c.GIHWR)
 			}
 			if !c.IsRecommended {
 				t.Errorf("card 100 (Card A, highest GIHWR) must have is_recommended=true")
@@ -161,7 +163,8 @@ func TestCurrentPack_RecommendedCardPopulated(t *testing.T) {
 	})
 	srv.SetDraftLookups(
 		stubCards{"100": "Lightning Bolt", "200": "Bear", "300": "Elf"},
-		stubRatings{"100": 72.0, "200": 55.0, "300": 48.0},
+		// #787: gihwr is a fraction (0.0–1.0) matching the BFF wire unit.
+		stubRatings{"100": 0.72, "200": 0.55, "300": 0.48},
 	)
 
 	resp, err := http.Get("http://" + srv.Addr() + "/api/v1/drafts/current/current-pack")
@@ -337,7 +340,8 @@ func TestGradePick_ExplicitAvailableCards(t *testing.T) {
 	srv := newDraftTestServer(t, nil)
 	srv.SetDraftLookups(
 		stubCards{"100": "A", "200": "B", "300": "C"},
-		stubRatings{"100": 60.0, "200": 55.0, "300": 50.0},
+		// #787: gihwr is a fraction (0.0–1.0) matching the BFF wire unit.
+		stubRatings{"100": 0.60, "200": 0.55, "300": 0.50},
 	)
 
 	body := map[string]any{
@@ -367,8 +371,9 @@ func TestGradePick_ExplicitAvailableCards(t *testing.T) {
 	if got.Grade != "A+" || got.Rank != 1 {
 		t.Errorf("expected A+ rank 1 (picked the best card), got %+v", got)
 	}
-	if got.PackBestGIHWR != 60.0 {
-		t.Errorf("PackBestGIHWR = %v, want 60.0", got.PackBestGIHWR)
+	// #787: PackBestGIHWR is the raw fraction from the stub, unscaled.
+	if got.PackBestGIHWR != 0.60 {
+		t.Errorf("PackBestGIHWR = %v, want 0.60 (fraction, #787)", got.PackBestGIHWR)
 	}
 }
 
@@ -436,7 +441,8 @@ func TestWinProbability_ComputesFromSession(t *testing.T) {
 	})
 	srv.SetDraftLookups(
 		stubCards{"1": "Card"},
-		stubRatings{"1": 50.0},
+		// #787: gihwr is a fraction (0.0–1.0) matching the BFF wire unit.
+		stubRatings{"1": 0.50},
 	)
 
 	body, _ := json.Marshal(map[string]string{"session_id": "current"})
