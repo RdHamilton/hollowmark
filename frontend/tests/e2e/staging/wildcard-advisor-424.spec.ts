@@ -150,7 +150,6 @@ test.describe('Wildcard advisor (#424): format param handling', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('Wildcard advisor (#424): 409 on empty collection [SKIPPED — no zero-inventory account]', () => {
-  // eslint-disable-next-line playwright/no-skipped-test
   test.skip(
     true,
     'SKIPPED — no zero-inventory staging account available. ' +
