@@ -735,13 +735,42 @@ func (h *DraftsHandler) CalculateGrade(w http.ResponseWriter, r *http.Request) {
 	writeMatchesJSON(w, draftGradeStub())
 }
 
-// DraftGrade handles GET /api/v1/drafts/{sessionId}/analysis. STUB
-// returning the SPA's DraftGrade shape.
+// DraftGrade handles GET /api/v1/drafts/{sessionId}/analysis.
+// Returns the grade stored in draft_sessions.overall_grade (and component
+// scores) for the given session, scoped to the authenticated account.
+//
+// The overall_grade is populated by the projection worker when a draft
+// completes. The response uses snake_case keys to match the SPA's
+// grading.DraftGrade model (source["overall_grade"] etc.).
+//
+// Falls back to a zero-confidence placeholder when the session is not
+// found or the grade has not yet been calculated.
 func (h *DraftsHandler) DraftGrade(w http.ResponseWriter, r *http.Request) {
-	if !h.requireAuth(w, r) {
+	accountID, found, ok := h.resolveAccount(w, r, "DraftGrade")
+	if !ok {
 		return
 	}
-	writeMatchesJSON(w, draftGradeStub())
+	sessionID := strings.TrimSpace(chi.URLParam(r, "sessionId"))
+	if sessionID == "" {
+		writeJSONError(w, "sessionId is required", http.StatusBadRequest)
+		return
+	}
+	if !found {
+		writeMatchesJSON(w, draftGradeStub())
+		return
+	}
+	s, err := h.drafts.GetSession(r.Context(), accountID, sessionID)
+	if err != nil {
+		log.Printf("[DraftsHandler.DraftGrade] accountID=%d sessionID=%s: %v", accountID, sessionID, err)
+		writeJSONError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if s == nil || s.OverallGrade == nil {
+		// Session not found or grade not yet calculated — return placeholder.
+		writeMatchesJSON(w, draftGradeStub())
+		return
+	}
+	writeMatchesJSON(w, draftGradeFromSession(s))
 }
 
 // AnalyzeSessionPickQuality handles POST /api/v1/drafts/{sessionId}/analyze-picks. STUB.
@@ -982,11 +1011,41 @@ func normalizePeriodType(raw string) string {
 }
 
 // draftGradeStub returns a zero-confidence DraftGrade placeholder.
+// Keys use snake_case to match the SPA's grading.DraftGrade model
+// (source["overall_grade"] etc.).
 func draftGradeStub() map[string]any {
 	return map[string]any{
-		"overallGrade": "Unknown", "overallScore": 0,
-		"pickQualityScore": 0.0, "colorDisciplineScore": 0.0,
-		"deckCompositionScore": 0.0, "strategicScore": 0.0,
-		"calculatedAt": time.Now().UTC().Format(time.RFC3339),
+		"overall_grade": "Unknown", "overall_score": 0,
+		"pick_quality_score": 0.0, "color_discipline_score": 0.0,
+		"deck_composition_score": 0.0, "strategic_score": 0.0,
+		"best_picks": []string{}, "worst_picks": []string{}, "suggestions": []string{},
+		"calculated_at": time.Now().UTC().Format(time.RFC3339),
 	}
+}
+
+// draftGradeFromSession builds a DraftGrade response from a session row's
+// stored grade fields. Keys use snake_case to match the SPA's
+// grading.DraftGrade model (source["overall_grade"] etc.).
+func draftGradeFromSession(s *repository.DraftSessionDetailRow) map[string]any {
+	grade := map[string]any{
+		"overall_grade":          *s.OverallGrade,
+		"overall_score":          derefInt(s.OverallScore),
+		"pick_quality_score":     deref(s.PickQualityScore),
+		"color_discipline_score": deref(s.ColorDisciplineScore),
+		"deck_composition_score": deref(s.DeckCompositionScore),
+		"strategic_score":        deref(s.StrategicScore),
+		"best_picks":             []string{},
+		"worst_picks":            []string{},
+		"suggestions":            []string{},
+		"calculated_at":          s.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+	return grade
+}
+
+// derefInt dereferences an *int, returning 0 if nil.
+func derefInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
