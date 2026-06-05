@@ -18,6 +18,10 @@
 -- may tighten the constraint once the backfill has been verified in prod and
 -- no new NULL-account_id INSERTs are possible (the Go fix gates that).
 
+-- Ensure account_id column exists on the 000054-consolidated-schema init path.
+-- On incremental-migration DBs where the column already exists, this is a no-op.
+ALTER TABLE game_plays ADD COLUMN IF NOT EXISTS account_id BIGINT;
+
 UPDATE game_plays gp
 SET    account_id = m.account_id
 FROM   games g
