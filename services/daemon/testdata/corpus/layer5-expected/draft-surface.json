@@ -1,12 +1,29 @@
 {
   "corpus_mtga_version": "2026.59.20.4846.1277160",
   "corpus_provenance": "FORMAT-CONFIRMED",
-  "expected_empty": true,
+  "expected_empty": false,
+  "note": "Grade B- is derived from the seeded 3W-3L draft-session-sos-003 fixture in test-data.sql. The BFF GET /api/v1/drafts/{id}/analysis handler reads overall_grade from draft_sessions (draftGradeFromSession, services/bff/internal/api/handlers/drafts.go). Update this manifest and the fixture row if the scoring model changes.",
   "assertions": [
     {
       "surface": "draft-surface",
+      "mode": "B",
+      "bff_endpoint": "/api/v1/drafts/{session_id}/analysis",
+      "navigation": "/draft-analytics?session=draft-session-sos-003&set=SOS",
+      "notes": "Layer 5 Mode B grade-pill assertion (#829). Seeded fixture: draft-session-sos-003, QuickDraft SOS, 3W-3L (win_rate=0.50). Grade B- verified against BFF scorer (draftGradeFromSession reads draft_sessions.overall_grade). URL params: session=<session_id>&set=<set_code> per DraftAnalytics.tsx useSearchParams().",
+      "fields": {
+        "grade_pill_value": "B-",
+        "overall_grade": "B-",
+        "grade_pill_testid": "session-overall-grade",
+        "session_id": "draft-session-sos-003",
+        "set_code": "SOS"
+      }
+    },
+    {
+      "surface": "draft-surface",
+      "mode": "B",
+      "subcase": "empty-state-regression-guard",
       "bff_endpoint": "/api/v1/history/drafts",
-      "notes": "Draft corpus requires NEW drafts on fixed daemon. 1142 packs + 1136 picks parse; 0 project.",
+      "notes": "Retained from original expected_empty guard. The draft history empty-state regression guard (#651) remains valid and independent of the grade assertion.",
       "fields": {
         "empty_state_must_render": true,
         "empty_state_testid": "draft-history-empty",
@@ -25,6 +42,6 @@
       "draft_sessions_projected": 0,
       "projection_errors": 0
     },
-    "note": "1142 packs + 1136 picks parse but 0 project. Historical logs predate session_id. Needs new daemon-captured drafts."
+    "note": "1142 packs + 1136 picks parse but 0 project. Historical logs predate session_id. Needs new daemon-captured drafts. Grade assertion uses seeded fixture (bridge pattern — same as deck-builder-resolution.json) per Ray's Layer 5 ruling (#829 PLAN_VERDICT)."
   }
 }

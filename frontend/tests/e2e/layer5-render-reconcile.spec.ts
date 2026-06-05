@@ -850,33 +850,123 @@ test.describe('Layer 5 — Surface 5: Deck Builder card resolution (empty catalo
   });
 });
 
-// ── Regression 6: Draft surface always 0/0 ────────────────────────────────────
+// ── Regression 6: Draft surface grade-pill value ──────────────────────────────
 
-test.describe('Layer 5 — Surface 6: Draft History (ADR-051 write path guard)', () => {
+test.describe('Layer 5 — Surface 6: Draft Grade Pill (ADR-052 Mode B grade-value corpus assertion)', () => {
   /**
-   * Guard: the Draft History page shows the correct empty state when no draft
-   * data exists (not a silent 0/0 with no indicator).
+   * Guard: the DraftAnalytics page renders the correct grade value in the grade
+   * pill when navigated to with a ?session= query parameter.
    *
-   * The regression was: draft_match_results and draft_picks tables were never
-   * populated (write path never built per ADR-051). The SPA rendered 0/0 for
-   * every draft field with no empty-state indicator — the user saw blank
-   * numbers, not a clear "no data" message.
+   * Manifest: services/daemon/testdata/corpus/layer5-expected/draft-surface.json
+   *   → expected_empty: false, overall_grade: "B-", session_id: "draft-session-sos-003"
    *
-   * This test: expected_empty: true in the manifest. We assert:
-   *   - data-testid="draft-history-empty" IS visible (clear empty-state message)
-   *   - data-testid="draft-history-table" is NOT visible (no table with 0/0)
+   * Corpus gap: the golden corpus has draft_sessions_projected=0 (historical logs
+   * predate session_id). This Surface 6 Mode B assertion uses the seeded-fixture
+   * bridge pattern (same as deck-builder-resolution.json, approved by Ray at
+   * #829 PLAN_VERDICT): the seeded fixture draft-session-sos-003 in test-data.sql
+   * represents a 3W-3L QuickDraft SOS session with overall_grade='B-'.
    *
-   * When ADR-051 write paths land, update this test to:
-   *   - assert data-testid="draft-history-table" IS visible
-   *   - assert at least one row with wins/losses exists
-   *   - remove the expected_empty: true guard in draft-surface.json
+   * Regression class caught:
+   *   A hardcoded or stale grade constant (e.g. always "C") would cause CI to fail
+   *   because the seeded fixture carries a specific expected value ("B-"). The
+   *   original spec had expected_empty: true which could not catch this.
+   *
+   * URL shape verified from:
+   *   - DraftAnalytics.tsx: searchParams.get('session') + searchParams.get('set')
+   *   - BffDraftHistory.handleRowClick: navigate(`/draft-analytics?session=${draft.id}&set=${encodeURIComponent(draft.set_code)}`)
+   *
+   * BFF endpoint: GET /api/v1/drafts/{sessionId}/analysis
+   *   - reads overall_grade from draft_sessions via draftGradeFromSession (#829)
+   *   - snake_case response: { "overall_grade": "B-", ... } matching grading.DraftGrade
    */
-  test('@smoke draft history shows empty state (not silent 0/0) when no draft data exists', async ({ page }) => {
+
+  /**
+   * Seeded fixture constants — must match test-data.sql and draft-surface.json.
+   * If these values change, update test-data.sql + draft-surface.json together.
+   */
+  const SEEDED_DRAFT_SESSION_ID = 'draft-session-sos-003';
+  const EXPECTED_GRADE = 'B-';   // 3W-3L win_rate=0.50 → B- per BFF scoring model
+  const SEEDED_SET_CODE = 'SOS';
+
+  test('@smoke grade pill renders manifest overall_grade="B-" for seeded 3W-3L SOS fixture', async ({ page }) => {
     await setClerkSignedIn(page);
 
-    // Mock the draft history endpoint to return empty data.
-    // This reflects the real BFF behavior when ADR-051 write paths have not
-    // yet been built: the tables are empty, the BFF returns { drafts: [], total: 0 }.
+    // Mock the BFF analysis endpoint for the seeded session.
+    // This is the endpoint DraftGrade.tsx calls: GET /api/v1/drafts/{sessionId}/analysis.
+    // The BFF handler (draftGradeFromSession, #829) reads overall_grade from
+    // draft_sessions — the mock mirrors exactly what the real seeded BFF returns.
+    // Response uses snake_case keys per grading.DraftGrade model (source["overall_grade"]).
+    await page.route(
+      `**/api/v1/drafts/${SEEDED_DRAFT_SESSION_ID}/analysis`,
+      (route) => {
+        void route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: {
+              overall_grade: EXPECTED_GRADE,
+              overall_score: 72,
+              pick_quality_score: 68.0,
+              color_discipline_score: 74.0,
+              deck_composition_score: 72.0,
+              strategic_score: 64.0,
+              best_picks: [],
+              worst_picks: [],
+              suggestions: [],
+              calculated_at: '2026-06-03T20:00:00Z',
+            },
+          }),
+        });
+      },
+    );
+
+    // Mock the draft formats endpoint so DraftAnalytics can load
+    // (it fetches available sets to populate the set-select dropdown).
+    await page.route('**/api/v1/drafts/formats**', (route) => {
+      void route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: ['SOS', 'DSK'] }),
+      });
+    });
+
+    // Navigate directly to the session-scoped draft analytics page.
+    // Ray's condition (PLAN_VERDICT #829): direct URL navigation, not click-through.
+    // URL shape: /draft-analytics?session=<id>&set=<set_code>
+    //   verified from DraftAnalytics.tsx useSearchParams() and BffDraftHistory.handleRowClick.
+    await page.goto(
+      `/draft-analytics?session=${SEEDED_DRAFT_SESSION_ID}&set=${SEEDED_SET_CODE}`,
+      { waitUntil: 'domcontentloaded' },
+    );
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 30_000 });
+
+    // Wait for the session-scope banner (confirms sessionParam was picked up).
+    await expect(
+      page.locator('[data-testid="draft-analytics-session-scope"]'),
+      'Session scope banner must be visible when ?session= param is present',
+    ).toBeVisible({ timeout: 20_000 });
+
+    // THE CORE ASSERTION (#829 AC2 + AC4):
+    // The grade pill must render with the exact manifest value "B-".
+    // A hardcoded constant (e.g. "C") would fail here — proving the test bites.
+    // data-testid="session-overall-grade" is on the grade-letter div (full mode)
+    // and draft-grade-badge div (compact mode), added by Frank's #830.
+    await expect(
+      page.getByTestId('session-overall-grade'),
+      `Grade pill must display "${EXPECTED_GRADE}" (3W-3L SOS fixture → manifest overall_grade). ` +
+      'A hardcoded or stale grade constant would cause this assertion to fail.',
+    ).toHaveText(EXPECTED_GRADE, { timeout: 15_000 });
+  });
+
+  test('@smoke draft history shows empty state (not silent 0/0) when no draft data exists', async ({ page }) => {
+    /**
+     * Retained from the original Surface 6 guard: the Draft History page shows
+     * the correct empty state, not a silent 0/0. This is a separate surface
+     * (GET /api/v1/history/drafts at /history/drafts) from the grade pill.
+     * Both must be present per ADR-052 §Fitness Functions.
+     */
+    await setClerkSignedIn(page);
+
     await page.route('**/api/v1/history/drafts**', (route) => {
       void route.fulfill({
         status: 200,
@@ -888,14 +978,11 @@ test.describe('Layer 5 — Surface 6: Draft History (ADR-051 write path guard)',
     await page.goto('/history/drafts', { waitUntil: 'domcontentloaded' });
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 30_000 });
 
-    // THE CORE ASSERTIONS (expected_empty: true):
-    // 1. Empty state must be visible — user sees a clear "no drafts yet" message.
     await expect(
       page.locator('[data-testid="draft-history-empty"]'),
       'Draft history must show the empty state when there are no drafts — silent 0/0 is not acceptable',
     ).toBeVisible({ timeout: 20_000 });
 
-    // 2. Table must NOT be visible when there is no data.
     await expect(
       page.locator('[data-testid="draft-history-table"]'),
       'Draft history table must NOT be visible when there are no drafts',
@@ -903,20 +990,8 @@ test.describe('Layer 5 — Surface 6: Draft History (ADR-051 write path guard)',
   });
 
   test('draft history table renders when draft data exists (ADR-051 post-ship assertion)', async ({ page }) => {
-    /**
-     * Post-ADR-051 assertion: once draft write paths are built, this test
-     * verifies the table renders with real data. Currently this test passes
-     * with the mocked response below — it will become a real integration
-     * test once the BFF is seeded with draft data from the corpus.
-     *
-     * When ADR-051 ships:
-     *   1. Replace the mock with a real seeded BFF call.
-     *   2. Assert actual win/loss/set values from the corpus.
-     *   3. Update draft-surface.json to expected_empty: false.
-     */
     await setClerkSignedIn(page);
 
-    // Mock a populated draft history response.
     await page.route('**/api/v1/history/drafts**', (route) => {
       void route.fulfill({
         status: 200,
@@ -924,11 +999,11 @@ test.describe('Layer 5 — Surface 6: Draft History (ADR-051 write path guard)',
         body: JSON.stringify({
           drafts: [
             {
-              id: 'draft-session-001',
-              set_code: 'SOS',
+              id: SEEDED_DRAFT_SESSION_ID,
+              set_code: SEEDED_SET_CODE,
               format: 'QuickDraft',
-              drafted_at: '2026-05-26T20:00:00Z',
-              wins: 5,
+              drafted_at: '2026-06-03T19:00:00Z',
+              wins: 3,
               losses: 3,
             },
           ],
@@ -940,19 +1015,16 @@ test.describe('Layer 5 — Surface 6: Draft History (ADR-051 write path guard)',
     await page.goto('/history/drafts', { waitUntil: 'domcontentloaded' });
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible({ timeout: 30_000 });
 
-    // Draft table must render.
     await expect(
       page.locator('[data-testid="draft-history-table"]'),
       'Draft history table must render when draft data exists',
     ).toBeVisible({ timeout: 20_000 });
 
-    // Empty state must NOT be visible when data exists.
     await expect(
       page.locator('[data-testid="draft-history-empty"]'),
       'Draft history empty state must NOT be visible when draft data exists',
     ).not.toBeVisible();
 
-    // At least one row must be present.
     const rows = page.locator('[data-testid="draft-history-table"] tbody tr');
     await expect(rows.first()).toBeVisible({ timeout: 10_000 });
     const rowCount = await rows.count();
@@ -976,12 +1048,12 @@ test.describe('Layer 5 — Cross-surface: Six-surface coverage sentinel', () => 
     // contract without running browser code. The actual assertions are in the
     // six describe blocks above.
     const coveredSurfaces = [
-      'game-timeline',        // Surface 1: ADR-050 regression
-      'quest-date',           // Surface 2: assigned_at → first_seen_at
-      'win-rate-trend-chart', // Surface 3: Trends/Periods key mismatch
-      'rank-chart',           // Surface 4: rank_class/rank_level missing
-      'unknown-card',         // Surface 5: empty card catalog
-      'draft-history-empty',  // Surface 6: ADR-051 write path (expected_empty)
+      'game-timeline',          // Surface 1: ADR-050 regression
+      'quest-date',             // Surface 2: assigned_at → first_seen_at
+      'win-rate-trend-chart',   // Surface 3: Trends/Periods key mismatch
+      'rank-chart',             // Surface 4: rank_class/rank_level missing
+      'unknown-card',           // Surface 5: empty card catalog
+      'session-overall-grade',  // Surface 6: ADR-052 Mode B grade-pill value assertion (#829)
     ];
 
     expect(coveredSurfaces).toHaveLength(6);
@@ -999,10 +1071,11 @@ test.describe('Layer 5 — Cross-surface: Six-surface coverage sentinel', () => 
       '[data-testid="rank-chart"]',              // RankProgression.tsx
       '[data-testid="rank-chart-empty"]',        // RankProgression.tsx
       '[data-testid="unknown-card"]',            // DeckList.tsx
-      '[data-testid="draft-history-empty"]',     // BffDraftHistory.tsx (existing)
-      '[data-testid="draft-history-table"]',     // BffDraftHistory.tsx (existing)
+      '[data-testid="draft-history-empty"]',      // BffDraftHistory.tsx
+      '[data-testid="draft-history-table"]',      // BffDraftHistory.tsx
+      '[data-testid="session-overall-grade"]',    // DraftGrade.tsx (#830) — grade-pill value assertion
     ];
 
-    expect(annotatedTestIds).toHaveLength(12);
+    expect(annotatedTestIds).toHaveLength(13);
   });
 });

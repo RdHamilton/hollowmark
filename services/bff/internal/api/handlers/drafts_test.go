@@ -771,6 +771,102 @@ func TestDraftsList_ZeroWinsLossesWhenNoMatches(t *testing.T) {
 	}
 }
 
+// ─── DraftGrade (GET /api/v1/drafts/{sessionId}/analysis) (#829) ───────────
+
+func TestDraftGrade_ReturnsStoredGrade(t *testing.T) {
+	// Arrange: a seeded session with overall_grade "B-" (3W-3L fixture).
+	grade := "B-"
+	score := 68
+	pickQual := 65.0
+	colorDisc := 70.0
+	deckComp := 68.0
+	strategic := 62.0
+	stub := &stubDraftsReader{
+		session: &repository.DraftSessionDetailRow{
+			ID:                   "draft-session-sos-003",
+			EventName:            "QuickDraft_SOS",
+			SetCode:              "SOS",
+			DraftType:            "quick_draft",
+			OverallGrade:         &grade,
+			OverallScore:         &score,
+			PickQualityScore:     &pickQual,
+			ColorDisciplineScore: &colorDisc,
+			DeckCompositionScore: &deckComp,
+			StrategicScore:       &strategic,
+		},
+	}
+	req := authedDraftsRequest(t, http.MethodGet, "/api/v1/drafts/draft-session-sos-003/analysis", nil, 1)
+	req = chiDraftsContext(req, "sessionId", "draft-session-sos-003")
+	h := handlers.NewDraftsHandler(stub, &draftsAccountLookup{accountID: 1, found: true})
+	rr := httptest.NewRecorder()
+
+	// Act.
+	h.DraftGrade(rr, req)
+
+	// Assert: 200, overall_grade = "B-", snake_case keys.
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var payload map[string]any
+	decodeDraftsEnvelope(t, rr.Body.Bytes(), &payload)
+	if g, ok := payload["overall_grade"]; !ok || g != "B-" {
+		t.Errorf("overall_grade: want B-, got %v (ok=%v)", g, ok)
+	}
+	if s, ok := payload["overall_score"]; !ok || s.(float64) != float64(score) {
+		t.Errorf("overall_score: want %d, got %v", score, s)
+	}
+	// Verify account-scoping: GetSession was called with the correct accountID.
+	if !stub.sessionCalled {
+		t.Error("GetSession was not called")
+	}
+	if stub.sessionAccountID != 1 {
+		t.Errorf("GetSession accountID: want 1, got %d", stub.sessionAccountID)
+	}
+	if stub.sessionLookupID != "draft-session-sos-003" {
+		t.Errorf("GetSession sessionID: want draft-session-sos-003, got %s", stub.sessionLookupID)
+	}
+}
+
+func TestDraftGrade_SessionNotFound_ReturnsPlaceholder(t *testing.T) {
+	// No session row → placeholder with overall_grade "Unknown".
+	stub := &stubDraftsReader{session: nil}
+	req := authedDraftsRequest(t, http.MethodGet, "/api/v1/drafts/no-such-session/analysis", nil, 1)
+	req = chiDraftsContext(req, "sessionId", "no-such-session")
+	h := handlers.NewDraftsHandler(stub, &draftsAccountLookup{accountID: 1, found: true})
+	rr := httptest.NewRecorder()
+
+	h.DraftGrade(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	var payload map[string]any
+	decodeDraftsEnvelope(t, rr.Body.Bytes(), &payload)
+	if g, ok := payload["overall_grade"]; !ok || g != "Unknown" {
+		t.Errorf("overall_grade: want Unknown, got %v (ok=%v)", g, ok)
+	}
+}
+
+func TestDraftGrade_StubKeySnakeCase(t *testing.T) {
+	// The stub response (used when session is not found) must use snake_case
+	// keys — not the legacy camelCase "overallGrade" that the SPA cannot read.
+	stub := &stubDraftsReader{session: nil}
+	req := authedDraftsRequest(t, http.MethodGet, "/api/v1/drafts/x/analysis", nil, 1)
+	req = chiDraftsContext(req, "sessionId", "x")
+	h := handlers.NewDraftsHandler(stub, &draftsAccountLookup{accountID: 1, found: true})
+	rr := httptest.NewRecorder()
+	h.DraftGrade(rr, req)
+
+	var payload map[string]any
+	decodeDraftsEnvelope(t, rr.Body.Bytes(), &payload)
+	if _, ok := payload["overallGrade"]; ok {
+		t.Error("legacy camelCase key 'overallGrade' must not appear — SPA reads overall_grade")
+	}
+	if _, ok := payload["overall_grade"]; !ok {
+		t.Error("snake_case key 'overall_grade' must be present")
+	}
+}
+
 // errStubDB is a sentinel error used by negative-case tests to drive the
 // repo stubs into their failure paths.
 var errStubDB = errors.New("stub: database unavailable")
