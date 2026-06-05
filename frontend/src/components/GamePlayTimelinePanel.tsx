@@ -67,6 +67,41 @@ const GamePlayTimelinePanel = ({
     }
   }, [isExpanded, matchId]);
 
+  /**
+   * Translate GRE internal zone names to player-facing terms.
+   *
+   * The GRE (Game Rules Engine) uses engine-internal zone identifiers that
+   * mean nothing to players. This function maps them to the standard MTG
+   * zone vocabulary a player already knows.
+   *
+   * "pending" is the GRE zone for spells/abilities waiting to resolve on
+   * the stack — rendered as "Stack" to match the in-game term (ticket #821).
+   */
+  const humanizeZone = (zone: string): string => {
+    switch (zone.toLowerCase()) {
+      case 'pending':
+        return 'Stack';
+      case 'hand':
+        return 'Hand';
+      case 'library':
+        return 'Library';
+      case 'battlefield':
+        return 'Battlefield';
+      case 'graveyard':
+        return 'Graveyard';
+      case 'exile':
+        return 'Exile';
+      case 'stack':
+        return 'Stack';
+      case 'command':
+        return 'Command';
+      default:
+        // Capitalize first letter for any unmapped GRE zone name so it at
+        // least looks presentable rather than raw lowercase engine jargon.
+        return zone.charAt(0).toUpperCase() + zone.slice(1);
+    }
+  };
+
   const formatActionType = (actionType: string): string => {
     switch (actionType) {
       case 'play_card':
@@ -133,6 +168,10 @@ const GamePlayTimelinePanel = ({
     const lifeChange =
       play.life_from != null && play.life_to != null ? play.life_to - play.life_from : null;
     const lifeChangeClass = lifeChange != null ? (lifeChange < 0 ? 'damage' : 'heal') : '';
+    // A life_change that reaches exactly 0 is always the lethal/winning moment
+    // (ticket #821 AC1). Only the to-0 case gets the label; other life changes
+    // are unchanged (AC3).
+    const isLethal = play.action_type === 'life_change' && play.life_to === 0;
 
     return (
       <div key={play.id} className={`play-item ${play.player_type}`}>
@@ -141,7 +180,7 @@ const GamePlayTimelinePanel = ({
         {play.card_name && <span className="play-card">{play.card_name}</span>}
         {play.zone_from && play.zone_to && (
           <span className="play-zones">
-            {play.zone_from} → {play.zone_to}
+            {humanizeZone(play.zone_from)} → {humanizeZone(play.zone_to)}
           </span>
         )}
         {play.action_type === 'life_change' && play.life_from != null && play.life_to != null && (
@@ -151,6 +190,11 @@ const GamePlayTimelinePanel = ({
               <span className="life-delta">
                 ({lifeChange > 0 ? '+' : ''}
                 {lifeChange})
+              </span>
+            )}
+            {isLethal && (
+              <span className="play-lethal-badge" data-testid="play-lethal-badge">
+                — lethal
               </span>
             )}
           </span>

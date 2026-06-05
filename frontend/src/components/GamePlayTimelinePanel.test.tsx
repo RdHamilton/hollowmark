@@ -415,6 +415,218 @@ describe('GamePlayTimelinePanel', () => {
     });
   });
 
+  // ── #821 Timeline renderer polish ──────────────────────────────────────────
+
+  describe('#821 lethal label on life-to-0', () => {
+    it('shows "— lethal" badge when life_change drops opponent to 0', async () => {
+      const lethalPlay: GamePlay = {
+        id: 20,
+        game_id: 1,
+        match_id: 'match-123',
+        turn_number: 6,
+        phase: 'Combat',
+        player_type: 'player',
+        action_type: 'life_change',
+        timestamp: '2025-01-09T12:00:10Z',
+        sequence_number: 20,
+        life_from: 3,
+        life_to: 0,
+      };
+
+      mockGetMatchTimeline.mockResolvedValue([
+        {
+          turn: 6,
+          active_player: 'player',
+          player_plays: [lethalPlay],
+          opponent_plays: [],
+          snapshot: mockSnapshot,
+        },
+      ]);
+
+      render(<GamePlayTimelinePanel matchId="match-123" isExpanded={true} onToggle={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('play-lethal-badge')).toBeInTheDocument();
+        expect(screen.getByTestId('play-lethal-badge')).toHaveTextContent('— lethal');
+      });
+    });
+
+    it('shows the lethal badge alongside the life numbers', async () => {
+      const lethalPlay: GamePlay = {
+        id: 21,
+        game_id: 1,
+        match_id: 'match-123',
+        turn_number: 7,
+        phase: 'Combat',
+        player_type: 'player',
+        action_type: 'life_change',
+        timestamp: '2025-01-09T12:00:11Z',
+        sequence_number: 21,
+        life_from: 5,
+        life_to: 0,
+      };
+
+      mockGetMatchTimeline.mockResolvedValue([
+        {
+          turn: 7,
+          active_player: 'player',
+          player_plays: [lethalPlay],
+          opponent_plays: [],
+          snapshot: mockSnapshot,
+        },
+      ]);
+
+      render(<GamePlayTimelinePanel matchId="match-123" isExpanded={true} onToggle={() => {}} />);
+
+      await waitFor(() => {
+        // Life numbers still rendered
+        expect(screen.getByText(/5 → 0/)).toBeInTheDocument();
+        // Delta still rendered
+        expect(screen.getByText(/\(-5\)/)).toBeInTheDocument();
+        // Lethal badge present
+        expect(screen.getByTestId('play-lethal-badge')).toBeInTheDocument();
+      });
+    });
+
+    it('does NOT show the lethal badge for a non-zero life_change (AC3)', async () => {
+      const damagePlay: GamePlay = {
+        id: 22,
+        game_id: 1,
+        match_id: 'match-123',
+        turn_number: 8,
+        phase: 'Combat',
+        player_type: 'opponent',
+        action_type: 'life_change',
+        timestamp: '2025-01-09T12:00:12Z',
+        sequence_number: 22,
+        life_from: 20,
+        life_to: 17,
+      };
+
+      mockGetMatchTimeline.mockResolvedValue([
+        {
+          turn: 8,
+          active_player: 'opponent',
+          player_plays: [],
+          opponent_plays: [damagePlay],
+          snapshot: mockSnapshot,
+        },
+      ]);
+
+      render(<GamePlayTimelinePanel matchId="match-123" isExpanded={true} onToggle={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/20 → 17/)).toBeInTheDocument();
+        expect(screen.queryByTestId('play-lethal-badge')).not.toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('#821 GRE pending zone humanization', () => {
+    it('renders "pending" zone_from as "Stack"', async () => {
+      const pendingZonePlay: GamePlay = {
+        id: 30,
+        game_id: 1,
+        match_id: 'match-123',
+        turn_number: 9,
+        phase: 'Main1',
+        player_type: 'player',
+        action_type: 'zone_change',
+        card_name: 'Lightning Bolt',
+        zone_from: 'pending',
+        zone_to: 'graveyard',
+        timestamp: '2025-01-09T12:00:13Z',
+        sequence_number: 30,
+      };
+
+      mockGetMatchTimeline.mockResolvedValue([
+        {
+          turn: 9,
+          active_player: 'player',
+          player_plays: [pendingZonePlay],
+          opponent_plays: [],
+          snapshot: mockSnapshot,
+        },
+      ]);
+
+      render(<GamePlayTimelinePanel matchId="match-123" isExpanded={true} onToggle={() => {}} />);
+
+      await waitFor(() => {
+        // "pending" should be rendered as "Stack", not "pending"
+        expect(screen.getByText(/Stack → Graveyard/)).toBeInTheDocument();
+        expect(screen.queryByText(/pending/i)).not.toBeInTheDocument();
+      });
+    });
+
+    it('renders "pending" zone_to as "Stack"', async () => {
+      const castToStack: GamePlay = {
+        id: 31,
+        game_id: 1,
+        match_id: 'match-123',
+        turn_number: 10,
+        phase: 'Main1',
+        player_type: 'player',
+        action_type: 'cast_spell',
+        card_name: 'Counterspell',
+        zone_from: 'hand',
+        zone_to: 'pending',
+        timestamp: '2025-01-09T12:00:14Z',
+        sequence_number: 31,
+      };
+
+      mockGetMatchTimeline.mockResolvedValue([
+        {
+          turn: 10,
+          active_player: 'player',
+          player_plays: [castToStack],
+          opponent_plays: [],
+          snapshot: mockSnapshot,
+        },
+      ]);
+
+      render(<GamePlayTimelinePanel matchId="match-123" isExpanded={true} onToggle={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Hand → Stack/)).toBeInTheDocument();
+        expect(screen.queryByText(/→ pending/i)).not.toBeInTheDocument();
+      });
+    });
+
+    it('capitalizes unknown GRE zone names as a fallback', async () => {
+      const unknownZonePlay: GamePlay = {
+        id: 32,
+        game_id: 1,
+        match_id: 'match-123',
+        turn_number: 11,
+        phase: 'Main1',
+        player_type: 'player',
+        action_type: 'zone_change',
+        card_name: 'Test Card',
+        zone_from: 'limbo',
+        zone_to: 'battlefield',
+        timestamp: '2025-01-09T12:00:15Z',
+        sequence_number: 32,
+      };
+
+      mockGetMatchTimeline.mockResolvedValue([
+        {
+          turn: 11,
+          active_player: 'player',
+          player_plays: [unknownZonePlay],
+          opponent_plays: [],
+          snapshot: mockSnapshot,
+        },
+      ]);
+
+      render(<GamePlayTimelinePanel matchId="match-123" isExpanded={true} onToggle={() => {}} />);
+
+      await waitFor(() => {
+        // Unknown zones should have their first letter capitalized
+        expect(screen.getByText(/Limbo → Battlefield/)).toBeInTheDocument();
+      });
+    });
+  });
+
   describe('Sentry error reporting', () => {
     beforeEach(() => {
       vi.clearAllMocks();
