@@ -131,6 +131,16 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
+      # The Playwright container image does not ship the AWS CLI.
+      # Install it here so the Read SSM secrets step can call `aws ssm get-parameter`.
+      - name: Install AWS CLI
+        run: |
+          apt-get update -qq && apt-get install -y -qq unzip curl
+          curl -sSfL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp/awscliv2
+          /tmp/awscliv2/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli
+          aws --version
+
       - name: Read SSM secrets
         id: ssm
         run: |
