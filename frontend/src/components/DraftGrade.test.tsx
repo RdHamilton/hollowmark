@@ -391,4 +391,62 @@ describe('DraftGrade Component', () => {
       });
     });
   });
+
+  // ── #830 — data-testid="session-overall-grade" ─────────────────────────────
+  //
+  // AC1: data-testid present on the grade-pill element in both render modes.
+  // AC2: textContent() of the testid element returns the grade string only.
+  // AC3: no visual or functional change (existing tests above still pass).
+  // AC4: testid is NOT conditionally rendered — present whenever grade pill is.
+
+  describe('data-testid="session-overall-grade" (#830)', () => {
+    it('renders data-testid in full (non-compact) mode', async () => {
+      const grade = createMockDraftGrade({ overall_grade: 'B+' });
+      mockDrafts.getDraftGrade.mockResolvedValue(grade);
+
+      render(<DraftGrade sessionID="test-session" />);
+
+      await waitFor(() => {
+        const el = screen.getByTestId('session-overall-grade');
+        expect(el).toBeInTheDocument();
+        expect(el.textContent).toBe('B+');
+      });
+    });
+
+    it('renders data-testid in compact mode', async () => {
+      const grade = createMockDraftGrade({ overall_grade: 'A' });
+      mockDrafts.getDraftGrade.mockResolvedValue(grade);
+
+      render(<DraftGrade sessionID="test-session" compact={true} />);
+
+      await waitFor(() => {
+        const el = screen.getByTestId('session-overall-grade');
+        expect(el).toBeInTheDocument();
+        expect(el.textContent).toBe('A');
+      });
+    });
+
+    it('textContent of session-overall-grade is the grade string only (no surrounding label text)', async () => {
+      const grade = createMockDraftGrade({ overall_grade: 'C-' });
+      mockDrafts.getDraftGrade.mockResolvedValue(grade);
+
+      render(<DraftGrade sessionID="test-session" />);
+
+      await waitFor(() => {
+        const el = screen.getByTestId('session-overall-grade');
+        // Must be exactly the grade string — no score, no label, no surrounding text.
+        expect(el.textContent).toBe('C-');
+      });
+    });
+
+    it('data-testid is absent when no grade loaded and showCalculateButton=false', async () => {
+      mockDrafts.getDraftGrade.mockRejectedValue(new Error('No grade found'));
+
+      render(<DraftGrade sessionID="test-session" showCalculateButton={false} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('session-overall-grade')).not.toBeInTheDocument();
+      });
+    });
+  });
 });
