@@ -17,6 +17,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"math"
 	"net/http"
@@ -380,9 +381,15 @@ func (h *WildcardRecommendationsHandler) GetWildcardRecommendations(w http.Respo
 		recommendations = buildRecommendations(gapRows, wc)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	writeMatchesJSON(w, wildcardRecommendationsResponse{
+	// ADR-045 §1 specifies a flat response body — do NOT use writeMatchesJSON
+	// here. writeMatchesJSON wraps the payload in {"data": ...} for endpoints
+	// consumed via the central apiClient (which unwraps .data automatically).
+	// bffWildcardAdvisor.ts bypasses apiClient and reads the body directly, so
+	// it expects the flat ADR-045 §1 shape. Using writeMatchesJSON produced a
+	// nested {"data": {"wildcard_budget": ...}} that broke two E2E assertions
+	// (wildcard-advisor-424.spec.ts:212 and :268). Fix: write flat with a direct
+	// json.NewEncoder call, matching the shape in ADR-045 §1.
+	resp := wildcardRecommendationsResponse{
 		WildcardBudget: wildcardBudgetResponse{
 			Common:   wc.Common,
 			Uncommon: wc.Uncommon,
@@ -397,7 +404,12 @@ func (h *WildcardRecommendationsHandler) GetWildcardRecommendations(w http.Respo
 		},
 		DataQualityWarning: dataQualityWarning,
 		Recommendations:    recommendations,
-	})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("[WildcardRecommendationsHandler] encode response: %v", err)
+	}
 }
 
 // ─── aggregation + ranking ────────────────────────────────────────────────────
