@@ -247,6 +247,12 @@ jobs:
         npm run lint:css
 
     - name: Run component tests
+      env:
+        # Belt-and-suspenders heap ceiling. The primary OOM fix is pool:forks in
+        # vite.config.ts (isolates heap per file). This cap handles future suite
+        # growth until the runner is upgraded. ubuntu-latest runners have 7 GB
+        # RAM; 6144 MB leaves 1 GB for OS + Node overhead.
+        NODE_OPTIONS: '--max-old-space-size=6144'
       run: |
         cd frontend
         npm run test:run

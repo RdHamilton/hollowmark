@@ -91,6 +91,18 @@ export default defineConfig({
       '**/dist/**',
       '**/tests/e2e/**', // Exclude Playwright E2E tests
     ],
+    // Use forks pool so each test file runs in its own child process.
+    // Heap is isolated per-process and GC'd between files, preventing the
+    // shared-heap growth that causes OOM in the default threads pool when
+    // the suite grows large (183+ files). maxForks=2 matches the 2-vCPU
+    // GitHub Actions runner — avoids spawning more processes than CPUs.
+    pool: 'forks',
+    poolOptions: {
+      forks: {
+        maxForks: 2,
+        minForks: 1,
+      },
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'cobertura'],
