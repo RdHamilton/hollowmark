@@ -259,6 +259,17 @@
   opacity: 0.8;
 }
 
+/* Lethal badge — shown inline after the life-change delta when life_to === 0
+ * (#821: label the game-ending hit as "lethal" so the timeline ends on a clear
+ * "this is how the game was won" beat rather than a bare zero). */
+.play-lethal-badge {
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--loss);
+  letter-spacing: 0.3px;
+}
+
 /* States */
 .empty-state {
   text-align: center;
