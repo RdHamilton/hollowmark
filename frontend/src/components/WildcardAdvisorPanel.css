@@ -259,7 +259,6 @@
 }
 
 .wildcard-advisor__rec-name {
-  flex: 1;
   font-family: var(--font-body);
   font-size: var(--text-sm);
   font-weight: 500;
@@ -268,6 +267,39 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Identity cluster: name + optional tier badge, takes all available space */
+.wildcard-advisor__rec-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+}
+
+/* Tier badge: e.g. "Tier 1" */
+.wildcard-advisor__rec-tier-badge {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--vault-sapphire);
+  background: color-mix(in srgb, var(--vault-sapphire) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--vault-sapphire) 30%, transparent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Wildcard cost summary: e.g. "4 Rare · 2 Mythic away" */
+.wildcard-advisor__rec-cost {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-secondary);
+  flex-shrink: 0;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .wildcard-advisor__rec-missing {
@@ -422,7 +454,7 @@
   margin: 0;
 }
 
-/* Error state */
+/* Error state — neutral/informational; not an alert, just "no data for this format" */
 .wildcard-advisor__error {
   display: flex;
   flex-direction: column;
@@ -430,12 +462,16 @@
   text-align: center;
   padding: var(--space-6) var(--space-4);
   gap: var(--space-3);
+  background: var(--vault-bg);
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-sm);
 }
 
 .wildcard-advisor__error-msg {
   font-family: var(--font-body);
   font-size: var(--text-sm);
-  color: var(--vault-danger);
+  /* Neutral/informational — this is an expected no-data fallback, not a catastrophe */
+  color: var(--vault-fg-muted);
   margin: 0;
 }
 
