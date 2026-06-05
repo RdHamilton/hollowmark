@@ -1,0 +1,197 @@
+name: Prof Visual Capture (staging)
+
+# Parameterized authenticated visual-capture harness for Prof (MTGA Enthusiast
+# Consultant). Authenticates as the ci-smoke-token account against the live
+# staging SPA, navigates to the requested surface, performs the requested
+# interaction, screenshots, and uploads as a downloadable artifact.
+#
+# READ-ONLY: navigate + screenshot ONLY. No mutations, no crafting, no settings
+# changes, no destructive actions.
+#
+# Auth: reads CLERK_SECRET_KEY from SSM /vaultmtg/staging/CLERK_SECRET_KEY.
+# Account: ci-smoke-token (user_3EamRFdUZdQl1yYPf4Yg7OIQqm4, account_id=17)
+#   — seeded with ~10k card_inventory rows and 3 Standard mtgzone_archetypes.
+#
+# Usage (Prof):
+#   gh workflow run prof-visual-capture.yml \
+#     -f route=wildcard-advisor \
+#     -f action=expand-rec \
+#     -f label=wildcard-v1
+#   gh run watch          # wait for completion
+#   gh run download       # downloads artifact to ./prof-visual-capture-*/
+#
+# Full usage doc: docs/prof-visual-harness.md
+
+on:
+  workflow_dispatch:
+    inputs:
+      route:
+        description: |
+          Surface to visit. Supported values:
+            collection              /collection
+            wildcard-advisor        /collection → open wildcard advisor panel
+            match-history           /match-history
+            match-details           /match-history → click first match row
+            draft-analytics         /draft-analytics
+            home                    /home dashboard
+            decks                   /decks
+            meta                    /meta
+            charts-win-rate         /charts/win-rate-trend
+            charts-deck-perf        /charts/deck-performance
+        required: true
+        type: choice
+        options:
+          - collection
+          - wildcard-advisor
+          - match-history
+          - match-details
+          - draft-analytics
+          - home
+          - decks
+          - meta
+          - charts-win-rate
+          - charts-deck-perf
+        default: collection
+
+      action:
+        description: |
+          Interaction to perform before screenshotting. Supported values:
+            screenshot-only         Navigate and screenshot with no further interaction
+            open-wildcard-advisor   Click "Show Wildcard Advisor" button
+            expand-rec              Expand first wildcard recommendation card (drill-down)
+            switch-format-historic  Toggle wildcard advisor format → Historic
+            switch-format-standard  Toggle wildcard advisor format → Standard
+            grade-pill              Wait for draft grade pill to appear
+            open-first-row          Click first list row → detail view
+        required: true
+        type: choice
+        options:
+          - screenshot-only
+          - open-wildcard-advisor
+          - expand-rec
+          - switch-format-historic
+          - switch-format-standard
+          - grade-pill
+          - open-first-row
+        default: screenshot-only
+
+      label:
+        description: >
+          Short label prefix for screenshot filenames and the artifact name
+          (e.g. "wildcard-v1", "match-history-review", "draft-analytics-q2").
+          No spaces — use hyphens.
+        required: false
+        type: string
+        default: 'prof-capture'
+
+      staging_spa_url:
+        description: 'Staging SPA URL override (leave blank for default stg-app.vaultmtg.app)'
+        required: false
+        type: string
+        default: 'https://stg-app.vaultmtg.app'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prof-visual-capture:
+    name: Prof Visual Capture — ${{ inputs.route }} / ${{ inputs.action }}
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout vault-mtg
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-staging-auth-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            playwright-staging-auth-${{ runner.os }}-
+            playwright-staging-${{ runner.os }}-
+            playwright-${{ runner.os }}-
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Read SSM secrets
+        id: ssm
+        run: |
+          CLERK_SECRET_KEY=$(aws ssm get-parameter \
+            --name /vaultmtg/staging/CLERK_SECRET_KEY \
+            --with-decryption \
+            --region us-east-1 \
+            --query Parameter.Value \
+            --output text)
+          echo "::add-mask::${CLERK_SECRET_KEY}"
+          echo "clerk_secret_key=${CLERK_SECRET_KEY}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Playwright browsers (cache miss)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: frontend
+        run: npx playwright install chromium --with-deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - name: Install Playwright system dependencies (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: frontend
+        run: npx playwright install-deps chromium
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - name: Create screenshot output directory
+        run: mkdir -p /tmp/prof-screenshots
+
+      - name: Run Prof visual capture spec
+        working-directory: frontend
+        run: |
+          npx playwright test \
+            tests/e2e/staging/prof-visual-capture.spec.ts \
+            --config=playwright.staging-spa.config.ts \
+            --reporter=list
+        env:
+          CI: true
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.vaultmtg.app' }}
+          CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
+          SCREENSHOT_DIR: /tmp/prof-screenshots
+          CI_SMOKE_USER_ID: user_3EamRFdUZdQl1yYPf4Yg7OIQqm4
+          PROF_ROUTE: ${{ inputs.route }}
+          PROF_ACTION: ${{ inputs.action }}
+          PROF_LABEL: ${{ inputs.label || 'prof-capture' }}
+
+      - name: Upload screenshots artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prof-visual-capture-${{ inputs.label || 'prof-capture' }}
+          path: /tmp/prof-screenshots/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload Playwright report on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-prof-visual-${{ inputs.label || 'prof-capture' }}
+          path: frontend/playwright-report-staging-spa/
+          retention-days: 7
