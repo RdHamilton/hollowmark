@@ -52,6 +52,55 @@ function rarityLabel(rarity: WildcardRecommendation['rarity']): string {
 }
 
 // ---------------------------------------------------------------------------
+// Collapsed-row helpers (#420 archetype-level fields)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a compact wildcard-cost string for the collapsed row.
+ *
+ * Uses `wildcards_required` when present (ADR-045 / #420 full BFF response).
+ * Falls back to `missing_copies` + `rarity` for the scaffold response shape.
+ *
+ * Examples:
+ *   "4 Rare · 2 Mythic away"   (archetype-level, multiple rarities)
+ *   "2 Rare away"              (archetype-level, single rarity)
+ *   "2 Rare away"              (scaffold fallback)
+ */
+function buildCostSummary(rec: WildcardRecommendation): string {
+  const { wildcards_required, missing_copies, rarity } = rec;
+
+  if (wildcards_required) {
+    const RARITY_ORDER: Array<keyof typeof wildcards_required> = ['mythic', 'rare', 'uncommon', 'common'];
+    const parts = RARITY_ORDER
+      .filter((r) => (wildcards_required[r] ?? 0) > 0)
+      .map((r) => {
+        const count = wildcards_required[r] as number;
+        return `${count} ${r.charAt(0).toUpperCase() + r.slice(1)}`;
+      });
+    return parts.length > 0 ? `${parts.join(' · ')} away` : 'Complete!';
+  }
+
+  // Scaffold fallback: single-rarity summary from the card-level fields
+  if (missing_copies > 0) {
+    return `${missing_copies} ${rarityLabel(rarity)} away`;
+  }
+  return 'Complete!';
+}
+
+/**
+ * Render a tier badge string from the BFF `tier` field.
+ * Handles both integer (1, 2, 3) and string ("S", "1") tier values.
+ * Returns null when tier is absent so callers can guard rendering.
+ */
+function formatTier(tier: number | string | undefined): string | null {
+  if (tier === undefined || tier === null) return null;
+  const str = String(tier).trim();
+  // Already prefixed (e.g. "Tier 1") — pass through
+  if (str.toLowerCase().startsWith('tier')) return str;
+  return `Tier ${str}`;
+}
+
+// ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
 
@@ -83,6 +132,11 @@ interface RecommendationCardProps {
 function RecommendationCard({ rec, affordable }: RecommendationCardProps) {
   const [expanded, setExpanded] = useState(false);
 
+  const tierLabel = formatTier(rec.tier);
+  const costSummary = buildCostSummary(rec);
+  // Prefer archetype_name from the #420 response; fall back to card name
+  const displayName = rec.archetype_name ?? rec.name;
+
   return (
     <div
       className={`wildcard-advisor__rec-card ${affordable ? 'wildcard-advisor__rec-card--affordable' : 'wildcard-advisor__rec-card--aspirational'}`}
@@ -98,13 +152,26 @@ function RecommendationCard({ rec, affordable }: RecommendationCardProps) {
           style={{ background: rarityColorVar(rec.rarity) }}
           aria-hidden="true"
         />
-        <span className="wildcard-advisor__rec-name">{rec.name}</span>
-        <span
-          className="wildcard-advisor__rec-missing"
-          aria-label={`Need ${rec.missing_copies} more`}
-        >
-          +{rec.missing_copies}
+
+        {/* Left cluster: name + optional tier badge */}
+        <span className="wildcard-advisor__rec-identity">
+          <span
+            className="wildcard-advisor__rec-name"
+            data-testid="wildcard-advisor-rec-name"
+          >
+            {displayName}
+          </span>
+          {tierLabel !== null && (
+            <span
+              className="wildcard-advisor__rec-tier-badge"
+              data-testid="wildcard-advisor-rec-tier"
+            >
+              {tierLabel}
+            </span>
+          )}
         </span>
+
+        {/* Right cluster: GIHWR signal + wildcard cost summary */}
         {rec.gihwr !== undefined && (
           <span
             className={`wildcard-advisor__rec-gihwr ${rec.gihwr >= 57 ? 'wildcard-advisor__rec-gihwr--positive' : rec.gihwr < 50 ? 'wildcard-advisor__rec-gihwr--negative' : ''}`}
@@ -115,6 +182,14 @@ function RecommendationCard({ rec, affordable }: RecommendationCardProps) {
             {rec.gihwr.toFixed(1)}%
           </span>
         )}
+        <span
+          className="wildcard-advisor__rec-cost"
+          data-testid="wildcard-advisor-rec-cost"
+          aria-label={costSummary}
+        >
+          {costSummary}
+        </span>
+
         <span className="wildcard-advisor__rec-expand-icon" aria-hidden="true">
           {expanded
             ? <ChevronDownIcon className="wildcard-advisor__chevron-icon" />
@@ -324,7 +399,7 @@ export default function WildcardAdvisorPanel({ onClose }: WildcardAdvisorPanelPr
         <div
           className="wildcard-advisor__error"
           data-testid="wildcard-advisor-error"
-          role="alert"
+          role="status"
         >
           <p className="wildcard-advisor__error-msg">
             Recommendations are temporarily unavailable. Please try again.
@@ -440,9 +515,6 @@ export default function WildcardAdvisorPanel({ onClose }: WildcardAdvisorPanelPr
                     <h3 className="wildcard-advisor__section-title wildcard-advisor__section-title--aspirational">
                       Saving Toward
                     </h3>
-                    <p className="wildcard-advisor__section-subtitle">
-                      High-value targets — keep earning wildcards.
-                    </p>
                     <div className="wildcard-advisor__rec-list">
                       {aspirational.map((rec) => (
                         <RecommendationCard
