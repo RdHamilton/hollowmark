@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { trackEvent } from '@/services/analytics';
 import { mlSuggestions as mlApi } from '@/services/api';
 import type {
   MLSuggestion,
@@ -49,7 +50,18 @@ export default function MLSuggestionsPanel({
     setError(null);
     try {
       const data = await mlApi.getMLSuggestions(deckId, !showDismissed);
-      setSuggestions(data || []);
+      const loaded = data || [];
+      setSuggestions(loaded);
+      if (loaded.length > 0) {
+        // #422 telemetry: fire when panel renders with at least one suggestion.
+        trackEvent({
+          name: 'feature_ml_suggestions_viewed',
+          properties: {
+            suggestion_count: loaded.length,
+            context: 'deck_builder',
+          },
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load ML suggestions');
       console.error('Failed to load ML suggestions:', err);
@@ -254,7 +266,19 @@ export default function MLSuggestionsPanel({
             >
               <div
                 className="suggestion-main"
-                onClick={() => setExpandedId(expandedId === suggestion.id ? null : suggestion.id)}
+                onClick={() => {
+                  setExpandedId(expandedId === suggestion.id ? null : suggestion.id);
+                  // #422 telemetry: fire on expand (first click), not on collapse.
+                  if (expandedId !== suggestion.id) {
+                    trackEvent({
+                      name: 'wildcard_recommendation_clicked',
+                      properties: {
+                        suggestion_type: suggestion.suggestionType as 'add' | 'remove' | 'swap',
+                        suggestion_count: sortedSuggestions.length,
+                      },
+                    });
+                  }
+                }}
               >
                 <div className="suggestion-type-icon">
                   {getMLSuggestionTypeIcon(suggestion.suggestionType)}

@@ -79,15 +79,102 @@ describe('analytics', () => {
     vi.unstubAllEnvs();
   });
 
-  it('identifyUser calls posthog.identify with the given user id after init', async () => {
+  it('identifyUser calls posthog.identify with the given user id after init (no email)', async () => {
     vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
     const posthog = (await import('posthog-js')).default;
     const { initAnalytics, identifyUser } = await import('../analytics');
 
     initAnalytics();
-    identifyUser('user_abc123');
+    await identifyUser('user_abc123');
 
     expect(posthog.identify).toHaveBeenCalledWith('user_abc123');
+    vi.unstubAllEnvs();
+  });
+
+  // ── #819: identifyUser with hashed email ───────────────────────────────────
+
+  it('identifyUser with email calls posthog.identify with hashed_email person property', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, identifyUser } = await import('../analytics');
+
+    initAnalytics();
+    await identifyUser('user_abc123', 'test@example.com');
+
+    expect(posthog.identify).toHaveBeenCalledOnce();
+    const [calledUserId, calledProps] = (posthog.identify as ReturnType<typeof vi.fn>).mock.calls[0] as [string, Record<string, unknown>];
+    expect(calledUserId).toBe('user_abc123');
+    expect(calledProps).toHaveProperty('hashed_email');
+    // hashed_email must be a 16-char lowercase hex string (ADR-027: SHA-256 hex[:16])
+    expect(typeof calledProps.hashed_email).toBe('string');
+    expect((calledProps.hashed_email as string).length).toBe(16);
+    expect((calledProps.hashed_email as string)).toMatch(/^[0-9a-f]{16}$/);
+    vi.unstubAllEnvs();
+  });
+
+  it('NEGATIVE: identifyUser with email never passes raw email to posthog.identify', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, identifyUser } = await import('../analytics');
+
+    initAnalytics();
+    await identifyUser('user_abc123', 'test@example.com');
+
+    const calls = (posthog.identify as ReturnType<typeof vi.fn>).mock.calls;
+    for (const callArgs of calls) {
+      // Check that the raw email string 'test@example.com' does not appear
+      // in any argument at any level.
+      expect(JSON.stringify(callArgs)).not.toContain('test@example.com');
+    }
+    vi.unstubAllEnvs();
+  });
+
+  it('hashPII returns a 16-character lowercase hex string', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', '');
+    const { hashPII } = await import('../analytics');
+    vi.unstubAllEnvs();
+
+    const result = await hashPII('test@example.com');
+    expect(result).toHaveLength(16);
+    expect(result).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('hashPII is deterministic — same input always yields same output', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', '');
+    const { hashPII } = await import('../analytics');
+    vi.unstubAllEnvs();
+
+    const a = await hashPII('user@example.com');
+    const b = await hashPII('user@example.com');
+    expect(a).toBe(b);
+  });
+
+  it('hashPII produces different output for different inputs', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', '');
+    const { hashPII } = await import('../analytics');
+    vi.unstubAllEnvs();
+
+    const a = await hashPII('alice@example.com');
+    const b = await hashPII('bob@example.com');
+    expect(a).not.toBe(b);
+  });
+
+  // ── #818: POSTHOG_HOST fallback with empty string (|| instead of ??) ────────
+
+  it('uses app.posthog.com fallback when VITE_POSTHOG_HOST is empty string', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    vi.stubEnv('VITE_POSTHOG_HOST', '');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics } = await import('../analytics');
+
+    initAnalytics();
+
+    expect(posthog.init).toHaveBeenCalledWith(
+      'phc_testkey',
+      expect.objectContaining({
+        api_host: 'https://app.posthog.com',
+      }),
+    );
     vi.unstubAllEnvs();
   });
 
@@ -524,6 +611,50 @@ describe('analytics', () => {
     stopSessionReplay();
 
     expect(posthog.stopSessionRecording).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  // ── #422: wildcard_recommendation_clicked event taxonomy ─────────────────
+
+  it('Events.WILDCARD_RECOMMENDATION_CLICKED is declared in the taxonomy', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', '');
+    const { Events } = await import('../analytics');
+    vi.unstubAllEnvs();
+    expect(Events.WILDCARD_RECOMMENDATION_CLICKED).toBe('wildcard_recommendation_clicked');
+  });
+
+  it('trackEvent handles wildcard_recommendation_clicked with correct shape', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, trackEvent } = await import('../analytics');
+
+    initAnalytics();
+    trackEvent({
+      name: 'wildcard_recommendation_clicked',
+      properties: { suggestion_type: 'add', suggestion_count: 5 },
+    });
+
+    expect(posthog.capture).toHaveBeenCalledWith('wildcard_recommendation_clicked', {
+      suggestion_type: 'add',
+      suggestion_count: 5,
+    });
+    vi.unstubAllEnvs();
+  });
+
+  it('NEGATIVE: wildcard_recommendation_clicked payload never contains user_id or raw email', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, trackEvent } = await import('../analytics');
+
+    initAnalytics();
+    trackEvent({
+      name: 'wildcard_recommendation_clicked',
+      properties: { suggestion_type: 'swap', suggestion_count: 3 },
+    });
+
+    const capturedProps = (posthog.capture as ReturnType<typeof vi.fn>).mock.calls[0][1] as Record<string, unknown>;
+    expect(capturedProps).not.toHaveProperty('user_id');
+    expect(capturedProps).not.toHaveProperty('email');
     vi.unstubAllEnvs();
   });
 });
