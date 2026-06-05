@@ -165,6 +165,38 @@ jobs:
           # STAGING_SMOKE_TOKEN is injected from SSM — never hardcoded or echoed.
           STAGING_SMOKE_TOKEN: ${{ steps.ssm.outputs.staging_smoke_token }}
 
+      # ── WildcardAdvisorPanel visual screenshot capture ───────────────────
+      # Captures authenticated screenshots of the WildcardAdvisorPanel for
+      # Prof's visual PLAYER_VERDICT (#421/#424). Uses the same Clerk session
+      # as the SPA smoke suite above. Runs after the smoke tests so a smoke
+      # failure doesn't block screenshot capture (continue-on-error: true).
+      - name: Create screenshot output directory
+        run: mkdir -p /tmp/wildcard-panel-screenshots
+
+      - name: Capture WildcardAdvisorPanel screenshots (wildcard-panel-visual-424.spec.ts)
+        working-directory: frontend
+        continue-on-error: true
+        run: |
+          npx playwright test \
+            tests/e2e/staging/wildcard-panel-visual-424.spec.ts \
+            --config=playwright.staging-spa.config.ts \
+            --reporter=list
+        env:
+          CI: true
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.vaultmtg.app' }}
+          CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
+          SCREENSHOT_DIR: /tmp/wildcard-panel-screenshots
+          CI_SMOKE_USER_ID: user_3EamRFdUZdQl1yYPf4Yg7OIQqm4
+
+      - name: Upload WildcardAdvisorPanel screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wildcard-panel-staging-screenshots
+          path: /tmp/wildcard-panel-screenshots/
+          retention-days: 14
+          if-no-files-found: warn
+
       - name: Upload Playwright report (on failure)
         if: failure()
         uses: actions/upload-artifact@v4
