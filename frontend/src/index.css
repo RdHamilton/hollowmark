@@ -162,6 +162,8 @@
   --shadow-lg-vault:       0 8px 32px rgba(0, 0, 0, 0.7);
   --shadow-sapphire-vault: 0 0 0 1px rgba(74, 144, 217, 0.2), 0 4px 12px rgba(74, 144, 217, 0.1);
   --shadow-inset-vault:    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --vault-shadow-inset-white-4: inset 0 1px 0 rgba(255, 255, 255, 0.04);  /* raised-surface top-edge highlight */
+  --vault-shadow-card:     0 1px 3px rgba(0, 0, 0, 0.4);                 /* card/panel elevation — 40 % black */
 
   /* ---- Motion ---- */
   --transition-fast:  150ms ease;

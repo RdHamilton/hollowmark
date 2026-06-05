@@ -9,6 +9,12 @@ if (typeof document !== 'undefined') {
   await import('@testing-library/jest-dom');
 }
 
+// Stable mock for getToken — must be a stable function reference so that
+// components with getToken in a useEffect dependency array don't re-fire
+// the effect on every render. A new arrow function per call would cause an
+// infinite render loop in components like WildcardAdvisorPanel.
+const _mockGetToken = vi.fn(() => Promise.resolve('clerk-test-token-stub'));
+
 // Mock @clerk/react globally so components that use Clerk work in tests
 // without a real ClerkProvider or publishable key.
 // Default behaviour: signed-in so route tests reach protected pages.
@@ -21,7 +27,7 @@ vi.mock('@clerk/react', () => ({
   SignUpButton: ({ children }: { children: unknown }) => children,
   UserButton: () => null,
   RedirectToSignIn: () => null,
-  useAuth: () => ({ isLoaded: true, isSignedIn: true, getToken: () => Promise.resolve('clerk-test-token-stub') }),
+  useAuth: () => ({ isLoaded: true, isSignedIn: true, getToken: _mockGetToken }),
   useUser: () => ({ isLoaded: true, isSignedIn: true, user: { id: 'user_test_123', emailAddresses: [{ emailAddress: 'test@example.com' }] } }),
 }));
 

@@ -35,6 +35,7 @@ export * as bffMatchHistory from './bffMatchHistory';
 export * as bffDraftHistory from './bffDraftHistory';
 export * as bffDaemons from './bffDaemons';
 export * as bffHomeSummary from './bffHomeSummary';
+export * as bffWildcardAdvisor from './bffWildcardAdvisor';
 
 // Re-export commonly used types
 export type {
@@ -168,3 +169,11 @@ export type {
   OpponentHistorySummary,
   ArchetypeExpectedCard,
 } from './opponents';
+
+export type {
+  WildcardAdvisorFormat,
+  WildcardRecommendation,
+  WildcardBudget,
+  WildcardAdvisorResponse,
+  WildcardAdvisorResult,
+} from './bffWildcardAdvisor';

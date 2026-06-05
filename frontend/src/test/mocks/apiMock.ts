@@ -311,6 +311,18 @@ export const mockBffDraftRatings = {
   })),
 };
 
+// bffWildcardAdvisor mock
+export const mockBffWildcardAdvisor = {
+  getWildcardRecommendations: vi.fn(() => Promise.resolve({
+    data: {
+      format: 'Standard',
+      recommendations: [],
+      wildcard_budget: { common: 0, uncommon: 0, rare: 0, mythic: 0 },
+    },
+    cacheDegraded: false,
+  })),
+};
+
 // Combined API mock export
 export const mockApi = {
   cards: mockCards,
@@ -326,6 +338,7 @@ export const mockApi = {
   mlSuggestions: mockMLSuggestions,
   standard: mockStandard,
   bffDraftRatings: mockBffDraftRatings,
+  bffWildcardAdvisor: mockBffWildcardAdvisor,
 };
 
 // Legacy mock kept for backwards compatibility with tests that haven't migrated
@@ -468,6 +481,9 @@ export function resetMocks() {
     if (vi.isMockFunction(mock)) mock.mockClear();
   });
   Object.values(mockBffDraftRatings).forEach((mock) => {
+    if (vi.isMockFunction(mock)) mock.mockClear();
+  });
+  Object.values(mockBffWildcardAdvisor).forEach((mock) => {
     if (vi.isMockFunction(mock)) mock.mockClear();
   });
   Object.values(mockWailsApp).forEach((mock) => {

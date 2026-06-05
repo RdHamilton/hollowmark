@@ -1,0 +1,458 @@
+/* ============================================================
+   WildcardAdvisorPanel — VaultMTG Design System tokens
+   Uses: --vault-* surface/text/semantic tokens + --vault-rarity-* gem tokens
+   ============================================================ */
+
+.wildcard-advisor {
+  background: var(--vault-bg-raised);
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--vault-shadow-inset-white-4);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Header */
+.wildcard-advisor__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wildcard-advisor__title {
+  font-family: var(--font-display-vault);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--vault-fg);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.wildcard-advisor__close {
+  background: transparent;
+  border: none;
+  color: var(--vault-fg-muted);
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast);
+}
+
+.wildcard-advisor__close:hover {
+  color: var(--vault-fg);
+}
+
+/* Format toggle — segmented control */
+.wildcard-advisor__format-toggle {
+  display: flex;
+  gap: var(--space-1);
+  background: var(--vault-bg);
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-md);
+  padding: 3px;
+}
+
+.wildcard-advisor__format-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--vault-fg-secondary);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  padding: 6px 10px;
+  text-align: center;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.wildcard-advisor__format-btn:hover {
+  background: var(--vault-bg-raised);
+  color: var(--vault-fg);
+}
+
+.wildcard-advisor__format-btn--active {
+  background: var(--vault-bg-raised);
+  color: var(--vault-sapphire);
+  font-weight: 600;
+  box-shadow: var(--vault-shadow-card);
+}
+
+/* Loading skeleton */
+.wildcard-advisor__loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.wildcard-advisor__skeleton-row {
+  height: 44px;
+  background: linear-gradient(
+    90deg,
+    var(--vault-border) 0%,
+    var(--vault-bg-overlay) 50%,
+    var(--vault-border) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+/* Stale-data warning banner */
+.wildcard-advisor__stale-banner {
+  background: var(--vault-warning-dim);
+  border: 1px solid var(--vault-warning);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  color: var(--vault-warning);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-3);
+}
+
+/* Wildcard budget header */
+.wildcard-advisor__budget {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--vault-bg);
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-sm);
+}
+
+.wildcard-advisor__budget-label {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--vault-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.wildcard-advisor__budget-gems {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.wildcard-advisor__budget-gem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--gem-color, var(--vault-fg));
+}
+
+.wildcard-advisor__budget-gem-icon {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--gem-color, var(--vault-fg-muted));
+  flex-shrink: 0;
+}
+
+.wildcard-advisor__budget-gem-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.wildcard-advisor__budget-gem-label {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-secondary);
+}
+
+/* Sections */
+.wildcard-advisor__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.wildcard-advisor__section-title {
+  font-family: var(--font-display-vault);
+  font-size: var(--text-base);
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.wildcard-advisor__section-title--affordable {
+  color: var(--vault-success);
+}
+
+.wildcard-advisor__section-title--aspirational {
+  color: var(--vault-fg-secondary);
+}
+
+.wildcard-advisor__section-subtitle {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-muted);
+  margin: 0;
+}
+
+/* Recommendation list */
+.wildcard-advisor__rec-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Recommendation card */
+.wildcard-advisor__rec-card {
+  background: transparent;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--vault-border-subtle);
+  transition: background var(--transition-fast);
+}
+
+.wildcard-advisor__rec-card:last-child {
+  border-bottom: none;
+}
+
+.wildcard-advisor__rec-card:hover {
+  background: var(--vault-bg-overlay);
+}
+
+.wildcard-advisor__rec-card--affordable {
+  border-left-color: var(--vault-success);
+}
+
+.wildcard-advisor__rec-card--aspirational {
+  border-left-color: var(--vault-fg-muted);
+}
+
+.wildcard-advisor__rec-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+
+.wildcard-advisor__rec-rarity-pip {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.wildcard-advisor__rec-name {
+  flex: 1;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--vault-fg);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wildcard-advisor__rec-missing {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-muted);
+  flex-shrink: 0;
+}
+
+.wildcard-advisor__rec-gihwr {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-secondary);
+  flex-shrink: 0;
+  min-width: 44px;
+  text-align: right;
+}
+
+.wildcard-advisor__rec-gihwr--positive {
+  color: var(--vault-success);
+}
+
+.wildcard-advisor__rec-gihwr--negative {
+  color: var(--vault-danger);
+}
+
+/* Inline label prefix for GIHWR value ("GIHWR 63.2%") */
+.wildcard-advisor__rec-gihwr-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--vault-fg-muted);
+  margin-right: 3px;
+  letter-spacing: 0.03em;
+}
+
+.wildcard-advisor__rec-expand-icon {
+  color: var(--vault-fg-muted);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.wildcard-advisor__chevron-icon {
+  width: 10px;
+  height: 10px;
+}
+
+/* Drill-down detail section */
+.wildcard-advisor__rec-drill-down {
+  padding: var(--space-2) var(--space-3) var(--space-3) 28px;
+  border-top: 1px solid var(--vault-border-subtle);
+}
+
+.wildcard-advisor__rec-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.wildcard-advisor__rec-detail-row {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.wildcard-advisor__rec-detail-row--full {
+  flex-basis: 100%;
+}
+
+.wildcard-advisor__rec-detail-row dt {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--vault-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wildcard-advisor__rec-detail-row dd {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-secondary);
+  margin: 0;
+}
+
+.wildcard-advisor__rec-detail-row--full dd {
+  font-family: var(--font-body);
+}
+
+/* Sync CTA state */
+.wildcard-advisor__sync-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-8) var(--space-4);
+  gap: var(--space-3);
+}
+
+.wildcard-advisor__sync-cta-icon {
+  width: 36px;
+  height: 36px;
+  color: var(--vault-fg-muted);
+}
+
+.wildcard-advisor__sync-cta-title {
+  font-family: var(--font-display-vault);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--vault-fg);
+  margin: 0;
+}
+
+.wildcard-advisor__sync-cta-body {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-fg-secondary);
+  max-width: 320px;
+  margin: 0;
+}
+
+.wildcard-advisor__sync-cta-hint {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--vault-fg-muted);
+  margin: 0;
+}
+
+/* Empty state (200 with no recs) */
+.wildcard-advisor__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-8) var(--space-4);
+  gap: var(--space-2);
+}
+
+.wildcard-advisor__empty-title {
+  font-family: var(--font-display-vault);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--vault-fg);
+  margin: 0;
+}
+
+.wildcard-advisor__empty-body {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-fg-secondary);
+  max-width: 320px;
+  margin: 0;
+}
+
+/* Error state */
+.wildcard-advisor__error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-6) var(--space-4);
+  gap: var(--space-3);
+}
+
+.wildcard-advisor__error-msg {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-danger);
+  margin: 0;
+}
+
+.wildcard-advisor__retry-btn {
+  background: transparent;
+  border: 1px solid var(--vault-border);
+  border-radius: var(--radius-md);
+  color: var(--vault-fg);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  padding: 6px 16px;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.wildcard-advisor__retry-btn:hover {
+  background: var(--vault-bg-raised);
+  border-color: var(--vault-sapphire);
+}
