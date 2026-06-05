@@ -24,7 +24,9 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests/e2e/staging',
-  testMatch: /staging-spa-smoke\.spec\.ts/,
+  // Matches the SPA smoke spec and the WildcardAdvisorPanel visual capture spec.
+  // Both require a real Clerk session against stg-app.vaultmtg.app.
+  testMatch: /(staging-spa-smoke|wildcard-panel-visual-424)\.spec\.ts/,
 
   // Individual test timeout — 60 s to handle CI runner latency (#1949)
   timeout: 60 * 1000,

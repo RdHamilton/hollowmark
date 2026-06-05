@@ -5,19 +5,27 @@ name: E2E Staging Auth Smoke (vmt-t#678)
 # a real Clerk session minted from the staging CLERK_SECRET_KEY in SSM.
 #
 # Auth-enforcement contract (vmt-t#678):
-#   - CLERK_SECRET_KEY is read directly from SSM (path /vaultmtg/staging/CLERK_SECRET_KEY,
-#     SecureString). The secret is masked immediately and never echoed to logs.
+#   - CLERK_SECRET_KEY is sourced from the CLERK_SECRET_KEY GitHub Actions
+#     secret (provisioned from SSM /vaultmtg/staging/CLERK_SECRET_KEY at
+#     environment setup time, stored as a repo/environment secret for CI use).
 #   - If CLERK_SECRET_KEY is absent the suite FAILs with INCONCLUSIVE — it does
 #     NOT skip and report PASS. A smoke that skips all authenticated surfaces is
 #     worse than no test (2026-06-02 false-PASS incident).
 #   - STAGING_SMOKE_TOKEN is a pre-issued static BFF JWT for the BFF API smoke.
-#     Also sourced from SSM; its absence produces the same hard failure.
+#     Also sourced from the STAGING_SMOKE_TOKEN GitHub Actions secret.
+#
+# Container note: Uses mcr.microsoft.com/playwright:v1.56.1-jammy (same container
+# as ci.yml frontend-e2e). Chromium is pre-baked — no browser download needed.
+# The configure-aws-credentials OIDC action does NOT propagate env vars into
+# container steps; GitHub Actions secrets injected via `env:` DO propagate.
+# This is why CLERK_SECRET_KEY uses a GHA secret instead of SSM runtime read.
 #
 # Surfaces exercised (authenticated):
 #   SPA: /home, /match-history, /quests, /draft, /draft-analytics, /decks,
 #        /collection, /meta, /charts/*, /settings, /history/drafts, /draft/live,
 #        /api-keys
 #   BFF: GET /api/v1/matches, GET /api/v1/events (SSE), GET /healthz
+#   WildcardAdvisorPanel: authenticated panel screenshots for visual PLAYER_VERDICT
 #
 # Verdict interpretation:
 #   PASS     = all authenticated surfaces exercised without error
@@ -56,15 +64,18 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   staging-auth-smoke:
     name: Staging Authenticated E2E Smoke
     runs-on: ubuntu-latest
+    # Playwright container: Chromium + all system deps pre-installed.
+    # Matches the container used in ci.yml frontend-e2e (tag = @playwright/test version).
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-jammy
     environment: staging
-    # 15 min: SPA routes (17 × ~20s) + BFF smoke + setup headroom.
-    timeout-minutes: 15
+    # 20 min: SPA routes (17 × ~20s) + wildcard panel screenshots + BFF smoke.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout vault-mtg
@@ -81,64 +92,6 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-staging-auth-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            playwright-staging-auth-${{ runner.os }}-
-            playwright-staging-${{ runner.os }}-
-            playwright-${{ runner.os }}-
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: us-east-1
-
-      # Read Clerk secret key and staging smoke token from SSM.
-      # The CLERK_SECRET_KEY (sk_*) is used by staging-spa-smoke.spec.ts to
-      # mint Clerk testing tokens via the Backend API pattern (never via FAPI,
-      # which is bot-protected). STAGING_SMOKE_TOKEN is a pre-issued BFF JWT
-      # used by staging-smoke.spec.ts for raw API assertions.
-      # Both values are injected as env vars and are NEVER written to logs.
-      - name: Read SSM secrets
-        id: ssm
-        run: |
-          CLERK_SECRET_KEY=$(aws ssm get-parameter \
-            --name /vaultmtg/staging/CLERK_SECRET_KEY \
-            --with-decryption \
-            --region us-east-1 \
-            --query Parameter.Value \
-            --output text)
-          STAGING_SMOKE_TOKEN=$(aws ssm get-parameter \
-            --name /vaultmtg/staging/ci-smoke-token \
-            --with-decryption \
-            --region us-east-1 \
-            --query Parameter.Value \
-            --output text)
-          # Mask both values immediately so they never appear in log output.
-          echo "::add-mask::${CLERK_SECRET_KEY}"
-          echo "::add-mask::${STAGING_SMOKE_TOKEN}"
-          echo "clerk_secret_key=${CLERK_SECRET_KEY}" >> "$GITHUB_OUTPUT"
-          echo "staging_smoke_token=${STAGING_SMOKE_TOKEN}" >> "$GITHUB_OUTPUT"
-
-      - name: Install Playwright browsers (cache miss — full install)
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        working-directory: frontend
-        run: npx playwright install chromium --with-deps
-        env:
-          DEBIAN_FRONTEND: noninteractive
-
-      - name: Install Playwright system dependencies (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        working-directory: frontend
-        run: npx playwright install-deps chromium
-        env:
-          DEBIAN_FRONTEND: noninteractive
-
       # ── SPA authenticated smoke ────────────────────────────────────────────
       # Exercises every protected SPA route via Clerk testing token injection.
       # If CLERK_SECRET_KEY is absent or invalid, this step FAILS — not skips.
@@ -148,10 +101,10 @@ jobs:
         env:
           CI: true
           STAGING_SPA_URL: ${{ inputs.staging_spa_url }}
-          # CLERK_SECRET_KEY is injected from SSM — never from a static secret.
-          # The spec uses this to call Clerk's Backend API testing_tokens endpoint
-          # and inject the token into the browser (not via FAPI, which is bot-protected).
-          CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
+          # CLERK_SECRET_KEY (sk_live_*) is stored as a GitHub Actions secret
+          # (CLERK_SECRET_KEY — provisioned from SSM /vaultmtg/staging/CLERK_SECRET_KEY).
+          # GHA secrets propagate into container steps (unlike OIDC env vars).
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
 
       # ── BFF API authenticated smoke ───────────────────────────────────────
       # Exercises auth-gated BFF endpoints (matches, SSE) with a pre-issued token.
@@ -162,8 +115,41 @@ jobs:
         env:
           CI: true
           STAGING_API_URL: ${{ inputs.staging_api_url }}
-          # STAGING_SMOKE_TOKEN is injected from SSM — never hardcoded or echoed.
-          STAGING_SMOKE_TOKEN: ${{ steps.ssm.outputs.staging_smoke_token }}
+          STAGING_SMOKE_TOKEN: ${{ secrets.STAGING_SMOKE_TOKEN }}
+
+      # ── WildcardAdvisorPanel visual screenshot capture ───────────────────
+      # Captures authenticated screenshots of the WildcardAdvisorPanel for
+      # Prof's visual PLAYER_VERDICT (#421/#424). Uses the same Clerk session
+      # as the SPA smoke suite above. Runs with continue-on-error so a smoke
+      # failure doesn't block screenshot capture.
+      - name: Create screenshot output directory
+        if: always()
+        run: mkdir -p /tmp/wildcard-panel-screenshots
+
+      - name: Capture WildcardAdvisorPanel screenshots (wildcard-panel-visual-424.spec.ts)
+        if: always()
+        working-directory: frontend
+        continue-on-error: true
+        run: |
+          npx playwright test \
+            tests/e2e/staging/wildcard-panel-visual-424.spec.ts \
+            --config=playwright.staging-spa.config.ts \
+            --reporter=list
+        env:
+          CI: true
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.vaultmtg.app' }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          SCREENSHOT_DIR: /tmp/wildcard-panel-screenshots
+          CI_SMOKE_USER_ID: user_3EamRFdUZdQl1yYPf4Yg7OIQqm4
+
+      - name: Upload WildcardAdvisorPanel screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wildcard-panel-staging-screenshots
+          path: /tmp/wildcard-panel-screenshots/
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Upload Playwright report (on failure)
         if: failure()
