@@ -222,9 +222,28 @@ test.describe('WildcardAdvisorPanel — visual screenshot capture (staging #421/
     await injectClerkSession(sharedContext, sessionCookies);
     sharedPage = await sharedContext.newPage();
 
-    // Warm up the session — navigate to /home and allow Clerk JS to initialize
+    // Warm up the session — navigate to /collection and allow Clerk JS to initialize.
     await sharedPage.goto(BASE_URL + '/collection', { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await sharedPage.waitForTimeout(12_000);
+
+    // Dismiss the onboarding modal if present — the ci-smoke-token account always
+    // sees it on a fresh session. The × close button has data-testid="onboarding-modal-close".
+    const onboardingModal = sharedPage.locator('[data-testid="onboarding-modal"]');
+    const modalVisible = await onboardingModal.isVisible().catch(() => false);
+    if (modalVisible) {
+      const closeBtn = sharedPage.locator('[data-testid="onboarding-modal-close"]');
+      const closeBtnVisible = await closeBtn.isVisible().catch(() => false);
+      if (closeBtnVisible) {
+        await closeBtn.click();
+        await sharedPage.waitForTimeout(500);
+        console.log('  Onboarding modal dismissed.');
+      } else {
+        // Fall back to pressing Escape to dismiss the modal
+        await sharedPage.keyboard.press('Escape');
+        await sharedPage.waitForTimeout(500);
+        console.log('  Onboarding modal dismissed via Escape.');
+      }
+    }
 
     // Verify session is active (not redirected to sign-in)
     const currentUrl = sharedPage.url();
@@ -271,6 +290,21 @@ test.describe('WildcardAdvisorPanel — visual screenshot capture (staging #421/
 
     // Collection page must be loaded
     await expect(sharedPage.locator('[data-testid="collection-page"]')).toBeVisible({ timeout: 15_000 });
+
+    // Dismiss onboarding modal if present (ci-smoke-token account always sees it)
+    const onboardingModal = sharedPage.locator('[data-testid="onboarding-modal"]');
+    if (await onboardingModal.isVisible().catch(() => false)) {
+      const closeBtn = sharedPage.locator('[data-testid="onboarding-modal-close"]');
+      if (await closeBtn.isVisible().catch(() => false)) {
+        await closeBtn.click();
+        await sharedPage.waitForTimeout(500);
+      } else {
+        await sharedPage.keyboard.press('Escape');
+        await sharedPage.waitForTimeout(500);
+      }
+      // Wait for modal to disappear
+      await onboardingModal.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
+    }
 
     // Click "Show Wildcard Advisor"
     const toggleBtn = sharedPage.locator('[data-testid="collection-toggle-wildcard-advisor"]');
