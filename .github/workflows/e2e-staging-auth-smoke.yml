@@ -13,11 +13,17 @@ name: E2E Staging Auth Smoke (vmt-t#678)
 #   - STAGING_SMOKE_TOKEN is a pre-issued static BFF JWT for the BFF API smoke.
 #     Also sourced from SSM; its absence produces the same hard failure.
 #
+# Architecture note: two jobs are required because configure-aws-credentials
+# (OIDC) sets env vars on the runner host but they do NOT propagate into
+# container steps. The fetch-secrets job runs on ubuntu-latest (no container)
+# and passes masked secrets as job outputs to the container-based e2e job.
+#
 # Surfaces exercised (authenticated):
 #   SPA: /home, /match-history, /quests, /draft, /draft-analytics, /decks,
 #        /collection, /meta, /charts/*, /settings, /history/drafts, /draft/live,
 #        /api-keys
 #   BFF: GET /api/v1/matches, GET /api/v1/events (SSE), GET /healthz
+#   WildcardAdvisorPanel: authenticated panel screenshots for visual PLAYER_VERDICT
 #
 # Verdict interpretation:
 #   PASS     = all authenticated surfaces exercised without error
@@ -59,46 +65,22 @@ permissions:
   id-token: write
 
 jobs:
-  staging-auth-smoke:
-    name: Staging Authenticated E2E Smoke
+  # ── Job 1: Fetch SSM secrets (non-container — OIDC only works on runner host)
+  fetch-secrets:
+    name: Fetch staging secrets from SSM
     runs-on: ubuntu-latest
-    # Use the same Playwright container as the main CI E2E suite (ci.yml).
-    # Chromium + all system deps are pre-installed — no cdn.playwright.dev
-    # download needed, eliminates the browser-install timeout that cancelled
-    # the ubuntu-latest runner approach. Tag must match @playwright/test version.
-    container:
-      image: mcr.microsoft.com/playwright:v1.56.1-jammy
     environment: staging
-    # 20 min: SPA routes (17 × ~20s) + wildcard panel screenshots + BFF smoke.
-    timeout-minutes: 20
+    outputs:
+      clerk_secret_key: ${{ steps.ssm.outputs.clerk_secret_key }}
+      staging_smoke_token: ${{ steps.ssm.outputs.staging_smoke_token }}
 
     steps:
-      - name: Checkout vault-mtg
-        uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
-      # Read Clerk secret key and staging smoke token from SSM.
-      # The CLERK_SECRET_KEY (sk_*) is used by staging-spa-smoke.spec.ts to
-      # mint Clerk testing tokens via the Backend API pattern (never via FAPI,
-      # which is bot-protected). STAGING_SMOKE_TOKEN is a pre-issued BFF JWT
-      # used by staging-smoke.spec.ts for raw API assertions.
-      # Both values are injected as env vars and are NEVER written to logs.
       - name: Read SSM secrets
         id: ssm
         run: |
@@ -120,6 +102,35 @@ jobs:
           echo "clerk_secret_key=${CLERK_SECRET_KEY}" >> "$GITHUB_OUTPUT"
           echo "staging_smoke_token=${STAGING_SMOKE_TOKEN}" >> "$GITHUB_OUTPUT"
 
+  # ── Job 2: E2E tests (Playwright container — Chromium pre-installed)
+  staging-auth-smoke:
+    name: Staging Authenticated E2E Smoke
+    needs: fetch-secrets
+    runs-on: ubuntu-latest
+    # Playwright container: Chromium + all system deps pre-installed.
+    # No cdn.playwright.dev download needed — eliminates the browser-install
+    # timeout that cancelled the ubuntu-latest runner approach.
+    # Tag must match @playwright/test version (1.56.1).
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-jammy
+    # 20 min: SPA routes (17 × ~20s) + wildcard panel screenshots + BFF smoke.
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout vault-mtg
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
       # ── SPA authenticated smoke ────────────────────────────────────────────
       # Exercises every protected SPA route via Clerk testing token injection.
       # If CLERK_SECRET_KEY is absent or invalid, this step FAILS — not skips.
@@ -129,10 +140,10 @@ jobs:
         env:
           CI: true
           STAGING_SPA_URL: ${{ inputs.staging_spa_url }}
-          # CLERK_SECRET_KEY is injected from SSM — never from a static secret.
-          # The spec uses this to call Clerk's Backend API testing_tokens endpoint
+          # CLERK_SECRET_KEY is injected from SSM via fetch-secrets job.
+          # The spec uses this to call Clerk's Backend API sign_in_tokens endpoint
           # and inject the token into the browser (not via FAPI, which is bot-protected).
-          CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
+          CLERK_SECRET_KEY: ${{ needs.fetch-secrets.outputs.clerk_secret_key }}
 
       # ── BFF API authenticated smoke ───────────────────────────────────────
       # Exercises auth-gated BFF endpoints (matches, SSE) with a pre-issued token.
@@ -143,8 +154,8 @@ jobs:
         env:
           CI: true
           STAGING_API_URL: ${{ inputs.staging_api_url }}
-          # STAGING_SMOKE_TOKEN is injected from SSM — never hardcoded or echoed.
-          STAGING_SMOKE_TOKEN: ${{ steps.ssm.outputs.staging_smoke_token }}
+          # STAGING_SMOKE_TOKEN is injected from SSM via fetch-secrets job.
+          STAGING_SMOKE_TOKEN: ${{ needs.fetch-secrets.outputs.staging_smoke_token }}
 
       # ── WildcardAdvisorPanel visual screenshot capture ───────────────────
       # Captures authenticated screenshots of the WildcardAdvisorPanel for
@@ -165,7 +176,7 @@ jobs:
         env:
           CI: true
           STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.vaultmtg.app' }}
-          CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
+          CLERK_SECRET_KEY: ${{ needs.fetch-secrets.outputs.clerk_secret_key }}
           SCREENSHOT_DIR: /tmp/wildcard-panel-screenshots
           CI_SMOKE_USER_ID: user_3EamRFdUZdQl1yYPf4Yg7OIQqm4
 
