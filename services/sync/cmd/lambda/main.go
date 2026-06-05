@@ -73,6 +73,12 @@ func main() {
 	awslambda.Start(h.Handle)
 }
 
+// ssmParamGetter is the subset of the SSM client used by resolveDSNWithGetter.
+// *ssm.Client satisfies it; tests inject a stub.
+type ssmParamGetter interface {
+	GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
+}
+
 // resolveDSN returns the PostgreSQL DSN for this invocation.
 //
 //   - If LAMBDA_LOCAL_DSN is set, it is returned as-is (local dev only).
@@ -84,7 +90,19 @@ func resolveDSN(ctx context.Context) (string, error) {
 		return localDSN, nil
 	}
 
-	password, err := fetchDBPassword(ctx, os.Getenv("DB_PASSWORD_SSM_PATH"))
+	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return resolveDSNWithGetter(ctx, ssm.NewFromConfig(cfg))
+}
+
+// resolveDSNWithGetter assembles the PostgreSQL DSN by reading DB_PASSWORD_SSM_PATH
+// from the environment and fetching the decrypted password via the provided SSM
+// getter. Extracted from resolveDSN to allow unit tests to inject a stub SSM client.
+func resolveDSNWithGetter(ctx context.Context, getter ssmParamGetter) (string, error) {
+	password, err := dbconn.FetchSecureString(ctx, getter, os.Getenv("DB_PASSWORD_SSM_PATH"))
 	if err != nil {
 		return "", err
 	}
@@ -96,17 +114,6 @@ func resolveDSN(ctx context.Context) (string, error) {
 		User:     os.Getenv("DB_USER"),
 		Password: password,
 	})
-}
-
-// fetchDBPassword reads the DB password from an SSM SecureString parameter,
-// decrypting it at runtime (WithDecryption=true → requires kms:Decrypt). The
-// decrypted value is never written to the environment or logged.
-func fetchDBPassword(ctx context.Context, ssmPath string) (string, error) {
-	cfg, err := awsconfig.LoadDefaultConfig(ctx)
-	if err != nil {
-		return "", err
-	}
-	return dbconn.FetchSecureString(ctx, ssm.NewFromConfig(cfg), ssmPath)
 }
 
 // activeSets parses SYNC_ACTIVE_SETS and returns a non-nil slice when the env
