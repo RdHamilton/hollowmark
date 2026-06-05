@@ -11,7 +11,7 @@ const config: StorybookConfig = {
   // @storybook/addon-a11y surfaces axe-core violations in the Accessibility
   // panel during development so contrast and ARIA issues are caught before
   // Chromatic and before code review.
-  addons: ['@storybook/addon-a11y'],
+  addons: ['@storybook/addon-a11y', 'msw-storybook-addon'],
 
   framework: {
     // Vite builder — the SPA is built with Vite (see vite.config.ts).
@@ -21,25 +21,24 @@ const config: StorybookConfig = {
   },
 
   // viteFinal lets the Storybook Vite build diverge from the app build.
-  // Here we alias network-calling modules to local mocks so every story
-  // renders fully offline and deterministically — no real publishable key,
-  // no real BFF URL, no network calls, no live auth session.
+  // Here we alias modules to local mocks so every story renders fully offline
+  // and deterministically — no real publishable key, no live auth session.
   //
   // Aliases:
-  //   @clerk/react            → clerk-mock.tsx
-  //   @/services/api/bffWildcardAdvisor → bffWildcardAdvisor-mock.ts
-  //     The wildcard advisor adapter calls `fetch` at a real BFF URL. In
-  //     Chromatic's render environment there is no server, so the fetch throws
-  //     and the story crashes. Aliasing to the mock gives each story a spy-able
-  //     `getWildcardRecommendations` function it can control via `beforeEach`.
+  //   @clerk/react → clerk-mock.tsx
+  //     Provides stable useAuth()/useUser() stubs so every story gets a
+  //     predictable session token without a real Clerk environment.
+  //
+  // BFF network calls (bffWildcardAdvisor and others) are intercepted at
+  // runtime by MSW (initialized in preview.ts) rather than via module aliasing.
+  // Module aliasing was fragile: the component imports bffWildcardAdvisor
+  // through the @/services/api barrel, not the deep path, so the deep-path
+  // alias was never resolved and the real fetch was still called.
   viteFinal: async (viteConfig) => {
     viteConfig.resolve = viteConfig.resolve ?? {};
     viteConfig.resolve.alias = {
       ...viteConfig.resolve.alias,
       '@clerk/react': fileURLToPath(new URL('./clerk-mock.tsx', import.meta.url)),
-      '@/services/api/bffWildcardAdvisor': fileURLToPath(
-        new URL('./bffWildcardAdvisor-mock.ts', import.meta.url)
-      ),
     };
     return viteConfig;
   },

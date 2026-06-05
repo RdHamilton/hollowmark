@@ -11,15 +11,16 @@
  *
  * BFF mock strategy
  * -----------------
- * `@/services/api/bffWildcardAdvisor` is aliased in `.storybook/main.ts`
- * `viteFinal` to `.storybook/bffWildcardAdvisor-mock.ts`. That mock exports
- * `getWildcardRecommendations` as a Storybook `fn()` (spy-able mock function).
+ * Network calls are intercepted at the fetch layer by MSW (Mock Service Worker),
+ * initialized globally in `.storybook/preview.ts`. Each story provides MSW
+ * request handlers via `parameters.msw.handlers`. This approach works
+ * identically in local `build-storybook` and in Chromatic's cloud renderer
+ * because it operates at the runtime fetch layer — not at the Vite module
+ * resolution layer — so it is unaffected by barrel exports or alias resolution.
  *
- * The alias ensures the component's barrel import path
- * (`bffWildcardAdvisor.getWildcardRecommendations` via `@/services/api`)
- * resolves to the same mock object that stories spy on in `beforeEach` —
- * avoiding the cross-module-boundary issue where `spyOn` on the direct module
- * file patches a different namespace object than the barrel re-export.
+ * The intercepted URL matches `getApiConfig().baseUrl` (defaults to
+ * `http://localhost:8080/api/v1` when VITE_BFF_URL is not set) plus the
+ * wildcard advisor endpoint path.
  *
  * `@clerk/react` is aliased to the Storybook Clerk mock globally (main.ts
  * viteFinal), so `useAuth()` returns a stable mock token automatically.
@@ -29,14 +30,16 @@
  */
 
 import type { Meta, StoryObj } from '@storybook/react';
-import { spyOn } from 'storybook/test';
+import { http, HttpResponse, delay } from 'msw';
 import WildcardAdvisorPanel from './WildcardAdvisorPanel';
-// Import from the aliased path so the spy targets the same fn() instance
-// the component calls through the @/services/api barrel.
-import * as bffWildcardAdvisorMock from '@/services/api/bffWildcardAdvisor';
-import type { WildcardAdvisorResult } from '@/services/api/bffWildcardAdvisor';
-import { ApiRequestError } from '@/services/apiClient';
+import type { WildcardAdvisorResponse } from '@/services/api/bffWildcardAdvisor';
 import './WildcardAdvisorPanel.css';
+
+// ---------------------------------------------------------------------------
+// BFF URL — matches the default when VITE_BFF_URL is unset (Storybook / Chromatic)
+// ---------------------------------------------------------------------------
+
+const WILDCARD_URL = 'http://localhost:8080/api/v1/recommendations/wildcards';
 
 // ---------------------------------------------------------------------------
 // Shared mock data fixtures
@@ -98,17 +101,11 @@ const AFFORDABLE_REC_2 = {
   wildcards_required: { rare: 4 },
 };
 
-function makeResult(overrides: Partial<WildcardAdvisorResult> = {}): WildcardAdvisorResult {
-  return {
-    data: {
-      format: 'Standard',
-      recommendations: [AFFORDABLE_REC, ASPIRATIONAL_REC, AFFORDABLE_REC_2],
-      wildcard_budget: BUDGET,
-    },
-    cacheDegraded: false,
-    ...overrides,
-  };
-}
+const FULL_RESPONSE: WildcardAdvisorResponse = {
+  format: 'Standard',
+  recommendations: [AFFORDABLE_REC, ASPIRATIONAL_REC, AFFORDABLE_REC_2],
+  wildcard_budget: BUDGET,
+};
 
 // ---------------------------------------------------------------------------
 // Meta
@@ -140,17 +137,20 @@ type Story = StoryObj<typeof WildcardAdvisorPanel>;
 
 /**
  * Loading — skeleton shimmer rows are visible while the BFF call is in-flight.
- * The `getWildcardRecommendations` mock never resolves so the skeleton persists.
- *
- * The mock is set via `spyOn` on the aliased mock module so the same `fn()`
- * instance that the component resolves through `@/services/api` is patched.
+ * The MSW handler delays indefinitely so the skeleton persists.
  */
 export const Loading: Story = {
   name: 'Loading',
-  beforeEach: () => {
-    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockImplementation(
-      () => new Promise(() => {}) // never resolves — skeleton stays visible
-    );
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, async () => {
+          // Never resolve — component stays in skeleton/loading state.
+          await delay('infinite');
+          return HttpResponse.json({});
+        }),
+      ],
+    },
   },
 };
 
@@ -161,16 +161,20 @@ export const Loading: Story = {
 /**
  * SyncCta — the BFF returns a 409 because the daemon has not yet synced the
  * user's MTGA collection. The panel shows a "Collection Not Synced" prompt.
- *
- * Per the component's implementation the 409 is detected by HTTP status code,
- * not by the error body string (Ray's note in the component source).
  */
 export const SyncCta: Story = {
   name: 'SyncCta — Collection Not Synced',
-  beforeEach: () => {
-    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockRejectedValue(
-      new ApiRequestError('collection_not_synced', 409)
-    );
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, () =>
+          HttpResponse.json(
+            { error: 'collection_not_synced' },
+            { status: 409 }
+          )
+        ),
+      ],
+    },
   },
 };
 
@@ -181,23 +185,22 @@ export const SyncCta: Story = {
 /**
  * Empty — 200 OK with zero recommendations and no `ratings_cached_at`.
  * The component shows "No recommendations yet — keep playing."
- *
- * Note: when `ratings_cached_at` IS present and recs are empty the panel shows
- * "Collection looks complete!" — that is a separate path (not covered here).
- * This story covers the no-data path (ratings pipeline has no signal yet).
  */
 export const Empty: Story = {
   name: 'Empty — No Recommendations Yet',
-  beforeEach: () => {
-    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockResolvedValue({
-      data: {
-        format: 'Standard',
-        recommendations: [],
-        wildcard_budget: BUDGET,
-        // ratings_cached_at intentionally absent → triggers "no data" branch
-      },
-      cacheDegraded: false,
-    });
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, () =>
+          HttpResponse.json({
+            format: 'Standard',
+            recommendations: [],
+            wildcard_budget: BUDGET,
+            // ratings_cached_at intentionally absent → triggers "no data" branch
+          } satisfies WildcardAdvisorResponse)
+        ),
+      ],
+    },
   },
 };
 
@@ -211,10 +214,17 @@ export const Empty: Story = {
  */
 export const Error: Story = {
   name: 'Error — 503 Retry',
-  beforeEach: () => {
-    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockRejectedValue(
-      new ApiRequestError('service_unavailable', 503)
-    );
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, () =>
+          HttpResponse.json(
+            { error: 'service_unavailable' },
+            { status: 503 }
+          )
+        ),
+      ],
+    },
   },
 };
 
@@ -235,10 +245,12 @@ export const Error: Story = {
  */
 export const WithRecommendations: Story = {
   name: 'WithRecommendations — Craft Tonight + Saving Toward',
-  beforeEach: () => {
-    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockResolvedValue(
-      makeResult()
-    );
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, () => HttpResponse.json(FULL_RESPONSE)),
+      ],
+    },
   },
 };
 
@@ -252,13 +264,22 @@ export const WithRecommendations: Story = {
  * recommendation list: "Ratings data is over N hours old — crafting advice may
  * be slightly outdated."
  *
- * `cacheDegraded: true` + `cacheAgeHours: 36` → banner visible (36 > 24h threshold).
+ * `x-cache-degraded: true` + `x-cache-age-hours: 36` → banner visible (36 > 24h threshold).
  */
 export const StaleData: Story = {
   name: 'StaleData — Stale Warning Banner',
-  beforeEach: () => {
-    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockResolvedValue(
-      makeResult({ cacheDegraded: true, cacheAgeHours: 36 })
-    );
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, () =>
+          HttpResponse.json(FULL_RESPONSE, {
+            headers: {
+              'x-cache-degraded': 'true',
+              'x-cache-age-hours': '36',
+            },
+          })
+        ),
+      ],
+    },
   },
 };

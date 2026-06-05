@@ -1,4 +1,5 @@
 import type { Preview } from '@storybook/react';
+import { initialize, mswLoader } from 'msw-storybook-addon';
 import { withClerkSession } from './decorators';
 
 // Global application styles. The VaultMTG SPA uses plain CSS (not Tailwind) —
@@ -9,12 +10,20 @@ import { withClerkSession } from './decorators';
 // sheet plus whatever its component imports itself.
 import '../src/index.css';
 
+// Initialize MSW. `onUnhandledRequest: 'bypass'` lets Storybook's own asset
+// requests (fonts, HMR, etc.) pass through without noisy console warnings.
+initialize({ onUnhandledRequest: 'bypass' });
+
 const preview: Preview = {
   // Global decorators apply to every story.
   //  - withClerkSession syncs the Clerk auth mock from the `clerk` story param.
   // Router context is opt-in per story (withRouter / withRouterAt) so that
   // atoms and molecules stay free of context they do not need.
   decorators: [withClerkSession],
+
+  // mswLoader activates the per-story `parameters.msw.handlers` array before
+  // each story renders. Required for MSW v2 with msw-storybook-addon v2.
+  loaders: [mswLoader],
 
   parameters: {
     // a11y — axe-core rules applied globally across all stories.
