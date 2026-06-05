@@ -29,6 +29,7 @@ import { useUser, useAuth } from '@clerk/react';
 import {
   trackEvent,
   identifyUser,
+  hashPII,
   resetIdentity,
   startSessionReplay,
   stopSessionReplay,
@@ -84,14 +85,19 @@ export function usePostHogIdentity(): void {
         });
 
         // Fire funnel_sign_up_completed once per session.
+        // ADR-027: user_id must be SHA-256 hashed (hex[:16]) before sending to
+        // PostHog — raw Clerk user IDs are never sent as event properties.
         if (!sessionStorage.getItem(SESSION_KEY)) {
-          trackEvent({
-            name: 'funnel_sign_up_completed',
-            properties: {
-              auth_method: 'email',
-              user_id: user.id,
-            },
-          });
+          void (async () => {
+            const hashedUserId = await hashPII(user.id);
+            trackEvent({
+              name: 'funnel_sign_up_completed',
+              properties: {
+                auth_method: 'email',
+                user_id: hashedUserId,
+              },
+            });
+          })();
           sessionStorage.setItem(SESSION_KEY, '1');
         }
 

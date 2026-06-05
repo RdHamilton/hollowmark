@@ -35,6 +35,8 @@ const CATEGORICAL_ALLOWLIST = new Set([
   '--meta-color',
   '--personal-bg',
   '--personal-color',
+  // Dynamic per-element gem color (WildcardAdvisorPanel — set inline per rarity gem, not a global token)
+  '--gem-color',
 ]);
 
 /**
