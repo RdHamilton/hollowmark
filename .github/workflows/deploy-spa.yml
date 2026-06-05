@@ -101,6 +101,9 @@ jobs:
           VITE_BFF_URL: ${{ vars.VITE_BFF_URL }}
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
           VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
+          # #818: pin PostHog ingest host explicitly. Falls back to app.posthog.com
+          # if the repo var is not yet set (safe — the redirect still works).
+          VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST || 'https://app.posthog.com' }}
           VITE_SENTRY_DSN: ${{ steps.ssm.outputs.sentry_dsn }}
           VITE_APP_VERSION: ${{ steps.version.outputs.version }}
           VITE_SENTRY_ENV: production

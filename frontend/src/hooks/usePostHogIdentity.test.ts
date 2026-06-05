@@ -82,7 +82,45 @@ describe('usePostHogIdentity', () => {
     const { usePostHogIdentity } = await import('./usePostHogIdentity');
     renderHook(() => usePostHogIdentity());
 
-    expect(mockIdentifyUser).toHaveBeenCalledWith('user_abc');
+    // identifyUser is called with (userId, email?). When no primaryEmailAddress is
+    // set, the second arg is undefined.
+    expect(mockIdentifyUser).toHaveBeenCalledWith('user_abc', undefined);
+  });
+
+  // ── #819: identifyUser receives email from Clerk primaryEmailAddress ───────
+
+  it('calls identifyUser with email when user has a primary email address (#819)', async () => {
+    mockUseUser.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      user: {
+        id: 'user_abc',
+        primaryEmailAddress: { emailAddress: 'user@example.com' },
+      },
+    });
+    const { usePostHogIdentity } = await import('./usePostHogIdentity');
+    renderHook(() => usePostHogIdentity());
+
+    expect(mockIdentifyUser).toHaveBeenCalledWith('user_abc', 'user@example.com');
+  });
+
+  it('NEGATIVE: identifyUser mock receives email but raw email is the hook arg — hash is analytics.ts responsibility', async () => {
+    // The hook passes the raw email to identifyUser; analytics.ts does the hashing.
+    // This test confirms the hook passes what Clerk gives it — not a pre-hashed value.
+    mockUseUser.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      user: {
+        id: 'user_abc',
+        primaryEmailAddress: { emailAddress: 'frank@vaultmtg.app' },
+      },
+    });
+    const { usePostHogIdentity } = await import('./usePostHogIdentity');
+    renderHook(() => usePostHogIdentity());
+
+    const [, emailArg] = mockIdentifyUser.mock.calls[0] as [string, string];
+    // Hook passes raw email — analytics.ts hashes it before calling posthog.identify.
+    expect(emailArg).toBe('frank@vaultmtg.app');
   });
 
   it('starts session replay when user is signed in', async () => {
