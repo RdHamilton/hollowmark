@@ -45,6 +45,31 @@ export interface WildcardRecommendation {
   format_context?: string;
   set_code?: string;
   image_uri?: string;
+
+  // ── ADR-045 / #420 archetype-level fields ────────────────────────────────
+  /**
+   * Deck / archetype name, e.g. "Mono White Aggro".
+   * Present in the full #420 BFF implementation; absent on the v0.3.7 scaffold.
+   */
+  archetype_name?: string;
+  /**
+   * Competitive tier from mtgzone_archetypes. Typically an integer 1–4 or the
+   * string "S". Rendered as "Tier {tier}" in the collapsed row.
+   * Present in the full #420 BFF implementation; absent on the v0.3.7 scaffold.
+   */
+  tier?: number | string;
+  /**
+   * Per-rarity wildcard count needed to complete the archetype.
+   * Populated by the BFF after Phase 2 aggregation (ADR-045 §2).
+   * Present in the full #420 BFF implementation; absent on the v0.3.7 scaffold.
+   */
+  wildcards_required?: Partial<WildcardBudget>;
+  /**
+   * Total number of missing cards across all rarities.
+   * Populated by the BFF as `cards_needed` (ADR-045 §1 response shape).
+   * Present in the full #420 BFF implementation; absent on the v0.3.7 scaffold.
+   */
+  cards_needed?: number;
 }
 
 /** The wildcard budget broken down by rarity. */
