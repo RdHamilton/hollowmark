@@ -168,27 +168,32 @@ func (r *GamePlayRepository) InsertLifeChanges(ctx context.Context, changes []Li
 }
 
 // InsertCardPlays bulk-inserts per-turn card play rows into game_plays.
+// accountID is the owning account — written to game_plays.account_id for
+// defense-in-depth multi-tenancy hygiene (AC1, ticket #820). The read path
+// scopes via games → matches → account_id, so this column is NOT used by any
+// current query; it is populated so the column carries the guarantee it implies.
 // gameID is the games.id FK resolved from (match_id, game_number).
 // matchID is carried on each row for the game_plays.match_id TEXT column.
 // occurredAt is used as the per-row timestamp (per-play timestamps are not
 // available in the current daemon payload shape).
 // ON CONFLICT (game_id, sequence_number) DO NOTHING ensures idempotent replay.
-func (r *GamePlayRepository) InsertCardPlays(ctx context.Context, gameID int64, matchID string, entries []contract.CardPlayEntry, occurredAt time.Time) error {
+func (r *GamePlayRepository) InsertCardPlays(ctx context.Context, accountID int64, gameID int64, matchID string, entries []contract.CardPlayEntry, occurredAt time.Time) error {
 	if len(entries) == 0 {
 		return nil
 	}
 
 	const q = `
 		INSERT INTO game_plays
-			(game_id, match_id, turn_number, phase, player_type, action_type,
+			(account_id, game_id, match_id, turn_number, phase, player_type, action_type,
 			 card_id, card_name, zone_from, zone_to, timestamp, sequence_number)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $12)
 		ON CONFLICT (game_id, sequence_number) DO NOTHING`
 
 	for i := range entries {
 		e := entries[i]
 		if _, err := r.db.ExecContext(
 			ctx, q,
+			accountID,
 			gameID,
 			matchID,
 			e.TurnNumber,

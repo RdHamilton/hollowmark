@@ -649,8 +649,16 @@ CREATE INDEX IF NOT EXISTS idx_games_match_id     ON games(match_id);
 CREATE INDEX IF NOT EXISTS idx_games_result_reason ON games(result_reason);
 
 -- Game plays: individual card plays and actions during a game
+-- account_id is included here as BIGINT so that migration 000068
+-- (ADD COLUMN IF NOT EXISTS account_id TEXT NOT NULL DEFAULT '') is a no-op
+-- on the consolidated-schema init path (000054 → up), keeping the column
+-- type consistent with the InsertCardPlays write path which binds an int64.
+-- On incremental-path DBs (000001 → onwards), 000054 never runs, so this
+-- CREATE TABLE never executes and those DBs are unaffected.
+-- Ref: ticket #820, Schema-000054-Compat CI gate.
 CREATE TABLE IF NOT EXISTS game_plays (
     id              BIGSERIAL PRIMARY KEY,
+    account_id      BIGINT,
     game_id         BIGINT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
     match_id        TEXT NOT NULL,
     turn_number     INTEGER NOT NULL,
