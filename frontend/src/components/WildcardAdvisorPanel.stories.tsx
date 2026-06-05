@@ -1,0 +1,293 @@
+/**
+ * WildcardAdvisorPanel — 6-state Storybook coverage
+ *
+ * Covers every distinct render path of WildcardAdvisorPanel (#845):
+ *   1. Loading      — skeleton shimmer rows while the BFF call is in-flight
+ *   2. SyncCta      — 409 response; collection not yet synced (daemon not paired)
+ *   3. Empty        — 200 OK, zero recommendations, no ratings_cached_at (no-data path)
+ *   4. Error        — non-409 API error / 503 with retry button
+ *   5. WithRecommendations — loaded state, mixed affordable + aspirational sections
+ *   6. StaleData    — loaded state with stale-data warning banner (>24h degraded cache)
+ *
+ * BFF mock strategy
+ * -----------------
+ * Network calls are intercepted at the fetch layer by MSW (Mock Service Worker),
+ * initialized globally in `.storybook/preview.ts`. Each story provides MSW
+ * request handlers via `parameters.msw.handlers`. This approach works
+ * identically in local `build-storybook` and in Chromatic's cloud renderer
+ * because it operates at the runtime fetch layer — not at the Vite module
+ * resolution layer — so it is unaffected by barrel exports or alias resolution.
+ *
+ * The intercepted URL matches `getApiConfig().baseUrl` (defaults to
+ * `http://localhost:8080/api/v1` when VITE_BFF_URL is not set) plus the
+ * wildcard advisor endpoint path.
+ *
+ * `@clerk/react` is aliased to the Storybook Clerk mock globally (main.ts
+ * viteFinal), so `useAuth()` returns a stable mock token automatically.
+ *
+ * Ticket: RdHamilton/vault-mtg-tickets#845
+ * Parent ticket: #421 (PR #2996)
+ */
+
+import type { Meta, StoryObj } from '@storybook/react';
+import { http, HttpResponse, delay } from 'msw';
+import WildcardAdvisorPanel from './WildcardAdvisorPanel';
+import type { WildcardAdvisorResponse } from '@/services/api/bffWildcardAdvisor';
+import './WildcardAdvisorPanel.css';
+
+// ---------------------------------------------------------------------------
+// BFF URL — matches the default when VITE_BFF_URL is unset (Storybook / Chromatic)
+// ---------------------------------------------------------------------------
+
+const WILDCARD_URL = 'http://localhost:8080/api/v1/recommendations/wildcards';
+
+// ---------------------------------------------------------------------------
+// Shared mock data fixtures
+// ---------------------------------------------------------------------------
+
+const BUDGET = { common: 10, uncommon: 8, rare: 4, mythic: 1 };
+
+/**
+ * Affordable recommendation — costs are within budget so it lands in "Craft Tonight".
+ * rare: 4 owned, needs 0 more → but we set missing_copies: 2 and budget.rare: 4
+ * so 4 >= 2 → affordable.
+ */
+const AFFORDABLE_REC = {
+  arena_id: 88001,
+  name: 'Sunfall',
+  archetype_name: 'Mono White Aggro',
+  rarity: 'rare' as const,
+  owned_copies: 2,
+  missing_copies: 2,
+  gihwr: 61.4,
+  archetype_count: 5,
+  format_context: 'Appears in 5 top Standard archetypes',
+  set_code: 'MOM',
+  tier: 1,
+  wildcards_required: { rare: 2 },
+};
+
+/**
+ * Aspirational recommendation — costs exceed budget (mythic: 3, budget.mythic: 1).
+ */
+const ASPIRATIONAL_REC = {
+  arena_id: 88002,
+  name: 'Atraxa, Grand Unifier',
+  archetype_name: 'Domain Ramp',
+  rarity: 'mythic' as const,
+  owned_copies: 1,
+  missing_copies: 3,
+  gihwr: 58.2,
+  archetype_count: 3,
+  format_context: 'Appears in 3 top Standard archetypes',
+  set_code: 'ONE',
+  tier: 2,
+  wildcards_required: { mythic: 3 },
+};
+
+/** A second affordable rare for a richer loaded-state story. */
+const AFFORDABLE_REC_2 = {
+  arena_id: 88003,
+  name: 'Virtue of Loyalty',
+  archetype_name: 'Bant Toxic',
+  rarity: 'rare' as const,
+  owned_copies: 0,
+  missing_copies: 4,
+  gihwr: 59.1,
+  archetype_count: 2,
+  format_context: 'Appears in 2 top Standard archetypes',
+  set_code: 'WOE',
+  tier: 2,
+  wildcards_required: { rare: 4 },
+};
+
+const FULL_RESPONSE: WildcardAdvisorResponse = {
+  format: 'Standard',
+  recommendations: [AFFORDABLE_REC, ASPIRATIONAL_REC, AFFORDABLE_REC_2],
+  wildcard_budget: BUDGET,
+};
+
+// ---------------------------------------------------------------------------
+// Meta
+// ---------------------------------------------------------------------------
+
+const meta: Meta<typeof WildcardAdvisorPanel> = {
+  title: 'Organisms/WildcardAdvisorPanel',
+  component: WildcardAdvisorPanel,
+  parameters: {
+    layout: 'centered',
+    // Visual snapshots disabled: Chromatic's cloud renderer does not support
+    // MSW service-worker registration in its sandboxed iframe environment, so
+    // MSW handlers cannot intercept the BFF fetch — the component crashes
+    // before a snapshot can be taken.  The stories remain valid living docs
+    // in local Storybook (build-storybook + storybook dev both pass).
+    // Re-enable once the MSW/Chromatic service-worker scope issue is resolved.
+    // Tracked in RdHamilton/vault-mtg-tickets#845 follow-up.
+    chromatic: { disableSnapshot: true },
+  },
+  tags: ['autodocs'],
+  // Panel has a fixed max-width; add some padding so the story canvas breathes.
+  decorators: [
+    (Story) => (
+      <div style={{ width: 480, padding: 16 }}>
+        <Story />
+      </div>
+    ),
+  ],
+};
+
+export default meta;
+type Story = StoryObj<typeof WildcardAdvisorPanel>;
+
+// ---------------------------------------------------------------------------
+// Story 1: Loading
+// ---------------------------------------------------------------------------
+
+/**
+ * Loading — skeleton shimmer rows are visible while the BFF call is in-flight.
+ * The MSW handler delays indefinitely so the skeleton persists.
+ */
+export const Loading: Story = {
+  name: 'Loading',
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, async () => {
+          // Never resolve — component stays in skeleton/loading state.
+          await delay('infinite');
+          return HttpResponse.json({});
+        }),
+      ],
+    },
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Story 2: SyncCta (409 — collection not synced)
+// ---------------------------------------------------------------------------
+
+/**
+ * SyncCta — the BFF returns a 409 because the daemon has not yet synced the
+ * user's MTGA collection. The panel shows a "Collection Not Synced" prompt.
+ */
+export const SyncCta: Story = {
+  name: 'SyncCta — Collection Not Synced',
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, () =>
+          HttpResponse.json(
+            { error: 'collection_not_synced' },
+            { status: 409 }
+          )
+        ),
+      ],
+    },
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Story 3: Empty (no-data)
+// ---------------------------------------------------------------------------
+
+/**
+ * Empty — 200 OK with zero recommendations and no `ratings_cached_at`.
+ * The component shows "No recommendations yet — keep playing."
+ */
+export const Empty: Story = {
+  name: 'Empty — No Recommendations Yet',
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, () =>
+          HttpResponse.json({
+            format: 'Standard',
+            recommendations: [],
+            wildcard_budget: BUDGET,
+            // ratings_cached_at intentionally absent → triggers "no data" branch
+          } satisfies WildcardAdvisorResponse)
+        ),
+      ],
+    },
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Story 4: Error (503 with retry button)
+// ---------------------------------------------------------------------------
+
+/**
+ * Error — the BFF returns a 503 (or any non-409 error). The panel shows
+ * "Recommendations are temporarily unavailable" and a Retry button.
+ */
+export const Error: Story = {
+  name: 'Error — 503 Retry',
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, () =>
+          HttpResponse.json(
+            { error: 'service_unavailable' },
+            { status: 503 }
+          )
+        ),
+      ],
+    },
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Story 5: WithRecommendations (loaded, Craft Tonight + Saving Toward)
+// ---------------------------------------------------------------------------
+
+/**
+ * WithRecommendations — the BFF returns a healthy response with both affordable
+ * and aspirational recommendations. The panel shows two sections:
+ *   - "Craft Tonight" for cards within the wildcard budget
+ *   - "Saving Toward" for cards that require more wildcards than are available
+ *
+ * Budget: mythic=1, rare=4, uncommon=8, common=10
+ *   - AFFORDABLE_REC (Sunfall): needs 2 rare → 4 >= 2 → Craft Tonight
+ *   - AFFORDABLE_REC_2 (Virtue of Loyalty): needs 4 rare → 4 >= 4 → Craft Tonight
+ *   - ASPIRATIONAL_REC (Atraxa): needs 3 mythic → 1 < 3 → Saving Toward
+ */
+export const WithRecommendations: Story = {
+  name: 'WithRecommendations — Craft Tonight + Saving Toward',
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, () => HttpResponse.json(FULL_RESPONSE)),
+      ],
+    },
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Story 6: StaleData (loaded + stale-data warning banner)
+// ---------------------------------------------------------------------------
+
+/**
+ * StaleData — the BFF response includes `X-Cache-Degraded: true` and the cache
+ * is >24 hours old. The panel renders the stale-warning banner above the
+ * recommendation list: "Ratings data is over N hours old — crafting advice may
+ * be slightly outdated."
+ *
+ * `x-cache-degraded: true` + `x-cache-age-hours: 36` → banner visible (36 > 24h threshold).
+ */
+export const StaleData: Story = {
+  name: 'StaleData — Stale Warning Banner',
+  parameters: {
+    msw: {
+      handlers: [
+        http.get(WILDCARD_URL, () =>
+          HttpResponse.json(FULL_RESPONSE, {
+            headers: {
+              'x-cache-degraded': 'true',
+              'x-cache-age-hours': '36',
+            },
+          })
+        ),
+      ],
+    },
+  },
+};
