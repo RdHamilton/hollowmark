@@ -28,7 +28,7 @@ func sampleBody(set, format string) string {
 		"set_code": %q,
 		"draft_format": %q,
 		"card_ratings": [
-			{"arena_id": 100, "name": "Lightning Bolt", "gihwr": 58.4},
+			{"arena_id": 100, "name": "Lightning Bolt", "gihwr": 0.584},
 			{"arena_id": 200, "name": "Mountain"}
 		],
 		"color_ratings": []
@@ -106,9 +106,10 @@ func TestGIHWR_FetchesAndCaches(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// #787: gihwr is stored and returned as a fraction (0.0–1.0).
 	v, ok := c.GIHWR("100", "PremierDraft")
-	if !ok || v != 58.4 {
-		t.Errorf("GIHWR(100) = (%v, %v), want (58.4, true)", v, ok)
+	if !ok || v != 0.584 {
+		t.Errorf("GIHWR(100) = (%v, %v), want (0.584, true)", v, ok)
 	}
 	if name := c.CardName("100"); name != "Lightning Bolt" {
 		t.Errorf("CardName(100) = %q", name)
@@ -215,8 +216,8 @@ func TestFetch_5xxRetryThenSuccess(t *testing.T) {
 		t.Fatalf("retry should have succeeded, got %v", err)
 	}
 	v, ok = c.GIHWR("100", "PremierDraft")
-	if !ok || v != 58.4 {
-		t.Errorf("GIHWR(100) after retry = (%v, %v), want (58.4, true)", v, ok)
+	if !ok || v != 0.584 {
+		t.Errorf("GIHWR(100) after retry = (%v, %v), want (0.584, true)", v, ok)
 	}
 }
 
@@ -345,8 +346,9 @@ func TestFetch_DegradedHeaderTaggedAndCounted(t *testing.T) {
 	}
 
 	// Data still served — stale 17Lands is better than nothing.
+	// #787: gihwr is stored and returned as a fraction (0.0–1.0).
 	v, ok := c.GIHWR("100", "PremierDraft")
-	if !ok || v != 58.4 {
+	if !ok || v != 0.584 {
 		t.Errorf("degraded fetch should still return data: (%v, %v)", v, ok)
 	}
 	s := c.Stats()
