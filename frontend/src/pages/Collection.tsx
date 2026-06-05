@@ -4,6 +4,7 @@ import { collection, cards as cardsApi } from '@/services/api';
 import { gui } from '@/types/models';
 import { useDownload } from '@/context/DownloadContext';
 import SetCompletionPanel from '../components/SetCompletion';
+import WildcardAdvisorPanel from '../components/WildcardAdvisorPanel';
 import './Collection.css';
 
 // Color icon mapping
@@ -45,6 +46,7 @@ export default function Collection() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageJumpInput, setPageJumpInput] = useState<string>('1');
   const [showSetCompletion, setShowSetCompletion] = useState(false);
+  const [showWildcardAdvisor, setShowWildcardAdvisor] = useState(false);
   const [collectionValue, setCollectionValue] = useState<{ totalValueUsd: number } | null>(null);
 
   const { startDownload, updateProgress, completeDownload } = useDownload();
@@ -361,6 +363,13 @@ export default function Collection() {
             )}
           </div>
         </div>
+        <button
+          className="set-completion-button"
+          onClick={() => setShowWildcardAdvisor(!showWildcardAdvisor)}
+          data-testid="collection-toggle-wildcard-advisor"
+        >
+          {showWildcardAdvisor ? 'Hide' : 'Show'} Wildcard Advisor
+        </button>
         {filters.setCode && (
           <button
             className="set-completion-button"
@@ -480,6 +489,15 @@ export default function Collection() {
           </div>
         </div>
       </div>
+
+      {/* Wildcard Advisor Panel */}
+      {showWildcardAdvisor && (
+        <div className="wildcard-advisor-container" data-testid="collection-wildcard-advisor-container">
+          <WildcardAdvisorPanel
+            onClose={() => setShowWildcardAdvisor(false)}
+          />
+        </div>
+      )}
 
       {/* Set Completion Panel */}
       {showSetCompletion && filters.setCode && (
