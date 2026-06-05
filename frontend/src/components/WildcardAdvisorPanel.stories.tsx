@@ -9,10 +9,19 @@
  *   5. WithRecommendations — loaded state, mixed affordable + aspirational sections
  *   6. StaleData    — loaded state with stale-data warning banner (>24h degraded cache)
  *
- * The component fetches via `bffWildcardAdvisor.getWildcardRecommendations` in a
- * useEffect. Each story uses Storybook's `beforeEach` hook (Storybook 8+) to spy
- * on the adapter function before the story renders — no MSW or separate mock infra
- * required. `@clerk/react` is aliased to the Storybook Clerk mock globally (main.ts
+ * BFF mock strategy
+ * -----------------
+ * `@/services/api/bffWildcardAdvisor` is aliased in `.storybook/main.ts`
+ * `viteFinal` to `.storybook/bffWildcardAdvisor-mock.ts`. That mock exports
+ * `getWildcardRecommendations` as a Storybook `fn()` (spy-able mock function).
+ *
+ * The alias ensures the component's barrel import path
+ * (`bffWildcardAdvisor.getWildcardRecommendations` via `@/services/api`)
+ * resolves to the same mock object that stories spy on in `beforeEach` —
+ * avoiding the cross-module-boundary issue where `spyOn` on the direct module
+ * file patches a different namespace object than the barrel re-export.
+ *
+ * `@clerk/react` is aliased to the Storybook Clerk mock globally (main.ts
  * viteFinal), so `useAuth()` returns a stable mock token automatically.
  *
  * Ticket: RdHamilton/vault-mtg-tickets#845
@@ -22,7 +31,9 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { spyOn } from 'storybook/test';
 import WildcardAdvisorPanel from './WildcardAdvisorPanel';
-import * as bffWildcardAdvisorModule from '@/services/api/bffWildcardAdvisor';
+// Import from the aliased path so the spy targets the same fn() instance
+// the component calls through the @/services/api barrel.
+import * as bffWildcardAdvisorMock from '@/services/api/bffWildcardAdvisor';
 import type { WildcardAdvisorResult } from '@/services/api/bffWildcardAdvisor';
 import { ApiRequestError } from '@/services/apiClient';
 import './WildcardAdvisorPanel.css';
@@ -130,11 +141,14 @@ type Story = StoryObj<typeof WildcardAdvisorPanel>;
 /**
  * Loading — skeleton shimmer rows are visible while the BFF call is in-flight.
  * The `getWildcardRecommendations` mock never resolves so the skeleton persists.
+ *
+ * The mock is set via `spyOn` on the aliased mock module so the same `fn()`
+ * instance that the component resolves through `@/services/api` is patched.
  */
 export const Loading: Story = {
   name: 'Loading',
   beforeEach: () => {
-    spyOn(bffWildcardAdvisorModule, 'getWildcardRecommendations').mockImplementation(
+    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockImplementation(
       () => new Promise(() => {}) // never resolves — skeleton stays visible
     );
   },
@@ -154,7 +168,7 @@ export const Loading: Story = {
 export const SyncCta: Story = {
   name: 'SyncCta — Collection Not Synced',
   beforeEach: () => {
-    spyOn(bffWildcardAdvisorModule, 'getWildcardRecommendations').mockRejectedValue(
+    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockRejectedValue(
       new ApiRequestError('collection_not_synced', 409)
     );
   },
@@ -175,7 +189,7 @@ export const SyncCta: Story = {
 export const Empty: Story = {
   name: 'Empty — No Recommendations Yet',
   beforeEach: () => {
-    spyOn(bffWildcardAdvisorModule, 'getWildcardRecommendations').mockResolvedValue({
+    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockResolvedValue({
       data: {
         format: 'Standard',
         recommendations: [],
@@ -198,7 +212,7 @@ export const Empty: Story = {
 export const Error: Story = {
   name: 'Error — 503 Retry',
   beforeEach: () => {
-    spyOn(bffWildcardAdvisorModule, 'getWildcardRecommendations').mockRejectedValue(
+    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockRejectedValue(
       new ApiRequestError('service_unavailable', 503)
     );
   },
@@ -222,7 +236,7 @@ export const Error: Story = {
 export const WithRecommendations: Story = {
   name: 'WithRecommendations — Craft Tonight + Saving Toward',
   beforeEach: () => {
-    spyOn(bffWildcardAdvisorModule, 'getWildcardRecommendations').mockResolvedValue(
+    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockResolvedValue(
       makeResult()
     );
   },
@@ -243,9 +257,8 @@ export const WithRecommendations: Story = {
 export const StaleData: Story = {
   name: 'StaleData — Stale Warning Banner',
   beforeEach: () => {
-    spyOn(bffWildcardAdvisorModule, 'getWildcardRecommendations').mockResolvedValue(
+    spyOn(bffWildcardAdvisorMock, 'getWildcardRecommendations').mockResolvedValue(
       makeResult({ cacheDegraded: true, cacheAgeHours: 36 })
     );
   },
 };
-

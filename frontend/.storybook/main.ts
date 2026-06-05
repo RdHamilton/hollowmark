@@ -21,14 +21,25 @@ const config: StorybookConfig = {
   },
 
   // viteFinal lets the Storybook Vite build diverge from the app build.
-  // Here we alias `@clerk/react` to a local mock so every story renders fully
-  // offline and deterministically — no real publishable key, no network calls,
-  // no live auth session. See `.storybook/clerk-mock.tsx` for the mock surface.
+  // Here we alias network-calling modules to local mocks so every story
+  // renders fully offline and deterministically — no real publishable key,
+  // no real BFF URL, no network calls, no live auth session.
+  //
+  // Aliases:
+  //   @clerk/react            → clerk-mock.tsx
+  //   @/services/api/bffWildcardAdvisor → bffWildcardAdvisor-mock.ts
+  //     The wildcard advisor adapter calls `fetch` at a real BFF URL. In
+  //     Chromatic's render environment there is no server, so the fetch throws
+  //     and the story crashes. Aliasing to the mock gives each story a spy-able
+  //     `getWildcardRecommendations` function it can control via `beforeEach`.
   viteFinal: async (viteConfig) => {
     viteConfig.resolve = viteConfig.resolve ?? {};
     viteConfig.resolve.alias = {
       ...viteConfig.resolve.alias,
       '@clerk/react': fileURLToPath(new URL('./clerk-mock.tsx', import.meta.url)),
+      '@/services/api/bffWildcardAdvisor': fileURLToPath(
+        new URL('./bffWildcardAdvisor-mock.ts', import.meta.url)
+      ),
     };
     return viteConfig;
   },
