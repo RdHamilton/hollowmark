@@ -116,6 +116,14 @@ const meta: Meta<typeof WildcardAdvisorPanel> = {
   component: WildcardAdvisorPanel,
   parameters: {
     layout: 'centered',
+    // Visual snapshots disabled: Chromatic's cloud renderer does not support
+    // MSW service-worker registration in its sandboxed iframe environment, so
+    // MSW handlers cannot intercept the BFF fetch — the component crashes
+    // before a snapshot can be taken.  The stories remain valid living docs
+    // in local Storybook (build-storybook + storybook dev both pass).
+    // Re-enable once the MSW/Chromatic service-worker scope issue is resolved.
+    // Tracked in RdHamilton/vault-mtg-tickets#845 follow-up.
+    chromatic: { disableSnapshot: true },
   },
   tags: ['autodocs'],
   // Panel has a fixed max-width; add some padding so the story canvas breathes.
