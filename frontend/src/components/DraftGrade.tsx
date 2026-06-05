@@ -103,6 +103,7 @@ export const DraftGrade: React.FC<DraftGradeProps> = ({
       <>
         <div
           className="draft-grade-badge"
+          data-testid="session-overall-grade"
           style={{ backgroundColor: gradeColor }}
           onClick={() => setShowBreakdown(true)}
           title={`Click to view breakdown (${grade.overall_score}/100)`}
@@ -123,7 +124,7 @@ export const DraftGrade: React.FC<DraftGradeProps> = ({
     <>
       <div className="draft-grade-container">
         <div className="grade-card" onClick={() => setShowBreakdown(true)}>
-          <div className="grade-letter" style={{ color: gradeColor }}>
+          <div className="grade-letter" data-testid="session-overall-grade" style={{ color: gradeColor }}>
             {grade.overall_grade}
           </div>
           <div className="grade-score">

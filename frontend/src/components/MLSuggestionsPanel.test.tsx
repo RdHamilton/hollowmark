@@ -9,6 +9,12 @@ vi.mock('@/services/api', () => ({
   mlSuggestions: mockMLSuggestions,
 }));
 
+// Mock analytics so we can assert PostHog events without a real PostHog key.
+const mockTrackEvent = vi.fn();
+vi.mock('@/services/analytics', () => ({
+  trackEvent: (...args: unknown[]) => mockTrackEvent(...args),
+}));
+
 // Helper to create mock ML suggestion
 function createMockMLSuggestion(overrides: Partial<MLSuggestion> = {}): MLSuggestion {
   return {
@@ -52,6 +58,7 @@ function createMockMLSuggestionResult(
 describe('MLSuggestionsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTrackEvent.mockReset();
     // Reset mock implementations to defaults
     mockMLSuggestions.getMLSuggestions.mockResolvedValue([]);
     mockMLSuggestions.generateMLSuggestions.mockResolvedValue([]);
@@ -503,6 +510,125 @@ describe('MLSuggestionsPanel', () => {
       await waitFor(() => {
         expect(screen.queryByText('Generation failed')).not.toBeInTheDocument();
       });
+    });
+  });
+
+  // ── #422 Telemetry ─────────────────────────────────────────────────────────
+
+  describe('PostHog telemetry (#422)', () => {
+    it('fires feature_ml_suggestions_viewed when suggestions load with count > 0', async () => {
+      const suggestions = [
+        createMockMLSuggestion({ id: 1, title: 'Add Lightning Bolt' }),
+        createMockMLSuggestion({ id: 2, title: 'Remove Shock' }),
+      ];
+      mockMLSuggestions.getMLSuggestions.mockResolvedValue(suggestions);
+
+      render(<MLSuggestionsPanel deckId="deck-1" />);
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith({
+          name: 'feature_ml_suggestions_viewed',
+          properties: {
+            suggestion_count: 2,
+            context: 'deck_builder',
+          },
+        });
+      });
+    });
+
+    it('does NOT fire feature_ml_suggestions_viewed when no suggestions loaded', async () => {
+      mockMLSuggestions.getMLSuggestions.mockResolvedValue([]);
+
+      render(<MLSuggestionsPanel deckId="deck-1" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('No ML suggestions yet.')).toBeInTheDocument();
+      });
+
+      const viewedCalls = mockTrackEvent.mock.calls.filter(
+        ([e]: [{ name: string }]) => e.name === 'feature_ml_suggestions_viewed',
+      );
+      expect(viewedCalls).toHaveLength(0);
+    });
+
+    it('fires wildcard_recommendation_clicked when a suggestion is clicked (expand)', async () => {
+      const suggestions = [
+        createMockMLSuggestion({ id: 1, title: 'Add Lightning Bolt', suggestionType: 'add' }),
+      ];
+      mockMLSuggestions.getMLSuggestions.mockResolvedValue(suggestions);
+
+      render(<MLSuggestionsPanel deckId="deck-1" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Add Lightning Bolt')).toBeInTheDocument();
+      });
+
+      // Click to expand the suggestion.
+      fireEvent.click(screen.getByText('Add Lightning Bolt'));
+
+      await waitFor(() => {
+        const clickedCalls = mockTrackEvent.mock.calls.filter(
+          ([e]: [{ name: string }]) => e.name === 'wildcard_recommendation_clicked',
+        );
+        expect(clickedCalls).toHaveLength(1);
+        expect(clickedCalls[0][0].properties.suggestion_type).toBe('add');
+        expect(clickedCalls[0][0].properties.suggestion_count).toBe(1);
+      });
+    });
+
+    it('does NOT fire wildcard_recommendation_clicked on collapse (second click)', async () => {
+      const suggestions = [
+        createMockMLSuggestion({ id: 1, title: 'Add Lightning Bolt', suggestionType: 'add' }),
+      ];
+      mockMLSuggestions.getMLSuggestions.mockResolvedValue(suggestions);
+
+      render(<MLSuggestionsPanel deckId="deck-1" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Add Lightning Bolt')).toBeInTheDocument();
+      });
+
+      const titleEl = screen.getByText('Add Lightning Bolt');
+
+      // First click — expand (fires event).
+      fireEvent.click(titleEl);
+      await waitFor(() => {
+        expect(mockTrackEvent.mock.calls.filter(
+          ([e]: [{ name: string }]) => e.name === 'wildcard_recommendation_clicked',
+        )).toHaveLength(1);
+      });
+
+      // Second click — collapse (must NOT fire a second event).
+      fireEvent.click(titleEl);
+      await waitFor(() => {
+        const clickedCalls = mockTrackEvent.mock.calls.filter(
+          ([e]: [{ name: string }]) => e.name === 'wildcard_recommendation_clicked',
+        );
+        expect(clickedCalls).toHaveLength(1);
+      });
+    });
+
+    it('NEGATIVE: telemetry events never contain user_id or raw email (PII compliance)', async () => {
+      const suggestions = [createMockMLSuggestion({ id: 1, title: 'Test', suggestionType: 'swap' })];
+      mockMLSuggestions.getMLSuggestions.mockResolvedValue(suggestions);
+
+      render(<MLSuggestionsPanel deckId="deck-1" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Test')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('Test'));
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalled();
+      });
+
+      // Confirm no call contains user_id or email.
+      for (const [event] of mockTrackEvent.mock.calls as [{ properties: Record<string, unknown> }][]) {
+        expect(JSON.stringify(event.properties)).not.toContain('user_id');
+        expect(JSON.stringify(event.properties)).not.toContain('@');
+      }
     });
   });
 });

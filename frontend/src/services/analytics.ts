@@ -12,7 +12,7 @@ import posthog from 'posthog-js';
 
 const POSTHOG_KEY = import.meta.env.VITE_POSTHOG_KEY as string | undefined;
 const POSTHOG_HOST =
-  (import.meta.env.VITE_POSTHOG_HOST as string | undefined) ??
+  (import.meta.env.VITE_POSTHOG_HOST as string | undefined) ||
   'https://app.posthog.com';
 
 let initialized = false;
@@ -91,6 +91,7 @@ export const Events = {
   FEATURE_COLLECTION_VIEWED: 'feature_collection_viewed',
   FEATURE_META_VIEWED: 'feature_meta_viewed',
   FEATURE_ML_SUGGESTIONS_VIEWED: 'feature_ml_suggestions_viewed',
+  WILDCARD_RECOMMENDATION_CLICKED: 'wildcard_recommendation_clicked',
   FEATURE_CHART_INTERACTED: 'feature_chart_interacted',
   FEATURE_OPPONENT_ANALYSIS_VIEWED: 'feature_opponent_analysis_viewed',
   FEATURE_COMMUNITY_COMPARISON_VIEWED: 'feature_community_comparison_viewed',
@@ -270,6 +271,13 @@ export type AnalyticsEvent =
       };
     }
   | {
+      name: 'wildcard_recommendation_clicked';
+      properties: {
+        suggestion_type: 'add' | 'remove' | 'swap';
+        suggestion_count: number;
+      };
+    }
+  | {
       name: 'feature_chart_interacted';
       properties: {
         chart: string;
@@ -368,13 +376,41 @@ export function captureEvent(
   posthog.capture(name, properties);
 }
 
+// ── PII hashing (ADR-027) ─────────────────────────────────────────────────────
+
+/**
+ * Hash a PII value using SHA-256 and return the first 16 hex characters.
+ * Matches the BFF's hashAccountID() scheme — SHA-256 hex[:16].
+ * Uses the Web Crypto API (available in all modern browsers and Vite/JSDOM).
+ */
+export async function hashPII(value: string): Promise<string> {
+  const buf = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .slice(0, 16);
+}
+
 /**
  * Identify the current user by their opaque Clerk user ID.
+ * Optionally accepts the user's email — it is SHA-256 hashed (hex[:16]) before
+ * being sent to PostHog as the `hashed_email` person property (ADR-027).
  * Must only be called once per session after Clerk confirms isSignedIn.
  */
-export function identifyUser(userId: string): void {
+export async function identifyUser(
+  userId: string,
+  email?: string,
+): Promise<void> {
   if (!initialized) return;
-  posthog.identify(userId);
+  if (email) {
+    const hashedEmail = await hashPII(email);
+    posthog.identify(userId, { hashed_email: hashedEmail });
+  } else {
+    posthog.identify(userId);
+  }
 }
 
 /**

@@ -106,8 +106,10 @@ type gamePlayStore interface {
 
 // cardPlayStore writes per-turn card play rows to game_plays.
 // After ADR-050: InsertCardPlays writes the turn-by-turn action log.
+// accountID is required so game_plays.account_id is populated on every insert
+// (defense-in-depth multi-tenancy hygiene, ticket #820).
 type cardPlayStore interface {
-	InsertCardPlays(ctx context.Context, gameID int64, matchID string, entries []contract.CardPlayEntry, occurredAt time.Time) error
+	InsertCardPlays(ctx context.Context, accountID int64, gameID int64, matchID string, entries []contract.CardPlayEntry, occurredAt time.Time) error
 }
 
 // gameIDResolver looks up games.id for a (match_id, game_number) pair.
@@ -1216,7 +1218,7 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 		}
 
 		if gameID > 0 {
-			if err := w.cardPlays.InsertCardPlays(ctx, gameID, p.MatchID, p.CardPlays, row.OccurredAt); err != nil {
+			if err := w.cardPlays.InsertCardPlays(ctx, accountID, gameID, p.MatchID, p.CardPlays, row.OccurredAt); err != nil {
 				return fmt.Errorf("InsertCardPlays: %w", err)
 			}
 		}
