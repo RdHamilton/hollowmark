@@ -1,0 +1,124 @@
+name: WildcardAdvisorPanel Visual Capture (staging)
+
+# One-shot workflow for Tim's visual screenshot capture of the WildcardAdvisorPanel
+# on staging, using a real Clerk session (Backend API sign-in-token pattern).
+#
+# Dispatched manually by Tim after the WildcardAdvisorPanel ships (#421/#424).
+# Uploads screenshots as an artifact so Prof can give his visual PLAYER_VERDICT.
+#
+# Auth: reads CLERK_SECRET_KEY from SSM /vaultmtg/staging/CLERK_SECRET_KEY
+# (SecureString, same path as the staging auth smoke suite).
+# Account: ci-smoke-token user (user_3EamRFdUZdQl1yYPf4Yg7OIQqm4, account_id=17)
+# — has ~10k card_inventory rows and 3 seeded Standard mtgzone_archetypes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_spa_url:
+        description: 'Staging SPA URL'
+        required: false
+        type: string
+        default: 'https://stg-app.vaultmtg.app'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  wildcard-visual-capture:
+    name: WildcardAdvisorPanel Screenshot Capture
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout vault-mtg
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-staging-auth-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            playwright-staging-auth-${{ runner.os }}-
+            playwright-staging-${{ runner.os }}-
+            playwright-${{ runner.os }}-
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Read SSM secrets
+        id: ssm
+        run: |
+          CLERK_SECRET_KEY=$(aws ssm get-parameter \
+            --name /vaultmtg/staging/CLERK_SECRET_KEY \
+            --with-decryption \
+            --region us-east-1 \
+            --query Parameter.Value \
+            --output text)
+          echo "::add-mask::${CLERK_SECRET_KEY}"
+          echo "clerk_secret_key=${CLERK_SECRET_KEY}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Playwright browsers (cache miss)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: frontend
+        run: npx playwright install chromium --with-deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - name: Install Playwright system dependencies (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: frontend
+        run: npx playwright install-deps chromium
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - name: Create screenshot output directory
+        run: mkdir -p /tmp/wildcard-panel-screenshots
+
+      - name: Capture WildcardAdvisorPanel screenshots
+        working-directory: frontend
+        run: |
+          npx playwright test \
+            tests/e2e/staging/wildcard-panel-visual-424.spec.ts \
+            --config=playwright.staging-spa.config.ts \
+            --reporter=list
+        env:
+          CI: true
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.vaultmtg.app' }}
+          CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
+          SCREENSHOT_DIR: /tmp/wildcard-panel-screenshots
+          CI_SMOKE_USER_ID: user_3EamRFdUZdQl1yYPf4Yg7OIQqm4
+
+      - name: Upload screenshots artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wildcard-panel-staging-screenshots
+          path: /tmp/wildcard-panel-screenshots/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload Playwright report on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-wildcard-visual
+          path: frontend/playwright-report-staging-spa/
+          retention-days: 7
