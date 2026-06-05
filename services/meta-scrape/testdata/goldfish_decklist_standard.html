@@ -1,0 +1,32 @@
+<!--
+  Reference snapshot of an MTGGoldfish archetype decklist page
+  (https://www.mtggoldfish.com/archetype/standard-izzet-prowess-woe) as
+  parseDecklistPage / decklistInputPattern in internal/scraper/goldfish.go
+  was validated against.
+
+  The critical element is the hidden <input name="deck_input[deck]"> whose
+  value holds the plain-text decklist. Card names may include HTML entities
+  (&#39; for apostrophe). The "sideboard" line is the mainboard/sideboard
+  separator.
+-->
+<html>
+<head><title>Izzet Prowess (Standard) - MTGGoldfish</title></head>
+<body>
+<div class="deck-tools">
+  <form action="/decks/new" accept-charset="UTF-8" method="post">
+    <input type="hidden" name="authenticity_token" value="abc123" autocomplete="off" />
+    <input type="hidden" name="deck_input[deck]" id="deck_input_deck" value="4 Slickshot Show-Off
+4 Stormchaser&#39;s Talent
+4 Opt
+4 Steam Vents
+4 Spirebluff Canal
+3 Flow State
+sideboard
+2 Spell Pierce
+2 Soul-Guide Lantern
+1 Slagstorm
+" />
+  </form>
+</div>
+</body>
+</html>

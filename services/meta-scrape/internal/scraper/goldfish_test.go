@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -303,10 +304,11 @@ func TestGoldfishClient_Cache(t *testing.T) {
 	defer server.Close()
 
 	config := &GoldfishConfig{
-		BaseURL:        server.URL,
-		CacheTTL:       1 * time.Hour,
-		RequestTimeout: 5 * time.Second,
-		RateLimitMs:    10,
+		BaseURL:            server.URL,
+		CacheTTL:           1 * time.Hour,
+		RequestTimeout:     5 * time.Second,
+		RateLimitMs:        10,
+		MaxDecklistFetches: -1, // disable decklist fetches so request count is predictable
 	}
 	client := NewGoldfishClient(config)
 
@@ -401,10 +403,11 @@ func TestGoldfishClient_RefreshMeta(t *testing.T) {
 	defer server.Close()
 
 	config := &GoldfishConfig{
-		BaseURL:        server.URL,
-		CacheTTL:       1 * time.Hour,
-		RequestTimeout: 5 * time.Second,
-		RateLimitMs:    10,
+		BaseURL:            server.URL,
+		CacheTTL:           1 * time.Hour,
+		RequestTimeout:     5 * time.Second,
+		RateLimitMs:        10,
+		MaxDecklistFetches: -1, // disable decklist fetches so request count is predictable
 	}
 	client := NewGoldfishClient(config)
 
@@ -913,5 +916,369 @@ func TestGoldfishClient_ResponseSizeCap(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected the within-cap deck to be parsed")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Decklist page parsing tests (#384).
+// All use parseDecklistPage directly or httptest.Server — zero live network.
+// ---------------------------------------------------------------------------
+
+// TestParseDecklistPage_Fixture verifies the goldfish_decklist_standard.html
+// reference snapshot parses correctly: card counts, card names, and sideboard
+// separation.
+func TestParseDecklistPage_Fixture(t *testing.T) {
+	client := NewGoldfishClient(nil)
+	_ = client // parseDecklistPage is a package-level func; client only needed for type check
+
+	html := readFixture(t, "goldfish_decklist_standard.html")
+	main, side, err := parseDecklistPage(html)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(main) != 6 {
+		t.Errorf("expected 6 mainboard cards, got %d", len(main))
+	}
+	if len(side) != 3 {
+		t.Errorf("expected 3 sideboard cards, got %d", len(side))
+	}
+
+	// Verify HTML entity decoding: Stormchaser's Talent must have the apostrophe.
+	foundTalent := false
+	for _, c := range main {
+		if c.Name == "Stormchaser's Talent" {
+			foundTalent = true
+			if c.Quantity != 4 {
+				t.Errorf("Stormchaser's Talent: expected 4 copies, got %d", c.Quantity)
+			}
+			break
+		}
+	}
+	if !foundTalent {
+		t.Error("expected Stormchaser's Talent with decoded apostrophe in mainboard")
+	}
+}
+
+// TestParseDecklistPage_NoInput verifies that a page with no deck_input hidden
+// field returns nil slices without error.
+func TestParseDecklistPage_NoInput(t *testing.T) {
+	main, side, err := parseDecklistPage(`<html><body><p>no deck here</p></body></html>`)
+	if err != nil {
+		t.Fatalf("unexpected error for page with no input: %v", err)
+	}
+	if main != nil || side != nil {
+		t.Errorf("expected nil slices for page with no deck input, got main=%v side=%v", main, side)
+	}
+}
+
+// TestParseDecklistPage_MainboardOnly verifies a decklist with no sideboard
+// section returns an empty sideboard and the full mainboard.
+func TestParseDecklistPage_MainboardOnly(t *testing.T) {
+	html := `<input name="deck_input[deck]" value="4 Lightning Bolt
+4 Goblin Guide
+">`
+	main, side, err := parseDecklistPage(html)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(main) != 2 {
+		t.Errorf("expected 2 mainboard cards, got %d", len(main))
+	}
+	if len(side) != 0 {
+		t.Errorf("expected 0 sideboard cards, got %d", len(side))
+	}
+}
+
+// TestParseDecklistPage_HTMLEntityDecoding verifies common HTML entities are
+// decoded in card names before parsing.
+func TestParseDecklistPage_HTMLEntityDecoding(t *testing.T) {
+	// &#39; = apostrophe, &amp; = &
+	html := `<input name="deck_input[deck]" value="4 Stormchaser&#39;s Talent
+2 Fire &amp; Ice
+sideboard
+1 Witches&#39; Cauldron
+">`
+	main, side, err := parseDecklistPage(html)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(main) != 2 {
+		t.Fatalf("expected 2 mainboard cards, got %d", len(main))
+	}
+	if main[0].Name != "Stormchaser's Talent" {
+		t.Errorf("expected Stormchaser's Talent, got %q", main[0].Name)
+	}
+	if main[1].Name != "Fire & Ice" {
+		t.Errorf("expected Fire & Ice, got %q", main[1].Name)
+	}
+	if len(side) != 1 || side[0].Name != "Witches' Cauldron" {
+		t.Errorf("expected Witches' Cauldron in sideboard, got %v", side)
+	}
+}
+
+// TestParseDecklistPage_MalformedLinesSkipped verifies that lines without a
+// leading integer quantity are silently skipped rather than causing an error.
+func TestParseDecklistPage_MalformedLinesSkipped(t *testing.T) {
+	html := `<input name="deck_input[deck]" value="4 Good Card
+bad line without quantity
+0 Zero Copies
+3 Another Good Card
+">`
+	main, side, err := parseDecklistPage(html)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Only the two valid positive-quantity lines should appear.
+	if len(main) != 2 {
+		t.Errorf("expected 2 valid cards, got %d: %v", len(main), main)
+	}
+	if len(side) != 0 {
+		t.Errorf("expected 0 sideboard cards, got %d", len(side))
+	}
+}
+
+// TestFetchDecklistPage_Non200IsNonFatal verifies that a non-200 response from
+// the decklist page returns an error (the caller will skip the deck rather than
+// aborting the format scrape).
+func TestFetchDecklistPage_Non200IsNonFatal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := NewGoldfishClient(&GoldfishConfig{
+		BaseURL:            server.URL,
+		CacheTTL:           time.Hour,
+		RequestTimeout:     5 * time.Second,
+		RateLimitMs:        10,
+		MaxDecklistFetches: -1, // disable auto-fetch; call fetchDecklistPage directly
+	})
+
+	_, _, err := client.fetchDecklistPage(context.Background(), "/archetype/test")
+	if err == nil {
+		t.Fatal("expected error on 404 response")
+	}
+}
+
+// TestGoldfishClient_GetMeta_PopulatesCardLists verifies that GetMeta
+// populates MainboardCards and SideboardCards on each MetaDeck when the
+// decklist server returns valid HTML with a deck_input hidden field.
+func TestGoldfishClient_GetMeta_PopulatesCardLists(t *testing.T) {
+	const decklistHTML = `
+<input name="deck_input[deck]" value="4 Monastery Swiftspear
+3 Lightning Bolt
+sideboard
+2 Spell Pierce
+">`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/archetype/") {
+			// Decklist page request.
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(decklistHTML))
+			return
+		}
+		// Metagame page request.
+		html := `
+		<html><body>
+		<div class='archetype-tile' id='1'>
+		<div class='archetype-tile-title'>
+		<a href="/archetype/mono-red-aggro#online">Mono Red Aggro</a>
+		</div>
+		<div class='archetype-tile-statistic metagame-percentage'>
+		<div class='archetype-tile-statistic-value'>18.0%</div>
+		</div>
+		</div>
+		</body></html>`
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	client := NewGoldfishClient(&GoldfishConfig{
+		BaseURL:            server.URL,
+		CacheTTL:           time.Hour,
+		RequestTimeout:     5 * time.Second,
+		RateLimitMs:        10,
+		MaxDecklistFetches: 5,
+	})
+
+	meta, err := client.GetMeta(context.Background(), "standard")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(meta.Decks) != 1 {
+		t.Fatalf("expected 1 deck, got %d", len(meta.Decks))
+	}
+	deck := meta.Decks[0]
+	if len(deck.MainboardCards) != 2 {
+		t.Errorf("expected 2 mainboard cards, got %d", len(deck.MainboardCards))
+	}
+	if len(deck.SideboardCards) != 1 {
+		t.Errorf("expected 1 sideboard card, got %d", len(deck.SideboardCards))
+	}
+	if len(deck.MainboardCards) > 0 && deck.MainboardCards[0].Name != "Monastery Swiftspear" {
+		t.Errorf("expected Monastery Swiftspear, got %q", deck.MainboardCards[0].Name)
+	}
+}
+
+// TestGoldfishClient_GetMeta_DecklistFetchErrorIsNonFatal verifies that a
+// decklist fetch failure (404 from the archetype sub-page) does not abort the
+// overall metagame scrape — the archetype is returned with an empty card list.
+func TestGoldfishClient_GetMeta_DecklistFetchErrorIsNonFatal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/archetype/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		html := `
+		<html><body>
+		<div class='archetype-tile' id='1'>
+		<div class='archetype-tile-title'>
+		<a href="/archetype/some-deck#online">Some Deck</a>
+		</div>
+		<div class='archetype-tile-statistic metagame-percentage'>
+		<div class='archetype-tile-statistic-value'>10.0%</div>
+		</div>
+		</div>
+		</body></html>`
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	client := NewGoldfishClient(&GoldfishConfig{
+		BaseURL:            server.URL,
+		CacheTTL:           time.Hour,
+		RequestTimeout:     5 * time.Second,
+		RateLimitMs:        10,
+		MaxDecklistFetches: 5,
+	})
+
+	meta, err := client.GetMeta(context.Background(), "standard")
+	if err != nil {
+		t.Fatalf("metagame scrape must not fail when decklist page is 404: %v", err)
+	}
+	if len(meta.Decks) != 1 {
+		t.Fatalf("expected 1 deck, got %d", len(meta.Decks))
+	}
+	// Card lists are empty, but the archetype row is present.
+	if len(meta.Decks[0].MainboardCards) != 0 {
+		t.Errorf("expected empty mainboard on decklist-404, got %d cards", len(meta.Decks[0].MainboardCards))
+	}
+}
+
+// TestGoldfishClient_GetMeta_DecklistCapRespected verifies that at most
+// MaxDecklistFetches decklist pages are fetched when the metagame page has more
+// archetypes than the cap.
+func TestGoldfishClient_GetMeta_DecklistCapRespected(t *testing.T) {
+	const decklistHTML = `<input name="deck_input[deck]" value="4 Test Card
+sideboard
+1 Sideboard Card
+">`
+
+	decklistRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/archetype/") {
+			decklistRequests++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(decklistHTML))
+			return
+		}
+		// Return 5 archetype tiles.
+		var sb strings.Builder
+		sb.WriteString("<html><body>")
+		for i := 0; i < 5; i++ {
+			sb.WriteString(`<div class='archetype-tile' id='x'>`)
+			sb.WriteString(`<div class='archetype-tile-title'>`)
+			sb.WriteString(`<a href="/archetype/deck-` + strconv.Itoa(i) + `#online">Deck ` + strconv.Itoa(i) + `</a>`)
+			sb.WriteString(`</div>`)
+			sb.WriteString(`<div class='archetype-tile-statistic metagame-percentage'>`)
+			sb.WriteString(`<div class='archetype-tile-statistic-value'>5.0%</div>`)
+			sb.WriteString(`</div></div>`)
+		}
+		sb.WriteString("</body></html>")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sb.String()))
+	}))
+	defer server.Close()
+
+	const cap = 3
+	client := NewGoldfishClient(&GoldfishConfig{
+		BaseURL:            server.URL,
+		CacheTTL:           time.Hour,
+		RequestTimeout:     5 * time.Second,
+		RateLimitMs:        10,
+		MaxDecklistFetches: cap,
+	})
+
+	_, err := client.GetMeta(context.Background(), "standard")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decklistRequests != cap {
+		t.Errorf("expected exactly %d decklist fetches (cap), got %d", cap, decklistRequests)
+	}
+}
+
+// TestParseDeckListLine_Valid verifies correctly formatted lines are parsed.
+func TestParseDeckListLine_Valid(t *testing.T) {
+	cases := []struct {
+		line     string
+		name     string
+		quantity int
+	}{
+		{"4 Lightning Bolt", "Lightning Bolt", 4},
+		{"1 Roaring Furnace // Steaming Sauna", "Roaring Furnace // Steaming Sauna", 1},
+		{"20 Island", "Island", 20},
+	}
+	for _, c := range cases {
+		t.Run(c.line, func(t *testing.T) {
+			card, err := parseDeckListLine(c.line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if card.Name != c.name {
+				t.Errorf("name: got %q want %q", card.Name, c.name)
+			}
+			if card.Quantity != c.quantity {
+				t.Errorf("quantity: got %d want %d", card.Quantity, c.quantity)
+			}
+		})
+	}
+}
+
+// TestParseDeckListLine_Invalid verifies malformed lines return an error.
+func TestParseDeckListLine_Invalid(t *testing.T) {
+	cases := []string{
+		"",
+		"nospaceline",
+		"0 Zero Copies",
+		"-1 Negative",
+		"abc Card Name",
+	}
+	for _, line := range cases {
+		t.Run(line, func(t *testing.T) {
+			_, err := parseDeckListLine(line)
+			if err == nil {
+				t.Errorf("expected error for malformed line %q", line)
+			}
+		})
+	}
+}
+
+// TestDecodeHTMLEntities verifies entity replacement.
+func TestDecodeHTMLEntities(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Stormchaser&#39;s Talent", "Stormchaser's Talent"},
+		{"Fire &amp; Ice", "Fire & Ice"},
+		{"&quot;Shriekmaw&quot;", `"Shriekmaw"`},
+		{"plain name", "plain name"},
+	}
+	for _, c := range cases {
+		got := decodeHTMLEntities(c.in)
+		if got != c.want {
+			t.Errorf("decodeHTMLEntities(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
