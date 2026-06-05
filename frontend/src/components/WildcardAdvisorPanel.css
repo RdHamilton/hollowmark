@@ -1,0 +1,442 @@
+/* ============================================================
+   WildcardAdvisorPanel — VaultMTG Design System tokens
+   Uses: --vault-* surface/text/semantic tokens + --vault-rarity-* gem tokens
+   ============================================================ */
+
+.wildcard-advisor {
+  background: var(--vault-bg-raised, #161C26);
+  border: 1px solid var(--vault-border, #2A3347);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  padding: var(--space-4, 16px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4, 16px);
+}
+
+/* Header */
+.wildcard-advisor__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wildcard-advisor__title {
+  font-family: var(--font-display-vault, 'Space Grotesk', sans-serif);
+  font-size: var(--text-xl, 20px);
+  font-weight: 700;
+  color: var(--vault-fg, #F1F5F9);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.wildcard-advisor__close {
+  background: transparent;
+  border: none;
+  color: var(--vault-fg-muted, #4E6080);
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm, 4px);
+  transition: color var(--transition-fast, 150ms ease);
+}
+
+.wildcard-advisor__close:hover {
+  color: var(--vault-fg, #F1F5F9);
+}
+
+/* Format toggle — segmented control */
+.wildcard-advisor__format-toggle {
+  display: flex;
+  gap: var(--space-1, 4px);
+  background: var(--vault-bg, #0D1117);
+  border: 1px solid var(--vault-border, #2A3347);
+  border-radius: var(--radius-md, 8px);
+  padding: 3px;
+}
+
+.wildcard-advisor__format-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--vault-fg-secondary, #94A3B8);
+  cursor: pointer;
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-sm, 13px);
+  font-weight: 500;
+  padding: 6px 10px;
+  text-align: center;
+  transition: all var(--transition-fast, 150ms ease);
+  white-space: nowrap;
+}
+
+.wildcard-advisor__format-btn:hover {
+  background: var(--vault-bg-raised, #161C26);
+  color: var(--vault-fg, #F1F5F9);
+}
+
+.wildcard-advisor__format-btn--active {
+  background: var(--vault-bg-raised, #161C26);
+  color: var(--vault-sapphire, #4A90D9);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* Loading skeleton */
+.wildcard-advisor__loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+  padding: var(--space-2, 8px) 0;
+}
+
+.wildcard-advisor__skeleton-row {
+  height: 44px;
+  background: linear-gradient(
+    90deg,
+    var(--vault-border, #2A3347) 0%,
+    var(--vault-bg-overlay, #1E2636) 50%,
+    var(--vault-border, #2A3347) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+  border-radius: var(--radius-sm, 4px);
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+/* Stale-data warning banner */
+.wildcard-advisor__stale-banner {
+  background: var(--vault-warning-dim, rgba(234, 179, 8, 0.15));
+  border: 1px solid var(--vault-warning, #EAB308);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--vault-warning, #EAB308);
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-sm, 13px);
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+}
+
+/* Wildcard budget header */
+.wildcard-advisor__budget {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3, 12px);
+  padding: var(--space-3, 12px);
+  background: var(--vault-bg, #0D1117);
+  border: 1px solid var(--vault-border, #2A3347);
+  border-radius: var(--radius-sm, 4px);
+}
+
+.wildcard-advisor__budget-label {
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-xs, 11px);
+  font-weight: 600;
+  color: var(--vault-fg-muted, #4E6080);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.wildcard-advisor__budget-gems {
+  display: flex;
+  gap: var(--space-3, 12px);
+  flex-wrap: wrap;
+}
+
+.wildcard-advisor__budget-gem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  color: var(--gem-color, #F1F5F9);
+}
+
+.wildcard-advisor__budget-gem-icon {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--gem-color, #4E6080);
+  flex-shrink: 0;
+}
+
+.wildcard-advisor__budget-gem-count {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: var(--text-sm, 13px);
+  font-weight: 500;
+}
+
+.wildcard-advisor__budget-gem-label {
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-xs, 11px);
+  color: var(--vault-fg-secondary, #94A3B8);
+}
+
+/* Sections */
+.wildcard-advisor__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+}
+
+.wildcard-advisor__section-title {
+  font-family: var(--font-display-vault, 'Space Grotesk', sans-serif);
+  font-size: var(--text-base, 15px);
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.wildcard-advisor__section-title--affordable {
+  color: var(--vault-success, #22C55E);
+}
+
+.wildcard-advisor__section-title--aspirational {
+  color: var(--vault-fg-secondary, #94A3B8);
+}
+
+.wildcard-advisor__section-subtitle {
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-xs, 11px);
+  color: var(--vault-fg-muted, #4E6080);
+  margin: 0;
+}
+
+/* Recommendation list */
+.wildcard-advisor__rec-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Recommendation card */
+.wildcard-advisor__rec-card {
+  background: transparent;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--vault-border-subtle, #1F2A3C);
+  transition: background var(--transition-fast, 150ms ease);
+}
+
+.wildcard-advisor__rec-card:last-child {
+  border-bottom: none;
+}
+
+.wildcard-advisor__rec-card:hover {
+  background: var(--vault-bg-overlay, #1E2636);
+}
+
+.wildcard-advisor__rec-card--affordable {
+  border-left-color: var(--vault-success, #22C55E);
+}
+
+.wildcard-advisor__rec-card--aspirational {
+  border-left-color: var(--vault-fg-muted, #4E6080);
+}
+
+.wildcard-advisor__rec-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  width: 100%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  text-align: left;
+}
+
+.wildcard-advisor__rec-rarity-pip {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.wildcard-advisor__rec-name {
+  flex: 1;
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-sm, 13px);
+  font-weight: 500;
+  color: var(--vault-fg, #F1F5F9);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wildcard-advisor__rec-missing {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: var(--text-xs, 11px);
+  color: var(--vault-fg-muted, #4E6080);
+  flex-shrink: 0;
+}
+
+.wildcard-advisor__rec-gihwr {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: var(--text-xs, 11px);
+  color: var(--vault-fg-secondary, #94A3B8);
+  flex-shrink: 0;
+  min-width: 44px;
+  text-align: right;
+}
+
+.wildcard-advisor__rec-gihwr--positive {
+  color: var(--vault-success, #22C55E);
+}
+
+.wildcard-advisor__rec-gihwr--negative {
+  color: var(--vault-danger, #EF4444);
+}
+
+.wildcard-advisor__rec-expand-icon {
+  color: var(--vault-fg-muted, #4E6080);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+/* Drill-down detail section */
+.wildcard-advisor__rec-drill-down {
+  padding: var(--space-2, 8px) var(--space-3, 12px) var(--space-3, 12px) 28px;
+  border-top: 1px solid var(--vault-border-subtle, #1F2A3C);
+}
+
+.wildcard-advisor__rec-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2, 8px) var(--space-4, 16px);
+  margin: 0;
+}
+
+.wildcard-advisor__rec-detail-row {
+  display: flex;
+  gap: var(--space-1, 4px);
+}
+
+.wildcard-advisor__rec-detail-row--full {
+  flex-basis: 100%;
+}
+
+.wildcard-advisor__rec-detail-row dt {
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-xs, 11px);
+  font-weight: 600;
+  color: var(--vault-fg-muted, #4E6080);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wildcard-advisor__rec-detail-row dd {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: var(--text-xs, 11px);
+  color: var(--vault-fg-secondary, #94A3B8);
+  margin: 0;
+}
+
+.wildcard-advisor__rec-detail-row--full dd {
+  font-family: var(--font-body, 'Inter', sans-serif);
+}
+
+/* Sync CTA state */
+.wildcard-advisor__sync-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-8, 32px) var(--space-4, 16px);
+  gap: var(--space-3, 12px);
+}
+
+.wildcard-advisor__sync-cta-icon {
+  font-size: 36px;
+  color: var(--vault-fg-muted, #4E6080);
+}
+
+.wildcard-advisor__sync-cta-title {
+  font-family: var(--font-display-vault, 'Space Grotesk', sans-serif);
+  font-size: var(--text-xl, 20px);
+  font-weight: 600;
+  color: var(--vault-fg, #F1F5F9);
+  margin: 0;
+}
+
+.wildcard-advisor__sync-cta-body {
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-sm, 13px);
+  color: var(--vault-fg-secondary, #94A3B8);
+  max-width: 320px;
+  margin: 0;
+}
+
+.wildcard-advisor__sync-cta-hint {
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-xs, 11px);
+  color: var(--vault-fg-muted, #4E6080);
+  margin: 0;
+}
+
+/* Empty state (200 with no recs) */
+.wildcard-advisor__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-8, 32px) var(--space-4, 16px);
+  gap: var(--space-2, 8px);
+}
+
+.wildcard-advisor__empty-title {
+  font-family: var(--font-display-vault, 'Space Grotesk', sans-serif);
+  font-size: var(--text-xl, 20px);
+  font-weight: 600;
+  color: var(--vault-fg, #F1F5F9);
+  margin: 0;
+}
+
+.wildcard-advisor__empty-body {
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-sm, 13px);
+  color: var(--vault-fg-secondary, #94A3B8);
+  max-width: 320px;
+  margin: 0;
+}
+
+/* Error state */
+.wildcard-advisor__error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-6, 24px) var(--space-4, 16px);
+  gap: var(--space-3, 12px);
+}
+
+.wildcard-advisor__error-msg {
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-sm, 13px);
+  color: var(--vault-danger, #EF4444);
+  margin: 0;
+}
+
+.wildcard-advisor__retry-btn {
+  background: transparent;
+  border: 1px solid var(--vault-border, #2A3347);
+  border-radius: var(--radius-md, 8px);
+  color: var(--vault-fg, #F1F5F9);
+  cursor: pointer;
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: var(--text-sm, 13px);
+  font-weight: 500;
+  padding: 6px 16px;
+  transition: background var(--transition-fast, 150ms ease), border-color var(--transition-fast, 150ms ease);
+}
+
+.wildcard-advisor__retry-btn:hover {
+  background: var(--vault-bg-raised, #161C26);
+  border-color: var(--vault-sapphire, #4A90D9);
+}
