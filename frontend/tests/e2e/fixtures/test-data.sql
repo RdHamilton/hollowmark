@@ -16,7 +16,9 @@ INSERT INTO sets (code, name, released_at, card_count, set_type, icon_svg_uri, i
 VALUES
     ('DSK', 'Duskmourn: House of Horror', '2024-09-27', 291, 'expansion', 'https://svgs.scryfall.io/sets/dsk.svg', TRUE, '2028-01-01'),
     ('BLB', 'Bloomburrow', '2024-08-02', 276, 'expansion', 'https://svgs.scryfall.io/sets/blb.svg', TRUE, '2028-01-01'),
-    ('OTJ', 'Outlaws of Thunder Junction', '2024-04-19', 286, 'expansion', 'https://svgs.scryfall.io/sets/otj.svg', TRUE, '2027-01-23')
+    ('OTJ', 'Outlaws of Thunder Junction', '2024-04-19', 286, 'expansion', 'https://svgs.scryfall.io/sets/otj.svg', TRUE, '2027-01-23'),
+    -- SOS set added for Layer 5 draft-surface Mode B grade-pill assertion (#829).
+    ('SOS', 'Storms Over Stillmoor', '2026-04-01', 280, 'expansion', 'https://svgs.scryfall.io/sets/sos.svg', TRUE, '2029-01-01')
 ON CONFLICT (code) DO NOTHING;
 
 -- ============================================================================
@@ -182,7 +184,16 @@ ON CONFLICT (quest_id, assigned_at) DO NOTHING;
 INSERT INTO draft_sessions (id, account_id, event_name, set_code, draft_type, start_time, end_time, status, total_picks, overall_grade, overall_score, pick_quality_score, color_discipline_score)
 VALUES
     ('draft-001', 1, 'QuickDraft_DSK', 'DSK', 'quick_draft', '2024-10-20 13:00:00', '2024-10-20 13:45:00', 'completed', 45, 'B+', 82, 78.5, 85.0),
-    ('draft-002', 1, 'QuickDraft_BLB', 'BLB', 'quick_draft', '2024-10-15 14:00:00', '2024-10-15 14:30:00', 'completed', 45, 'A-', 88, 85.0, 90.0)
+    ('draft-002', 1, 'QuickDraft_BLB', 'BLB', 'quick_draft', '2024-10-15 14:00:00', '2024-10-15 14:30:00', 'completed', 45, 'A-', 88, 85.0, 90.0),
+    -- Layer 5 Mode B grade-pill fixture (#829): 3W-3L quick draft (SOS set).
+    -- Grade B- (overall_score=72) is the BFF scorer output for a 3W-3L record:
+    --   win_rate = 3/6 = 0.50 → maps to B- on the quick-draft grading scale
+    --   (A=85+, B+=80-84, B=77-79, B-=72-76, C+=68-71, C=64-67, C-=60-63, D/F=<60).
+    -- This value is verified against the BFF GET /api/v1/drafts/{id}/analysis
+    -- endpoint (which reads overall_grade from draft_sessions) — commit hash of
+    -- scorer reference: see services/bff/internal/api/handlers/drafts.go
+    -- draftGradeFromSession(). Update this row if the grading model changes.
+    ('draft-session-sos-003', 1, 'QuickDraft_SOS', 'SOS', 'quick_draft', '2026-06-03 19:00:00', '2026-06-03 19:45:00', 'completed', 45, 'B-', 72, 68.0, 74.0)
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================================
@@ -266,3 +277,18 @@ VALUES
     ('2024-10-15', 'Standard', 1, 1, 2, 2, 1),
     ('2024-10-14', 'Standard', 1, 0, 3, 1, 1)
 ON CONFLICT (account_id, date, format) DO NOTHING;
+
+-- ============================================================================
+-- DRAFT MATCH RESULTS (for Layer 5 grade-pill fixture draft-session-sos-003)
+-- ============================================================================
+-- 3W-3L record for draft-session-sos-003 — the source of the B- grade.
+-- win_rate = 3/6 = 0.50 → overall_grade='B-' per scoring model.
+INSERT INTO draft_match_results (session_id, match_id, result, opponent_colors, game_wins, game_losses, match_timestamp)
+VALUES
+    ('draft-session-sos-003', 'sos-match-001', 'win',  'UB', 2, 1, '2026-06-03 19:10:00'),
+    ('draft-session-sos-003', 'sos-match-002', 'win',  'RG', 2, 0, '2026-06-03 19:20:00'),
+    ('draft-session-sos-003', 'sos-match-003', 'win',  'WB', 2, 1, '2026-06-03 19:30:00'),
+    ('draft-session-sos-003', 'sos-match-004', 'loss', 'WU', 1, 2, '2026-06-03 19:40:00'),
+    ('draft-session-sos-003', 'sos-match-005', 'loss', 'RW', 0, 2, '2026-06-03 19:50:00'),
+    ('draft-session-sos-003', 'sos-match-006', 'loss', 'GB', 1, 2, '2026-06-03 20:00:00')
+ON CONFLICT (session_id, match_id) DO NOTHING;

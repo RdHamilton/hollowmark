@@ -6,6 +6,7 @@ import { trackEvent } from '@/services/analytics';
 import TemporalTrends from '@/components/TemporalTrends';
 import CommunityComparison from '@/components/CommunityComparison';
 import FormatInsights from '@/components/FormatInsights';
+import { DraftGrade } from '@/components/DraftGrade';
 import './DraftAnalytics.css';
 
 const DraftAnalytics: React.FC = () => {
@@ -76,7 +77,11 @@ const DraftAnalytics: React.FC = () => {
           data-testid="draft-analytics-session-scope"
           data-session-id={sessionParam}
         >
-          Viewing draft session{setParam ? ` — ${setParam}` : ''}
+          <span>Viewing draft session{setParam ? ` — ${setParam}` : ''}</span>
+          {/* Grade pill: reads overall_grade from /api/v1/drafts/{id}/analysis
+              so the Layer 5 corpus harness can assert the concrete grade value
+              (data-testid="session-overall-grade", ADR-052 Surface 6, #829). */}
+          <DraftGrade sessionID={sessionParam} compact={true} />
         </div>
       )}
       <div className="draft-analytics__header">
