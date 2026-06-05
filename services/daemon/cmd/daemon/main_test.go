@@ -1128,6 +1128,71 @@ func TestHeadlessPair_BFFRegisterFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "register")
 }
 
+// TestHeadlessPair_AllStepsSendContentType verifies that all three HTTP POST
+// steps in headlessPair set Content-Type: application/json (#812).
+//
+// Omitting Content-Type on Step 3 (JWT mint) caused Clerk to return 422
+// Unprocessable Entity; Steps 1 (sign_in_tokens) and 2 (FAPI sign_in) already
+// had the header. This test asserts the header is present on all three requests
+// so the regression cannot silently recur.
+func TestHeadlessPair_AllStepsSendContentType(t *testing.T) {
+	// Track Content-Type header for each Clerk API call.
+	ctByPath := map[string]string{}
+
+	clerkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctByPath[r.URL.Path] = r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/sign_in_tokens":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"token":"sit_ct_test"}`))
+		case "/v1/client/sign_ins":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"client":{"sessions":[{"id":"sess_ct_test"}]}}`))
+		case "/v1/sessions/sess_ct_test/tokens":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jwt":"eyJct"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer clerkSrv.Close()
+
+	bffSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"api_key":"k","account_id":"a","device_id":"d"}`))
+	}))
+	defer bffSrv.Close()
+
+	_, _, _, err := headlessPair(
+		context.Background(),
+		headlessPairConfig{
+			ClerkBackendAPIBase: clerkSrv.URL,
+			ClerkFAPIBase:       clerkSrv.URL,
+			ClerkSecretKey:      "sk_test",
+			ClerkUserID:         "user_ct_test",
+			BFFBase:             bffSrv.URL,
+			Platform:            "linux",
+			DaemonVersion:       "dev",
+			DeviceID:            "",
+		},
+	)
+	require.NoError(t, err)
+
+	// Assert Content-Type: application/json on all three Clerk POST paths.
+	wantCT := "application/json"
+	for _, path := range []string{
+		"/v1/sign_in_tokens",
+		"/v1/client/sign_ins",
+		"/v1/sessions/sess_ct_test/tokens",
+	} {
+		if got := ctByPath[path]; got != wantCT {
+			t.Errorf("Content-Type on %s = %q, want %q (#812: missing header causes 422)", path, got, wantCT)
+		}
+	}
+}
+
 // TestReplayModeEnvVarPrecedence verifies that VAULTMTG_DAEMON_REPLAY_FILE
 // sets the replay file path and that the flag value wins when both are set.
 // (Uses the package-level replayFilePath var populated by parseReplayFlag.)

@@ -987,12 +987,15 @@ func headlessPair(ctx context.Context, cfg headlessPairConfig) (apiKey, accountI
 	sessionID := fapiResult.Client.Sessions[0].ID
 
 	// Step 3 — Mint session JWT via Clerk Backend API.
+	// Content-Type is required here as it is in Steps 1 and 2; omitting it
+	// causes Clerk to return 422 Unprocessable Entity (#812).
 	jwtURL := strings.TrimRight(cfg.ClerkBackendAPIBase, "/") + "/v1/sessions/" + sessionID + "/tokens"
 	jwtReq, err := http.NewRequestWithContext(ctx, http.MethodPost, jwtURL, nil)
 	if err != nil {
 		return "", "", "", fmt.Errorf("headless-pair: build JWT request: %w", err)
 	}
 	jwtReq.Header.Set("Authorization", "Bearer "+cfg.ClerkSecretKey)
+	jwtReq.Header.Set("Content-Type", "application/json")
 
 	jwtResp, err := client.Do(jwtReq)
 	if err != nil {
