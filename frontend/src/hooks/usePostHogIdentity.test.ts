@@ -15,7 +15,7 @@ vi.mock('posthog-js', () => ({
   },
 }));
 
-// Mock analytics module so we can spy on identifyUser / trackEvent.
+// Mock analytics module so we can spy on identifyUser / trackEvent / hashPII.
 const mockIdentifyUser = vi.fn();
 const mockTrackEvent = vi.fn();
 const mockResetIdentity = vi.fn();
@@ -23,10 +23,14 @@ const mockStartSessionReplay = vi.fn();
 const mockStopSessionReplay = vi.fn();
 const mockRegisterSuperProperties = vi.fn();
 const mockUnregisterSuperProperty = vi.fn();
+// hashPII mock returns a deterministic fake hash — sufficiently unlike the raw input
+// to validate the negative assertion that raw IDs are never forwarded.
+const mockHashPII = vi.fn().mockResolvedValue('abcd1234abcd1234');
 
 vi.mock('@/services/analytics', () => ({
   identifyUser: (...args: unknown[]) => mockIdentifyUser(...args),
   trackEvent: (...args: unknown[]) => mockTrackEvent(...args),
+  hashPII: (...args: unknown[]) => mockHashPII(...args),
   resetIdentity: () => mockResetIdentity(),
   startSessionReplay: () => mockStartSessionReplay(),
   stopSessionReplay: () => mockStopSessionReplay(),
@@ -59,6 +63,8 @@ describe('usePostHogIdentity', () => {
     // Default: no devices paired — tests that need devices override this.
     mockListDaemons.mockResolvedValue({ devices: [] });
     mockGetToken.mockResolvedValue('test-token');
+    // Reset hashPII to default deterministic fake hash.
+    mockHashPII.mockResolvedValue('abcd1234abcd1234');
   });
 
   // ── Pre-existing behaviour (preserved) ─────────────────────────────────────
@@ -152,6 +158,11 @@ describe('usePostHogIdentity', () => {
     const { usePostHogIdentity } = await import('./usePostHogIdentity');
     renderHook(() => usePostHogIdentity());
 
+    // Flush the async hashPII IIFE so trackEvent is called.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
     const funnelCalls = mockTrackEvent.mock.calls.filter(
       ([e]: [{ name: string }]) => e.name === 'funnel_sign_up_completed',
     );
@@ -170,10 +181,65 @@ describe('usePostHogIdentity', () => {
     const { usePostHogIdentity } = await import('./usePostHogIdentity');
     renderHook(() => usePostHogIdentity());
 
+    await act(async () => {
+      await Promise.resolve();
+    });
+
     const funnelCalls = mockTrackEvent.mock.calls.filter(
       ([e]: [{ name: string }]) => e.name === 'funnel_sign_up_completed',
     );
     expect(funnelCalls).toHaveLength(0);
+  });
+
+  // ── ADR-027: funnel_sign_up_completed user_id hashing (#851) ─────────────────
+
+  it('funnel_sign_up_completed sends hashed user_id (not raw Clerk id)', async () => {
+    const rawUserId = 'user_clerk_raw_id_xyz';
+    mockHashPII.mockResolvedValue('abcd1234abcd1234');
+    mockUseUser.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      user: { id: rawUserId },
+    });
+    const { usePostHogIdentity } = await import('./usePostHogIdentity');
+    renderHook(() => usePostHogIdentity());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const funnelCalls = mockTrackEvent.mock.calls.filter(
+      ([e]: [{ name: string }]) => e.name === 'funnel_sign_up_completed',
+    );
+    expect(funnelCalls).toHaveLength(1);
+    // user_id property must be the hashed value, not the raw Clerk id.
+    expect(funnelCalls[0][0].properties.user_id).toBe('abcd1234abcd1234');
+  });
+
+  it('NEGATIVE: funnel_sign_up_completed never sends raw Clerk user id as event property', async () => {
+    const rawUserId = 'user_clerk_raw_secret_789';
+    mockHashPII.mockResolvedValue('deadbeef12345678');
+    mockUseUser.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      user: { id: rawUserId },
+    });
+    const { usePostHogIdentity } = await import('./usePostHogIdentity');
+    renderHook(() => usePostHogIdentity());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Inspect ALL trackEvent calls — the raw Clerk user id must never appear
+    // as a property value in any of them.
+    for (const [event] of mockTrackEvent.mock.calls as [{ name: string; properties?: Record<string, unknown> }][]) {
+      if (event.properties) {
+        for (const value of Object.values(event.properties)) {
+          expect(value).not.toBe(rawUserId);
+        }
+      }
+    }
   });
 
   it('calls resetIdentity when user is signed out after being signed in', async () => {
