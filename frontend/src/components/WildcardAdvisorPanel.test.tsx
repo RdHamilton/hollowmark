@@ -188,15 +188,47 @@ describe('WildcardAdvisorPanel', () => {
       expect(mythicGem.getAttribute('style')).toContain('--gem-color: var(--vault-rarity-mythic)');
     });
 
-    it('shows GIHWR for cards that have it', async () => {
+    it('shows GIHWR for cards that have it, with "GIHWR" inline label', async () => {
       const rec = makeRec({ gihwr: 63.4 });
       mockGetRecs.mockResolvedValue(makeResult([rec]));
 
       render(<WildcardAdvisorPanel />);
 
+      // The gihwr span has an aria-label with the full value; the inline label text also appears
       await waitFor(() =>
-        expect(screen.getByText('63.4%')).toBeInTheDocument()
+        expect(screen.getByLabelText('63.4% game-in-hand win rate')).toBeInTheDocument()
       );
+      // Inline "GIHWR" label text should be present in the row
+      expect(screen.getAllByText('GIHWR').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('GIHWR span has a tooltip (title attribute) explaining the stat', async () => {
+      const rec = makeRec({ gihwr: 58.0 });
+      mockGetRecs.mockResolvedValue(makeResult([rec]));
+
+      render(<WildcardAdvisorPanel />);
+
+      // aria-label is set on the gihwr span; find it that way
+      await waitFor(() =>
+        expect(screen.getByLabelText('58.0% game-in-hand win rate')).toBeInTheDocument()
+      );
+
+      const gihwrSpan = screen.getByLabelText('58.0% game-in-hand win rate');
+      expect(gihwrSpan.getAttribute('title')).toContain('game-in-hand win rate');
+    });
+
+    it('drill-down is collapsed by default', async () => {
+      const rec = makeRec({ name: 'Drill Card', missing_copies: 2, owned_copies: 2 });
+      mockGetRecs.mockResolvedValue(makeResult([rec]));
+
+      render(<WildcardAdvisorPanel />);
+
+      await waitFor(() =>
+        expect(screen.getByText('Drill Card')).toBeInTheDocument()
+      );
+
+      // drill-down must not be visible before any click
+      expect(screen.queryByTestId('wildcard-advisor-drill-down')).not.toBeInTheDocument();
     });
 
     it('drill-down expands on click to show missing-cards detail', async () => {
@@ -218,6 +250,30 @@ describe('WildcardAdvisorPanel', () => {
       );
     });
 
+    it('drill-down toggle button uses SVG chevron icons, not Unicode glyphs', async () => {
+      const rec = makeRec({ name: 'Chevron Card' });
+      mockGetRecs.mockResolvedValue(makeResult([rec]));
+
+      render(<WildcardAdvisorPanel />);
+
+      await waitFor(() =>
+        expect(screen.getByText('Chevron Card')).toBeInTheDocument()
+      );
+
+      // The rec-card container has an expand button — find the button inside the card
+      const card = screen.getByTestId('wildcard-advisor-rec-card');
+      const expandBtn = card.querySelector('button.wildcard-advisor__rec-main');
+      expect(expandBtn).not.toBeNull();
+
+      // There should be an SVG (heroicon chevron) inside the expand icon span
+      const expandIconSpan = expandBtn?.querySelector('.wildcard-advisor__rec-expand-icon');
+      expect(expandIconSpan?.querySelector('svg')).not.toBeNull();
+
+      // Unicode characters '▸' and '▾' must not appear anywhere in the panel
+      expect(document.body.textContent).not.toContain('▸');
+      expect(document.body.textContent).not.toContain('▾');
+    });
+
     it('drill-down shows format context when available', async () => {
       const rec = makeRec({ format_context: 'Appears in 3 top Standard archetypes' });
       mockGetRecs.mockResolvedValue(makeResult([rec]));
@@ -233,6 +289,26 @@ describe('WildcardAdvisorPanel', () => {
       await waitFor(() =>
         expect(screen.getByText('Appears in 3 top Standard archetypes')).toBeInTheDocument()
       );
+    });
+
+    it('drill-down does not render Context row when format_context is absent', async () => {
+      const rec = makeRec({ format_context: undefined });
+      mockGetRecs.mockResolvedValue(makeResult([rec]));
+
+      render(<WildcardAdvisorPanel />);
+
+      await waitFor(() =>
+        expect(screen.getByText(rec.name)).toBeInTheDocument()
+      );
+
+      fireEvent.click(screen.getByText(rec.name));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('wildcard-advisor-drill-down')).toBeInTheDocument()
+      );
+
+      // "Context" label must not appear when format_context is absent
+      expect(screen.queryByText('Context')).not.toBeInTheDocument();
     });
   });
 
@@ -261,19 +337,68 @@ describe('WildcardAdvisorPanel', () => {
         expect(screen.getByTestId('wildcard-advisor-sync-cta')).toBeInTheDocument()
       );
     });
-  });
 
-  // ── State 4: 200 empty ────────────────────────────────────────────────────
-  describe('State 4 — 200 with empty recommendations', () => {
-    it('shows empty state when recommendations array is empty', async () => {
-      mockGetRecs.mockResolvedValue(makeResult([]));
+    it('sync-CTA hero icon is an SVG element, not a raw Unicode glyph', async () => {
+      mockGetRecs.mockRejectedValue(new ApiRequestError('collection_not_synced', 409));
 
       render(<WildcardAdvisorPanel />);
 
       await waitFor(() =>
-        expect(screen.getByTestId('wildcard-advisor-empty')).toBeInTheDocument()
+        expect(screen.getByTestId('wildcard-advisor-sync-cta')).toBeInTheDocument()
+      );
+
+      const ctaContainer = screen.getByTestId('wildcard-advisor-sync-cta');
+      // Must contain an SVG (heroicon ArrowPathIcon)
+      expect(ctaContainer.querySelector('svg')).not.toBeNull();
+      // The raw rotation glyph must not appear
+      expect(ctaContainer.textContent).not.toContain('⟳');
+    });
+  });
+
+  // ── State 4: 200 empty ────────────────────────────────────────────────────
+  describe('State 4 — 200 with empty recommendations', () => {
+    it('shows complete-collection state when ratings_cached_at is present and recs are empty', async () => {
+      mockGetRecs.mockResolvedValue({
+        ...makeResult([]),
+        data: { ...makeResult([]).data, ratings_cached_at: '2026-06-04T00:00:00Z' },
+      });
+
+      render(<WildcardAdvisorPanel />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId('wildcard-advisor-empty-complete')).toBeInTheDocument()
+      );
+      expect(screen.getByText('Collection looks complete!')).toBeInTheDocument();
+      expect(screen.getByText(/nothing left to craft/i)).toBeInTheDocument();
+    });
+
+    it('shows no-data state when ratings_cached_at is absent and recs are empty', async () => {
+      mockGetRecs.mockResolvedValue(makeResult([]));
+      // makeResult does not set ratings_cached_at → no-data path
+
+      render(<WildcardAdvisorPanel />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId('wildcard-advisor-empty-no-data')).toBeInTheDocument()
       );
       expect(screen.getByText('No recommendations yet')).toBeInTheDocument();
+      expect(screen.getByText(/keep playing/i)).toBeInTheDocument();
+    });
+
+    it('complete-collection state includes the selected format name', async () => {
+      mockGetRecs.mockResolvedValue({
+        ...makeResult([]),
+        data: { ...makeResult([]).data, ratings_cached_at: '2026-06-04T00:00:00Z' },
+      });
+
+      render(<WildcardAdvisorPanel />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId('wildcard-advisor-empty-complete')).toBeInTheDocument()
+      );
+
+      // Default format is Standard
+      expect(screen.getByText(/Standard collection looks complete/i)).toBeInTheDocument();
     });
   });
 

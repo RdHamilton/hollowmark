@@ -18,6 +18,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@clerk/react';
+import { ArrowPathIcon, ChevronRightIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import { bffWildcardAdvisor } from '@/services/api';
 import { ApiRequestError } from '@/services/apiClient';
 import type {
@@ -108,12 +109,17 @@ function RecommendationCard({ rec, affordable }: RecommendationCardProps) {
           <span
             className={`wildcard-advisor__rec-gihwr ${rec.gihwr >= 57 ? 'wildcard-advisor__rec-gihwr--positive' : rec.gihwr < 50 ? 'wildcard-advisor__rec-gihwr--negative' : ''}`}
             aria-label={`${rec.gihwr.toFixed(1)}% game-in-hand win rate`}
+            title="GIHWR: game-in-hand win rate — win % when this card is in your opening hand or drawn"
           >
+            <span className="wildcard-advisor__rec-gihwr-label">GIHWR</span>
             {rec.gihwr.toFixed(1)}%
           </span>
         )}
         <span className="wildcard-advisor__rec-expand-icon" aria-hidden="true">
-          {expanded ? '▾' : '▸'}
+          {expanded
+            ? <ChevronDownIcon className="wildcard-advisor__chevron-icon" />
+            : <ChevronRightIcon className="wildcard-advisor__chevron-icon" />
+          }
         </span>
       </button>
 
@@ -299,7 +305,10 @@ export default function WildcardAdvisorPanel({ onClose }: WildcardAdvisorPanelPr
           data-testid="wildcard-advisor-sync-cta"
           role="status"
         >
-          <div className="wildcard-advisor__sync-cta-icon" aria-hidden="true">⟳</div>
+          <ArrowPathIcon
+            className="wildcard-advisor__sync-cta-icon"
+            aria-hidden="true"
+          />
           <h3 className="wildcard-advisor__sync-cta-title">Collection Not Synced</h3>
           <p className="wildcard-advisor__sync-cta-body">
             Run the VaultMTG daemon to sync your MTGA collection, then come back
@@ -365,17 +374,39 @@ export default function WildcardAdvisorPanel({ onClose }: WildcardAdvisorPanelPr
             </div>
 
             {recs.length === 0 ? (
-              <div
-                className="wildcard-advisor__empty"
-                data-testid="wildcard-advisor-empty"
-                role="status"
-              >
-                <p className="wildcard-advisor__empty-title">No recommendations yet</p>
-                <p className="wildcard-advisor__empty-body">
-                  Your collection looks complete for {format}, or there is not
-                  enough data to make recommendations right now.
-                </p>
-              </div>
+              // Distinguish complete-collection from no-data using ratings_cached_at.
+              // When ratings_cached_at is absent the BFF has no meta signal yet — show
+              // the no-data message. When it is present but recs are empty the collection
+              // is likely complete for the selected format.
+              //
+              // NOTE: The BFF currently does not expose a dedicated discriminator field.
+              // ratings_cached_at is the best available proxy. A proper `empty_reason`
+              // field on the BFF response (e.g. "collection_complete" | "no_data") would
+              // make this unambiguous — route to Bob/Bianca via a follow-up ticket if
+              // fill-rate analysis shows the heuristic is wrong.
+              result.data.ratings_cached_at !== undefined ? (
+                <div
+                  className="wildcard-advisor__empty"
+                  data-testid="wildcard-advisor-empty-complete"
+                  role="status"
+                >
+                  <p className="wildcard-advisor__empty-title">Collection looks complete!</p>
+                  <p className="wildcard-advisor__empty-body">
+                    Your {format} collection looks complete — nothing left to craft!
+                  </p>
+                </div>
+              ) : (
+                <div
+                  className="wildcard-advisor__empty"
+                  data-testid="wildcard-advisor-empty-no-data"
+                  role="status"
+                >
+                  <p className="wildcard-advisor__empty-title">No recommendations yet</p>
+                  <p className="wildcard-advisor__empty-body">
+                    Not enough data yet to make recommendations — keep playing.
+                  </p>
+                </div>
+              )
             ) : (
               <>
                 {affordable.length > 0 && (
