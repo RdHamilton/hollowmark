@@ -98,17 +98,15 @@ func newWildcardHandler(accounts handlers.AccountLookup) *handlers.WildcardRecom
 	)
 }
 
-func decodeWildcardEnvelope(t *testing.T, body []byte) map[string]any {
+// decodeWildcardResponse decodes the flat ADR-045 §1 wildcard response body.
+// The wildcard handler uses json.NewEncoder (NOT writeMatchesJSON) and therefore
+// produces a flat body — NOT a {"data": ...} envelope. Tests that previously
+// expected the wrapped form have been updated to use this helper.
+func decodeWildcardResponse(t *testing.T, body []byte) map[string]any {
 	t.Helper()
-	wrapper := struct {
-		Data json.RawMessage `json:"data"`
-	}{}
-	if err := json.Unmarshal(body, &wrapper); err != nil {
-		t.Fatalf("envelope decode: %v body=%s", err, string(body))
-	}
 	var out map[string]any
-	if err := json.Unmarshal(wrapper.Data, &out); err != nil {
-		t.Fatalf("payload decode: %v data=%s", err, string(wrapper.Data))
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("response decode: %v body=%s", err, string(body))
 	}
 	return out
 }
@@ -151,7 +149,7 @@ func TestWildcardRecommendations_Returns200(t *testing.T) {
 		t.Fatalf("expected 200 OK, got %d body=%s", rr.Code, rr.Body.String())
 	}
 
-	resp := decodeWildcardEnvelope(t, rr.Body.Bytes())
+	resp := decodeWildcardResponse(t, rr.Body.Bytes())
 
 	// ADR-045 shape: wildcard_budget
 	budget, ok := resp["wildcard_budget"].(map[string]any)
@@ -305,7 +303,7 @@ func TestWildcardRecommendations_StaleRatings_StillReturns200(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200 even with stale ratings, got %d body=%s", rr.Code, rr.Body.String())
 	}
-	resp := decodeWildcardEnvelope(t, rr.Body.Bytes())
+	resp := decodeWildcardResponse(t, rr.Body.Bytes())
 	freshness, ok := resp["data_freshness"].(map[string]any)
 	if !ok {
 		t.Fatal("data_freshness missing")
@@ -340,7 +338,7 @@ func TestWildcardRecommendations_FreshRatings_NoStaleReason(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200 with fresh ratings, got %d body=%s", rr.Code, rr.Body.String())
 	}
-	resp := decodeWildcardEnvelope(t, rr.Body.Bytes())
+	resp := decodeWildcardResponse(t, rr.Body.Bytes())
 	freshness, ok := resp["data_freshness"].(map[string]any)
 	if !ok {
 		t.Fatal("data_freshness missing")
@@ -376,7 +374,7 @@ func TestWildcardRecommendations_WildcardBudgetPopulated(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
-	resp := decodeWildcardEnvelope(t, rr.Body.Bytes())
+	resp := decodeWildcardResponse(t, rr.Body.Bytes())
 	budget, ok := resp["wildcard_budget"].(map[string]any)
 	if !ok {
 		t.Fatal("wildcard_budget missing")
@@ -427,7 +425,7 @@ func TestWildcardRecommendations_TierIsString(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
 	}
 
-	resp := decodeWildcardEnvelope(t, rr.Body.Bytes())
+	resp := decodeWildcardResponse(t, rr.Body.Bytes())
 	recs := resp["recommendations"].([]any)
 	if len(recs) == 0 {
 		t.Fatal("expected at least one recommendation")
@@ -458,15 +456,14 @@ func TestWildcardRecommendations_RecommendationsNeverNull(t *testing.T) {
 	h.GetWildcardRecommendations(rr, req)
 
 	// Unmarshal raw body to detect a literal null.
+	// The wildcard handler emits a flat body (ADR-045 §1) — no {"data": ...} wrapper.
 	var raw struct {
-		Data struct {
-			Recommendations json.RawMessage `json:"recommendations"`
-		} `json:"data"`
+		Recommendations json.RawMessage `json:"recommendations"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if string(raw.Data.Recommendations) == "null" {
+	if string(raw.Recommendations) == "null" {
 		t.Error("recommendations must be [] not null")
 	}
 }
@@ -512,7 +509,7 @@ func TestGIHWRFractionalGuard(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
 	}
 
-	resp := decodeWildcardEnvelope(t, rr.Body.Bytes())
+	resp := decodeWildcardResponse(t, rr.Body.Bytes())
 	recs := resp["recommendations"].([]any)
 	if len(recs) < 2 {
 		t.Fatalf("expected 2 recommendations, got %d", len(recs))

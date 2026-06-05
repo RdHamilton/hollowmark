@@ -57,7 +57,12 @@ export function usePostHogIdentity(): void {
 
     if (isSignedIn && user?.id) {
       if (!identifiedRef.current) {
-        identifyUser(user.id);
+        // #819: pass hashed email as person property for PostHog targeting.
+        // hashPII runs client-side — raw email never leaves the browser.
+        void identifyUser(
+          user.id,
+          user.primaryEmailAddress?.emailAddress,
+        );
         // Enable session replay now that we have a confirmed signed-in user.
         // Recording is disabled at init time and only starts here.
         startSessionReplay();
@@ -136,5 +141,5 @@ export function usePostHogIdentity(): void {
         identifiedRef.current = false;
       }
     }
-  }, [isLoaded, isSignedIn, user?.id, getToken]);
+  }, [isLoaded, isSignedIn, user?.id, user?.primaryEmailAddress?.emailAddress, getToken]);
 }
