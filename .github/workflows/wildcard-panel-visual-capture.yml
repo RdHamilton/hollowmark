@@ -10,6 +10,10 @@ name: WildcardAdvisorPanel Visual Capture (staging)
 # (SecureString, same path as the staging auth smoke suite).
 # Account: ci-smoke-token user (user_3EamRFdUZdQl1yYPf4Yg7OIQqm4, account_id=17)
 # — has ~10k card_inventory rows and 3 seeded Standard mtgzone_archetypes.
+#
+# Container: uses mcr.microsoft.com/playwright:v1.56.1-jammy (same as e2e-smoke.yml).
+# Chromium is pre-installed in the image — no playwright install step, no CDN
+# download, no timeout risk. (#855 — eliminated cold-install cancellations)
 
 on:
   workflow_dispatch:
@@ -29,33 +33,27 @@ jobs:
     name: WildcardAdvisorPanel Screenshot Capture
     runs-on: ubuntu-latest
     environment: staging
-    timeout-minutes: 10
+    # -------------------------------------------------------------------------
+    # Use the official Playwright Docker container.
+    # Chromium is PRE-INSTALLED — no playwright install step, no CDN download.
+    # Tag must match @playwright/test version in frontend/package.json (1.56.1).
+    # PLAYWRIGHT_BROWSERS_PATH=/ms-playwright is set in the image; tests find
+    # browsers automatically.
+    # -------------------------------------------------------------------------
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-jammy
+    timeout-minutes: 15
 
     steps:
       - name: Checkout vault-mtg
         uses: actions/checkout@v6
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+      # Node.js and npm are pre-installed in the Playwright container.
+      # No setup-node or browser cache steps required.
 
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
-
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-staging-auth-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            playwright-staging-auth-${{ runner.os }}-
-            playwright-staging-${{ runner.os }}-
-            playwright-${{ runner.os }}-
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -75,19 +73,7 @@ jobs:
           echo "::add-mask::${CLERK_SECRET_KEY}"
           echo "clerk_secret_key=${CLERK_SECRET_KEY}" >> "$GITHUB_OUTPUT"
 
-      - name: Install Playwright browsers (cache miss)
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        working-directory: frontend
-        run: npx playwright install chromium --with-deps
-        env:
-          DEBIAN_FRONTEND: noninteractive
-
-      - name: Install Playwright system dependencies (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        working-directory: frontend
-        run: npx playwright install-deps chromium
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      # No playwright install steps — browsers are pre-installed in the container.
 
       - name: Create screenshot output directory
         run: mkdir -p /tmp/wildcard-panel-screenshots
