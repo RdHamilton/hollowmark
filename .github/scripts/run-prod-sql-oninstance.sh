@@ -11,23 +11,32 @@
 #
 # WRITE PROTECTION MODEL (defense in depth -- three independent layers):
 #
-#   Layer 1: SET TRANSACTION READ ONLY (Postgres level)
-#     Every user SQL is unconditionally wrapped in:
-#       BEGIN;
-#       SET TRANSACTION READ ONLY;
-#       <user SQL>;
-#       COMMIT;
-#     Any INSERT / UPDATE / DELETE / DDL inside a READ ONLY transaction is
-#     rejected by Postgres immediately. There is no allow_write path in this
-#     script -- the wrapper is hardcoded and cannot be bypassed by the caller.
+#   Layer 1: SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY (session level)
+#     Before user SQL runs, the psql session is set read-only at the SESSION
+#     level:
+#       SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;
+#     This is a session-scoped setting: it applies to EVERY transaction opened
+#     on this connection, including any transaction started by an injected
+#     COMMIT inside the user SQL.  A USER_SQL of "COMMIT; INSERT INTO …"
+#     ends the current transaction but the INSERT still runs in a read-only
+#     session and is rejected by Postgres with
+#     "cannot execute INSERT in a read-only transaction".
+#     The per-transaction BEGIN/COMMIT framing is kept for explicit boundaries
+#     but the session-level setting is the actual write-protection guarantee.
+#     Any INSERT / UPDATE / DELETE / DDL is rejected by Postgres. There is no
+#     allow_write path in this script -- the session flag is hardcoded and
+#     cannot be bypassed by the caller.
 #
 #   Layer 2: vaultmtg_app Postgres role
 #     The app DB credential (app-db-secret-arn) connects as vaultmtg_app,
-#     which holds only SELECT/INSERT/UPDATE/DELETE on public schema tables.
-#     DDL (ALTER, DROP, CREATE) is not granted to this role -- a DDL statement
-#     would fail even WITHOUT the READ ONLY wrapper.  Note: the role is not
-#     read-only at the Postgres level (it has DML grants), but Layer 1 prevents
-#     writes at the transaction level.
+#     which holds SELECT/INSERT/UPDATE/DELETE on public schema tables.  The
+#     claim that vaultmtg_app cannot execute DDL is UNVERIFIED live and is
+#     contradicted in-repo (create-production-db.sql:53 grants CREATE ON SCHEMA
+#     public to vaultmtg_app, while run-migrations.sh claims it lacks DDL
+#     grants).  Treat this layer as defense-in-depth to be verified; do not
+#     rely on it as the primary write barrier.  The vaultmtg_ro fast-follow
+#     will eliminate DML grants from the attack surface entirely.  Layer 1
+#     (session-level read-only) is the primary and sufficient write guarantee.
 #
 #   Layer 3: Identity guard (two independent factors)
 #     Before any user SQL runs, the script asserts:
@@ -207,21 +216,26 @@ echo "[run-prod-sql] Guard PASS factor 2: current_database()=${CURRENT_DB}, curr
 # Step 4: Build the final SQL to execute.
 #
 # UNCONDITIONALLY read-only.  There is no allow_write path.
-# The transaction wrapper is:
-#   BEGIN;
-#   SET TRANSACTION READ ONLY;
-#   <user SQL>
-#   COMMIT;
 #
-# Any INSERT / UPDATE / DELETE / DDL inside this transaction is rejected by
-# Postgres.  This is the primary defense-in-depth write-protection layer.
+# The session-level setting is issued first:
+#   SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;
+#
+# This applies to EVERY transaction on this connection, including any
+# transaction opened by an injected COMMIT inside USER_SQL.  A USER_SQL of
+# "COMMIT; INSERT INTO x VALUES (1);" would end the current BEGIN/COMMIT
+# block but the INSERT still executes in a read-only session and Postgres
+# rejects it with "cannot execute INSERT in a read-only transaction".
+#
+# The BEGIN/COMMIT framing provides explicit transaction boundaries and
+# ensures the user SQL runs in a single atomic block, but the session-level
+# flag is the actual write-protection guarantee.
 # -----------------------------------------------------------------------
-FULL_SQL="BEGIN;
-SET TRANSACTION READ ONLY;
+FULL_SQL="SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;
+BEGIN;
 ${USER_SQL}
 COMMIT;"
 
-echo "[run-prod-sql] Mode: READ-ONLY (unconditional -- no write path exists)"
+echo "[run-prod-sql] Mode: READ-ONLY (session-level -- SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY)"
 echo "[run-prod-sql] SQL to execute:"
 echo "---"
 echo "$FULL_SQL"

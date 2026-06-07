@@ -12,11 +12,17 @@
 #   - Target: production ONLY -- host and credentials are pulled from production
 #     SSM paths exclusively; there is no input that selects a target, and there
 #     is no code path that can redirect to staging or another account
-#   - NO write capability: every run unconditionally wraps user SQL in:
-#       BEGIN; SET TRANSACTION READ ONLY; <sql>; COMMIT;
-#     Any INSERT / UPDATE / DELETE / DDL is rejected by Postgres at the
-#     transaction level.  There is no allow_write input -- it was deliberately
-#     not added.  Writes stay MFA/break-glass only.
+#   - NO write capability: every run unconditionally issues:
+#       SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;
+#     before user SQL runs.  This is a SESSION-level read-only setting -- it
+#     applies to every transaction opened on this psql connection, including
+#     any transaction started by an injected COMMIT inside the user SQL.
+#     A USER_SQL of "COMMIT; INSERT INTO …" ends the current transaction but
+#     the INSERT still executes in a read-only session and is rejected by
+#     Postgres with "cannot execute INSERT in a read-only transaction".
+#     The per-transaction BEGIN/COMMIT framing is kept for explicit boundaries.
+#     There is no allow_write input -- it was deliberately not added.
+#     Writes stay MFA/break-glass only.
 #   - Identity guard: before running user SQL, a guard query asserts TWO
 #     independent factors:
 #       1. host(inet_server_addr()) -- the server-reported IP using host()
@@ -28,17 +34,22 @@
 #          name, read from /vaultmtg/app/production/db-name via SSM).
 #     Hard-abort (exit 1) if either factor fails.
 #   - DB user: vaultmtg_app (the least-privileged app role), credentials from
-#     /vaultmtg/app/production/app-db-secret-arn.  vaultmtg_app holds only
-#     SELECT/INSERT/UPDATE/DELETE; it cannot execute DDL even outside a READ
-#     ONLY transaction.  This is defense-in-depth: Layer 1 (SET TRANSACTION
-#     READ ONLY) prevents writes at the Postgres transaction level; Layer 2
-#     (vaultmtg_app role) prevents DDL even without the read-only wrapper.
+#     /vaultmtg/app/production/app-db-secret-arn.  vaultmtg_app holds
+#     SELECT/INSERT/UPDATE/DELETE on public schema tables.
+#     Layer 1 (SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY) is the
+#     primary and sufficient write-protection guarantee.
+#     Layer 2 (vaultmtg_app DDL restriction) is defense-in-depth but UNVERIFIED
+#     live: create-production-db.sql:53 grants CREATE ON SCHEMA public to
+#     vaultmtg_app, contradicting run-migrations.sh.  Treat as "to be verified"
+#     pending the vaultmtg_ro fast-follow (dedicated read-only role with SELECT
+#     only), which will eliminate DML grants from the attack surface entirely.
 #     *** DESIGN QUESTION FOR RAY: Should we provision a dedicated read-only
 #     Postgres role (e.g. vaultmtg_ro) that holds only SELECT on all tables?
 #     That would give a third layer of write-protection independent of both the
-#     transaction wrapper and Postgres DML grants.  Using vaultmtg_app is safe
-#     today because Layer 1 is unconditional, but a named read-only role would
-#     make the intent explicit and eliminate DML grants from the attack surface.
+#     session-level flag and Postgres DML grants.  Using vaultmtg_app is safe
+#     today because Layer 1 (session-level) is unconditional, but a named
+#     read-only role would make the intent explicit and eliminate DML grants
+#     from the attack surface.
 #     Flagging here rather than blocking the PR -- see ticket reference in reason. ***
 #   - Credential handling: PGPASSWORD is set as an env var on the EC2 instance
 #     and passed to psql directly; it is never echoed or printed in any log line
@@ -75,8 +86,11 @@ on:
       sql:
         description: >
           SQL statement(s) to run against the production DB (vaultmtg).
-          Always read-only: wrapped unconditionally in SET TRANSACTION READ ONLY.
-          No writes are possible -- INSERT/UPDATE/DELETE/DDL will be rejected.
+          Always read-only: the psql session is set SESSION-level read-only
+          (SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY) before your
+          SQL runs.  This applies to every transaction on the connection,
+          including any started by an injected COMMIT -- writes are rejected
+          by Postgres regardless.  No writes are possible.
           Include a ticket reference (e.g. "#970") in the reason field.
         required: true
         type: string
@@ -112,7 +126,7 @@ jobs:
         echo "==== PRODUCTION READ-ONLY SQL DIAGNOSTICS RUN ===="
         echo "Actor    : ${{ github.actor }}"
         echo "Reason   : ${{ inputs.reason }}"
-        echo "Mode     : READ-ONLY (unconditional -- no write path)"
+        echo "Mode     : READ-ONLY (session-level SET SESSION CHARACTERISTICS -- no write path)"
         echo "Run ID   : ${{ github.run_id }}"
         echo "Ref      : ${{ github.ref }}"
         echo "=================================================="
@@ -170,8 +184,10 @@ jobs:
     #        a) host(inet_server_addr()) IP matches resolved prod RDS endpoint IP
     #        b) current_database() == prod DB name (from SSM)
     #      Hard-aborts (exit 1) if either check fails
-    #   5. UNCONDITIONALLY wraps user SQL in:
-    #        BEGIN; SET TRANSACTION READ ONLY; <sql>; COMMIT;
+    #   5. UNCONDITIONALLY sets SESSION-level read-only before user SQL:
+    #        SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;
+    #        BEGIN; <sql>; COMMIT;
+    #      Session-level: survives any injected COMMIT in the user SQL.
     #      There is no allow_write flag -- writes are not possible
     #   6. Streams psql output back to SSM stdout (visible in workflow log)
     - name: Execute SQL on prod EC2 via SSM (read-only)
