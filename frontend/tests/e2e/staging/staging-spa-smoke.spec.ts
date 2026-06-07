@@ -17,9 +17,9 @@ import { test, expect, type Page, type BrowserContext } from '@playwright/test';
  *   3. Inject __client + __client_uat cookies into Playwright browser context
  *   4. Navigate — Clerk JS reads the cookies and establishes the session
  *
- *   The ci-smoke@vaultmtg.app account (user_3EamRFdUZdQl1yYPf4Yg7OIQqm4) is the
- *   dedicated headless smoke account. It has no match/draft data on staging;
- *   data-driven surfaces show empty states (authenticated rendering still verified).
+ *   The ci-smoke@vaultmtg.app account is the dedicated headless smoke account.
+ *   It has no match/draft data on staging; data-driven surfaces show empty states
+ *   (authenticated rendering still verified).
  *
  * Auth-enforcement policy (#678):
  *   If CLERK_SECRET_KEY is absent, the suite reports INCONCLUSIVE and FAILS —
@@ -40,6 +40,8 @@ import { test, expect, type Page, type BrowserContext } from '@playwright/test';
  *   CLERK_SECRET_KEY  — Clerk Backend API secret key (sk_live_* for staging).
  *                       REQUIRED. Absence causes INCONCLUSIVE hard failure.
  *   STAGING_SPA_URL   — Override staging SPA base URL (optional).
+ *   CLERK_FAPI_URL    — Clerk FAPI base URL for the staging instance (optional).
+ *                       Default: https://clerk.stg-app.hollowmark.app
  *   CI_SMOKE_USER_ID  — Override ci-smoke Clerk user ID (optional).
  */
 
@@ -51,9 +53,16 @@ const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY ?? '';
 // Use `||` (not `??`) so that an empty-string CI secret falls back to the
 // default. `??` only falls back on `undefined`/`null`, which left
 // BASE_URL = '' when STAGING_SPA_URL was set-but-empty in CI (#1933).
-const BASE_URL = process.env.STAGING_SPA_URL || 'https://stg-app.vaultmtg.app';
-const FAPI_BASE = 'https://clerk.stg-app.vaultmtg.app';
-const CI_SMOKE_USER_ID = process.env.CI_SMOKE_USER_ID || 'user_3EamRFdUZdQl1yYPf4Yg7OIQqm4';
+const BASE_URL = process.env.STAGING_SPA_URL || 'https://stg-app.hollowmark.app';
+// CLERK_FAPI_URL must match the Clerk instance the staging CLERK_SECRET_KEY belongs to.
+// Updated for Hollowmark staging cutover — old instance was clerk.stg-app.vaultmtg.app.
+const FAPI_BASE = process.env.CLERK_FAPI_URL || 'https://clerk.stg-app.hollowmark.app';
+// Derive the __client cookie domain from FAPI_BASE: strip the scheme and prepend '.'.
+const CLERK_COOKIE_DOMAIN = '.' + FAPI_BASE.replace(/^https?:\/\//, '');
+// Derive the __client_uat cookie domain from BASE_URL: the top two domain segments.
+// e.g. https://stg-app.hollowmark.app → .hollowmark.app
+const UAT_COOKIE_DOMAIN = '.' + BASE_URL.replace(/^https?:\/\/[^.]+\./, '');
+const CI_SMOKE_USER_ID = process.env.CI_SMOKE_USER_ID || 'user_3EmtmrSgZrtd0yRRdisTIIFYnnF';
 const API_BASE_URL = 'staging-api.vaultmtg.app';
 
 // ---------------------------------------------------------------------------
@@ -245,7 +254,7 @@ async function signIn(page: Page): Promise<void> {
     {
       name: '__client_uat',
       value: clientUat,
-      domain: '.vaultmtg.app',
+      domain: UAT_COOKIE_DOMAIN,
       path: '/',
       httpOnly: false,
       secure: true,
@@ -255,7 +264,7 @@ async function signIn(page: Page): Promise<void> {
     {
       name: '__client_uat_hKdSwoMR',
       value: clientUatHkds,
-      domain: '.vaultmtg.app',
+      domain: UAT_COOKIE_DOMAIN,
       path: '/',
       httpOnly: false,
       secure: true,
@@ -268,7 +277,7 @@ async function signIn(page: Page): Promise<void> {
     cookiesToAdd.push({
       name: '__client',
       value: clientCookie,
-      domain: '.clerk.stg-app.vaultmtg.app',
+      domain: CLERK_COOKIE_DOMAIN,
       path: '/',
       httpOnly: true,
       secure: true,

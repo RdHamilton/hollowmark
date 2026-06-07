@@ -39,10 +39,10 @@ on:
   workflow_call:
     inputs:
       staging_spa_url:
-        description: 'Staging SPA URL (e.g. https://stg-app.vaultmtg.app)'
+        description: 'Staging SPA URL (e.g. https://stg-app.hollowmark.app)'
         required: false
         type: string
-        default: 'https://stg-app.vaultmtg.app'
+        default: 'https://stg-app.hollowmark.app'
       staging_api_url:
         description: 'Staging BFF URL (e.g. https://staging-api.vaultmtg.app)'
         required: false
@@ -55,7 +55,7 @@ on:
         description: 'Staging SPA URL'
         required: false
         type: string
-        default: 'https://stg-app.vaultmtg.app'
+        default: 'https://stg-app.hollowmark.app'
       staging_api_url:
         description: 'Staging BFF URL'
         required: false
@@ -105,6 +105,9 @@ jobs:
           # (CLERK_SECRET_KEY — provisioned from SSM /vaultmtg/staging/CLERK_SECRET_KEY).
           # GHA secrets propagate into container steps (unlike OIDC env vars).
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          # CLERK_FAPI_URL: Hollowmark staging Clerk instance FAPI base URL.
+          # Updated from clerk.stg-app.vaultmtg.app during Hollowmark staging cutover.
+          CLERK_FAPI_URL: https://clerk.stg-app.hollowmark.app
 
       # ── BFF API authenticated smoke ───────────────────────────────────────
       # Exercises auth-gated BFF endpoints (matches, SSE) with a pre-issued token.
@@ -137,10 +140,11 @@ jobs:
             --reporter=list
         env:
           CI: true
-          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.vaultmtg.app' }}
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.hollowmark.app' }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          CLERK_FAPI_URL: https://clerk.stg-app.hollowmark.app
           SCREENSHOT_DIR: /tmp/wildcard-panel-screenshots
-          CI_SMOKE_USER_ID: user_3EamRFdUZdQl1yYPf4Yg7OIQqm4
+          CI_SMOKE_USER_ID: user_3EmtmrSgZrtd0yRRdisTIIFYnnF
 
       - name: Upload WildcardAdvisorPanel screenshots
         uses: actions/upload-artifact@v4
