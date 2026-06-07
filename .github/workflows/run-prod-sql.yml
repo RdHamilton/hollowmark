@@ -1,0 +1,277 @@
+# PROD READ-ONLY diagnostics. NO writes possible. Writes are MFA/break-glass only.
+#
+# run-prod-sql.yml
+#
+# Purpose: lets engineers with write access run read-only diagnostic SQL against
+# the production RDS without requiring interactive MFA from Ramone. The immediate
+# use is verifying whether the #970 orphaned-constraint issue is latent in prod
+# (lineage analysis suggests prod is clean; this tool produces a definitive answer).
+#
+# Security design:
+#   - Trigger: workflow_dispatch only (write access required to dispatch)
+#   - Target: production ONLY -- host and credentials are pulled from production
+#     SSM paths exclusively; there is no input that selects a target, and there
+#     is no code path that can redirect to staging or another account
+#   - NO write capability: every run unconditionally wraps user SQL in:
+#       BEGIN; SET TRANSACTION READ ONLY; <sql>; COMMIT;
+#     Any INSERT / UPDATE / DELETE / DDL is rejected by Postgres at the
+#     transaction level.  There is no allow_write input -- it was deliberately
+#     not added.  Writes stay MFA/break-glass only.
+#   - Identity guard: before running user SQL, a guard query asserts TWO
+#     independent factors:
+#       1. host(inet_server_addr()) -- the server-reported IP using host()
+#          (NOT inet_server_addr()::text, which appends a /32 CIDR suffix
+#          and caused fail-closed behavior in the staging tool -- fixed in
+#          RdHamilton/vault-mtg#3021).  Must match the IP that the prod RDS
+#          endpoint resolves to on the EC2 instance (getent hosts).
+#       2. current_database() must equal "vaultmtg" (the production database
+#          name, read from /vaultmtg/app/production/db-name via SSM).
+#     Hard-abort (exit 1) if either factor fails.
+#   - DB user: vaultmtg_app (the least-privileged app role), credentials from
+#     /vaultmtg/app/production/app-db-secret-arn.  vaultmtg_app holds only
+#     SELECT/INSERT/UPDATE/DELETE; it cannot execute DDL even outside a READ
+#     ONLY transaction.  This is defense-in-depth: Layer 1 (SET TRANSACTION
+#     READ ONLY) prevents writes at the Postgres transaction level; Layer 2
+#     (vaultmtg_app role) prevents DDL even without the read-only wrapper.
+#     *** DESIGN QUESTION FOR RAY: Should we provision a dedicated read-only
+#     Postgres role (e.g. vaultmtg_ro) that holds only SELECT on all tables?
+#     That would give a third layer of write-protection independent of both the
+#     transaction wrapper and Postgres DML grants.  Using vaultmtg_app is safe
+#     today because Layer 1 is unconditional, but a named read-only role would
+#     make the intent explicit and eliminate DML grants from the attack surface.
+#     Flagging here rather than blocking the PR -- see ticket reference in reason. ***
+#   - Credential handling: PGPASSWORD is set as an env var on the EC2 instance
+#     and passed to psql directly; it is never echoed or printed in any log line
+#   - Execution path: psql runs on the EC2 instance via SSM RunShellScript
+#     (the production RDS is in a private VPC subnet -- no direct runner access)
+#   - IAM: reuses the production GitHub environment and the github-actions-oidc-deploy
+#     OIDC role (GhaAppDeployRole in iam-gha-roles.yml).  That role already holds
+#     ssm:GetParameter on /vaultmtg/* and ssm:SendCommand + ssm:GetCommandInvocation.
+#     The on-instance script assumes vaultmtg-staging-deploy-provisioner to call
+#     secretsmanager:GetSecretValue on the vaultmtg-production-app-db-* secret
+#     (that grant already exists in staging-deploy-role.yml: StagingDBSecretRead Sid).
+#     NO new IAM grants are needed.
+#   - Prod SSM paths used:
+#       /vaultmtg/app/production/db-endpoint     -- RDS hostname (plain String)
+#       /vaultmtg/app/production/app-db-secret-arn -- Secrets Manager ARN for
+#                                                     vaultmtg_app credential
+#       /vaultmtg/app/production/db-name         -- Postgres database name ("vaultmtg")
+#     All three are fetched from the GHA runner (under github-actions-oidc-deploy),
+#     then substituted into the on-instance script template.  The actual password
+#     is fetched on-instance after the provisioner assume-role.
+#
+# Review routing: Ray (arch/security design -- read-only-only guarantee, vaultmtg_app
+#   vs dedicated read-only role question) + Sarah (S-07 -- confirm no write path,
+#   prod-targeting hardcoded, host() comparison correct, isolation holds) + Lee (merge)
+# Unblocks: vault-mtg-tickets#970 prod verification
+#
+# Concurrency: a single group prevents two runs from racing the DB.
+
+name: Run Prod SQL (read-only diagnostics)
+
+on:
+  workflow_dispatch:
+    inputs:
+      sql:
+        description: >
+          SQL statement(s) to run against the production DB (vaultmtg).
+          Always read-only: wrapped unconditionally in SET TRANSACTION READ ONLY.
+          No writes are possible -- INSERT/UPDATE/DELETE/DDL will be rejected.
+          Include a ticket reference (e.g. "#970") in the reason field.
+        required: true
+        type: string
+      reason:
+        description: >
+          Required: what are you diagnosing and why? Include a ticket reference
+          (e.g. "Verify #970 orphaned-constraint absence in prod").
+          Echoed to the workflow log for audit.
+        required: true
+        type: string
+
+# One run at a time -- prevent two operators from racing the production DB.
+concurrency:
+  group: run-prod-sql
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run-prod-sql:
+    name: Run Prod SQL (read-only)
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+    - name: Checkout (for on-instance script template)
+      uses: actions/checkout@v4
+
+    - name: Echo reason (audit log)
+      run: |
+        echo "==== PRODUCTION READ-ONLY SQL DIAGNOSTICS RUN ===="
+        echo "Actor    : ${{ github.actor }}"
+        echo "Reason   : ${{ inputs.reason }}"
+        echo "Mode     : READ-ONLY (unconditional -- no write path)"
+        echo "Run ID   : ${{ github.run_id }}"
+        echo "Ref      : ${{ github.ref }}"
+        echo "=================================================="
+
+    - name: Configure AWS credentials (OIDC)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+        aws-region: us-east-1
+
+    # Fetch production SSM facts from the GHA runner.
+    # DB_ENDPOINT and DB_NAME are plain Strings (not secrets) -- safe to log.
+    # APP_DB_SECRET_ARN is a structural ARN fact (not a credential) -- safe to log.
+    # The actual password is fetched ON-INSTANCE after the provisioner assume-role.
+    - name: Fetch production SSM facts
+      id: ssm
+      run: |
+        DB_ENDPOINT=$(aws ssm get-parameter \
+          --name "/vaultmtg/app/production/db-endpoint" \
+          --region us-east-1 \
+          --query "Parameter.Value" \
+          --output text)
+
+        APP_DB_SECRET_ARN=$(aws ssm get-parameter \
+          --name "/vaultmtg/app/production/app-db-secret-arn" \
+          --region us-east-1 \
+          --query "Parameter.Value" \
+          --output text)
+
+        DB_NAME=$(aws ssm get-parameter \
+          --name "/vaultmtg/app/production/db-name" \
+          --region us-east-1 \
+          --query "Parameter.Value" \
+          --output text)
+
+        echo "Prod DB endpoint : ${DB_ENDPOINT}"
+        echo "Prod DB name     : ${DB_NAME}"
+        echo "App DB secret ARN: ${APP_DB_SECRET_ARN}"
+
+        {
+          echo "db_endpoint=${DB_ENDPOINT}"
+          echo "app_db_secret_arn=${APP_DB_SECRET_ARN}"
+          echo "db_name=${DB_NAME}"
+        } >> "$GITHUB_OUTPUT"
+
+    # The on-instance script lives in .github/scripts/run-prod-sql-oninstance.sh
+    # (checked out above).  We substitute runtime tokens, base64-encode the
+    # result, and ship it to EC2 via SSM RunShellScript.
+    #
+    # The script:
+    #   1. Assumes vaultmtg-staging-deploy-provisioner (same as run-migrations.sh)
+    #   2. Fetches vaultmtg_app credentials from Secrets Manager
+    #   3. PGPASSWORD is set as an env var and never echoed/logged
+    #   4. Runs the identity guard -- TWO factors must pass before user SQL runs:
+    #        a) host(inet_server_addr()) IP matches resolved prod RDS endpoint IP
+    #        b) current_database() == prod DB name (from SSM)
+    #      Hard-aborts (exit 1) if either check fails
+    #   5. UNCONDITIONALLY wraps user SQL in:
+    #        BEGIN; SET TRANSACTION READ ONLY; <sql>; COMMIT;
+    #      There is no allow_write flag -- writes are not possible
+    #   6. Streams psql output back to SSM stdout (visible in workflow log)
+    - name: Execute SQL on prod EC2 via SSM (read-only)
+      env:
+        EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+        DB_ENDPOINT: ${{ steps.ssm.outputs.db_endpoint }}
+        APP_DB_SECRET_ARN: ${{ steps.ssm.outputs.app_db_secret_arn }}
+        DB_NAME: ${{ steps.ssm.outputs.db_name }}
+        USER_SQL: ${{ inputs.sql }}
+        AUDIT_REASON: ${{ inputs.reason }}
+        ACTOR: ${{ github.actor }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        # Encode user-supplied values so they survive token substitution safely.
+        ENCODED_SQL=$(printf '%s' "$USER_SQL" | base64 -w 0)
+        ENCODED_REASON=$(printf '%s' "$AUDIT_REASON" | base64 -w 0)
+
+        PROVISIONER_ROLE_ARN="arn:aws:iam::901347789205:role/vaultmtg-staging-deploy-provisioner"
+
+        # Copy the checked-out script template to a working copy.
+        SCRIPT_FILE=$(mktemp /tmp/prod-sql-script.XXXXXX.sh)
+        cp .github/scripts/run-prod-sql-oninstance.sh "$SCRIPT_FILE"
+
+        # Substitute runtime values into the script template.
+        sed -i "s|__PROVISIONER_ROLE_ARN__|${PROVISIONER_ROLE_ARN}|g" "$SCRIPT_FILE"
+        sed -i "s|__EXPECTED_DB__|${DB_NAME}|g"                        "$SCRIPT_FILE"
+        sed -i "s|__DB_ENDPOINT__|${DB_ENDPOINT}|g"                    "$SCRIPT_FILE"
+        sed -i "s|__APP_DB_SECRET_ARN__|${APP_DB_SECRET_ARN}|g"        "$SCRIPT_FILE"
+        sed -i "s|__ACTOR__|${ACTOR}|g"                                "$SCRIPT_FILE"
+        sed -i "s|__RUN_ID__|${RUN_ID}|g"                              "$SCRIPT_FILE"
+        sed -i "s|__ENCODED_SQL__|${ENCODED_SQL}|g"                    "$SCRIPT_FILE"
+        sed -i "s|__ENCODED_REASON__|${ENCODED_REASON}|g"              "$SCRIPT_FILE"
+
+        # Base64-encode the complete script so it survives SSM JSON quoting.
+        ENCODED_SCRIPT=$(base64 -w 0 "$SCRIPT_FILE")
+        rm -f "$SCRIPT_FILE"
+
+        SSM_COMMAND="echo '${ENCODED_SCRIPT}' | base64 -d | bash"
+
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids "${EC2_INSTANCE_ID}" \
+          --document-name "AWS-RunShellScript" \
+          --parameters "commands=[\"${SSM_COMMAND}\"]" \
+          --region us-east-1 \
+          --query "Command.CommandId" \
+          --output text)
+
+        echo "SSM Command ID: ${COMMAND_ID}"
+
+        SUCCEEDED=0
+        for i in $(seq 1 30); do
+          set +e
+          RAW=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${EC2_INSTANCE_ID}" \
+            --region us-east-1 \
+            --output json 2>&1)
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            if echo "$RAW" | grep -q "InvocationDoesNotExist"; then
+              echo "[$i/30] Status: Pending (invocation not yet registered)"
+            else
+              echo "[$i/30] API error (rc=$RC): $RAW"
+            fi
+          else
+            STATUS=$(echo "$RAW" | jq -r '.Status // "Unknown"')
+            STDOUT=$(echo "$RAW" | jq -r '.StandardOutputContent // ""')
+            STDERR=$(echo "$RAW" | jq -r '.StandardErrorContent // ""')
+            echo "[$i/30] Status: $STATUS"
+            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || \
+               [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              if [ -n "$STDOUT" ]; then
+                echo "=== STDOUT ==="
+                echo "$STDOUT"
+              fi
+              if [ -n "$STDERR" ]; then
+                echo "=== STDERR ==="
+                echo "$STDERR"
+              fi
+              if [ "$STATUS" = "Success" ]; then
+                SUCCEEDED=1
+              else
+                echo "SQL execution failed: $STATUS" >&2
+                exit 1
+              fi
+              break
+            fi
+          fi
+          sleep 10
+        done
+
+        if [ "$SUCCEEDED" -ne 1 ]; then
+          echo "SSM command timed out waiting for SQL execution" >&2
+          exit 1
+        fi
+
+        echo "=================================================="
+        echo "run-prod-sql complete (read-only)."
+        echo "Actor    : ${{ github.actor }}"
+        echo "Reason   : ${{ inputs.reason }}"
+        echo "Run ID   : ${{ github.run_id }}"
+        echo "=================================================="
