@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1460,6 +1461,10 @@ func TestMigrateKeychainIfNeeded_EmitsOnce(t *testing.T) {
 		"event type must be keychain.migrated")
 	assert.Contains(t, ingestBodies[0], testVersion,
 		"keychain.migrated event must carry daemon_version")
+	assert.Contains(t, ingestBodies[0], `"platform"`,
+		"keychain.migrated event must carry platform field so Faye can break down AC16 adoption by OS")
+	assert.Contains(t, ingestBodies[0], runtime.GOOS,
+		"keychain.migrated event platform value must equal runtime.GOOS")
 
 	// ── Second call: migration must be a no-op ────────────────────────────────
 	prevCount := len(ingestBodies)
@@ -1486,6 +1491,8 @@ func runKeychainMigration(t *testing.T, bffURL, accountID, version string) {
 	}
 
 	// Mirror the dispatch pattern from main.go Step-2 keychain migration.
+	// Platform is runtime.GOOS — mirrors production dispatchKeychainMigrated so
+	// the test exercises the correct value on every CI platform (darwin, linux, windows).
 	payload := struct {
 		FromService   string `json:"from_service"`
 		ToService     string `json:"to_service"`
@@ -1495,7 +1502,7 @@ func runKeychainMigration(t *testing.T, bffURL, accountID, version string) {
 		FromService:   keychain.ServiceNameLegacy,
 		ToService:     keychain.ServiceNameNew,
 		DaemonVersion: version,
-		Platform:      "darwin",
+		Platform:      runtime.GOOS,
 	}
 
 	evt, err := dispatch.BuildEvent("keychain.migrated", accountID, "", payload)
