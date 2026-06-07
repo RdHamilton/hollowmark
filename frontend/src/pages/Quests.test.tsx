@@ -1237,4 +1237,50 @@ describe('Quests', () => {
       expect(mockSystem.getCurrentAccount).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('Progress bar contrast — sapphire/gilt gradients (#1021)', () => {
+    it('applies quest-progress-fill--done class when active quest is 100% complete', async () => {
+      const completedQuest = createMockQuest({
+        ending_progress: 10,
+        goal: 10,
+        completed: true,
+      });
+      mockQuests.getActiveQuests.mockResolvedValue(createActiveQuestsResponse([completedQuest], true));
+      mockQuests.getQuestHistory.mockResolvedValue([]);
+      mockQuests.getDailyWins.mockResolvedValue({ wins: 0 });
+      mockQuests.getWeeklyWins.mockResolvedValue({ wins: 0 });
+      mockSystem.getCurrentAccount.mockResolvedValue(null);
+
+      renderWithProvider(<Quests />);
+
+      await waitFor(() => {
+        const fills = document.querySelectorAll('.quest-progress-fill');
+        expect(fills.length).toBeGreaterThan(0);
+        // 100% complete quest should have the gilt modifier class
+        expect(fills[0]).toHaveClass('quest-progress-fill--done');
+      });
+    });
+
+    it('does not apply quest-progress-fill--done class when active quest is incomplete', async () => {
+      const incompleteQuest = createMockQuest({
+        ending_progress: 5,
+        goal: 10,
+        completed: false,
+      });
+      mockQuests.getActiveQuests.mockResolvedValue(createActiveQuestsResponse([incompleteQuest], true));
+      mockQuests.getQuestHistory.mockResolvedValue([]);
+      mockQuests.getDailyWins.mockResolvedValue({ wins: 0 });
+      mockQuests.getWeeklyWins.mockResolvedValue({ wins: 0 });
+      mockSystem.getCurrentAccount.mockResolvedValue(null);
+
+      renderWithProvider(<Quests />);
+
+      await waitFor(() => {
+        const fills = document.querySelectorAll('.quest-progress-fill');
+        expect(fills.length).toBeGreaterThan(0);
+        // Incomplete quest should NOT have the gilt modifier
+        expect(fills[0]).not.toHaveClass('quest-progress-fill--done');
+      });
+    });
+  });
 });
