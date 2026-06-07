@@ -6,6 +6,7 @@ package install_test
 
 import (
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -226,6 +227,9 @@ func TestIdentity_StagingChannel_HollowmarkLabel(t *testing.T) {
 }
 
 func TestIdentity_StableChannel_HollowmarkPath(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("PlistPathHollowmark is only populated on Darwin")
+	}
 	id := install.Identity(install.ChannelStable)
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -235,6 +239,9 @@ func TestIdentity_StableChannel_HollowmarkPath(t *testing.T) {
 }
 
 func TestIdentity_StagingChannel_HollowmarkPath(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("PlistPathHollowmark is only populated on Darwin")
+	}
 	id := install.Identity(install.ChannelStaging)
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
