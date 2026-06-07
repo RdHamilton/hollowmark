@@ -1,7 +1,7 @@
 name: Board Status Automation
 
 # ---------------------------------------------------------------------------
-# Automatically transitions board #40 (v0.3.4) Status based on PR lifecycle.
+# Automatically transitions board #46 (v0.3.9) Status based on PR lifecycle.
 #
 # TARGET BEHAVIOR
 # ---------------
@@ -12,16 +12,16 @@ name: Board Status Automation
 #
 # CROSS-REPO SUPPORT
 # ------------------
-# Board #40 aggregates issues from both RdHamilton/hollowmark AND
-# RdHamilton/vault-mtg-tickets. The GitHub GraphQL closingIssuesReferences
+# Board #46 aggregates issues from both RdHamilton/hollowmark AND
+# RdHamilton/hollowmark-tickets. The GitHub GraphQL closingIssuesReferences
 # field resolves linked issues regardless of repo, then projectItems returns
-# the item ID on board #40 directly — no per-repo fan-out needed.
+# the item ID on board #46 directly — no per-repo fan-out needed.
 #
 # LINKING CONVENTION
 # ------------------
 # Issues are linked via the PR body using GitHub closing keywords:
-#   closes #NNN                              (vault-mtg same-repo)
-#   closes RdHamilton/vault-mtg-tickets#NNN  (cross-repo)
+#   closes #NNN                                    (hollowmark same-repo)
+#   closes RdHamilton/hollowmark-tickets#NNN       (cross-repo)
 # Both forms are resolved by closingIssuesReferences.
 #
 # TOKEN REQUIREMENT (S-20 FLAG — see below)
@@ -34,13 +34,21 @@ name: Board Status Automation
 # S-20 FLAG: GH_PROJECT_PAT is a NEW credential. Provisioning it requires
 # Ramone's explicit approval before it is stored as a repo secret.
 #
-# BOARD / FIELD CONSTANTS (board #40 as of 2026-05-29)
+# BOARD / FIELD CONSTANTS (board #46 as of 2026-06-07)
 # -----------------------------------------------------
-# Project ID:      PVT_kwHOABsZ684BZI6K
-# Status field ID: PVTSSF_lAHOABsZ684BZI6KzhUJvXw
+# Project ID:      PVT_kwHOABsZ684BZZgf
+# Status field ID: PVTSSF_lAHOABsZ684BZZgfzhUYaRA
 # Status options:
 #   PR Review: 29cbdce5
 #   Done:      e645b7f6
+#
+# PER-WAVE UPDATE CHECKLIST
+# -------------------------
+# When advancing to a new board, update TWO env vars at the top of this file:
+#   TARGET_BOARD_NUMBER — the new board number (e.g. "47")
+#   PROJECT_ID          — the new board's project node ID
+#   STATUS_FIELD_ID     — the new board's Status field ID
+# Status option IDs (PR Review / Done) are typically stable across boards.
 #
 # S-07 REVIEW STATUS
 # ------------------
@@ -51,7 +59,7 @@ name: Board Status Automation
 #
 # TICKET
 # ------
-# Cleanup Wave item 1 — board status automation (Ray, 2026-05-29)
+# Fix #1016 — board-status-automation hardcoded to deleted board #40 (Bob, 2026-06-07)
 # ---------------------------------------------------------------------------
 
 on:
@@ -71,17 +79,18 @@ permissions:
   pull-requests: read
 
 env:
-  PROJECT_ID: "PVT_kwHOABsZ684BZI6K"
-  STATUS_FIELD_ID: "PVTSSF_lAHOABsZ684BZI6KzhUJvXw"
+  PROJECT_ID: "PVT_kwHOABsZ684BZZgf"
+  STATUS_FIELD_ID: "PVTSSF_lAHOABsZ684BZZgfzhUYaRA"
   STATUS_PR_REVIEW: "29cbdce5"
   STATUS_DONE: "e645b7f6"
+  TARGET_BOARD_NUMBER: "46"
 
 jobs:
 
   # -------------------------------------------------------------------------
   # Job: set-pr-review
   # Runs when a PR is opened or marked ready-for-review (non-draft).
-  # Sets Status = "PR Review" on every board-#40 item linked to this PR.
+  # Sets Status = "PR Review" on every board-#46 item linked to this PR.
   # -------------------------------------------------------------------------
   set-pr-review:
     name: Set board status to PR Review
@@ -138,24 +147,29 @@ jobs:
           echo "GraphQL response received."
 
           ITEM_IDS=$(echo "${RESPONSE}" | python3 -c "
-          import json, sys
+          import json, sys, os
           raw = sys.stdin.read()
-          data = json.loads(raw)
-          pr_node = data['data']['repository']['pullRequest']
+          try:
+              data = json.loads(raw)
+              repo = (data.get('data') or {}).get('repository') or {}
+              pr_node = repo.get('pullRequest')
+          except (json.JSONDecodeError, AttributeError):
+              pr_node = None
           if not pr_node:
               sys.exit(0)
+          target = int(os.environ.get('TARGET_BOARD_NUMBER', '0'))
           for issue in pr_node['closingIssuesReferences']['nodes']:
               for item in issue['projectItems']['nodes']:
-                  if item['project']['number'] == 40:
+                  if item['project']['number'] == target:
                       print(item['id'])
           ")
 
           if [ -z "${ITEM_IDS}" ]; then
-            echo "No board #40 items found linked to PR #${PR_NUMBER} — nothing to update."
+            echo "No board #${TARGET_BOARD_NUMBER} items found linked to PR #${PR_NUMBER} — nothing to update."
             exit 0
           fi
 
-          echo "Board #40 items linked to PR #${PR_NUMBER}:"
+          echo "Board #${TARGET_BOARD_NUMBER} items linked to PR #${PR_NUMBER}:"
           echo "${ITEM_IDS}"
 
           UPDATED=0
@@ -199,7 +213,7 @@ jobs:
   # Runs when a PR is merged (pull_request_target closed + merged == true).
   # pull_request_target runs in the base-branch context, giving access to
   # secrets even for PRs from feature branches.
-  # Sets Status = "Done" on every board-#40 item linked to this PR.
+  # Sets Status = "Done" on every board-#46 item linked to this PR.
   # -------------------------------------------------------------------------
   set-done:
     name: Set board status to Done
@@ -256,24 +270,29 @@ jobs:
           echo "GraphQL response received."
 
           ITEM_IDS=$(echo "${RESPONSE}" | python3 -c "
-          import json, sys
+          import json, sys, os
           raw = sys.stdin.read()
-          data = json.loads(raw)
-          pr_node = data['data']['repository']['pullRequest']
+          try:
+              data = json.loads(raw)
+              repo = (data.get('data') or {}).get('repository') or {}
+              pr_node = repo.get('pullRequest')
+          except (json.JSONDecodeError, AttributeError):
+              pr_node = None
           if not pr_node:
               sys.exit(0)
+          target = int(os.environ.get('TARGET_BOARD_NUMBER', '0'))
           for issue in pr_node['closingIssuesReferences']['nodes']:
               for item in issue['projectItems']['nodes']:
-                  if item['project']['number'] == 40:
+                  if item['project']['number'] == target:
                       print(item['id'])
           ")
 
           if [ -z "${ITEM_IDS}" ]; then
-            echo "No board #40 items found linked to PR #${PR_NUMBER} — nothing to update."
+            echo "No board #${TARGET_BOARD_NUMBER} items found linked to PR #${PR_NUMBER} — nothing to update."
             exit 0
           fi
 
-          echo "Board #40 items linked to PR #${PR_NUMBER}:"
+          echo "Board #${TARGET_BOARD_NUMBER} items linked to PR #${PR_NUMBER}:"
           echo "${ITEM_IDS}"
 
           UPDATED=0
