@@ -6,7 +6,7 @@ toolchain go1.25.11
 
 require (
 	github.com/RdHamilton/hollowmark/services/contract v0.1.6
-	github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260603164737-e0e383f680c4
+	github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260607111157-fedace9e5ede
 	github.com/aws/aws-sdk-go-v2/config v1.32.22
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.7
 	github.com/clerk/clerk-sdk-go/v2 v2.6.0
@@ -22,6 +22,7 @@ require (
 )
 
 require (
+	github.com/RdHamilton/hollowmark/pkg/logparse v0.1.5 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.11 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.21 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.27 // indirect
