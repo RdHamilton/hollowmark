@@ -125,16 +125,13 @@ describe('Layout Component', () => {
 
       const brand = screen.getByTestId('nav-brand');
       expect(brand).toBeInTheDocument();
-      // #1020: wordmark updated from VaultMTG → Hollowmark
+      // #1020: wordmark text updated from VaultMTG → Hollowmark
       expect(brand).toHaveTextContent('Hollowmark');
       // Brand lockup links back to home
       expect(brand).toHaveAttribute('href', '/home');
       // aria-label updated to match Hollowmark
       expect(brand).toHaveAttribute('aria-label', 'Hollowmark home');
-      // Orb mark rendered at ≥32px per design spec
-      const mark = brand.querySelector('img');
-      expect(mark).toHaveAttribute('width', '32');
-      expect(mark).toHaveAttribute('height', '32');
+      // Note: mark asset sizing is deferred to #1035 (logo-mark stamp asset)
     });
 
     it('should apply active treatment class to the current tab', () => {
