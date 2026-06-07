@@ -5,7 +5,7 @@
 #
 # Options:
 #   -Purge    Also delete the daemon's API key from Windows Credential Manager.
-#             By default the credential (target: com.vaultmtg.daemon:api-key)
+#             By default the credential (target: com.hollowmark.daemon:api-key)
 #             is retained for downgrade safety so that a reinstall does not
 #             require re-authenticating.
 #
@@ -90,12 +90,13 @@ if (Test-Path $BinaryPath) {
 }
 
 # ---------------------------------------------------------------------------
-# Credential Manager entry (target: com.vaultmtg.daemon:api-key).
+# Credential Manager entry (target: com.hollowmark.daemon:api-key).
 # Default behaviour: RETAIN the credential for downgrade safety.
 # -Purge: delete it so no credential remains in Credential Manager.
 # go-keyring on Windows uses the target name "<service>:<account>".
+# ADR-022 Phase 3 (v0.3.9): target name advances to hollowmark namespace.
 # ---------------------------------------------------------------------------
-$CredTarget = 'com.vaultmtg.daemon:api-key'
+$CredTarget = 'com.hollowmark.daemon:api-key'
 
 if ($Purge) {
     Write-Host "Removing Credential Manager entry '$CredTarget'..."
