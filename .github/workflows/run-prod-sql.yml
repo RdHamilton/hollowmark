@@ -33,24 +33,17 @@
 #       2. current_database() must equal "vaultmtg" (the production database
 #          name, read from /vaultmtg/app/production/db-name via SSM).
 #     Hard-abort (exit 1) if either factor fails.
-#   - DB user: vaultmtg_app (the least-privileged app role), credentials from
-#     /vaultmtg/app/production/app-db-secret-arn.  vaultmtg_app holds
-#     SELECT/INSERT/UPDATE/DELETE on public schema tables.
-#     Layer 1 (SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY) is the
-#     primary and sufficient write-protection guarantee.
-#     Layer 2 (vaultmtg_app DDL restriction) is defense-in-depth but UNVERIFIED
-#     live: create-production-db.sql:53 grants CREATE ON SCHEMA public to
-#     vaultmtg_app, contradicting run-migrations.sh.  Treat as "to be verified"
-#     pending the vaultmtg_ro fast-follow (dedicated read-only role with SELECT
-#     only), which will eliminate DML grants from the attack surface entirely.
-#     *** DESIGN QUESTION FOR RAY: Should we provision a dedicated read-only
-#     Postgres role (e.g. vaultmtg_ro) that holds only SELECT on all tables?
-#     That would give a third layer of write-protection independent of both the
-#     session-level flag and Postgres DML grants.  Using vaultmtg_app is safe
-#     today because Layer 1 (session-level) is unconditional, but a named
-#     read-only role would make the intent explicit and eliminate DML grants
-#     from the attack surface.
-#     Flagging here rather than blocking the PR -- see ticket reference in reason. ***
+#   - DB user: vaultmtg_ro (SELECT-only role provisioned by migration 000108 /
+#     ticket #971), credentials from /vaultmtg/app/production/ro-db-secret-arn.
+#     vaultmtg_ro holds SELECT on all public schema tables and nothing else --
+#     no INSERT/UPDATE/DELETE/DDL grants exist on this role.  This is a durable
+#     role-layer write guarantee independent of the session-level flag.
+#     Layer 1 (SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY) is kept as
+#     defense-in-depth; now both layers independently block writes:
+#       Layer 1: session-level read-only (Postgres rejects DML at the transaction
+#                level regardless of role grants)
+#       Layer 2: vaultmtg_ro role holds SELECT only (no DML grants -- writes
+#                rejected at the role/grant layer even if Layer 1 were bypassed)
 #   - Credential handling: PGPASSWORD is set as an env var on the EC2 instance
 #     and passed to psql directly; it is never echoed or printed in any log line
 #   - Execution path: psql runs on the EC2 instance via SSM RunShellScript
@@ -59,14 +52,14 @@
 #     OIDC role (GhaAppDeployRole in iam-gha-roles.yml).  That role already holds
 #     ssm:GetParameter on /vaultmtg/* and ssm:SendCommand + ssm:GetCommandInvocation.
 #     The on-instance script assumes vaultmtg-staging-deploy-provisioner to call
-#     secretsmanager:GetSecretValue on the vaultmtg-production-app-db-* secret
-#     (that grant already exists in staging-deploy-role.yml: StagingDBSecretRead Sid).
-#     NO new IAM grants are needed.
+#     secretsmanager:GetSecretValue on the vaultmtg-production-ro-db-* secret
+#     (that grant is in staging-deploy-role.yml StagingDBSecretRead Sid, added
+#     by CFN #306 -- no new IAM grants needed).
 #   - Prod SSM paths used:
-#       /vaultmtg/app/production/db-endpoint     -- RDS hostname (plain String)
-#       /vaultmtg/app/production/app-db-secret-arn -- Secrets Manager ARN for
-#                                                     vaultmtg_app credential
-#       /vaultmtg/app/production/db-name         -- Postgres database name ("vaultmtg")
+#       /vaultmtg/app/production/db-endpoint    -- RDS hostname (plain String)
+#       /vaultmtg/app/production/ro-db-secret-arn -- Secrets Manager ARN for
+#                                                    vaultmtg_ro credential
+#       /vaultmtg/app/production/db-name        -- Postgres database name ("vaultmtg")
 #     All three are fetched from the GHA runner (under github-actions-oidc-deploy),
 #     then substituted into the on-instance script template.  The actual password
 #     is fetched on-instance after the provisioner assume-role.
@@ -139,7 +132,7 @@ jobs:
 
     # Fetch production SSM facts from the GHA runner.
     # DB_ENDPOINT and DB_NAME are plain Strings (not secrets) -- safe to log.
-    # APP_DB_SECRET_ARN is a structural ARN fact (not a credential) -- safe to log.
+    # RO_DB_SECRET_ARN is a structural ARN fact (not a credential) -- safe to log.
     # The actual password is fetched ON-INSTANCE after the provisioner assume-role.
     - name: Fetch production SSM facts
       id: ssm
@@ -150,8 +143,8 @@ jobs:
           --query "Parameter.Value" \
           --output text)
 
-        APP_DB_SECRET_ARN=$(aws ssm get-parameter \
-          --name "/vaultmtg/app/production/app-db-secret-arn" \
+        RO_DB_SECRET_ARN=$(aws ssm get-parameter \
+          --name "/vaultmtg/app/production/ro-db-secret-arn" \
           --region us-east-1 \
           --query "Parameter.Value" \
           --output text)
@@ -164,11 +157,11 @@ jobs:
 
         echo "Prod DB endpoint : ${DB_ENDPOINT}"
         echo "Prod DB name     : ${DB_NAME}"
-        echo "App DB secret ARN: ${APP_DB_SECRET_ARN}"
+        echo "RO DB secret ARN : ${RO_DB_SECRET_ARN}"
 
         {
           echo "db_endpoint=${DB_ENDPOINT}"
-          echo "app_db_secret_arn=${APP_DB_SECRET_ARN}"
+          echo "ro_db_secret_arn=${RO_DB_SECRET_ARN}"
           echo "db_name=${DB_NAME}"
         } >> "$GITHUB_OUTPUT"
 
@@ -178,7 +171,7 @@ jobs:
     #
     # The script:
     #   1. Assumes vaultmtg-staging-deploy-provisioner (same as run-migrations.sh)
-    #   2. Fetches vaultmtg_app credentials from Secrets Manager
+    #   2. Fetches vaultmtg_ro credentials from Secrets Manager (SELECT-only role)
     #   3. PGPASSWORD is set as an env var and never echoed/logged
     #   4. Runs the identity guard -- TWO factors must pass before user SQL runs:
     #        a) host(inet_server_addr()) IP matches resolved prod RDS endpoint IP
@@ -194,7 +187,7 @@ jobs:
       env:
         EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
         DB_ENDPOINT: ${{ steps.ssm.outputs.db_endpoint }}
-        APP_DB_SECRET_ARN: ${{ steps.ssm.outputs.app_db_secret_arn }}
+        RO_DB_SECRET_ARN: ${{ steps.ssm.outputs.ro_db_secret_arn }}
         DB_NAME: ${{ steps.ssm.outputs.db_name }}
         USER_SQL: ${{ inputs.sql }}
         AUDIT_REASON: ${{ inputs.reason }}
@@ -215,7 +208,7 @@ jobs:
         sed -i "s|__PROVISIONER_ROLE_ARN__|${PROVISIONER_ROLE_ARN}|g" "$SCRIPT_FILE"
         sed -i "s|__EXPECTED_DB__|${DB_NAME}|g"                        "$SCRIPT_FILE"
         sed -i "s|__DB_ENDPOINT__|${DB_ENDPOINT}|g"                    "$SCRIPT_FILE"
-        sed -i "s|__APP_DB_SECRET_ARN__|${APP_DB_SECRET_ARN}|g"        "$SCRIPT_FILE"
+        sed -i "s|__RO_DB_SECRET_ARN__|${RO_DB_SECRET_ARN}|g"          "$SCRIPT_FILE"
         sed -i "s|__ACTOR__|${ACTOR}|g"                                "$SCRIPT_FILE"
         sed -i "s|__RUN_ID__|${RUN_ID}|g"                              "$SCRIPT_FILE"
         sed -i "s|__ENCODED_SQL__|${ENCODED_SQL}|g"                    "$SCRIPT_FILE"
