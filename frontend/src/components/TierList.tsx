@@ -133,14 +133,17 @@ const TierList: React.FC<TierListProps> = ({ setCode, draftFormat, pickedCardIds
     };
 
     const getTierColor = (tier: string): string => {
+        // Hex values mirror the CSS custom properties defined in index.css (D17 / ADR-074).
+        //   --vault-tier-a: #4A90D9  --vault-tier-b: #22C55E  --vault-tier-c: #94A3B8
+        //   --vault-tier-d: #EF4444  --vault-tier-f: #7F1414
         switch (tier) {
-            case 'S': return '#ffd700'; // Gold
-            case 'A': return '#c0c0c0'; // Silver
-            case 'B': return '#cd7f32'; // Bronze
-            case 'C': return '#4a9eff'; // Blue
-            case 'D': return '#888888'; // Gray
-            case 'F': return '#ff4444'; // Red
-            default: return '#aaaaaa';
+            case 'S': return '#FFD700'; // Gold — S-tier (bomb); no CSS token defined
+            case 'A': return '#4A90D9'; // var(--vault-tier-a) — sapphire, exceptional
+            case 'B': return '#22C55E'; // var(--vault-tier-b) — green, above average
+            case 'C': return '#94A3B8'; // var(--vault-tier-c) — slate, average
+            case 'D': return '#EF4444'; // var(--vault-tier-d) — red, below average
+            case 'F': return '#7F1414'; // var(--vault-tier-f) — deep oxblood, most dire
+            default: return '#94A3B8';
         }
     };
 
