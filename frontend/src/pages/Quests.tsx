@@ -364,7 +364,7 @@ const Quests = () => {
                         </div>
                         <div className="quest-progress-bar">
                           <div
-                            className="quest-progress-fill"
+                            className={`quest-progress-fill${progress >= 100 ? ' quest-progress-fill--done' : ''}`}
                             style={{ width: `${progress}%` }}
                           />
                         </div>
@@ -525,7 +525,7 @@ const Quests = () => {
                                 <span>{quest.ending_progress} / {quest.goal}</span>
                                 <div className="mini-progress-bar">
                                   <div
-                                    className="mini-progress-fill"
+                                    className={`mini-progress-fill${quest.completed ? ' mini-progress-fill--done' : ''}`}
                                     style={{ width: `${progress}%` }}
                                   />
                                 </div>

@@ -214,8 +214,15 @@
 
 .quest-progress-fill {
   height: 100%;
+  /* #1021: sapphire gradient for in-progress quests per design spec */
   background: linear-gradient(90deg, var(--accent) 0%, var(--vault-sapphire-light) 100%);
   transition: width 0.3s ease;
+}
+
+.quest-progress-fill--done {
+  /* #1021: gilt gradient for 100%-complete quests (gold-economy completion moment).
+     Depends on --hollowmark-gilt defined by #1015/#1018 (index.css). */
+  background: linear-gradient(90deg, var(--hollowmark-gilt) 0%, var(--hollowmark-gilt-light) 100%);
 }
 
 .quest-progress-percent {
@@ -269,6 +276,11 @@
   height: 100%;
   background: linear-gradient(90deg, var(--accent) 0%, var(--vault-sapphire-light) 100%);
   transition: width 0.3s ease;
+}
+
+.mini-progress-fill--done {
+  /* #1021: gilt gradient for completed history rows */
+  background: linear-gradient(90deg, var(--hollowmark-gilt) 0%, var(--hollowmark-gilt-light) 100%);
 }
 
 .status-badge {
