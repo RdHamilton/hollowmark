@@ -46,8 +46,8 @@ jobs:
     - name: Download dependencies
       working-directory: services/bff
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: go mod download
 
     - name: Run BFF integration tests
@@ -55,8 +55,8 @@ jobs:
       env:
         DATABASE_URL: postgres://mtga:mtga@localhost:5432/mtga_test?sslmode=disable
         INTEGRATION_TEST: "true"
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: go test -v -run Integration -coverprofile=coverage-integration.out -covermode=atomic ./...
 
     - name: Run Layer 3a projection integration tests
@@ -65,8 +65,8 @@ jobs:
       working-directory: services/bff
       env:
         DATABASE_URL: postgres://mtga:mtga@localhost:5432/mtga_test?sslmode=disable
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: go test -v -tags integration -run TestProjectionIntegration -coverprofile=coverage-integration-proj.out -covermode=atomic ./...
 
     - name: Run Layer 3b sync integration smoke
@@ -76,8 +76,8 @@ jobs:
       working-directory: services/bff
       env:
         DATABASE_URL: postgres://mtga:mtga@localhost:5432/mtga_test?sslmode=disable
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: go test -v -tags integration -run TestSyncIntegration -coverprofile=coverage-integration-sync.out -covermode=atomic ./...
 
     - name: Upload integration coverage to Codecov

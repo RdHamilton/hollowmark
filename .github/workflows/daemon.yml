@@ -64,16 +64,16 @@ jobs:
       - name: Download dependencies
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOFLAGS: -mod=mod
         run: go mod download
 
       - name: Run tests
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage
@@ -91,8 +91,8 @@ jobs:
       - name: Corpus fixture-consistency lint (vmt-t#698)
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go test -v -race -run TestCorpusConsistency ./testdata/corpus/...
 
       # ADR-042 Layer 2: contract/serialisation gate.
@@ -104,8 +104,8 @@ jobs:
       - name: Contract/serialisation gate (ADR-042 Layer 2)
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go test -v -run TestContractEmit ./internal/logreader/...
 
       # ADR-042 Layer 4: daemon dispatch wire smoke.
@@ -128,8 +128,8 @@ jobs:
       - name: Ingest wire smoke (ADR-042 Layer 4)
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go test -v -tags integration -run TestIngestSmoke ./internal/daemon/...
 
       # Run services/contract tests — the contract package has no dependencies on the daemon
@@ -137,8 +137,8 @@ jobs:
       - name: Run contract tests
         working-directory: services/contract
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload contract coverage
@@ -153,16 +153,16 @@ jobs:
       - name: Download pkg/logparse dependencies
         working-directory: pkg/logparse
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOFLAGS: -mod=mod
         run: go mod download
 
       - name: Run pkg/logparse tests
         working-directory: pkg/logparse
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload pkg/logparse coverage
@@ -198,22 +198,22 @@ jobs:
       - name: Download dependencies
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOFLAGS: -mod=mod
         run: go mod download
 
       - name: Install govulncheck
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: govulncheck — Daemon
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: govulncheck ./...
 
   integration-smoke:
@@ -244,16 +244,16 @@ jobs:
       - name: Download dependencies
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOFLAGS: -mod=mod
         run: go mod download
 
       - name: Build daemon binary (smoke pre-check)
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go build ./cmd/daemon
 
       - name: Binary-contract check (CGO/Cocoa/systray) — PR gate
@@ -261,8 +261,8 @@ jobs:
         working-directory: services/daemon
         env:
           CGO_ENABLED: "1"
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: |
           # What this catches: CGO_ENABLED flipped to 0 or !cgo stub ships — see ADR-041 G1/P0-2
           BINARY=./vaultmtg-daemon-pr-check
@@ -284,8 +284,8 @@ jobs:
       - name: Run integration smoke test
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           MTGA_DAEMON_HEADLESS: "1"
         run: go test -v -race -tags integration -run TestDaemonBinarySmoke -timeout 5m ./internal/daemon/...
 
@@ -302,8 +302,8 @@ jobs:
         # What this catches: tray_test.go exercising the !cgo stub — see ADR-041 G2
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           CGO_ENABLED: "1"
         run: go test -v -race -tags cgo -run TestTrayCGO ./internal/tray/...
 
