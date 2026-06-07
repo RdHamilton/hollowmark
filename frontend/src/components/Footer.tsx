@@ -88,7 +88,7 @@ const Footer = () => {
 
   if (loading) {
     return (
-      <footer className="app-footer">
+      <footer className="app-footer" data-testid="app-status-footer">
         <div className="footer-content">
           <span className="footer-loading">Loading stats...</span>
           <EnvBadge />
@@ -99,7 +99,7 @@ const Footer = () => {
 
   if (!stats || stats.TotalMatches === 0) {
     return (
-      <footer className="app-footer">
+      <footer className="app-footer" data-testid="app-status-footer">
         <div className="footer-content">
           <span className="footer-empty">No matches yet - play some games to see your stats!</span>
           <EnvBadge />
@@ -109,7 +109,7 @@ const Footer = () => {
   }
 
   return (
-    <footer className="app-footer">
+    <footer className="app-footer" data-testid="app-status-footer">
       <div className="footer-content">
         <span className="footer-label">All Time</span>
         <span className="footer-separator">·</span>
