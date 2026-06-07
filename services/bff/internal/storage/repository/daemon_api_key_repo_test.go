@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -477,4 +479,151 @@ func TestGetByAccountAndDevice_IncludesRevoked(t *testing.T) {
 	// Non-existent row: must return ErrDaemonAPIKeyNotFound.
 	_, err = repo.GetByAccountAndDevice(context.Background(), accountID, "99999999-9999-9999-9999-999999999999")
 	assert.ErrorIs(t, err, repository.ErrDaemonAPIKeyNotFound)
+}
+
+// ─── GetByPrefix integration tests (#1043) ────────────────────────────────────
+
+// TestGetByPrefix_SingleMatch verifies that a prefix matching exactly one
+// active row returns that row and nil error.
+func TestGetByPrefix_SingleMatch(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	accountID := "user_prefix_single_" + t.Name()
+	deviceID := "aa000001-0000-0000-0000-000000000001"
+	prefix := "pfx_single_0001"
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM daemon_api_keys WHERE account_id = $1`, accountID)
+	})
+
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver)
+		 VALUES ($1, 'hash_single', $2, $3, 'darwin', '0.3.9')`,
+		accountID, prefix, deviceID)
+	require.NoError(t, err)
+
+	keys, err := repo.GetByPrefix(context.Background(), prefix)
+	require.NoError(t, err)
+	require.Len(t, keys, 1, "GetByPrefix must return the matching row")
+	assert.Equal(t, prefix, keys[0].KeyPrefix)
+	assert.Equal(t, accountID, keys[0].AccountID)
+	assert.NotEmpty(t, keys[0].KeyHash)
+}
+
+// TestGetByPrefix_ExcludesRevoked verifies that revoked rows are excluded
+// because the partial index and WHERE clause both filter on revoked_at IS NULL.
+func TestGetByPrefix_ExcludesRevoked(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	accountID := "user_prefix_revoked_" + t.Name()
+	deviceID := "bb000001-0000-0000-0000-000000000002"
+	prefix := "pfx_revoked_0002"
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM daemon_api_keys WHERE account_id = $1`, accountID)
+	})
+
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver, revoked_at)
+		 VALUES ($1, 'hash_rev', $2, $3, 'darwin', '0.3.9', now())`,
+		accountID, prefix, deviceID)
+	require.NoError(t, err)
+
+	keys, err := repo.GetByPrefix(context.Background(), prefix)
+	require.NoError(t, err)
+	assert.Empty(t, keys, "revoked rows must not be returned by GetByPrefix")
+}
+
+// TestGetByPrefix_NotFound verifies that a prefix with no matching active rows
+// returns an empty slice (not an error). This distinguishes the "no prefix
+// match" case — the middleware applies a dummy bcrypt to close the timing oracle.
+func TestGetByPrefix_NotFound(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	keys, err := repo.GetByPrefix(context.Background(), "pfx_nonexistent_xxxx")
+	require.NoError(t, err)
+	assert.Empty(t, keys, "no rows for unknown prefix must return empty slice, not error")
+}
+
+// TestGetByPrefix_PrefixCollision is the load-bearing auth-bypass regression
+// test: two rows share the same key_prefix; only the one whose key_hash
+// matches the bearer token must authenticate. A prefix collision MUST NOT
+// allow either key to authenticate with the other's plaintext.
+//
+// This exercises Ray's constraint #3 (DROP the LIMIT 1 — prefix is NOT
+// unique; the query must return the full matching set and bcrypt-loop it).
+func TestGetByPrefix_PrefixCollision(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonAPIKeyRepository(db)
+
+	accountA := "user_pfxcoll_A_" + t.Name()
+	accountB := "user_pfxcoll_B_" + t.Name()
+	deviceA := "cc000001-0000-0000-0000-000000000003"
+	deviceB := "cc000002-0000-0000-0000-000000000004"
+	sharedPrefix := "pfx_collision_00"
+
+	// Two distinct plaintext keys that happen to share the same prefix.
+	plaintextA := sharedPrefix + "KEYA_rest_of_token_here"
+	plaintextB := sharedPrefix + "KEYB_rest_of_token_here"
+
+	hashA, err := bcryptHash(plaintextA)
+	require.NoError(t, err)
+	hashB, err := bcryptHash(plaintextB)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM daemon_api_keys WHERE account_id IN ($1, $2)`, accountA, accountB)
+	})
+
+	_, err = db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver)
+		 VALUES ($1, $2, $3, $4, 'darwin', '0.3.9')`,
+		accountA, hashA, sharedPrefix, deviceA)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver)
+		 VALUES ($1, $2, $3, $4, 'windows', '0.3.9')`,
+		accountB, hashB, sharedPrefix, deviceB)
+	require.NoError(t, err)
+
+	// Both rows must be returned by GetByPrefix.
+	keys, err := repo.GetByPrefix(context.Background(), sharedPrefix)
+	require.NoError(t, err)
+	require.Len(t, keys, 2, "both rows with the same prefix must be returned (no LIMIT 1)")
+
+	// Verify the caller can bcrypt-loop and find each key correctly.
+	foundA, foundB := false, false
+	for _, k := range keys {
+		if bcryptCompare(k.KeyHash, plaintextA) {
+			foundA = true
+			assert.Equal(t, accountA, k.AccountID)
+		}
+		if bcryptCompare(k.KeyHash, plaintextB) {
+			foundB = true
+			assert.Equal(t, accountB, k.AccountID)
+		}
+	}
+	assert.True(t, foundA, "keyA must be findable by bcrypt comparison in the result set")
+	assert.True(t, foundB, "keyB must be findable by bcrypt comparison in the result set")
+}
+
+// bcryptHash generates a bcrypt hash of plaintext at MinCost for test speed.
+func bcryptHash(plaintext string) (string, error) {
+	h, err := bcrypt.GenerateFromPassword([]byte(plaintext), bcrypt.MinCost)
+	if err != nil {
+		return "", err
+	}
+	return string(h), nil
+}
+
+// bcryptCompare returns true when hash matches plaintext.
+func bcryptCompare(hash, plaintext string) bool {
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(plaintext)) == nil
 }
