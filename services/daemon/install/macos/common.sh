@@ -66,8 +66,11 @@ INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 # LaunchAgent label
 PLIST_LABEL="com.vaultmtg.daemon${LABEL_SUFFIX}"
 
-# OS keychain service (matches keychain.go ServiceNameNew for stable channel)
-KEYCHAIN_SERVICE="com.vaultmtg.daemon${LABEL_SUFFIX}"
+# OS keychain service (ADR-022 Phase 3 hollowmark credential shim — v0.3.9).
+# Matches keychain.go ServiceNameNew ("com.hollowmark.daemon" for stable).
+# NOTE: PLIST_LABEL retains "com.vaultmtg.daemon" because the bundle-ID rename
+# is v0.4.0 scope (PRD AC15). Only KEYCHAIN_SERVICE advances here.
+KEYCHAIN_SERVICE="com.hollowmark.daemon${LABEL_SUFFIX}"
 KEYCHAIN_ACCOUNT="api-key"
 
 # Config and state dirs / files

@@ -51,6 +51,7 @@ import (
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/config"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/daemon"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/daemonstate"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/dispatch"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/install"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/keychain"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/migrate"
@@ -187,6 +188,15 @@ func main() {
 	// ── Step 2: keychain migration (legacy plaintext api_key → OS keychain) ────
 	if err := migrateLegacyAPIKey(cfg, keychainService); err != nil {
 		log.Printf("[mtga-daemon] warn: keychain migration failed: %v", err)
+	}
+
+	// ── Step 2a: keychain service-name migration (vaultmtg → hollowmark shim) ─
+	// ADR-022 Phase 3: migrate existing "com.vaultmtg.daemon" credentials to
+	// "com.hollowmark.daemon" so the bundle-ID flip in v0.4.0 finds the key.
+	// keychain.Get() handles the copy-forward atomically; we emit telemetry when
+	// it reports a migration ran. The legacy entry is retained (not deleted here).
+	if migrated := migrateKeychainServiceName(cfg, Version); migrated {
+		dispatchKeychainMigrated(cfg, Version)
 	}
 
 	// ── Step 2b: load daemon-state.json (#2133 — RC2 load order) ──────────────
@@ -515,6 +525,81 @@ func migrateLegacyAPIKey(cfg *config.Config, keychainService string) error {
 
 	log.Printf("[mtga-daemon] api_key migrated to OS keychain; daemon.json updated")
 	return nil
+}
+
+// migrateKeychainServiceName runs the ADR-022 Phase 3 keychain service-name
+// migration (vaultmtg → hollowmark) by calling keychain.Get(), which handles
+// the copy-forward atomically. Returns true if a migration was performed
+// (i.e. the "com.vaultmtg.daemon" entry was copied to "com.hollowmark.daemon"),
+// so the caller can emit the keychain.migrated telemetry event.
+//
+// This is a no-op when:
+//   - cfg.Keychain is false (plaintext api_key mode — no keychain entry to migrate).
+//   - The "com.hollowmark.daemon" entry already exists (migration already ran).
+//   - Neither entry is present (fresh install — no migration needed).
+func migrateKeychainServiceName(cfg *config.Config, _ string) bool {
+	if !cfg.Keychain {
+		return false // plaintext mode: no keychain entry to migrate
+	}
+	_, migrated, err := keychain.Get()
+	if err != nil && !errors.Is(err, keychain.ErrNotFound) {
+		log.Printf("[mtga-daemon] warn: keychain service-name migration check failed: %v", err)
+		return false
+	}
+	return migrated
+}
+
+// keychainMigratedPayload is the JSON body of the keychain.migrated telemetry event.
+// This event is emitted exactly once per install when the credential is migrated
+// from "com.vaultmtg.daemon" to "com.hollowmark.daemon" (ADR-022 Phase 3).
+// AC16 reads this event's daemon_version to gate the v0.4.0 legacy-entry deletion.
+type keychainMigratedPayload struct {
+	FromService   string `json:"from_service"`
+	ToService     string `json:"to_service"`
+	DaemonVersion string `json:"daemon_version"`
+	Platform      string `json:"platform"`
+}
+
+// dispatchKeychainMigrated sends the keychain.migrated telemetry event to the BFF
+// via a transient no-refresher dispatcher (same pattern as daemon.keychain_error).
+// This is best-effort — errors are logged and swallowed.
+// The event fires exactly once per install (idempotency is the Keychain entry).
+func dispatchKeychainMigrated(cfg *config.Config, daemonVersion string) {
+	if cfg.CloudAPIURL == "" || cfg.AccountID == "" {
+		// Pre-auth: no dispatcher available yet. The telemetry event will not fire,
+		// which is acceptable — the migration still ran; only the metric is missed.
+		log.Printf("[mtga-daemon] info: keychain.migrated event skipped (pre-auth, no cloud_api_url or account_id yet)")
+		return
+	}
+	p := keychainMigratedPayload{
+		FromService:   keychain.ServiceNameLegacy,
+		ToService:     keychain.ServiceNameNew,
+		DaemonVersion: daemonVersion,
+		Platform:      runtime.GOOS,
+	}
+	evt, err := dispatch.BuildEvent("keychain.migrated", cfg.AccountID, "", p)
+	if err != nil {
+		log.Printf("[mtga-daemon] warn: build keychain.migrated event: %v", err)
+		return
+	}
+	// Transient dispatcher without a refresher, matching daemon.keychain_error pattern.
+	apiKey := ""
+	if cfg.Keychain {
+		if k, kErr := keychain.GetForService(install.Identity(install.Channel).KeychainService); kErr == nil {
+			apiKey = k
+		}
+	} else {
+		apiKey = cfg.APIKey
+	}
+	d := dispatch.New(cfg.CloudAPIURL, "/ingest/events", apiKey)
+	dispatchCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := d.SendOrBuffer(dispatchCtx, evt); err != nil {
+		log.Printf("[mtga-daemon] warn: dispatch keychain.migrated event: %v", err)
+		return
+	}
+	log.Printf("[mtga-daemon] keychain.migrated event dispatched (from=%s to=%s version=%s)",
+		keychain.ServiceNameLegacy, keychain.ServiceNameNew, daemonVersion)
 }
 
 // runPKCEAuth executes the PKCE browser-redirect flow and:
