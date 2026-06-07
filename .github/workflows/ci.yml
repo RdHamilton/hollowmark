@@ -186,16 +186,16 @@ jobs:
     - name: Download dependencies
       working-directory: services/bff
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         GOFLAGS: -mod=mod
       run: go mod download
 
     - name: Run BFF unit tests
       working-directory: services/bff
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: go test -race -v -short -coverprofile=coverage.out -covermode=atomic ./...
 
     - name: Upload coverage to Codecov
@@ -288,8 +288,8 @@ jobs:
 
     - name: go vet — all modules
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: |
         for mod in services/bff services/sync services/meta-scrape services/contract pkg/logparse; do
           echo "=== go vet $mod ==="
@@ -354,24 +354,24 @@ jobs:
 
     - name: Install govulncheck
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
     - name: govulncheck — BFF
       if: needs.detect-changes.outputs.bff == 'true'
       working-directory: services/bff
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: govulncheck ./...
 
     - name: govulncheck — Sync
       if: needs.detect-changes.outputs.sync == 'true'
       working-directory: services/sync
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: govulncheck ./...
 
   sync-unit-tests:
@@ -400,16 +400,16 @@ jobs:
     - name: Download dependencies
       working-directory: services/sync
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         GOFLAGS: -mod=mod
       run: go mod download
 
     - name: Run Sync unit tests
       working-directory: services/sync
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: go test -race -v -short -coverprofile=coverage.out -covermode=atomic ./...
 
     - name: Upload coverage to Codecov
@@ -445,16 +445,16 @@ jobs:
     - name: Download dependencies
       working-directory: services/meta-scrape
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         GOFLAGS: -mod=mod
       run: go mod download
 
     - name: Run Meta-Scrape unit tests
       working-directory: services/meta-scrape
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: go test -race -v -short -coverprofile=coverage.out -covermode=atomic ./...
 
     - name: Upload coverage to Codecov
@@ -484,16 +484,16 @@ jobs:
     - name: Download dependencies
       working-directory: pkg/logparse
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         GOFLAGS: -mod=mod
       run: go mod download
 
     - name: Run logparse unit tests
       working-directory: pkg/logparse
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: go test -race -v -short -coverprofile=coverage.out -covermode=atomic ./...
 
     - name: Upload coverage to Codecov
