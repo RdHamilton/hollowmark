@@ -74,16 +74,16 @@ jobs:
       - name: Download dependencies
         working-directory: services/collection-agent-helper
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOFLAGS: -mod=mod
         run: go mod download
 
       - name: Run canary test suite
         working-directory: services/collection-agent-helper
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         # Run all tests — the drift canary tests (TestCanary* + TestScanDictEntriesDrift*)
         # produce output containing COLLECTION_SCAN_DRIFT on failure, which
         # surfaces in the job log for CloudWatch / on-call triage.

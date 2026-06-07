@@ -115,8 +115,8 @@ jobs:
       - name: Download Go dependencies
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOFLAGS: -mod=mod
         run: |
           go mod download
@@ -129,8 +129,8 @@ jobs:
       - name: Run tests (pre-release gate)
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go test -race ./...
 
       - name: Resolve build-time DefaultCloudAPIURL
@@ -326,8 +326,8 @@ jobs:
           args: release --config services/daemon/.goreleaser.yml --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GITHUB_WORKSPACE: ${{ github.workspace }}
           # Stripped semver (e.g. 'v0.3.2-rc1') so GoReleaser's internal semver
           # parser succeeds. The release is renamed to the `daemon/v*` form by
@@ -438,8 +438,8 @@ jobs:
             echo "WARNING: strings cross-check found no systray string — buildinfo is still the authoritative gate." >&2
           fi
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
 
       - name: Rename GitHub Release to daemon/v* tag (ADR-023)
         # GoReleaser publishes the release at the bare semver tag (e.g.
@@ -708,8 +708,8 @@ jobs:
       - name: Download Go dependencies
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOFLAGS: -mod=mod
         run: go mod download
 
@@ -814,8 +814,8 @@ jobs:
         working-directory: services/daemon
         env:
           CGO_ENABLED: "1"
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOOS: darwin
           GOARCH: arm64
         run: |
@@ -828,8 +828,8 @@ jobs:
         working-directory: services/daemon
         env:
           CGO_ENABLED: "1"
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOOS: darwin
           GOARCH: amd64
         run: |
