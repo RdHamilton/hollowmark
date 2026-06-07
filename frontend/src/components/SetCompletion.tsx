@@ -3,12 +3,16 @@ import { collection, cards } from '@/services/api';
 import { models, gui } from '@/types/models';
 import './SetCompletion.css';
 
-// Rarity colors for progress bars
+// Rarity colors for progress bars.
+// #1015/#1018: wire rarity labels to design-system tokens. CSS custom properties
+// work in backgroundColor inline styles, so we reference token var() strings.
+// mythic → --hollowmark-gilt (aged brass) — the "crafting/completion" gold-economy
+// moment per design advisory. rare keeps --vault-rarity-rare (gold).
 const rarityColors: Record<string, string> = {
-  common: '#1a1a1a',
-  uncommon: '#6b7c8d',
-  rare: '#d4af37',
-  mythic: '#e67e22',
+  common: 'var(--vault-rarity-common)',
+  uncommon: 'var(--vault-rarity-uncommon)',
+  rare: 'var(--vault-rarity-rare)',
+  mythic: 'var(--hollowmark-gilt)',
 };
 
 // Rarity display order

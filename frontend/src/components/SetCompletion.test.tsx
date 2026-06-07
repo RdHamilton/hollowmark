@@ -218,6 +218,34 @@ describe('SetCompletion', () => {
     });
   });
 
+  describe('Gilt token wiring (#1015/#1018)', () => {
+    it('should apply gilt token to mythic rarity progress bar', async () => {
+      mockCollection.getSetCompletion.mockResolvedValue([createMockSetCompletion()]);
+      mockCards.getAllSetInfo.mockResolvedValue([createMockSetInfo()]);
+
+      render(<SetCompletion />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Duskmourn: House of Horror')).toBeInTheDocument();
+      });
+
+      // Expand the rarity breakdown
+      const setHeader = screen.getByText('Duskmourn: House of Horror').closest('.set-header');
+      fireEvent.click(setHeader!);
+
+      await waitFor(() => {
+        expect(screen.getByText('Mythic')).toBeInTheDocument();
+      });
+
+      // The mythic progress bar fill should use the gilt CSS variable, not the
+      // old hardcoded orange (#e67e22) or --vault-rarity-mythic.
+      const mythicLabel = screen.getByText('Mythic');
+      const rarityRow = mythicLabel.closest('.rarity-row');
+      const progressFill = rarityRow?.querySelector('.progress-bar-fill') as HTMLElement | null;
+      expect(progressFill?.style.backgroundColor).toBe('var(--hollowmark-gilt)');
+    });
+  });
+
   describe('Close Button', () => {
     it('should call onClose when close button clicked', async () => {
       mockCollection.getSetCompletion.mockResolvedValue([createMockSetCompletion()]);
