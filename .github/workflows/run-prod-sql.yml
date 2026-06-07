@@ -34,7 +34,7 @@
 #          name, read from /vaultmtg/app/production/db-name via SSM).
 #     Hard-abort (exit 1) if either factor fails.
 #   - DB user: vaultmtg_ro (SELECT-only role provisioned by migration 000108 /
-#     ticket #971), credentials from /vaultmtg/app/production/ro-db-secret-arn.
+#     ticket #971), credentials from SSM /vaultmtg/app/production/ro-db-secret-arn
 #     vaultmtg_ro holds SELECT on all public schema tables and nothing else --
 #     no INSERT/UPDATE/DELETE/DDL grants exist on this role.  This is a durable
 #     role-layer write guarantee independent of the session-level flag.
