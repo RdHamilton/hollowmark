@@ -1,4 +1,4 @@
-module github.com/RdHamilton/vault-mtg/services/meta-scrape
+module github.com/RdHamilton/hollowmark/services/meta-scrape
 
 go 1.25.0
 

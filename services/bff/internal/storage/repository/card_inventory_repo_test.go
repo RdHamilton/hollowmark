@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // insertTestAccountForInventory inserts a minimal accounts row and returns its

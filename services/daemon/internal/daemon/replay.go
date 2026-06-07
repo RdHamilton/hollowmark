@@ -17,8 +17,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/dispatch"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/dispatch"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 )
 
 // ReplayProgressPayload is the payload sent with replay:progress events.

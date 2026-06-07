@@ -22,10 +22,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/datasets"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/refresh"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/scryfall"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/seventeenlands"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/datasets"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/refresh"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/scryfall"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/seventeenlands"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

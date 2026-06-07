@@ -190,7 +190,7 @@ func TestTrayCGO_OpenURLCalled_OnCheckForUpdates(t *testing.T) {
 
 	app.openCheckForUpdates()
 
-	assert.Equal(t, "https://github.com/RdHamilton/vault-mtg/releases?q=daemon", gotURL)
+	assert.Equal(t, "https://github.com/RdHamilton/hollowmark/releases?q=daemon", gotURL)
 }
 
 // ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ func TestTrayCGO_CheckForUpdates_URLIsVaultMTGRepo(t *testing.T) {
 
 	app.openCheckForUpdates()
 
-	assert.Contains(t, gotURL, "RdHamilton/vault-mtg", "URL must reference the vault-mtg repo")
+	assert.Contains(t, gotURL, "RdHamilton/hollowmark", "URL must reference the hollowmark repo")
 	assert.NotContains(t, gotURL, "mtga-companion", "legacy repo slug must not appear in Check for Updates URL")
 }
 

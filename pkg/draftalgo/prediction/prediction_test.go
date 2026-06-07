@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/prediction"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo/prediction"
 )
 
 // ─── PredictWinRate ─────────────────────────────────────────────────────────

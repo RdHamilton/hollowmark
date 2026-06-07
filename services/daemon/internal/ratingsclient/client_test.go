@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/ratingsclient"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/ratingsclient"
 )
 
 // ─── helpers ──────────────────────────────────────────────────────────────

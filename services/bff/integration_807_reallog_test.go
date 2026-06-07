@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 func TestIntegration_807_RealLogTimeline_EndToEnd(t *testing.T) {

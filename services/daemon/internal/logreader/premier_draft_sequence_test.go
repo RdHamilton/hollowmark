@@ -21,8 +21,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/draftstate"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/draftstate"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -1,4 +1,4 @@
-module github.com/RdHamilton/vault-mtg/pkg/draftalgo
+module github.com/RdHamilton/hollowmark/pkg/draftalgo
 
 go 1.25.0
 

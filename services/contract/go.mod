@@ -1,4 +1,4 @@
-module github.com/RdHamilton/vault-mtg/services/contract
+module github.com/RdHamilton/hollowmark/services/contract
 
 go 1.25.0
 

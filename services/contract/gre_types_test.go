@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // TestCardPlayEntry_WireKeys verifies CardPlayEntry marshals to the correct JSON keys

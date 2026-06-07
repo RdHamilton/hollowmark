@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // isErrReauthRequired reports whether err wraps ErrReauthRequired.

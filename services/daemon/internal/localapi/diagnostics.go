@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/sentryhook"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/sentryhook"
 )
 
 // diagnosticsResponse is the JSON body returned by GET /api/v1/system/diagnostics.

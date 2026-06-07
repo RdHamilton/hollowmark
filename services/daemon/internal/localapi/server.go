@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo"
 )
 
 // DefaultPort is the loopback TCP port the daemon's local HTTP API listens on.

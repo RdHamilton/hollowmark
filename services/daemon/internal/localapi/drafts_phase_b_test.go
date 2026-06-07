@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/draftstate"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/localapi"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/draftstate"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/localapi"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 )
 
 // stubMeta satisfies draftalgo.CardMetaLookup.
@@ -210,7 +210,7 @@ func TestCurrentPack_PoolColorsPopulatedFromPool(t *testing.T) {
 		"p1": {Colors: []string{"G"}}, "p2": {Colors: []string{"G"}},
 		"p3": {Colors: []string{"G"}}, "p4": {Colors: []string{"G"}},
 		"p5": {Colors: []string{"U"}}, "p6": {Colors: []string{"U"}},
-		"p7": {Colors: []string{"U"}},
+		"p7":  {Colors: []string{"U"}},
 		"200": {Colors: []string{"G"}, ALSA: 3.0, GIHCount: &count},
 	}
 	poolIDs := []int{0, 0, 0, 0, 0, 0, 0} // injected via picks below

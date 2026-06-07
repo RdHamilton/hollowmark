@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/RdHamilton/vault-mtg/services/meta-scrape/internal/scraper"
-	"github.com/RdHamilton/vault-mtg/services/meta-scrape/internal/store"
+	"github.com/RdHamilton/hollowmark/services/meta-scrape/internal/scraper"
+	"github.com/RdHamilton/hollowmark/services/meta-scrape/internal/store"
 	"github.com/jackc/pgx/v5"
 )
 

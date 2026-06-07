@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
 )
 
 // reachedHandler is a helper that records whether ServeHTTP was called.

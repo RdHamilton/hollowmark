@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/draftstate"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/localapi"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/draftstate"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/localapi"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 )
 
 // Ensure json is referenced (used in TestCurrentPack_ContractSnakeCaseFields).

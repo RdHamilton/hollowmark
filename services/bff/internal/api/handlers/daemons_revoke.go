@@ -9,7 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
 )
 
 // daemonAPIKeyRevokeRepo is the subset of DaemonAPIKeyRepository used by

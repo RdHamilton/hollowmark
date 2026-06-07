@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/config"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/config"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

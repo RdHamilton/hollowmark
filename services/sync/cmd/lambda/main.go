@@ -40,11 +40,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/datasets"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/dbconn"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/handler"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/scryfall"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/seventeenlands"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/datasets"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/dbconn"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/handler"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/scryfall"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/seventeenlands"
 )
 
 func main() {

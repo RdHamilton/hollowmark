@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
-	contract "github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
+	contract "github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // githubRelease mirrors the fields from the GitHub Releases API used by
@@ -45,13 +45,13 @@ func TestReleaseFetcher_ParsesDaemonTag(t *testing.T) {
 		{
 			TagName:     "daemon/v0.3.7",
 			PublishedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
-			HTMLURL:     "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon%2Fv0.3.7",
+			HTMLURL:     "https://github.com/RdHamilton/hollowmark/releases/tag/daemon%2Fv0.3.7",
 			Assets: []struct {
 				Name               string `json:"name"`
 				BrowserDownloadURL string `json:"browser_download_url"`
 			}{
-				{Name: "SHA256SUMS", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS"},
-				{Name: "SHA256SUMS.minisig", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig"},
+				{Name: "SHA256SUMS", BrowserDownloadURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/SHA256SUMS"},
+				{Name: "SHA256SUMS.minisig", BrowserDownloadURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig"},
 			},
 		},
 		// app release should be ignored
@@ -74,13 +74,13 @@ func TestReleaseFetcher_ParsesDaemonTag(t *testing.T) {
 	if result.ReleasedAt != "2026-06-01T12:00:00Z" {
 		t.Errorf("released_at: got %q, want %q", result.ReleasedAt, "2026-06-01T12:00:00Z")
 	}
-	if result.DownloadURL != "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon%2Fv0.3.7" {
+	if result.DownloadURL != "https://github.com/RdHamilton/hollowmark/releases/tag/daemon%2Fv0.3.7" {
 		t.Errorf("download_url: got %q", result.DownloadURL)
 	}
-	if result.Sha256SumsURL != "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS" {
+	if result.Sha256SumsURL != "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/SHA256SUMS" {
 		t.Errorf("sha256sums_url: got %q", result.Sha256SumsURL)
 	}
-	if result.AttestationURL != "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig" {
+	if result.AttestationURL != "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig" {
 		t.Errorf("attestation_url: got %q", result.AttestationURL)
 	}
 }
@@ -211,13 +211,13 @@ func TestGetDaemonVersion_LiveFetch(t *testing.T) {
 		{
 			TagName:     "daemon/v0.3.7",
 			PublishedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
-			HTMLURL:     "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon%2Fv0.3.7",
+			HTMLURL:     "https://github.com/RdHamilton/hollowmark/releases/tag/daemon%2Fv0.3.7",
 			Assets: []struct {
 				Name               string `json:"name"`
 				BrowserDownloadURL string `json:"browser_download_url"`
 			}{
-				{Name: "SHA256SUMS", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS"},
-				{Name: "SHA256SUMS.minisig", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig"},
+				{Name: "SHA256SUMS", BrowserDownloadURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/SHA256SUMS"},
+				{Name: "SHA256SUMS.minisig", BrowserDownloadURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig"},
 			},
 		},
 	}
@@ -298,15 +298,15 @@ func TestReleaseFetcher_PerPlatformAssetURLs(t *testing.T) {
 		{
 			TagName:     "daemon/v0.3.7",
 			PublishedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
-			HTMLURL:     "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon%2Fv0.3.7",
+			HTMLURL:     "https://github.com/RdHamilton/hollowmark/releases/tag/daemon%2Fv0.3.7",
 			Assets: []struct {
 				Name               string `json:"name"`
 				BrowserDownloadURL string `json:"browser_download_url"`
 			}{
-				{Name: "SHA256SUMS", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS"},
-				{Name: "SHA256SUMS.minisig", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig"},
-				{Name: "vaultmtg-daemon-darwin-universal.pkg", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg"},
-				{Name: "vaultmtg-daemon-windows-amd64.exe", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe"},
+				{Name: "SHA256SUMS", BrowserDownloadURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/SHA256SUMS"},
+				{Name: "SHA256SUMS.minisig", BrowserDownloadURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig"},
+				{Name: "vaultmtg-daemon-darwin-universal.pkg", BrowserDownloadURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg"},
+				{Name: "vaultmtg-daemon-windows-amd64.exe", BrowserDownloadURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe"},
 			},
 		},
 	}
@@ -319,11 +319,11 @@ func TestReleaseFetcher_PerPlatformAssetURLs(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	want := "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg"
+	want := "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg"
 	if result.MacOSInstallerURL != want {
 		t.Errorf("macos_installer_url: got %q, want %q", result.MacOSInstallerURL, want)
 	}
-	want = "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe"
+	want = "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe"
 	if result.WindowsInstallerURL != want {
 		t.Errorf("windows_installer_url: got %q, want %q", result.WindowsInstallerURL, want)
 	}
@@ -337,7 +337,7 @@ func TestReleaseFetcher_HostValidation_RejectsOffListURL(t *testing.T) {
 		{
 			TagName:     "daemon/v0.3.7",
 			PublishedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
-			HTMLURL:     "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon%2Fv0.3.7",
+			HTMLURL:     "https://github.com/RdHamilton/hollowmark/releases/tag/daemon%2Fv0.3.7",
 			Assets: []struct {
 				Name               string `json:"name"`
 				BrowserDownloadURL string `json:"browser_download_url"`
@@ -345,11 +345,11 @@ func TestReleaseFetcher_HostValidation_RejectsOffListURL(t *testing.T) {
 				// Evil host injected into SHA256SUMS asset
 				{Name: "SHA256SUMS", BrowserDownloadURL: "https://evil.example.com/SHA256SUMS"},
 				// Valid minisig
-				{Name: "SHA256SUMS.minisig", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig"},
+				{Name: "SHA256SUMS.minisig", BrowserDownloadURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/SHA256SUMS.minisig"},
 				// Evil host injected into macOS asset
 				{Name: "vaultmtg-daemon-darwin-universal.pkg", BrowserDownloadURL: "https://evil.example.com/vaultmtg-daemon-darwin-universal.pkg"},
 				// Valid Windows asset
-				{Name: "vaultmtg-daemon-windows-amd64.exe", BrowserDownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe"},
+				{Name: "vaultmtg-daemon-windows-amd64.exe", BrowserDownloadURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe"},
 			},
 		},
 	}
@@ -386,7 +386,7 @@ func TestReleaseFetcher_HostValidation_AllowsObjectsGithubusercontentHost(t *tes
 		{
 			TagName:     "daemon/v0.3.7",
 			PublishedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
-			HTMLURL:     "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon%2Fv0.3.7",
+			HTMLURL:     "https://github.com/RdHamilton/hollowmark/releases/tag/daemon%2Fv0.3.7",
 			Assets: []struct {
 				Name               string `json:"name"`
 				BrowserDownloadURL string `json:"browser_download_url"`

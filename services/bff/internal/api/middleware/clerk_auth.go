@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/observability"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/observability"
 	"github.com/clerk/clerk-sdk-go/v2"
 	clerkhttp "github.com/clerk/clerk-sdk-go/v2/http"
 )

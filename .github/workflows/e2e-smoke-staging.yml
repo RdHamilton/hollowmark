@@ -4,7 +4,7 @@ name: E2E Smoke — Staging Rebuild Gate (R-17)
 # in mtga-companion-infra. Runs the R-17 Playwright assertions against the live
 # staging environment — no local BFF, no Postgres service container.
 #
-# Issue: RdHamilton/vault-mtg#2343
+# Issue: RdHamilton/hollowmark#2343
 #
 # Inputs:
 #   base_url — SPA URL (https://stg-app.vaultmtg.app)

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/migrate"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/migrate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

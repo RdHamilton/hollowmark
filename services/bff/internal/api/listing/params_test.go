@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/listing"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/listing"
 )
 
 var testSortAllowlist = map[string]struct{}{

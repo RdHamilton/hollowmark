@@ -16,8 +16,8 @@ import (
 	"net/http"
 	"time"
 
-	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // MTGA wins-per-day / wins-per-week goals. Both currently 15 — the rewards

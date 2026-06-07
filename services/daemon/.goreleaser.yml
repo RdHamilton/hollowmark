@@ -123,8 +123,8 @@ builds:
       # job's apt-get step (gcc-mingw-w64-x86-64).
       - CGO_ENABLED=1
       - CC=x86_64-w64-mingw32-gcc
-      - GONOSUMDB=github.com/RdHamilton/vault-mtg
-      - GOPRIVATE=github.com/RdHamilton/vault-mtg
+      - GONOSUMDB=github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+      - GOPRIVATE=github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
     goos:
       - windows
     goarch:
@@ -160,7 +160,7 @@ builds:
       #   VAULTMTG_CHANNEL=staging -> binary identity uses -staging suffix names
       # Resolved by daemon-release.yml "Resolve build channel" step; consumed by
       # Bob's internal/install.Channel var (#651) to derive Go-side identity constants.
-      - -s -w -X main.Version={{ .Env.PLAIN_VERSION }} -X main.DefaultCloudAPIURL={{ .Env.DEFAULT_CLOUD_API_URL }} -X main.DefaultSentryDSN={{ .Env.DEFAULT_SENTRY_DSN }} -X main.DefaultSPAURL={{ .Env.DEFAULT_SPA_URL }} -X main.DefaultSetupURL={{ .Env.DEFAULT_SETUP_URL }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey={{ .Env.MINISIGN_PUBLIC_KEY }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/install.Channel={{ .Env.VAULTMTG_CHANNEL }}
+      - -s -w -X main.Version={{ .Env.PLAIN_VERSION }} -X main.DefaultCloudAPIURL={{ .Env.DEFAULT_CLOUD_API_URL }} -X main.DefaultSentryDSN={{ .Env.DEFAULT_SENTRY_DSN }} -X main.DefaultSPAURL={{ .Env.DEFAULT_SPA_URL }} -X main.DefaultSetupURL={{ .Env.DEFAULT_SETUP_URL }} -X github.com/RdHamilton/hollowmark/services/daemon/internal/updatecheck.EmbeddedPublicKey={{ .Env.MINISIGN_PUBLIC_KEY }} -X github.com/RdHamilton/hollowmark/services/daemon/internal/install.Channel={{ .Env.VAULTMTG_CHANNEL }}
     mod_timestamp: "{{ .CommitTimestamp }}"
     # Windows NSIS installer -- compiled after the Windows amd64 binary is built.
     # makensis is available on ubuntu runners via apt; skipped in snapshot mode.
@@ -250,7 +250,7 @@ checksum:
 release:
   github:
     owner: RdHamilton
-    name: vault-mtg
+    name: hollowmark
   # Tag handling note (ADR-023 daemon/v* namespacing on free-tier GoReleaser):
   #
   # GoReleaser publishes the GitHub Release at `ctx.Git.CurrentTag`, which is

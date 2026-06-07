@@ -5,7 +5,7 @@
 //
 // The build channel is injected once via an ldflag at release time:
 //
-//	-X github.com/RdHamilton/vault-mtg/services/daemon/internal/install.Channel=staging
+//	-X github.com/RdHamilton/hollowmark/services/daemon/internal/install.Channel=staging
 //
 // The stable (production) channel keeps the bare identity so existing installs
 // are untouched (ADR-049 §5). The staging channel takes a "-staging" / ".staging"
@@ -37,7 +37,7 @@ import (
 
 // Channel is the build-time channel string, injected via ldflag:
 //
-//	-X github.com/RdHamilton/vault-mtg/services/daemon/internal/install.Channel=staging
+//	-X github.com/RdHamilton/hollowmark/services/daemon/internal/install.Channel=staging
 //
 // Defaults to ChannelStable ("stable") for local/dev builds. The release
 // workflow sets this to the correct value for every build; an unknown value

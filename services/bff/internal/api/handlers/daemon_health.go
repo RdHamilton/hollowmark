@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
 )
 
 // daemonHealthWindow is the look-back duration used to decide whether the
