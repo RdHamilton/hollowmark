@@ -27,16 +27,13 @@
 #     allow_write path in this script -- the session flag is hardcoded and
 #     cannot be bypassed by the caller.
 #
-#   Layer 2: vaultmtg_app Postgres role
-#     The app DB credential (app-db-secret-arn) connects as vaultmtg_app,
-#     which holds SELECT/INSERT/UPDATE/DELETE on public schema tables.  The
-#     claim that vaultmtg_app cannot execute DDL is UNVERIFIED live and is
-#     contradicted in-repo (create-production-db.sql:53 grants CREATE ON SCHEMA
-#     public to vaultmtg_app, while run-migrations.sh claims it lacks DDL
-#     grants).  Treat this layer as defense-in-depth to be verified; do not
-#     rely on it as the primary write barrier.  The vaultmtg_ro fast-follow
-#     will eliminate DML grants from the attack surface entirely.  Layer 1
-#     (session-level read-only) is the primary and sufficient write guarantee.
+#   Layer 2: vaultmtg_ro Postgres role (SELECT-only)
+#     The RO DB credential (ro-db-secret-arn) connects as vaultmtg_ro,
+#     provisioned by migration 000108 (ticket #971) with SELECT-only grants
+#     on all public schema tables.  No INSERT/UPDATE/DELETE/DDL grants exist
+#     on this role.  This is a durable role-layer write guarantee independent
+#     of the session-level flag: writes are rejected at the Postgres
+#     privilege-check layer even if Layer 1 were somehow bypassed.
 #
 #   Layer 3: Identity guard (two independent factors)
 #     Before any user SQL runs, the script asserts:
@@ -47,12 +44,13 @@
 #     a different RDS instance than staging; the guard catches accidental
 #     cross-environment connections.
 #
-# DESIGN NOTE: this script uses the vaultmtg_app credential (SSM path
-# /vaultmtg/app/production/app-db-secret-arn) rather than the DDL master
-# credential (/vaultmtg/app/production/db-secret-arn).  Using the
-# least-privileged app credential is defense-in-depth: even if Layer 1 were
-# somehow bypassed, the role itself cannot execute DDL.  Ray flagged this
-# design question in the originating ticket -- see run-prod-sql.yml header.
+# DESIGN NOTE: this script uses the vaultmtg_ro credential (SSM path
+# /vaultmtg/app/production/ro-db-secret-arn), provisioned by migration 000108
+# (ticket #971 / CFN #306).  vaultmtg_ro holds SELECT only on all public
+# schema tables.  This provides two independent write-protection layers:
+# Layer 1 (session-level read-only) and Layer 2 (role grants -- no DML).
+# The read-only guarantee is now durable at the role layer and no longer
+# depends solely on the session-level flag.
 #
 # NOTE: SSM GetParameter for prod SSM paths is performed by the EC2 instance
 # role BEFORE this script runs (the workflow resolves the endpoint and secret
@@ -64,7 +62,7 @@ set -euo pipefail
 PROVISIONER_ROLE_ARN="__PROVISIONER_ROLE_ARN__"
 EXPECTED_DB="__EXPECTED_DB__"
 DB_ENDPOINT="__DB_ENDPOINT__"
-APP_DB_SECRET_ARN="__APP_DB_SECRET_ARN__"
+RO_DB_SECRET_ARN="__RO_DB_SECRET_ARN__"
 ACTOR="__ACTOR__"
 RUN_ID="__RUN_ID__"
 ENCODED_SQL="__ENCODED_SQL__"
@@ -84,14 +82,14 @@ echo "[run-prod-sql] ===========================================================
 # -----------------------------------------------------------------------
 # Step 1: Assume the provisioner role (same pattern as run-migrations.sh)
 # so all subsequent AWS calls are scoped to the production SSM namespace.
-# The app DB secret ARN was already fetched by the workflow runner and
+# The RO DB secret ARN was already fetched by the workflow runner and
 # injected into this script; this assume-role is only needed to call
-# secretsmanager:GetSecretValue on the app DB secret ARN.
+# secretsmanager:GetSecretValue on the RO DB secret ARN.
 # Clean up temporary credentials on exit.
 # -----------------------------------------------------------------------
 cleanup_creds() {
     unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-    unset APP_DB_SECRET_JSON APP_DB_USER APP_DB_PASSWORD PGPASSWORD
+    unset RO_DB_SECRET_JSON DB_USER DB_PASSWORD PGPASSWORD
 }
 trap cleanup_creds EXIT
 
@@ -128,28 +126,28 @@ case "$CALLER_ARN" in
 esac
 
 # -----------------------------------------------------------------------
-# Step 2: Fetch the app DB credential from Secrets Manager.
-# vaultmtg_app holds SELECT/INSERT/UPDATE/DELETE only -- no DDL.
+# Step 2: Fetch the RO DB credential from Secrets Manager.
+# vaultmtg_ro holds SELECT only on all public schema tables -- no DML/DDL.
 # PGPASSWORD is set as an env var and never echoed or logged.
 # -----------------------------------------------------------------------
-APP_DB_SECRET_JSON=$(aws secretsmanager get-secret-value \
+RO_DB_SECRET_JSON=$(aws secretsmanager get-secret-value \
     --region    us-east-1 \
-    --secret-id "$APP_DB_SECRET_ARN" \
+    --secret-id "$RO_DB_SECRET_ARN" \
     --query     "SecretString" \
     --output    text)
 
-APP_DB_USER=$(echo    "$APP_DB_SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['username'])")
-APP_DB_PASSWORD=$(echo "$APP_DB_SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['password'])")
-unset APP_DB_SECRET_JSON
+DB_USER=$(echo     "$RO_DB_SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['username'])")
+DB_PASSWORD=$(echo "$RO_DB_SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['password'])")
+unset RO_DB_SECRET_JSON
 
-PGPASSWORD="$APP_DB_PASSWORD"
+PGPASSWORD="$DB_PASSWORD"
 export PGPASSWORD
 
 # Drop provisioner credentials now -- they are no longer needed.
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 
 # Never log PGPASSWORD.  Log the user so we know which role connected.
-echo "[run-prod-sql] DB user     : ${APP_DB_USER}"
+echo "[run-prod-sql] DB user     : ${DB_USER}"
 echo "[run-prod-sql] DB endpoint : ${DB_ENDPOINT}"
 
 # -----------------------------------------------------------------------
@@ -171,7 +169,7 @@ echo "[run-prod-sql] DB endpoint : ${DB_ENDPOINT}"
 echo "[run-prod-sql] Running identity guard..."
 GUARD_OUTPUT=$(PGPASSWORD="$PGPASSWORD" psql \
     -h "$DB_ENDPOINT" \
-    -U "$APP_DB_USER" \
+    -U "$DB_USER" \
     -d "$EXPECTED_DB" \
     --no-password \
     -v ON_ERROR_STOP=1 \
@@ -247,7 +245,7 @@ echo "---"
 echo "[run-prod-sql] Executing SQL against production..."
 PGPASSWORD="$PGPASSWORD" psql \
     -h "$DB_ENDPOINT" \
-    -U "$APP_DB_USER" \
+    -U "$DB_USER" \
     -d "$EXPECTED_DB" \
     --no-password \
     -v ON_ERROR_STOP=1 \
