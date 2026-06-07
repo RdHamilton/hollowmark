@@ -94,7 +94,10 @@ type IdentitySet struct {
 	PlistLabel string
 
 	// KeychainService is the OS keychain service name.
-	// "com.vaultmtg.daemon" (stable) or "com.vaultmtg.daemon.staging" (staging).
+	// "com.hollowmark.daemon" (stable) or "com.hollowmark.daemon.staging" (staging).
+	// This is the ADR-022 Phase 3 (v0.3.9) credential shim target — all new credential
+	// writes land here; the legacy "com.vaultmtg.daemon" entries are migrated on first
+	// startup via keychain.Get() and retained for downgrade safety until Phase 6.
 	// On macOS this is the Keychain Services service; on Windows it is the
 	// Windows Credential Manager target prefix (go-keyring format: "<service>:<account>").
 	KeychainService string
@@ -150,9 +153,12 @@ const (
 // Identity returns the IdentitySet for the given channel.
 // Panics on an unrecognised channel (fail-closed, ADR-049 §2).
 //
-// The stable channel returns the exact values that are hardcoded in the current
-// codebase (keychain.ServiceNameNew, defaultConfigPath, DefaultPort) so there
-// is zero behaviour change for existing prod installs when this package is adopted.
+// KeychainService uses the ADR-022 Phase 3 (v0.3.9) hollowmark credential shim
+// name ("com.hollowmark.daemon") so all new PKCE logins write to the new slot.
+// The v0.3.8 "com.vaultmtg.daemon" credentials are migrated transparently via
+// keychain.Get() on first startup and retained for downgrade safety.
+// PlistLabel and BinaryName intentionally retain their v0.3.8 values because the
+// bundle-ID rename is v0.4.0 scope (PRD AC15).
 func Identity(channel string) IdentitySet {
 	s := Suffixes(channel) // panics on unknown channel
 
@@ -189,8 +195,8 @@ func Identity(channel string) IdentitySet {
 
 	return IdentitySet{
 		BinaryName:           "vaultmtg-daemon" + s.Bin,
-		PlistLabel:           "com.vaultmtg.daemon" + s.Label,
-		KeychainService:      "com.vaultmtg.daemon" + s.Label,
+		PlistLabel:           "com.vaultmtg.daemon" + s.Label,   // unchanged in v0.3.9 per PRD AC15
+		KeychainService:      "com.hollowmark.daemon" + s.Label, // ADR-022 Phase 3 credential shim
 		ConfigDir:            configDir,
 		LogPath:              logPath,
 		AppBundlePath:        "/Applications/VaultMTG" + s.App + ".app",

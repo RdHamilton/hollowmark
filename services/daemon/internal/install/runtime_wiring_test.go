@@ -30,12 +30,12 @@ import (
 
 // TestRuntimeWiring_Stable_KeychainService verifies that the stable channel
 // produces the keychain service that main.go will pass to keychain.GetForService
-// and keychain.SetForService. Must match keychain.ServiceNameNew so existing
-// installs are untouched (ADR-049 §5).
+// and keychain.SetForService. Must match keychain.ServiceNameNew (ADR-022 Phase 3
+// hollowmark credential shim — v0.3.9).
 func TestRuntimeWiring_Stable_KeychainService(t *testing.T) {
 	id := install.Identity(install.ChannelStable)
-	assert.Equal(t, "com.vaultmtg.daemon", id.KeychainService,
-		"stable keychain service must match keychain.ServiceNameNew")
+	assert.Equal(t, "com.hollowmark.daemon", id.KeychainService,
+		"stable keychain service must match keychain.ServiceNameNew (com.hollowmark.daemon)")
 }
 
 // TestRuntimeWiring_Stable_PlistLabel verifies the stable plist label equals the
@@ -75,11 +75,11 @@ func TestRuntimeWiring_Stable_ArchiveDir(t *testing.T) {
 
 // TestRuntimeWiring_Staging_KeychainService verifies that the staging channel
 // produces a keychain service distinct from the stable one so both daemons can
-// run simultaneously without colliding.
+// run simultaneously without colliding (ADR-022 Phase 3 hollowmark credential shim).
 func TestRuntimeWiring_Staging_KeychainService(t *testing.T) {
 	id := install.Identity(install.ChannelStaging)
-	assert.Equal(t, "com.vaultmtg.daemon.staging", id.KeychainService,
-		"staging keychain service must be com.vaultmtg.daemon.staging")
+	assert.Equal(t, "com.hollowmark.daemon.staging", id.KeychainService,
+		"staging keychain service must be com.hollowmark.daemon.staging (ADR-022 Phase 3)")
 }
 
 // TestRuntimeWiring_Staging_PlistLabel verifies the staging plist label carries

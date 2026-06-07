@@ -53,9 +53,9 @@ func TestSuffix_StagingHasSuffixes(t *testing.T) {
 
 func TestIdentity_Stable_ExactStrings(t *testing.T) {
 	id := install.Identity(install.ChannelStable)
-	assert.Equal(t, "vaultmtg-daemon", id.BinaryName, "stable binary name must be bare")
-	assert.Equal(t, "com.vaultmtg.daemon", id.PlistLabel, "stable plist label must be bare")
-	assert.Equal(t, "com.vaultmtg.daemon", id.KeychainService, "stable keychain service must be bare")
+	assert.Equal(t, "vaultmtg-daemon", id.BinaryName, "stable binary name must be bare (unchanged in v0.3.9 per PRD AC15)")
+	assert.Equal(t, "com.vaultmtg.daemon", id.PlistLabel, "stable plist label must be bare (bundle ID unchanged in v0.3.9 per PRD AC15)")
+	assert.Equal(t, "com.hollowmark.daemon", id.KeychainService, "stable keychain service must advance to hollowmark (ADR-022 Phase 3 shim)")
 	assert.Equal(t, "/Applications/VaultMTG.app", id.AppBundlePath, "stable app bundle path must be bare")
 	assert.Equal(t, "VaultMTG", id.TrayLabel, "stable tray label must be bare")
 	assert.Equal(t, 9001, id.LocalAPIPort, "stable local-API port must be 9001")
@@ -64,8 +64,8 @@ func TestIdentity_Stable_ExactStrings(t *testing.T) {
 func TestIdentity_Staging_SuffixedStrings(t *testing.T) {
 	id := install.Identity(install.ChannelStaging)
 	assert.Equal(t, "vaultmtg-daemon-staging", id.BinaryName, "staging binary name must be suffixed")
-	assert.Equal(t, "com.vaultmtg.daemon.staging", id.PlistLabel, "staging plist label must be suffixed")
-	assert.Equal(t, "com.vaultmtg.daemon.staging", id.KeychainService, "staging keychain service must be suffixed")
+	assert.Equal(t, "com.vaultmtg.daemon.staging", id.PlistLabel, "staging plist label must be suffixed (bundle ID unchanged in v0.3.9 per PRD AC15)")
+	assert.Equal(t, "com.hollowmark.daemon.staging", id.KeychainService, "staging keychain service must advance to hollowmark (ADR-022 Phase 3 shim)")
 	assert.Equal(t, "/Applications/VaultMTG Staging.app", id.AppBundlePath, "staging app bundle must be suffixed")
 	assert.Equal(t, "VaultMTG (Staging)", id.TrayLabel, "staging tray label must be suffixed")
 	assert.Equal(t, 9011, id.LocalAPIPort, "staging local-API port must be 9011 (9001+10)")
@@ -265,16 +265,16 @@ func TestIdentity_HollowmarkLabel_DoesNotCollideWithCurrentLabel(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCrossCheck_ChannelStable_IdentityConsistent(t *testing.T) {
-	// For the stable channel, the keychain service must be "com.vaultmtg.daemon"
-	// — this is the same value hardcoded in keychain.go (ServiceNameNew).
+	// For the stable channel, the keychain service must be "com.hollowmark.daemon"
+	// (ADR-022 Phase 3 shim) — this is the same value as keychain.ServiceNameNew.
 	// If they diverge, ADR-049 §2 cross-check fires.
 	id := install.Identity(install.ChannelStable)
-	assert.Equal(t, "com.vaultmtg.daemon", id.KeychainService,
-		"stable keychain service must match keychain.ServiceNameNew")
+	assert.Equal(t, "com.hollowmark.daemon", id.KeychainService,
+		"stable keychain service must match keychain.ServiceNameNew (com.hollowmark.daemon)")
 }
 
 func TestCrossCheck_ChannelStaging_IdentityConsistent(t *testing.T) {
 	id := install.Identity(install.ChannelStaging)
-	assert.Equal(t, "com.vaultmtg.daemon.staging", id.KeychainService,
-		"staging keychain service must be com.vaultmtg.daemon.staging")
+	assert.Equal(t, "com.hollowmark.daemon.staging", id.KeychainService,
+		"staging keychain service must be com.hollowmark.daemon.staging")
 }

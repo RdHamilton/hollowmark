@@ -3,15 +3,19 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/config"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/dispatch"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/keychain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -536,7 +540,7 @@ func TestRunPKCEAuth_AlreadyRegistered_KeychainPresent(t *testing.T) {
 	assert.Equal(t, "acc_456", accountID)
 
 	// Simulate the already-registered branch of runPKCEAuth.
-	existing, kcErr := keychain.Get()
+	existing, _, kcErr := keychain.Get()
 	require.NoError(t, kcErr, "keychain.Get must succeed when entry is present")
 	require.NotEmpty(t, existing, "keychain entry must not be empty")
 
@@ -554,7 +558,7 @@ func TestRunPKCEAuth_AlreadyRegistered_KeychainPresent(t *testing.T) {
 	assert.Equal(t, "acc_456", out["account_id"], "daemon.json must have correct account_id")
 
 	// Verify the existing keychain entry was NOT overwritten.
-	afterKey, _ := keychain.Get()
+	afterKey, _, _ := keychain.Get()
 	assert.Equal(t, existingKey, afterKey, "existing keychain entry must be preserved")
 }
 
@@ -794,7 +798,7 @@ func TestRunPKCEAuth_AlreadyRegistered_KeychainMissing_RecoverySuccess(t *testin
 	require.True(t, alreadyRegistered, "BFF must signal alreadyRegistered on first call")
 
 	// Step 2: keychain is empty.
-	existing, _ := keychain.Get()
+	existing, _, _ := keychain.Get()
 	require.Empty(t, existing, "keychain must be empty to exercise recovery path")
 
 	// Step 3: revoke the stale row.
@@ -834,7 +838,7 @@ func TestRunPKCEAuth_AlreadyRegistered_KeychainMissing_RecoverySuccess(t *testin
 	assert.Equal(t, newDeviceID, out["daemon_id"], "daemon.json must carry the new server-issued device_id")
 
 	// OS keychain must hold the new key.
-	storedKey, kcErr := keychain.Get()
+	storedKey, _, kcErr := keychain.Get()
 	require.NoError(t, kcErr)
 	assert.Equal(t, newAPIKey, storedKey, "OS keychain must hold the new API key after recovery")
 
@@ -1398,4 +1402,114 @@ func TestDefaultSPAURL_ProductionDefault(t *testing.T) {
 func TestDefaultSetupURL_ProductionDefault(t *testing.T) {
 	assert.NotEmpty(t, DefaultSetupURL,
 		"DefaultSetupURL must have a non-empty package-level default")
+}
+
+// ---------------------------------------------------------------------------
+// #998 — Keychain hollowmark dual-read shim: migration telemetry wiring
+// ---------------------------------------------------------------------------
+
+// TestMigrateKeychainIfNeeded_EmitsOnce verifies the idempotency property of the
+// Step-2 keychain migration:
+//   - First call: only vaultmtg entry present → migration runs, migrated=true,
+//     BFF ingest stub receives exactly one keychain.migrated event.
+//   - Second call: hollowmark entry now present → migration skipped, migrated=false,
+//     no second event dispatched.
+//
+// The BFF ingest stub records the event bodies so we can assert the
+// daemon_version property is present and the event type is "keychain.migrated".
+func TestMigrateKeychainIfNeeded_EmitsOnce(t *testing.T) {
+	useMemoryKeyring(t)
+
+	// Seed only the legacy vaultmtg entry — simulates a v0.3.8 upgrade.
+	const legacyKey = "sk_live_vaultmtg_upgrade_key"
+	require.NoError(t, keyring.Set(keychain.ServiceNameLegacy, keychain.AccountKey, legacyKey))
+	t.Cleanup(func() {
+		_ = keychain.Delete()
+		_ = keyring.Delete(keychain.ServiceNameLegacy, keychain.AccountKey)
+	})
+
+	// BFF stub records ingest payloads.
+	// dispatch.SendOrBuffer posts one DaemonEvent JSON object per call (not
+	// wrapped in an "events" array) — capture the raw body per request.
+	var ingestBodies []string
+	bffSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "ingest") {
+			raw, err := io.ReadAll(r.Body)
+			if err == nil && len(raw) > 0 {
+				ingestBodies = append(ingestBodies, string(raw))
+			}
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer bffSrv.Close()
+
+	const accountID = "acc_migration_test"
+	const testVersion = "0.3.9-test"
+
+	// ── First call: migration must run ────────────────────────────────────────
+	runKeychainMigration(t, bffSrv.URL, accountID, testVersion)
+
+	// Confirm migration ran: hollowmark entry must now exist.
+	gotKey, migrated1, err := keychain.Get()
+	require.NoError(t, err, "keychain.Get must succeed after migration")
+	assert.Equal(t, legacyKey, gotKey)
+	assert.False(t, migrated1, "second Get() call must find new entry already present")
+
+	// Confirm exactly one keychain.migrated event was dispatched.
+	require.Len(t, ingestBodies, 1, "exactly one keychain.migrated event must be dispatched on first migration")
+	assert.Contains(t, ingestBodies[0], `"keychain.migrated"`,
+		"event type must be keychain.migrated")
+	assert.Contains(t, ingestBodies[0], testVersion,
+		"keychain.migrated event must carry daemon_version")
+	assert.Contains(t, ingestBodies[0], `"platform"`,
+		"keychain.migrated event must carry platform field so Faye can break down AC16 adoption by OS")
+	assert.Contains(t, ingestBodies[0], runtime.GOOS,
+		"keychain.migrated event platform value must equal runtime.GOOS")
+
+	// ── Second call: migration must be a no-op ────────────────────────────────
+	prevCount := len(ingestBodies)
+	runKeychainMigration(t, bffSrv.URL, accountID, testVersion)
+
+	assert.Equal(t, prevCount, len(ingestBodies),
+		"second migration call must not dispatch another keychain.migrated event (idempotent)")
+}
+
+// runKeychainMigration is the test helper that exercises the Step-2 migration
+// logic from main() in isolation: calls keychain.Get() and if migrated=true,
+// dispatches the keychain.migrated telemetry event to bffURL.
+// This mirrors the production code path in migrateLegacyAPIKey in main.go.
+func runKeychainMigration(t *testing.T, bffURL, accountID, version string) {
+	t.Helper()
+	_, migrated, err := keychain.Get()
+	if err != nil && errors.Is(err, keychain.ErrNotFound) {
+		return // nothing to migrate
+	}
+	require.NoError(t, err, "keychain.Get must not fail during migration")
+
+	if !migrated {
+		return // already migrated or fresh install
+	}
+
+	// Mirror the dispatch pattern from main.go Step-2 keychain migration.
+	// Platform is runtime.GOOS — mirrors production dispatchKeychainMigrated so
+	// the test exercises the correct value on every CI platform (darwin, linux, windows).
+	payload := struct {
+		FromService   string `json:"from_service"`
+		ToService     string `json:"to_service"`
+		DaemonVersion string `json:"daemon_version"`
+		Platform      string `json:"platform"`
+	}{
+		FromService:   keychain.ServiceNameLegacy,
+		ToService:     keychain.ServiceNameNew,
+		DaemonVersion: version,
+		Platform:      runtime.GOOS,
+	}
+
+	evt, err := dispatch.BuildEvent("keychain.migrated", accountID, "", payload)
+	require.NoError(t, err, "BuildEvent must succeed")
+
+	d := dispatch.New(bffURL, "/ingest/events", "sk_test_migration_token")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = d.SendOrBuffer(ctx, evt)
 }

@@ -20,25 +20,28 @@ func useMemoryKeyring(t *testing.T) {
 
 // TestConstants verifies the exported constants hold the correct values so
 // callers can rely on the string literals (e.g. for launchd label matching).
+// ADR-022 Phase 3 (v0.3.9): ServiceNameNew advances to "com.hollowmark.daemon";
+// ServiceNameLegacy is now "com.vaultmtg.daemon" (the previous write target).
 func TestConstants(t *testing.T) {
-	assert.Equal(t, "com.vaultmtg.daemon", keychain.ServiceNameNew)
-	assert.Equal(t, "com.mtga-companion.daemon", keychain.ServiceNameLegacy)
+	assert.Equal(t, "com.hollowmark.daemon", keychain.ServiceNameNew)
+	assert.Equal(t, "com.vaultmtg.daemon", keychain.ServiceNameLegacy)
 	assert.Equal(t, "api-key", keychain.AccountKey)
 }
 
 // ── Scenario 1: new entry present ────────────────────────────────────────────
 
 // TestGet_NewEntryPresent verifies that when ServiceNameNew has an entry
-// Get() returns it without touching the legacy service name.
+// Get() returns it without touching the legacy service name, and migrated=false.
 func TestGet_NewEntryPresent(t *testing.T) {
 	useMemoryKeyring(t)
 
 	const wantKey = "sk_live_newentry"
 	require.NoError(t, keyring.Set(keychain.ServiceNameNew, keychain.AccountKey, wantKey))
 
-	got, err := keychain.Get()
+	got, migrated, err := keychain.Get()
 	require.NoError(t, err)
 	assert.Equal(t, wantKey, got)
+	assert.False(t, migrated, "new entry already present: migrated must be false")
 }
 
 // TestSet_WritesToNewServiceName confirms that Set() stores under ServiceNameNew.
@@ -60,9 +63,10 @@ func TestSetAndGet(t *testing.T) {
 	const key = "sk_live_test1234"
 	require.NoError(t, keychain.Set(key))
 
-	got, err := keychain.Get()
+	got, migrated, err := keychain.Get()
 	require.NoError(t, err)
 	assert.Equal(t, key, got)
+	assert.False(t, migrated, "Set writes to ServiceNameNew directly: migrated must be false")
 }
 
 // TestSet_Overwrite verifies that a second Set() replaces the first.
@@ -72,26 +76,28 @@ func TestSet_Overwrite(t *testing.T) {
 	require.NoError(t, keychain.Set("sk_live_first"))
 	require.NoError(t, keychain.Set("sk_live_second"))
 
-	got, err := keychain.Get()
+	got, _, err := keychain.Get()
 	require.NoError(t, err)
 	assert.Equal(t, "sk_live_second", got)
 }
 
-// ── Scenario 2: legacy entry present (upgrade path) ──────────────────────────
+// ── Scenario 2: legacy entry present (upgrade path from vaultmtg→hollowmark) ─
 
 // TestGet_LegacyEntryPresent_CopiedForward verifies that when only the legacy
-// service name has an entry, Get() returns the key AND copies it to ServiceNameNew.
-// The legacy entry must be retained (not deleted).
+// service name (com.vaultmtg.daemon) has an entry, Get() returns the key,
+// copies it to ServiceNameNew (com.hollowmark.daemon), retains the old entry,
+// and signals migrated=true.
 func TestGet_LegacyEntryPresent_CopiedForward(t *testing.T) {
 	useMemoryKeyring(t)
 
 	const wantKey = "sk_live_legacykey"
-	// Seed only the legacy entry — simulating an upgrade from the old daemon.
+	// Seed only the legacy entry — simulating an upgrade from the vaultmtg daemon.
 	require.NoError(t, keyring.Set(keychain.ServiceNameLegacy, keychain.AccountKey, wantKey))
 
-	got, err := keychain.Get()
+	got, migrated, err := keychain.Get()
 	require.NoError(t, err, "Get() must succeed when only legacy entry is present")
 	assert.Equal(t, wantKey, got, "Get() must return the legacy key")
+	assert.True(t, migrated, "Get() must signal migrated=true when copy-forward ran")
 
 	// ── Copy-forward assertion ────────────────────────────────────────────────
 	copiedVal, copyErr := keyring.Get(keychain.ServiceNameNew, keychain.AccountKey)
@@ -104,6 +110,29 @@ func TestGet_LegacyEntryPresent_CopiedForward(t *testing.T) {
 	assert.Equal(t, wantKey, legacyVal, "retained legacy entry must be unchanged")
 }
 
+// TestGet_BothEntriesPresent_NoOp verifies that when both the new and legacy
+// entries are present, Get() returns the new entry immediately with migrated=false
+// and does NOT re-run the copy-forward (idempotency).
+func TestGet_BothEntriesPresent_NoOp(t *testing.T) {
+	useMemoryKeyring(t)
+
+	const newKey = "sk_live_already_migrated"
+	const legacyKey = "sk_live_old_vaultmtg_key"
+
+	require.NoError(t, keyring.Set(keychain.ServiceNameNew, keychain.AccountKey, newKey))
+	require.NoError(t, keyring.Set(keychain.ServiceNameLegacy, keychain.AccountKey, legacyKey))
+
+	got, migrated, err := keychain.Get()
+	require.NoError(t, err)
+	assert.Equal(t, newKey, got, "Get() must return ServiceNameNew entry when both present")
+	assert.False(t, migrated, "both entries present: migrated must be false (idempotent)")
+
+	// Legacy entry must be untouched.
+	legacyVal, legacyErr := keyring.Get(keychain.ServiceNameLegacy, keychain.AccountKey)
+	require.NoError(t, legacyErr, "legacy entry must still be present")
+	assert.Equal(t, legacyKey, legacyVal, "legacy entry must not be modified when new entry already present")
+}
+
 // TestGet_LegacyPresent_SubsequentCallHitsNew verifies that a second Get() call
 // after the copy-forward reads from ServiceNameNew, not from legacy.
 // This proves the copy-forward is effective and persistent within the same mock store.
@@ -114,25 +143,28 @@ func TestGet_LegacyPresent_SubsequentCallHitsNew(t *testing.T) {
 	require.NoError(t, keyring.Set(keychain.ServiceNameLegacy, keychain.AccountKey, wantKey))
 
 	// First call triggers migration.
-	_, err := keychain.Get()
+	_, migrated1, err := keychain.Get()
 	require.NoError(t, err)
+	assert.True(t, migrated1, "first call with only legacy entry must set migrated=true")
 
 	// Remove the legacy entry to confirm subsequent reads come from ServiceNameNew.
 	require.NoError(t, keyring.Delete(keychain.ServiceNameLegacy, keychain.AccountKey))
 
-	got, err := keychain.Get()
+	got, migrated2, err := keychain.Get()
 	require.NoError(t, err)
 	assert.Equal(t, wantKey, got)
+	assert.False(t, migrated2, "second call hits new entry directly: migrated must be false")
 }
 
 // ── Scenario 3: neither entry present ────────────────────────────────────────
 
 // TestGet_NotFound verifies that ErrNotFound is returned when no entry exists
-// under either service name (fresh install).
+// under either service name (fresh install), and migrated=false.
 func TestGet_NotFound(t *testing.T) {
 	useMemoryKeyring(t)
-	_, err := keychain.Get()
+	_, migrated, err := keychain.Get()
 	assert.ErrorIs(t, err, keychain.ErrNotFound)
+	assert.False(t, migrated, "ErrNotFound path must return migrated=false")
 }
 
 // ── Scenario 4: neither entry present (via global mock error) ────────────────
@@ -153,11 +185,10 @@ func TestGet_NeitherEntryPresent_GlobalMockError(t *testing.T) {
 	keyring.MockInitWithError(keyring.ErrNotFound)
 	t.Cleanup(func() { keyring.MockInitWithError(nil) })
 
-	_, err := keychain.Get()
-	// Must return ErrNotFound (not a raw keyring error) so callers that check
-	// errors.Is(err, keychain.ErrNotFound) can trigger re-auth cleanly.
+	_, migrated, err := keychain.Get()
 	assert.ErrorIs(t, err, keychain.ErrNotFound,
 		"both keyring ops returning ErrNotFound must yield keychain.ErrNotFound")
+	assert.False(t, migrated, "neither-entry-present path must return migrated=false")
 }
 
 // ── Delete tests ──────────────────────────────────────────────────────────────
@@ -169,7 +200,7 @@ func TestDelete_Existing(t *testing.T) {
 	require.NoError(t, keychain.Set("sk_live_todelete"))
 	require.NoError(t, keychain.Delete())
 
-	_, err := keychain.Get()
+	_, _, err := keychain.Get()
 	// After Delete, the new entry is gone.  If no legacy entry exists either
 	// this should be ErrNotFound.
 	assert.ErrorIs(t, err, keychain.ErrNotFound)
@@ -205,7 +236,7 @@ func TestDelete_DoesNotRemoveLegacy(t *testing.T) {
 func TestSetForService_UsesPassedServiceName(t *testing.T) {
 	useMemoryKeyring(t)
 
-	const service = "com.vaultmtg.daemon.staging"
+	const service = "com.hollowmark.daemon.staging"
 	const wantKey = "sk_live_staging_key"
 
 	require.NoError(t, keychain.SetForService(service, wantKey))
@@ -226,7 +257,7 @@ func TestSetForService_UsesPassedServiceName(t *testing.T) {
 func TestGetForService_UsesPassedServiceName(t *testing.T) {
 	useMemoryKeyring(t)
 
-	const service = "com.vaultmtg.daemon.staging"
+	const service = "com.hollowmark.daemon.staging"
 	const wantKey = "sk_live_staging_read"
 
 	// Seed the staging slot, leaving ServiceNameNew empty.
@@ -250,7 +281,7 @@ func TestGetForService_NotFound(t *testing.T) {
 func TestGetForService_RoundTrip(t *testing.T) {
 	useMemoryKeyring(t)
 
-	const service = "com.vaultmtg.daemon.staging"
+	const service = "com.hollowmark.daemon.staging"
 	const key = "sk_live_roundtrip"
 
 	require.NoError(t, keychain.SetForService(service, key))
@@ -264,7 +295,7 @@ func TestGetForService_RoundTrip(t *testing.T) {
 func TestSetForService_Overwrite(t *testing.T) {
 	useMemoryKeyring(t)
 
-	const service = "com.vaultmtg.daemon.staging"
+	const service = "com.hollowmark.daemon.staging"
 	require.NoError(t, keychain.SetForService(service, "sk_live_first"))
 	require.NoError(t, keychain.SetForService(service, "sk_live_second"))
 
@@ -280,8 +311,8 @@ func TestSetForService_Overwrite(t *testing.T) {
 func TestChannelSlotIsolation(t *testing.T) {
 	useMemoryKeyring(t)
 
-	const stableService = keychain.ServiceNameNew // "com.vaultmtg.daemon"
-	const stagingService = "com.vaultmtg.daemon.staging"
+	const stableService = keychain.ServiceNameNew // "com.hollowmark.daemon"
+	const stagingService = "com.hollowmark.daemon.staging"
 
 	const stableKey = "sk_live_stable_key"
 	const stagingKey = "sk_live_staging_key"
