@@ -2,14 +2,14 @@
   "FixedFileInfo": {
     "FileVersion": {
       "Major": 0,
-      "Minor": 0,
-      "Patch": 0,
+      "Minor": 3,
+      "Patch": 10,
       "Build": 0
     },
     "ProductVersion": {
       "Major": 0,
-      "Minor": 0,
-      "Patch": 0,
+      "Minor": 3,
+      "Patch": 10,
       "Build": 0
     },
     "FileFlagsMask": "3f",
