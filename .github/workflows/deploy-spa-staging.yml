@@ -56,13 +56,18 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
-      # Read S3 bucket name, CloudFront distribution ID, Sentry DSN, and CI smoke
-      # credentials from SSM at deploy time. Canonical SSM-as-source-of-truth
-      # pattern (vault-mtg-tickets#16).
+      # Read S3 bucket name, CloudFront distribution ID, Sentry DSN, CI smoke
+      # credentials, and staging Clerk publishable key from SSM at deploy time.
+      # Canonical SSM-as-source-of-truth pattern (vault-mtg-tickets#16).
       #
       # Auth-enforcement (#678): ci-smoke-token is the pre-issued BFF JWT used by
       # staging-smoke.spec.ts for BFF API assertions. Its absence causes the BFF
       # smoke to FAIL with INCONCLUSIVE — not silently skip.
+      #
+      # vmt#967: CLERK_PUBLISHABLE_KEY is read from SSM /vaultmtg/staging/CLERK_PUBLISHABLE_KEY
+      # (a plain String — publishable keys are public) so the staging SPA authenticates
+      # against the staging Clerk instance, not the prod instance. The repo-level
+      # vars.VITE_CLERK_PUBLISHABLE_KEY holds the PROD key and must NOT be used here.
       - name: Read SSM parameters
         id: ssm
         run: |
@@ -92,11 +97,18 @@ jobs:
             --output text)
           # Mask the smoke token immediately so it never appears in log output.
           echo "::add-mask::${STAGING_SMOKE_TOKEN}"
+          # Publishable key is a plain String (pk_live_* values are public) — no --with-decryption.
+          CLERK_PUBLISHABLE_KEY=$(aws ssm get-parameter \
+            --name /vaultmtg/staging/CLERK_PUBLISHABLE_KEY \
+            --region us-east-1 \
+            --query Parameter.Value \
+            --output text)
           {
             echo "bucket=$BUCKET"
             echo "dist_id=$DIST_ID"
             echo "sentry_dsn=$SENTRY_DSN"
             echo "staging_smoke_token=${STAGING_SMOKE_TOKEN}"
+            echo "clerk_publishable_key=${CLERK_PUBLISHABLE_KEY}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build React SPA (staging)
@@ -111,7 +123,9 @@ jobs:
           # Value is a loopback port only — not a secret. Coupled to the daemon
           # 9011-bind change (ticket #667); must deploy together.
           VITE_DAEMON_URL: ${{ vars.VITE_DAEMON_URL || 'http://localhost:9011/api/v1' }}
-          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+          # vmt#967: sourced from SSM /vaultmtg/staging/CLERK_PUBLISHABLE_KEY (staging instance),
+          # not the repo-level var which holds the prod key.
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ steps.ssm.outputs.clerk_publishable_key }}
           VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
           # #818: pin PostHog ingest host explicitly. Falls back to app.posthog.com
           # if the repo var is not yet set (safe — the redirect still works).
