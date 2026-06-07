@@ -190,15 +190,15 @@ jobs:
 
       # ── SPA authenticated smoke (#678) ──────────────────────────────────────
       # Exercises every protected SPA route via Clerk testing token injection.
-      # CLERK_SECRET_KEY is sourced from GitHub Actions secrets (provisioned from
-      # SSM /vaultmtg/staging/CLERK_SECRET_KEY at environment setup time).
+      # CLERK_STAGING_SECRET_KEY is sourced from GitHub Actions secrets (provisioned
+      # from SSM /vaultmtg/staging/CLERK_SECRET_KEY at environment setup time).
       # If absent, the suite FAILS with INCONCLUSIVE — it does NOT skip.
       - name: Run SPA browser smoke suite
         working-directory: frontend
         run: npm run test:e2e:staging-spa
         env:
           STAGING_SPA_URL: ${{ vars.STAGING_SPA_URL }}
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_STAGING_SECRET_KEY }}
 
       # ── BFF API authenticated smoke (#678) ──────────────────────────────────
       # Exercises auth-gated BFF endpoints (matches, SSE) with a pre-issued
