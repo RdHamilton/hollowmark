@@ -193,13 +193,21 @@ describe('MatchDetailsModal', () => {
 
   describe('loading state', () => {
     it('shows loading spinner while fetching games', async () => {
-      mockGetMatchGames.mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve(mockGames), 100))
-      );
+      // Use fake timers so the deferred resolve never fires into a torn-down
+      // jsdom environment — without this, the 100ms setTimeout outlives the
+      // test and triggers "window is not defined" as an unhandled rejection.
+      vi.useFakeTimers();
+      try {
+        mockGetMatchGames.mockImplementation(
+          () => new Promise((resolve) => setTimeout(() => resolve(mockGames), 100))
+        );
 
-      render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
+        render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
 
-      expect(screen.getByText(/Loading games/i)).toBeInTheDocument();
+        expect(screen.getByText(/Loading games/i)).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

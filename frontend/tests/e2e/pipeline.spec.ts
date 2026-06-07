@@ -698,45 +698,47 @@ test.describe('Data Pipeline - Log to UI', () => {
     });
   });
 
-  test.describe('Footer Stats Pipeline', () => {
-    test('should display stats in footer from parsed matches', async ({ page }) => {
-      const footer = page.locator('.app-footer, footer');
-      const hasFooter = await footer.isVisible().catch(() => false);
+  test.describe('StatusStrip Pipeline (#1019)', () => {
+    test('should display stats in status strip from parsed matches', async ({ page }) => {
+      // StatusStrip replaced Footer per #1019 — use data-testid="status-strip"
+      const strip = page.locator('[data-testid="status-strip"]');
+      const hasStrip = await strip.isVisible().catch(() => false);
 
-      if (hasFooter) {
-        // .footer-label only appears when stats are loaded (requires database).
-        // In CI without a database the footer shows "No matches yet" (.footer-empty).
+      if (hasStrip) {
+        // .status-strip-label only appears when stats are loaded (requires database).
+        // In CI without a database the strip shows "Loading stats..." state.
         // Guard data assertions behind a stats-present check.
-        const footerLabel = footer.locator('.footer-label');
-        const hasStatsLabel = await footerLabel.isVisible().catch(() => false);
+        const stripLabel = strip.locator('.status-strip-label');
+        const hasStatsLabel = await stripLabel.isVisible().catch(() => false);
 
         if (hasStatsLabel) {
-          const footerText = await footer.textContent();
-          // Footer should show win/loss stats
+          const stripText = await strip.textContent();
+          // Strip should show win/loss stats
           // Log contains: 7 wins, 5 losses = ~58% win rate
           const hasStats =
-            footerText?.includes('W') || footerText?.includes('L') || footerText?.includes('%');
+            stripText?.includes('W') || stripText?.includes('L') || stripText?.includes('%');
           expect(hasStats).toBeTruthy();
         }
-        // else: no database in CI — footer is in "No matches yet" state; test passes
+        // else: no database in CI — strip is in loading state; test passes
       }
     });
 
-    test('should display All Time label in footer to clarify stats scope (#741)', async ({ page }) => {
-      const footer = page.locator('.app-footer, footer');
-      const hasFooter = await footer.isVisible().catch(() => false);
+    test('should display All Time label in status strip to clarify stats scope (#741)', async ({ page }) => {
+      // StatusStrip replaced Footer per #1019 — use data-testid="status-strip"
+      const strip = page.locator('[data-testid="status-strip"]');
+      const hasStrip = await strip.isVisible().catch(() => false);
 
-      if (hasFooter) {
-        // .footer-label only appears when there are stats (requires database).
-        // In CI without a database the footer shows .footer-empty instead.
-        const allTimeLabel = footer.locator('.footer-label');
+      if (hasStrip) {
+        // .status-strip-label only appears when there are stats (requires database).
+        // In CI without a database the strip shows loading state instead.
+        const allTimeLabel = strip.locator('.status-strip-label');
         const hasStatsLabel = await allTimeLabel.isVisible().catch(() => false);
 
         if (hasStatsLabel) {
-          // Footer should clearly indicate these are "All Time" stats
+          // Strip should clearly indicate these are "All Time" stats
           await expect(allTimeLabel).toContainText('All Time');
         }
-        // else: no database in CI — footer-label absent; test passes gracefully
+        // else: no database in CI — label absent; test passes gracefully
       }
     });
   });
