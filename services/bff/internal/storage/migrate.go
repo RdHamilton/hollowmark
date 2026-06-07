@@ -1,16 +1,19 @@
 package storage
 
 import (
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
 	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // MigrationStatusUpToDate is the value returned by MigrationStatus when the
@@ -143,6 +146,58 @@ func embeddedMaxVersion() (uint, error) {
 // the embedded migrations FS.  Useful for health checks and diagnostics.
 func EmbeddedMaxVersion() (uint, error) {
 	return embeddedMaxVersion()
+}
+
+// CheckBinaryAheadOfDB is a pre-flight guard called at BFF startup, before
+// RunMigrations, to detect a rolled-back binary deployed against a database
+// that has already been migrated further.
+//
+// It opens a THROWAWAY connection (separate from the shared pool) solely to
+// query schema_migrations, then closes it.  The shared pool is not open yet
+// at the call site in cmd/main.go.
+//
+// Semantics:
+//   - db version > binary embedded max version → return error with both numbers
+//     (caller should log.Fatalf — this is a hard stop)
+//   - db version == binary version, or db version < binary version → return nil
+//     (normal operation; RunMigrations handles forward migrations)
+//   - DB unreachable, table absent, or any query error → return nil (fail-open)
+//     RunMigrations will deal with unreachable DBs via its own retry loop.
+func CheckBinaryAheadOfDB(databaseURL string) error {
+	binaryMax, err := embeddedMaxVersion()
+	if err != nil {
+		// Cannot determine the binary's own version — fail-open.
+		return nil
+	}
+
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		return nil
+	}
+	defer db.Close()
+
+	// Short connect-timeout: we only need a quick read; don't block startup.
+	db.SetConnMaxLifetime(5 * time.Second)
+	db.SetMaxOpenConns(1)
+
+	var dbMax int64
+	queryErr := db.QueryRow(
+		"SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+	).Scan(&dbMax)
+	if queryErr != nil {
+		// Table absent, query error, or connection failure — fail-open.
+		return nil
+	}
+
+	if uint(dbMax) > binaryMax {
+		return fmt.Errorf(
+			"startup aborted: database schema version %d is ahead of this binary's embedded version %d; "+
+				"deploy a binary that includes migration %d or roll the database back",
+			dbMax, binaryMax, dbMax,
+		)
+	}
+
+	return nil
 }
 
 func normalizePgxURL(dsn string) string {
