@@ -323,8 +323,10 @@ const Layout = ({ children }: LayoutProps) => {
         {children}
       </div>
 
-      {/* StatusStrip — persistent bottom status bar (replaces Footer per #1019) */}
-      <StatusStrip daemonStatus={daemonStatus} />
+      {/* StatusStrip — authenticated routes only (AC5: auth guard is structural).
+          isSignedIn from useAuth() — Layout mounts on public routes (/download, /setup)
+          too, so we guard here rather than in the router. */}
+      {isSignedIn && <StatusStrip daemonStatus={daemonStatus} />}
 
       {/* Daemon onboarding modal — shown on first login if daemon not connected
           and account has no existing data (accountDataState === 'empty').
