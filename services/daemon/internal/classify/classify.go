@@ -9,7 +9,7 @@ package classify
 import (
 	"strings"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 )
 
 // ClassifyEntry maps a log entry to a semantic event type string.

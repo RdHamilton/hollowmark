@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	contract "github.com/RdHamilton/vault-mtg/services/contract"
+	contract "github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // DefaultHeartbeatInterval is the period between SSE heartbeat comment frames

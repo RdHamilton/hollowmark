@@ -10,7 +10,7 @@
 # explicit VERDICT: APPROVED comment.
 #
 # Runbook: vault-mtg-docs/engineering/runbooks/infra-security-review-gate.md
-# Ticket:  RdHamilton/vault-mtg#2365
+# Ticket:  RdHamilton/hollowmark#2365
 #
 # GATE MECHANISM
 # --------------
@@ -507,5 +507,5 @@ jobs:
           echo "  was pushed after the last approval."
           echo ""
           echo "Runbook: vault-mtg-docs/engineering/runbooks/infra-security-review-gate.md"
-          echo "Ticket:  RdHamilton/vault-mtg#2365"
+          echo "Ticket:  RdHamilton/hollowmark#2365"
           exit 1

@@ -3,7 +3,7 @@ package handlers_test
 import (
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
 )
 
 func TestIsKnownFormat(t *testing.T) {

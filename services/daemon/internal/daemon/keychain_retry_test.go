@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/config"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/keychain"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/config"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/keychain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

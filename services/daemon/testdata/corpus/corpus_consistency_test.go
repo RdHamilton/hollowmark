@@ -26,7 +26,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // matchPair describes a daemon-emit match fixture and its expected DB + API

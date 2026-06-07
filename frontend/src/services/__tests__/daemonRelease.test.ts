@@ -28,7 +28,7 @@ import {
   daemonArtifactChannelInfix,
 } from '../daemonRelease';
 
-const GITHUB_REPO = 'RdHamilton/vault-mtg';
+const GITHUB_REPO = 'RdHamilton/hollowmark';
 const RELEASES_API = `https://api.github.com/repos/${GITHUB_REPO}/releases`;
 
 const mockFetch = vi.fn();

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
-	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // --- fakes ---

@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/install"
 )
 
 // Config holds all daemon configuration.

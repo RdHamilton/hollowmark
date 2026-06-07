@@ -6,12 +6,12 @@
 
 ## Local Go Build Setup (Required)
 
-Local Go builds require `GOPRIVATE=github.com/RdHamilton/vault-mtg` to be set. Without it, `go build`, `go mod tidy`, and `go test` fail with a cryptic 404 from `proxy.golang.org` because the public proxy holds stale pre-rename cached module versions (root cause: ADR-023 Addendum II — module proxy cache poisoning post-rename).
+Local Go builds require `GOPRIVATE=github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark` to be set. Without it, `go build`, `go mod tidy`, and `go test` fail with a cryptic 404 from `proxy.golang.org` because the public proxy holds stale pre-rename cached module versions (root cause: ADR-023 Addendum II — module proxy cache poisoning post-rename).
 
 One-time setup:
 
 ```bash
-go env -w GOPRIVATE=github.com/RdHamilton/vault-mtg
+go env -w GOPRIVATE=github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
 ```
 
 `scripts/dev.sh` also exports this defensively, so `./scripts/dev.sh build` works without the one-time setup. CI workflows (`integration.yml`, `daemon.yml`, `deploy-script-integration-test.yml`) already set `GOPRIVATE` at the job level — this requirement only affects local developer machines.

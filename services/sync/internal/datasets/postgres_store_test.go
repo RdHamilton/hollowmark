@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/datasets"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/draftdata"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/scryfall"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/seventeenlands"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/datasets"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/draftdata"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/scryfall"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/seventeenlands"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

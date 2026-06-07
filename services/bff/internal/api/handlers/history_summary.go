@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // HistorySummaryReader is the interface the handler uses for the summary repo.

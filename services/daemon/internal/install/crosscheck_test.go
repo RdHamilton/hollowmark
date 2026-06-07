@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/install"
 	"github.com/stretchr/testify/require"
 )
 

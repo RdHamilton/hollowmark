@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/updatecheck"
 )
 
 // TestCheck_UpdateAvailable_CallsNotifyHook verifies that when a newer version
@@ -20,9 +20,9 @@ func TestCheck_UpdateAvailable_CallsNotifyHook(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(versionResponseFull{
 			Latest:         "1.3.0",
 			ReleasedAt:     "2026-06-01T12:00:00Z",
-			DownloadURL:    "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon%2Fv1.3.0",
-			Sha256SumsURL:  "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv1.3.0/SHA256SUMS",
-			AttestationURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv1.3.0/SHA256SUMS.minisig",
+			DownloadURL:    "https://github.com/RdHamilton/hollowmark/releases/tag/daemon%2Fv1.3.0",
+			Sha256SumsURL:  "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv1.3.0/SHA256SUMS",
+			AttestationURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv1.3.0/SHA256SUMS.minisig",
 		})
 	}))
 	defer srv.Close()

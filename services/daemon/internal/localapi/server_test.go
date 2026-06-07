@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/localapi"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/localapi"
 )
 
 func TestHealthReturnsState(t *testing.T) {

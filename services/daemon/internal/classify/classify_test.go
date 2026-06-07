@@ -3,7 +3,7 @@ package classify
 import (
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 	"github.com/stretchr/testify/assert"
 )
 

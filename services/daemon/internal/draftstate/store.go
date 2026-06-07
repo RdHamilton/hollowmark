@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 )
 
 // Pick captures one pack-and-pick combination — the offered cards and

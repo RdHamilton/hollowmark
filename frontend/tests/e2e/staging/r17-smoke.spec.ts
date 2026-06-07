@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
  * Contract defined by Ray in mtga-companion-infra:
  *   .github/workflows/staging-rebuild-smoke-gate.yml (## TIM SPEC)
  *
- * Issue: RdHamilton/vault-mtg#2343
+ * Issue: RdHamilton/hollowmark#2343
  *
  * These 4 assertions run against live staging after every EC2 rebuild.
  * No auth flows, no Postgres service, no local BFF — purely HTTP/browser

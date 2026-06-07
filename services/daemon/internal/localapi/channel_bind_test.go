@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/localapi"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/install"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/localapi"
 )
 
 // portFree reports whether the given loopback port can be bound right now.

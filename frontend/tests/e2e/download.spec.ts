@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-const GITHUB_REPO = 'RdHamilton/vault-mtg';
+const GITHUB_REPO = 'RdHamilton/hollowmark';
 const FALLBACK_RELEASES_BASE =
   `https://github.com/${GITHUB_REPO}/releases/latest/download`;
 const RUNTIME_RELEASES_BASE =

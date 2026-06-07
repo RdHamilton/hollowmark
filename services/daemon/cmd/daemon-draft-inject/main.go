@@ -46,8 +46,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/contract"
-	"github.com/RdHamilton/vault-mtg/services/daemon/replay"
+	"github.com/RdHamilton/hollowmark/services/contract"
+	"github.com/RdHamilton/hollowmark/services/daemon/replay"
 )
 
 const ingestPath = "/api/v1/ingest/events"

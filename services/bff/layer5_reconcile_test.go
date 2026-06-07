@@ -50,10 +50,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/projection"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
-	daemonreplay "github.com/RdHamilton/vault-mtg/services/daemon/replay"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/projection"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
+	daemonreplay "github.com/RdHamilton/hollowmark/services/daemon/replay"
 )
 
 // ─── TestMain (layer5 build tag) ────────────────────────────────────────────

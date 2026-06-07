@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // GamePlayInsert holds the data needed to insert a single match_game_results row.

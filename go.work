@@ -12,3 +12,15 @@ use (
 	./services/meta-scrape
 	./services/sync
 )
+
+// TEMPORARY: These replace directives bridge the gap between the module path
+// rewrite (#995) and the new tag-cuts (#997). The published versions at the
+// old vault-mtg tags declare the old module path; Go 1.25 workspace use-
+// directives do not bypass module-identity validation during graph construction.
+// Remove these once #997 has cut new hollowmark/* tags with the correct paths.
+replace (
+	github.com/RdHamilton/hollowmark/pkg/draftalgo v0.1.2 => ./pkg/draftalgo
+	github.com/RdHamilton/hollowmark/pkg/logparse v0.1.4 => ./pkg/logparse
+	github.com/RdHamilton/hollowmark/services/contract v0.1.5 => ./services/contract
+	github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260603164737-e0e383f680c4 => ./services/daemon
+)

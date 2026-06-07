@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/dbpool"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/dbpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 

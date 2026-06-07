@@ -3,9 +3,9 @@ package datasets
 import (
 	"context"
 
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/draftdata"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/scryfall"
-	"github.com/RdHamilton/vault-mtg/services/sync/internal/seventeenlands"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/draftdata"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/scryfall"
+	"github.com/RdHamilton/hollowmark/services/sync/internal/seventeenlands"
 )
 
 // SyncSet holds the Scryfall set code and the 17Lands expansion code for a set.

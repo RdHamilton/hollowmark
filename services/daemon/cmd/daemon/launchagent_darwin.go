@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/install"
 )
 
 // plistLabelLegacy is the pre-rename LaunchAgent label.  The installer detects

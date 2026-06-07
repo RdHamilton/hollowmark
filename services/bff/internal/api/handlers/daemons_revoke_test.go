@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
 )
 
 // stubDaemonRevokeRepo is a test double for the daemonAPIKeyRevokeRepo

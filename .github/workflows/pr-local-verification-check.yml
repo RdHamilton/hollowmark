@@ -74,7 +74,7 @@ name: PR Local Verification Check
 #        ## Local Verification
 #        ```
 #        $ go test ./...
-#        ok  github.com/RdHamilton/vault-mtg/services/bff  0.834s
+#        ok  github.com/RdHamilton/hollowmark/services/bff  0.834s
 #        PASS
 #        ```
 #      -> 1 fence, prompt `$ `, marker `PASS` -> PASS

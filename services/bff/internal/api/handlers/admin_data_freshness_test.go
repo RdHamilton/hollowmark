@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
 )
 
 // stubFreshnessChecker is a test double for CardRatingsFreshnessChecker.

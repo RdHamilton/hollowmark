@@ -5,8 +5,8 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/config"
-	contract "github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/config"
+	contract "github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // VersionConfig is the minimal interface DaemonVersionHandler needs from the BFF
@@ -75,7 +75,7 @@ func (h *DaemonVersionHandler) GetDaemonVersion(w http.ResponseWriter, r *http.R
 		resp = contract.DaemonVersionResponse{
 			Latest:      version,
 			ReleasedAt:  releasedAt,
-			DownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/tag/daemon/v" + version,
+			DownloadURL: "https://github.com/RdHamilton/hollowmark/releases/tag/daemon/v" + version,
 		}
 	}
 

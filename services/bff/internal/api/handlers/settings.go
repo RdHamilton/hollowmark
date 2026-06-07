@@ -23,7 +23,7 @@ import (
 	"net/http"
 	"strings"
 
-	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
 	"github.com/go-chi/chi/v5"
 )
 
