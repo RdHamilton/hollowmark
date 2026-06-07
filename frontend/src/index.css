@@ -70,6 +70,13 @@
   --vault-loss:             var(--vault-danger);
 
   /* ---- Rarity / Wildcard Badges (categorical, non-brand) ---- */
+  /* ---- Hollowmark Gilt — warm economy accent (#1015 / #1018) ----
+     Used exclusively for gold-economy moments: quest gold rewards, completion
+     milestones (OTJ 100%), and the mythic wildcard tally. NOT a CTA colour
+     (sapphire owns CTAs). Per design advisory: --vault-gilt = aged brass.   */
+  --hollowmark-gilt:        #B87D32;   /* aged brass — primary gilt (public alias) */
+  --hollowmark-gilt-light:  #C8913A;   /* lifted gilt — hover / highlight          */
+
   --vault-rarity-common:    #4B5563;
   --vault-rarity-uncommon:  #C0C0C0;
   --vault-rarity-rare:      #D4AF37;   /* gold */
