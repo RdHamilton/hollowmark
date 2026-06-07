@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@clerk/react';
-import Footer from './Footer';
+import StatusStrip from './StatusStrip';
 import AuthBar from './AuthBar';
 import DaemonHealthIndicator, { type DaemonHealthState } from './DaemonHealthIndicator';
 import { OnboardingModal } from './OnboardingModal';
@@ -323,8 +323,10 @@ const Layout = ({ children }: LayoutProps) => {
         {children}
       </div>
 
-      {/* Footer with Stats */}
-      <Footer />
+      {/* StatusStrip — authenticated routes only (AC5: auth guard is structural).
+          isSignedIn from useAuth() — Layout mounts on public routes (/download, /setup)
+          too, so we guard here rather than in the router. */}
+      {isSignedIn && <StatusStrip daemonStatus={daemonStatus} />}
 
       {/* Daemon onboarding modal — shown on first login if daemon not connected
           and account has no existing data (accountDataState === 'empty').
