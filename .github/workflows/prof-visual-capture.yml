@@ -8,7 +8,7 @@ name: Prof Visual Capture (staging)
 # READ-ONLY: navigate + screenshot ONLY. No mutations, no crafting, no settings
 # changes, no destructive actions.
 #
-# Auth: reads CLERK_SECRET_KEY from SSM /vaultmtg/staging/CLERK_SECRET_KEY.
+# Auth: reads CLERK_SECRET_KEY from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY.
 # Account: ci-smoke-token (user_3EamRFdUZdQl1yYPf4Yg7OIQqm4, account_id=17)
 #   — seeded with ~10k card_inventory rows and 3 Standard mtgzone_archetypes.
 #
@@ -145,7 +145,7 @@ jobs:
         id: ssm
         run: |
           CLERK_SECRET_KEY=$(aws ssm get-parameter \
-            --name /vaultmtg/staging/CLERK_SECRET_KEY \
+            --name /vaultmtg/app/staging/CLERK_SECRET_KEY \
             --with-decryption \
             --region us-east-1 \
             --query Parameter.Value \
