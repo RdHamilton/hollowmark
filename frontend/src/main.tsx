@@ -11,12 +11,19 @@ import { TaskProgressProvider } from './context/TaskProgressContext'
 import { initializeServices, servicesInitMs } from './services/adapter'
 import { trackEvent, initAnalytics } from './services/analytics'
 import StagingErrorBoundary from './components/StagingErrorBoundary'
-import { runLocalStorageMigration } from './utils/localStorageMigration'
+import { runLocalStorageMigration, runLocalStorageMigrationV2 } from './utils/localStorageMigration'
 
-// Run the one-time localStorage key migration (mtga-companion-* → vaultmtg-*)
-// BEFORE rendering so every component reads from the new vaultmtg-* keys only.
-// The function is gated by a sentinel flag and is safe to call unconditionally.
+// Run localStorage key migrations BEFORE rendering so every component reads
+// from the canonical hollowmark-* keys only.
+//
+// V1: mtga-companion-* → vaultmtg-*  (gated by vaultmtg-migration-v1 sentinel)
+// V2: vaultmtg-*      → hollowmark-* (gated by hollowmark-migration-v2 sentinel)
+//
+// V2 must run after V1 so a user on the original mtga-companion-* namespace
+// chains both hops in a single load. Both functions are idempotent and safe to
+// call unconditionally on every app mount.
 runLocalStorageMigration()
+runLocalStorageMigrationV2()
 
 // Social OAuth providers (Google, Facebook, Apple) are enabled in the Clerk Dashboard
 // under "Social connections" — no additional code required here.
