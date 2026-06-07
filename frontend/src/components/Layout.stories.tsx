@@ -3,15 +3,17 @@ import { MemoryRouter } from 'react-router-dom';
 import './Layout.css';
 import './AuthBar.css';
 import './DaemonHealthIndicator.css';
+import './StatusStrip.css';
 
 /**
  * Layout — the top-level application shell rendered on every page load.
  *
  * Renders the tab-bar (brand logo + nav links + AuthBar + DaemonHealthIndicator),
- * optional sub-navigation (draft / charts routes), main content area, and Footer.
+ * optional sub-navigation (draft / charts routes), main content area, and
+ * StatusStrip (the persistent bottom status bar, replacing Footer per #1019).
  *
  * The live Layout component fetches data via DaemonHealthIndicator (BFF health
- * poll) and Footer (match stats), both of which are network-dependent. These
+ * poll) and StatusStrip (match stats), both of which are network-dependent. These
  * stories render the shell's HTML structure directly using the component's own
  * CSS classes, giving Chromatic stable offline snapshots while accurately
  * capturing every visual state.
@@ -142,16 +144,24 @@ function NavShell({
         <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--text-sm)' }}>[page content slot]</p>
       </div>
 
-      <footer className="app-footer">
-        <div className="footer-content">
-          <span className="footer-label">All Time</span>
-          <span className="footer-separator">·</span>
-          <span className="footer-stat">
-            <strong>Matches:</strong> <span className="footer-num">142</span>
+      {/* StatusStrip — replaces Footer per #1019 */}
+      <footer className="status-strip" data-testid="status-strip">
+        <div className="status-strip-content">
+          <span className="status-strip-label">All Time</span>
+          <span className="status-strip-sep">·</span>
+          <span className="status-strip-stat">
+            <strong>Matches:</strong>{' '}
+            <span className="status-strip-num">142</span>
           </span>
-          <span className="footer-separator">·</span>
-          <span className="footer-stat">
-            <strong>Win Rate:</strong> <span className="footer-num">58.5% (83-59)</span>
+          <span className="status-strip-sep">·</span>
+          <span className="status-strip-stat">
+            <strong>Win Rate:</strong>{' '}
+            <span className="status-strip-num">58.5% (83-59)</span>
+          </span>
+          <span className="status-strip-sep status-strip-sep-push">·</span>
+          <span className="status-strip-synced status-strip-synced-ok">
+            <strong>Synced:</strong>{' '}
+            <span className="status-strip-num">10:18 PM</span>
           </span>
         </div>
       </footer>

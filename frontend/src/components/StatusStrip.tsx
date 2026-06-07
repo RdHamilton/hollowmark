@@ -2,11 +2,17 @@ import { useState, useEffect } from 'react';
 import { EventsOn } from '@/services/websocketClient';
 import { matches, system } from '@/services/api';
 import { models } from '@/types/models';
+import type { DaemonHealthState } from './DaemonHealthIndicator';
 import DownloadProgressBar from './DownloadProgressBar';
 import EnvBadge from './EnvBadge';
-import './Footer.css';
+import './StatusStrip.css';
 
-const Footer = () => {
+interface StatusStripProps {
+  /** Daemon health state passed from Layout — no internal polling. */
+  daemonStatus: DaemonHealthState;
+}
+
+const StatusStrip = ({ daemonStatus }: StatusStripProps) => {
   const [stats, setStats] = useState<models.Statistics | null>(null);
   const [streak, setStreak] = useState<{ type: string; count: number }>({ type: '', count: 0 });
   const [lastMatch, setLastMatch] = useState<string>('');
@@ -15,16 +21,13 @@ const Footer = () => {
 
   const loadStats = async () => {
     try {
-      // Get overall stats
       const filter = new models.StatsFilter();
       const statsData = await matches.getStats(matches.statsFilterToRequest(filter));
       setStats(statsData);
 
-      // Get recent matches to calculate streak and last match time
       const matchData = await matches.getMatches(matches.statsFilterToRequest(filter));
 
       if (matchData && matchData.length > 0) {
-        // Calculate current streak
         const lastResult = matchData[0].Result;
         let streakCount = 1;
 
@@ -38,31 +41,26 @@ const Footer = () => {
 
         setStreak({
           type: lastResult === 'win' ? 'W' : 'L',
-          count: streakCount
+          count: streakCount,
         });
 
-        // Format last match time
         const lastMatchDate = new Date(matchData[0].Timestamp as string);
         setLastMatch(lastMatchDate.toLocaleString());
       }
 
-      // Get backend sync time from health status
       try {
         const health = await system.getHealth();
         if (health.database.lastWrite) {
-          // Format the RFC3339 timestamp to a user-friendly time
           const syncDate = new Date(health.database.lastWrite);
           setLastSynced(syncDate.toLocaleTimeString());
         } else {
-          // No writes yet, show current time as fallback
           setLastSynced(new Date().toLocaleTimeString());
         }
       } catch {
-        // Fallback to current time if health check fails
         setLastSynced(new Date().toLocaleTimeString());
       }
     } catch (err) {
-      console.error('Error loading footer stats:', err);
+      console.error('Error loading status strip stats:', err);
     } finally {
       setLoading(false);
     }
@@ -72,10 +70,8 @@ const Footer = () => {
     loadStats();
   }, []);
 
-  // Listen for real-time updates
   useEffect(() => {
     const unsubscribe = EventsOn('stats:updated', () => {
-      console.log('Stats updated event received - reloading footer');
       loadStats();
     });
 
@@ -86,22 +82,23 @@ const Footer = () => {
     };
   }, []);
 
+  const isDaemonOffline = daemonStatus !== 'connected';
+
+  const renderMatches = () => {
+    if (!stats) return '0';
+    return String(stats.TotalMatches);
+  };
+
+  const renderWinRate = () => {
+    if (!stats || stats.TotalMatches === 0) return '--';
+    return `${Math.round(stats.WinRate * 1000) / 10}% (${stats.MatchesWon}-${stats.MatchesLost})`;
+  };
+
   if (loading) {
     return (
-      <footer className="app-footer" data-testid="app-status-footer">
-        <div className="footer-content">
-          <span className="footer-loading">Loading stats...</span>
-          <EnvBadge />
-        </div>
-      </footer>
-    );
-  }
-
-  if (!stats || stats.TotalMatches === 0) {
-    return (
-      <footer className="app-footer" data-testid="app-status-footer">
-        <div className="footer-content">
-          <span className="footer-empty">No matches yet - play some games to see your stats!</span>
+      <footer className="status-strip" data-testid="status-strip">
+        <div className="status-strip-content">
+          <span className="status-strip-loading">Loading stats...</span>
           <EnvBadge />
         </div>
       </footer>
@@ -109,40 +106,47 @@ const Footer = () => {
   }
 
   return (
-    <footer className="app-footer" data-testid="app-status-footer">
-      <div className="footer-content">
-        <span className="footer-label">All Time</span>
-        <span className="footer-separator">·</span>
-        <span className="footer-stat">
-          <strong>Matches:</strong> <span className="footer-num">{stats.TotalMatches}</span>
+    <footer className="status-strip" data-testid="status-strip">
+      <div className="status-strip-content">
+        <span className="status-strip-label">All Time</span>
+        <span className="status-strip-sep">·</span>
+        <span className="status-strip-stat">
+          <strong>Matches:</strong>{' '}
+          <span className="status-strip-num">{renderMatches()}</span>
         </span>
-        <span className="footer-separator">·</span>
-        <span className="footer-stat">
-          <strong>Win Rate:</strong> <span className="footer-num">{Math.round(stats.WinRate * 1000) / 10}% ({stats.MatchesWon}-{stats.MatchesLost})</span>
+        <span className="status-strip-sep">·</span>
+        <span className="status-strip-stat">
+          <strong>Win Rate:</strong>{' '}
+          <span className="status-strip-num">{renderWinRate()}</span>
         </span>
         {streak.count > 0 && (
           <>
-            <span className="footer-separator">·</span>
-            <span className={`footer-stat streak-${streak.type.toLowerCase()}`}>
-              <strong>Streak:</strong> <span className="footer-num">{streak.type}{streak.count}</span>
+            <span className="status-strip-sep">·</span>
+            <span className={`status-strip-stat status-strip-streak-${streak.type.toLowerCase()}`}>
+              <strong>Streak:</strong>{' '}
+              <span className="status-strip-num">{streak.type}{streak.count}</span>
             </span>
           </>
         )}
         {lastMatch && (
           <>
-            <span className="footer-separator footer-separator-push">·</span>
-            <span className="footer-stat footer-last-match">
-              <strong>Last Played:</strong> <span className="footer-num">{lastMatch}</span>
+            <span className="status-strip-sep status-strip-sep-push">·</span>
+            <span className="status-strip-stat">
+              <strong>Last Played:</strong>{' '}
+              <span className="status-strip-num">{lastMatch}</span>
             </span>
           </>
         )}
-        {lastSynced && (
-          <>
-            <span className="footer-separator">·</span>
-            <span className="footer-stat footer-last-synced">
-              <strong>Synced:</strong> <span className="footer-num">{lastSynced}</span>
-            </span>
-          </>
+        <span className="status-strip-sep">·</span>
+        {isDaemonOffline ? (
+          <span className="status-strip-synced status-strip-offline">
+            Daemon offline
+          </span>
+        ) : (
+          <span className="status-strip-synced status-strip-synced-ok">
+            <strong>Synced:</strong>{' '}
+            <span className="status-strip-num">{lastSynced}</span>
+          </span>
         )}
         <DownloadProgressBar />
         <EnvBadge />
@@ -151,4 +155,4 @@ const Footer = () => {
   );
 };
 
-export default Footer;
+export default StatusStrip;
