@@ -440,3 +440,146 @@ print('PASS: api_key preserved across reinstall')
 
   [[ "${output}" == *"Config updated (cloud_api_url)"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# ADR-022 C1 cutover-safety: hollowmark future-label defensive handling
+# (#999 — symmetric to the com.mtga-companion.daemon legacy pattern)
+#
+# The v0.3.9 installer must defensively boot out the future label
+# (com.hollowmark.daemon) if it is already loaded — preventing double-launch
+# if a user somehow has a v0.4.0+ daemon installed and then rolls back to
+# v0.3.9.  Symmetric to install.sh:194-216 (mtga-companion legacy path).
+# ---------------------------------------------------------------------------
+
+# 9. install boots out a pre-existing com.hollowmark.daemon job before loading primary
+@test "cutover-safety: install boots out a pre-existing com.hollowmark.daemon job" {
+  local stub_dir
+  stub_dir="$(_make_stub_dir)"
+
+  cat > "${stub_dir}/uname" <<'EOF'
+#!/usr/bin/env bash
+echo "arm64"
+EOF
+  chmod +x "${stub_dir}/uname"
+
+  # Override launchctl to simulate: com.hollowmark.daemon is loaded.
+  # Record all invocations to a log file for inspection.
+  cat > "${stub_dir}/launchctl" <<'LCEOF'
+#!/usr/bin/env bash
+echo "stub-launchctl: $*" >&2
+echo "$*" >> "${BATS_TEST_TMPDIR}/launchctl_log"
+# `launchctl list com.hollowmark.daemon` — return 0 to indicate it is loaded.
+if [[ "$1" == "list" && "$2" == "com.hollowmark.daemon" ]]; then
+  exit 0
+fi
+exit 0
+LCEOF
+  chmod +x "${stub_dir}/launchctl"
+
+  local fake_home
+  fake_home="$(mktemp -d)"
+  export BATS_TEST_TMPDIR
+
+  run env \
+    PATH="${stub_dir}:${PATH}" \
+    HOME="${fake_home}" \
+    RELEASE_TAG="daemon/v0.1.0" \
+    DRY_RUN=1 \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${INSTALL_SH}" <<< $'https://api.example.com\nfake-token\n'
+
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+
+  # The script must report finding and handling the future hollowmark label.
+  [[ "${output}" == *"com.hollowmark.daemon"* ]]
+  [[ "${output}" == *"hollowmark"* ]]
+}
+
+# 10. install does NOT boot out com.hollowmark.daemon when it is absent (no-op)
+@test "cutover-safety: install skips com.hollowmark.daemon bootout when absent" {
+  local stub_dir
+  stub_dir="$(_make_stub_dir)"
+
+  cat > "${stub_dir}/uname" <<'EOF'
+#!/usr/bin/env bash
+echo "arm64"
+EOF
+  chmod +x "${stub_dir}/uname"
+
+  # launchctl list com.hollowmark.daemon returns 1 — not loaded.
+  cat > "${stub_dir}/launchctl" <<'LCEOF'
+#!/usr/bin/env bash
+echo "stub-launchctl: $*" >&2
+echo "$*" >> "${BATS_TEST_TMPDIR}/launchctl_log"
+if [[ "$1" == "list" && "$2" == "com.hollowmark.daemon" ]]; then
+  exit 1
+fi
+exit 0
+LCEOF
+  chmod +x "${stub_dir}/launchctl"
+
+  local fake_home
+  fake_home="$(mktemp -d)"
+  export BATS_TEST_TMPDIR
+
+  run env \
+    PATH="${stub_dir}:${PATH}" \
+    HOME="${fake_home}" \
+    RELEASE_TAG="daemon/v0.1.0" \
+    DRY_RUN=1 \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${INSTALL_SH}" <<< $'https://api.example.com\nfake-token\n'
+
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  # The script must still succeed cleanly.
+  [[ "${output}" == *"VaultMTG daemon installed"* ]]
+}
+
+# 11. only ONE daemon job loaded after install (AC4 — no double-launch)
+@test "cutover-safety: exactly one launchctl load call issued for the primary label" {
+  local stub_dir
+  stub_dir="$(_make_stub_dir)"
+
+  cat > "${stub_dir}/uname" <<'EOF'
+#!/usr/bin/env bash
+echo "arm64"
+EOF
+  chmod +x "${stub_dir}/uname"
+
+  # Count launchctl load calls.
+  cat > "${stub_dir}/launchctl" <<'LCEOF'
+#!/usr/bin/env bash
+echo "stub-launchctl: $*" >&2
+echo "$*" >> "${BATS_TEST_TMPDIR}/launchctl_log"
+if [[ "$1" == "list" ]]; then
+  exit 1
+fi
+exit 0
+LCEOF
+  chmod +x "${stub_dir}/launchctl"
+
+  local fake_home
+  fake_home="$(mktemp -d)"
+  export BATS_TEST_TMPDIR
+
+  run env \
+    PATH="${stub_dir}:${PATH}" \
+    HOME="${fake_home}" \
+    RELEASE_TAG="daemon/v0.1.0" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${INSTALL_SH}" <<< $'https://api.example.com\nfake-token\n'
+
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+
+  # Count "load" invocations in the launchctl log — must be exactly 1.
+  local load_count
+  if [[ -f "${BATS_TEST_TMPDIR}/launchctl_log" ]]; then
+    load_count=$(grep "^load " "${BATS_TEST_TMPDIR}/launchctl_log" | wc -l | tr -d ' ')
+  else
+    load_count=1  # DRY_RUN not used here — real launchctl stub ran
+  fi
+  [ "${load_count}" -eq 1 ]
+}

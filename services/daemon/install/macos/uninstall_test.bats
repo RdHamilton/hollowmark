@@ -531,3 +531,95 @@ _make_fake_home() {
   [[ "${output}" == *"legacy binary"* ]]
   [[ "${output}" == *"mtga-companion-daemon"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# ADR-022 C1 cutover-safety: hollowmark future-label cleanup on uninstall
+# (#999 — symmetric to the com.mtga-companion.daemon legacy pattern at
+# uninstall.sh:100-111)
+# ---------------------------------------------------------------------------
+
+# 13. uninstall removes com.hollowmark.daemon plist when present
+@test "cutover-safety: com.hollowmark.daemon.plist is removed on uninstall when present" {
+  local stub_dir; stub_dir="$(_make_stub_dir)"
+  local install_dir; install_dir="$(mktemp -d)"
+  local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
+    no-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
+
+  # Place a com.hollowmark.daemon.plist to simulate a forward-upgrade leftover.
+  local hollowmark_plist="${fake_home}/Library/LaunchAgents/com.hollowmark.daemon.plist"
+  echo "<plist>hollowmark</plist>" > "${hollowmark_plist}"
+  [ -f "${hollowmark_plist}" ]
+
+  run env \
+    PATH="${stub_dir}:${PATH}" \
+    HOME="${fake_home}" \
+    INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${UNINSTALL_SH}"
+
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  # Hollowmark plist must be gone.
+  [ ! -f "${hollowmark_plist}" ]
+  # Script must emit a message referencing com.hollowmark.daemon.
+  [[ "${output}" == *"com.hollowmark.daemon"* ]]
+}
+
+# 14. uninstall removal of com.hollowmark.daemon.plist is idempotent (no-op when absent)
+@test "cutover-safety: com.hollowmark.daemon cleanup is a no-op when plist is absent" {
+  local stub_dir; stub_dir="$(_make_stub_dir)"
+  local install_dir; install_dir="$(mktemp -d)"
+  local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
+    no-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
+
+  # No hollowmark plist — verify the script exits 0 with no error.
+  run env \
+    PATH="${stub_dir}:${PATH}" \
+    HOME="${fake_home}" \
+    INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${UNINSTALL_SH}"
+
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"VaultMTG daemon uninstalled"* ]]
+}
+
+# 15. uninstall boots out com.hollowmark.daemon when loaded but plist is absent
+@test "cutover-safety: com.hollowmark.daemon booted out when loaded without plist" {
+  local stub_dir; stub_dir="$(_make_stub_dir)"
+  local install_dir; install_dir="$(mktemp -d)"
+  local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
+    no-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
+
+  # Override launchctl: com.hollowmark.daemon is loaded (list returns 0),
+  # but the plist is absent (simulates half-removed install state).
+  cat > "${stub_dir}/launchctl" <<'LCEOF'
+#!/usr/bin/env bash
+echo "stub-launchctl: $*" >&2
+echo "$*" >> "${BATS_TEST_TMPDIR}/launchctl_log"
+if [[ "$1" == "list" && "$2" == "com.hollowmark.daemon" ]]; then
+  exit 0
+fi
+exit 0
+LCEOF
+  chmod +x "${stub_dir}/launchctl"
+
+  run env \
+    PATH="${stub_dir}:${PATH}" \
+    HOME="${fake_home}" \
+    INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${UNINSTALL_SH}"
+
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  # Script must emit a message referencing booting out or handling com.hollowmark.daemon.
+  [[ "${output}" == *"com.hollowmark.daemon"* ]]
+}

@@ -40,9 +40,14 @@ BINARY_NAME="vaultmtg-daemon"
 PLIST_LABEL="com.vaultmtg.daemon"
 # Legacy label — unloaded before registering the new one (prevents dual-daemon).
 PLIST_LABEL_LEGACY="com.mtga-companion.daemon"
+# Future label (v0.4.0 rename target) — defensively unloaded before loading the
+# current label so a downgrade/reinstall from v0.4.0+ cannot leave two jobs running.
+# No plist is written for this label in v0.3.9 (ADR-022 C1 cutover-safety, #999).
+PLIST_LABEL_HOLLOWMARK="com.hollowmark.daemon"
 
 PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
 PLIST_PATH_LEGACY="${HOME}/Library/LaunchAgents/${PLIST_LABEL_LEGACY}.plist"
+PLIST_PATH_HOLLOWMARK="${HOME}/Library/LaunchAgents/${PLIST_LABEL_HOLLOWMARK}.plist"
 
 # ADR-022 Phase 2: new config dir.
 CONFIG_DIR="${HOME}/.vaultmtg"
@@ -213,6 +218,43 @@ fi
 if [[ -f "${PLIST_PATH_LEGACY}" ]]; then
   echo "Removing legacy plist: ${PLIST_PATH_LEGACY}"
   rm -f "${PLIST_PATH_LEGACY}"
+fi
+
+# ---------------------------------------------------------------------------
+# ADR-022 C1 cutover-safety (#999): Detect and unload the future hollowmark
+# label BEFORE loading the current label.
+#
+# This handles the downgrade/reinstall path: if a user previously had v0.4.0+
+# installed (which runs under com.hollowmark.daemon), then installs v0.3.9,
+# both labels would be loaded simultaneously causing duplicate ingestion.
+#
+# Symmetric to the PLIST_LABEL_LEGACY (com.mtga-companion.daemon) block above
+# which guards the past rename. This block guards the forward rename.
+#
+# All failures are non-fatal (|| true) — a fresh v0.3.9 install has no
+# hollowmark label; this path is only hit on downgrade/reinstall.
+# ---------------------------------------------------------------------------
+echo "Checking for future hollowmark launchd job ${PLIST_LABEL_HOLLOWMARK}..."
+HOLLOWMARK_LOADED=0
+if [[ -z "${DRY_RUN}" ]] && launchctl list "${PLIST_LABEL_HOLLOWMARK}" >/dev/null 2>&1; then
+  HOLLOWMARK_LOADED=1
+fi
+
+if [[ "${HOLLOWMARK_LOADED}" -eq 1 ]]; then
+  echo "Found future daemon label ${PLIST_LABEL_HOLLOWMARK} — stopping and unloading (downgrade path)..."
+  if [[ -z "${DRY_RUN}" ]]; then
+    launchctl bootout "gui/$(id -u)/${PLIST_LABEL_HOLLOWMARK}" 2>/dev/null || \
+      launchctl unload -w "${PLIST_PATH_HOLLOWMARK}" 2>/dev/null || true
+  else
+    echo "[DRY_RUN] would run: launchctl bootout gui/$(id -u)/${PLIST_LABEL_HOLLOWMARK}"
+  fi
+  echo "Future daemon label unloaded."
+fi
+
+# Remove hollowmark plist if present (idempotent — ignore if already gone).
+if [[ -f "${PLIST_PATH_HOLLOWMARK}" ]]; then
+  echo "Removing hollowmark plist: ${PLIST_PATH_HOLLOWMARK}"
+  rm -f "${PLIST_PATH_HOLLOWMARK}"
 fi
 
 # ---------------------------------------------------------------------------

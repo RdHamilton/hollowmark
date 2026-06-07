@@ -74,6 +74,9 @@ fi
 
 PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
 PLIST_PATH_LEGACY="${HOME}/Library/LaunchAgents/${PLIST_LABEL_LEGACY}.plist"
+# Future hollowmark label — from common.sh when sourced, else fallback.
+PLIST_LABEL_HOLLOWMARK="${PLIST_LABEL_HOLLOWMARK:-com.hollowmark.daemon}"
+PLIST_PATH_HOLLOWMARK="${HOME}/Library/LaunchAgents/${PLIST_LABEL_HOLLOWMARK}.plist"
 
 # ---------------------------------------------------------------------------
 # Unload the new launchd job (com.vaultmtg.daemon).
@@ -108,6 +111,33 @@ elif launchctl list "${PLIST_LABEL_LEGACY}" >/dev/null 2>&1; then
   launchctl bootout "gui/$(id -u)/${PLIST_LABEL_LEGACY}" 2>/dev/null || true
 else
   echo "Legacy launchd label (${PLIST_LABEL_LEGACY}) not found, skipping."
+fi
+
+# ---------------------------------------------------------------------------
+# ADR-022 C1 cutover-safety (#999): Unload and remove the future hollowmark
+# label if present.
+#
+# This handles two scenarios:
+#   a) A user installs v0.4.0+ (which runs under com.hollowmark.daemon), then
+#      runs v0.3.9 uninstall — the hollowmark job must not be left loaded.
+#   b) A user has a partially-removed v0.4.0+ install (label loaded, plist
+#      already gone) — fall back to label-based bootout.
+#
+# Symmetric to the PLIST_LABEL_LEGACY (com.mtga-companion.daemon) block above.
+# All failures are non-fatal (|| true) — a fresh v0.3.9 install has no
+# hollowmark label; this path is only hit on downgrade uninstall.
+# ---------------------------------------------------------------------------
+if [[ -f "${PLIST_PATH_HOLLOWMARK}" ]]; then
+  echo "Found future hollowmark plist (${PLIST_PATH_HOLLOWMARK}) — unloading and removing..."
+  launchctl unload -w "${PLIST_PATH_HOLLOWMARK}" 2>/dev/null || true
+  rm -f "${PLIST_PATH_HOLLOWMARK}"
+  echo "Future hollowmark launchd job (com.hollowmark.daemon) removed."
+elif launchctl list "${PLIST_LABEL_HOLLOWMARK}" >/dev/null 2>&1; then
+  # Label is loaded but plist is gone — use label-based bootout.
+  echo "Found future launchd label ${PLIST_LABEL_HOLLOWMARK} (no plist) — booting out..."
+  launchctl bootout "gui/$(id -u)/${PLIST_LABEL_HOLLOWMARK}" 2>/dev/null || true
+else
+  echo "Future hollowmark launchd label (${PLIST_LABEL_HOLLOWMARK}) not found, skipping."
 fi
 
 # ---------------------------------------------------------------------------
