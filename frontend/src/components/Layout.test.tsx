@@ -115,7 +115,7 @@ describe('Layout Component', () => {
       expect(screen.getByTestId('nav-tab-settings')).toBeInTheDocument();
     });
 
-    it('should render the VaultMTG brand lockup in the tab bar', () => {
+    it('should render the Hollowmark brand lockup in the tab bar (#1020)', () => {
       render(
         <Layout>
           <div>Test Content</div>
@@ -125,9 +125,16 @@ describe('Layout Component', () => {
 
       const brand = screen.getByTestId('nav-brand');
       expect(brand).toBeInTheDocument();
-      expect(brand).toHaveTextContent('VaultMTG');
+      // #1020: wordmark updated from VaultMTG → Hollowmark
+      expect(brand).toHaveTextContent('Hollowmark');
       // Brand lockup links back to home
       expect(brand).toHaveAttribute('href', '/home');
+      // aria-label updated to match Hollowmark
+      expect(brand).toHaveAttribute('aria-label', 'Hollowmark home');
+      // Orb mark rendered at ≥32px per design spec
+      const mark = brand.querySelector('img');
+      expect(mark).toHaveAttribute('width', '32');
+      expect(mark).toHaveAttribute('height', '32');
     });
 
     it('should apply active treatment class to the current tab', () => {
