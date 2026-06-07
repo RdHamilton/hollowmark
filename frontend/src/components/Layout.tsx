@@ -165,9 +165,10 @@ const Layout = ({ children }: LayoutProps) => {
       {/* Top Navigation Tabs */}
       <div className="tab-bar" data-testid="nav-tab-bar">
         <div className="tab-bar-left">
-          <Link to="/home" className="nav-brand" data-testid="nav-brand" aria-label="VaultMTG home">
-            <img src={vaultMark} alt="" width={22} height={22} className="nav-brand-mark" />
-            <span className="nav-brand-wordmark">VaultMTG</span>
+          <Link to="/home" className="nav-brand" data-testid="nav-brand" aria-label="Hollowmark home">
+            {/* #1020: Hollowmark orb mark ≥32px per design spec */}
+            <img src={vaultMark} alt="" width={32} height={32} className="nav-brand-mark" />
+            <span className="nav-brand-wordmark">Hollowmark</span>
           </Link>
           <div className="tab-links">
           <Link
