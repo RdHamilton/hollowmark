@@ -1,0 +1,252 @@
+# STAGING-ONLY maintenance tool. NOT for prod. Read-only by default.
+#
+# run-staging-sql.yml
+#
+# Purpose: lets team members with write access run diagnostic or guarded
+# maintenance SQL against the staging RDS without requiring interactive MFA
+# from Ramone. Replaces the manual "ping Ramone to run psql" loop.
+#
+# Security design:
+#   - Trigger: workflow_dispatch only (write access required to dispatch)
+#   - Target: staging ONLY -- host and credentials are pulled from staging
+#     SSM paths exclusively; there is no input that selects a target
+#   - Identity guard: before running user SQL, a guard query asserts TWO
+#     independent factors:
+#       1. inet_server_addr() (server-reported IP) must match the IP that
+#          the staging RDS endpoint resolves to (resolved on the EC2 instance
+#          via `getent hosts`).  A prod endpoint resolves to a different RDS
+#          instance; its IP will not match -- hard abort.
+#       2. current_database() must equal "vaultmtg_staging" -- hard abort if
+#          the connected DB name differs.
+#     NOTE: IAM does NOT provide prod isolation here.  The
+#     vaultmtg-staging-deploy-provisioner role holds Secrets Manager read
+#     access that technically extends to the prod RDS credential path.
+#     Prod isolation is enforced by (a) hardcoded staging SSM paths and
+#     (b) the inet_server_addr() server-address assertion above.
+#   - Read-only default: when allow_write is false (the default), the user
+#     SQL is wrapped in a read-only transaction (SET TRANSACTION READ ONLY)
+#     so any accidental INSERT/UPDATE/DELETE/DDL fails at the Postgres level
+#   - DB user: staging master credential (mtga_admin_staging) fetched from
+#     Secrets Manager via the vaultmtg-staging-deploy-provisioner role; DDL
+#     is permitted only because the target is hard-guarded to staging
+#   - Credential handling: PGPASSWORD is set as an environment variable on
+#     the EC2 instance and passed to psql directly; it is never echoed or
+#     printed to stdout/stderr in any log line
+#   - Execution path: psql runs on the EC2 instance via SSM RunShellScript
+#     (the staging RDS is in a private VPC subnet -- no direct runner access)
+#   - IAM: reuses the existing staging GitHub environment and
+#     AWS_DEPLOY_ROLE_ARN (vaultmtg-staging-deploy-provisioner) -- that
+#     role already holds the secretsmanager:GetSecretValue + ssm:GetParameter
+#     grants required here; no new IAM changes are needed
+#
+# Review routing: Sarah (S-07 security gate) + Ray (arch/security design) + Lee (merge)
+# Unblocks: vault-mtg-tickets#970 (staging DROP CONSTRAINT) and the durable fix
+# for MFA-gated staging DB ops.
+#
+# Concurrency: a single group prevents two runs from racing the DB.
+
+name: Run Staging SQL (maintenance)
+
+on:
+  workflow_dispatch:
+    inputs:
+      sql:
+        description: >
+          SQL statement(s) to run against vaultmtg_staging. Read-only by
+          default (SET TRANSACTION READ ONLY); set allow_write=true to
+          permit DDL/DML.
+        required: true
+        type: string
+      allow_write:
+        description: >
+          Set to true to allow DDL/DML (e.g. DROP CONSTRAINT). Defaults to
+          false -- SQL runs inside a read-only transaction.
+        required: false
+        default: 'false'
+        type: boolean
+      reason:
+        description: >
+          Free-text reason for this run (echoed to the log for audit).
+          Required -- describe what you are doing and why.
+        required: true
+        type: string
+
+# One run at a time -- prevent two operators from racing the staging DB.
+concurrency:
+  group: run-staging-sql
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run-staging-sql:
+    name: Run Staging SQL
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+    - name: Checkout (for on-instance script template)
+      uses: actions/checkout@v4
+
+    - name: Echo reason (audit log)
+      run: |
+        echo "==== STAGING SQL MAINTENANCE RUN ===="
+        echo "Actor    : ${{ github.actor }}"
+        echo "Reason   : ${{ inputs.reason }}"
+        echo "allow_write: ${{ inputs.allow_write }}"
+        echo "Run ID   : ${{ github.run_id }}"
+        echo "Ref      : ${{ github.ref }}"
+        echo "======================================"
+
+    - name: Configure AWS credentials (OIDC)
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+        aws-region: us-east-1
+
+    # Fetch the staging DB endpoint and secret ARN from SSM so the EC2-side
+    # script can resolve master credentials without any value being passed
+    # through workflow inputs or environment variables visible in the runner log.
+    # Both values are structural facts (not secrets themselves); the actual
+    # password is fetched on-instance inside the SSM RunShellScript session.
+    - name: Fetch staging SSM facts
+      id: ssm
+      run: |
+        DB_ENDPOINT=$(aws ssm get-parameter \
+          --name "/vaultmtg/app/staging/db-endpoint" \
+          --region us-east-1 \
+          --query "Parameter.Value" \
+          --output text)
+
+        DB_SECRET_ARN=$(aws ssm get-parameter \
+          --name "/vaultmtg/app/staging/db-secret-arn" \
+          --region us-east-1 \
+          --query "Parameter.Value" \
+          --output text)
+
+        # DB_ENDPOINT is structural (hostname), not a credential -- safe to log.
+        echo "Staging DB endpoint: ${DB_ENDPOINT}"
+        echo "db_endpoint=${DB_ENDPOINT}" >> "$GITHUB_OUTPUT"
+        echo "db_secret_arn=${DB_SECRET_ARN}" >> "$GITHUB_OUTPUT"
+
+    # The on-instance script lives in .github/scripts/run-staging-sql-oninstance.sh
+    # (checked out above).  We substitute runtime tokens into it, base64-encode
+    # the result, and ship it to EC2 via SSM RunShellScript.  This approach avoids
+    # embedding heredocs inside the run: block, which trips the YAML parser.
+    #
+    # The script:
+    #   1. Assumes vaultmtg-staging-deploy-provisioner (same as migrations)
+    #   2. Fetches staging master credentials from Secrets Manager
+    #   3. PGPASSWORD is set as an env var and never echoed/logged
+    #   4. Runs the identity guard -- TWO factors must pass before user SQL runs:
+    #        a) inet_server_addr() IP matches resolved staging RDS endpoint IP
+    #        b) current_database() == vaultmtg_staging
+    #      Hard-aborts (exit 1) if either check fails
+    #   5. Wraps user SQL in BEGIN / SET TRANSACTION READ ONLY / ... / COMMIT
+    #      when allow_write is false; or BEGIN / ... / COMMIT when allow_write is true
+    #   6. Streams psql output back to SSM stdout (visible in workflow log)
+    - name: Execute SQL on staging EC2 via SSM
+      env:
+        EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+        DB_ENDPOINT: ${{ steps.ssm.outputs.db_endpoint }}
+        DB_SECRET_ARN: ${{ steps.ssm.outputs.db_secret_arn }}
+        USER_SQL: ${{ inputs.sql }}
+        ALLOW_WRITE: ${{ inputs.allow_write }}
+        AUDIT_REASON: ${{ inputs.reason }}
+        ACTOR: ${{ github.actor }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        # Encode user-supplied values so they survive token substitution safely.
+        ENCODED_SQL=$(printf '%s' "$USER_SQL" | base64 -w 0)
+        ENCODED_REASON=$(printf '%s' "$AUDIT_REASON" | base64 -w 0)
+
+        PROVISIONER_ROLE_ARN="arn:aws:iam::901347789205:role/vaultmtg-staging-deploy-provisioner"
+        EXPECTED_DB="vaultmtg_staging"
+
+        # Copy the checked-out script template to a working copy.
+        SCRIPT_FILE=$(mktemp /tmp/staging-sql-script.XXXXXX.sh)
+        cp .github/scripts/run-staging-sql-oninstance.sh "$SCRIPT_FILE"
+
+        # Substitute runtime values into the script template.
+        sed -i "s|__PROVISIONER_ROLE_ARN__|${PROVISIONER_ROLE_ARN}|g" "$SCRIPT_FILE"
+        sed -i "s|__EXPECTED_DB__|${EXPECTED_DB}|g"                    "$SCRIPT_FILE"
+        sed -i "s|__DB_ENDPOINT__|${DB_ENDPOINT}|g"                    "$SCRIPT_FILE"
+        sed -i "s|__DB_SECRET_ARN__|${DB_SECRET_ARN}|g"               "$SCRIPT_FILE"
+        sed -i "s|__ALLOW_WRITE__|${ALLOW_WRITE}|g"                    "$SCRIPT_FILE"
+        sed -i "s|__ACTOR__|${ACTOR}|g"                                "$SCRIPT_FILE"
+        sed -i "s|__RUN_ID__|${RUN_ID}|g"                              "$SCRIPT_FILE"
+        sed -i "s|__ENCODED_SQL__|${ENCODED_SQL}|g"                    "$SCRIPT_FILE"
+        sed -i "s|__ENCODED_REASON__|${ENCODED_REASON}|g"              "$SCRIPT_FILE"
+
+        # Base64-encode the complete script so it survives SSM JSON quoting.
+        ENCODED_SCRIPT=$(base64 -w 0 "$SCRIPT_FILE")
+        rm -f "$SCRIPT_FILE"
+
+        SSM_COMMAND="echo '${ENCODED_SCRIPT}' | base64 -d | bash"
+
+        COMMAND_ID=$(aws ssm send-command \
+          --instance-ids "${EC2_INSTANCE_ID}" \
+          --document-name "AWS-RunShellScript" \
+          --parameters "commands=[\"${SSM_COMMAND}\"]" \
+          --region us-east-1 \
+          --query "Command.CommandId" \
+          --output text)
+
+        echo "SSM Command ID: ${COMMAND_ID}"
+
+        SUCCEEDED=0
+        for i in $(seq 1 30); do
+          set +e
+          RAW=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${EC2_INSTANCE_ID}" \
+            --region us-east-1 \
+            --output json 2>&1)
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            if echo "$RAW" | grep -q "InvocationDoesNotExist"; then
+              echo "[$i/30] Status: Pending (invocation not yet registered)"
+            else
+              echo "[$i/30] API error (rc=$RC): $RAW"
+            fi
+          else
+            STATUS=$(echo "$RAW" | jq -r '.Status // "Unknown"')
+            STDOUT=$(echo "$RAW" | jq -r '.StandardOutputContent // ""')
+            STDERR=$(echo "$RAW" | jq -r '.StandardErrorContent // ""')
+            echo "[$i/30] Status: $STATUS"
+            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || \
+               [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              if [ -n "$STDOUT" ]; then
+                echo "=== STDOUT ==="
+                echo "$STDOUT"
+              fi
+              if [ -n "$STDERR" ]; then
+                echo "=== STDERR ==="
+                echo "$STDERR"
+              fi
+              if [ "$STATUS" = "Success" ]; then
+                SUCCEEDED=1
+              else
+                echo "SQL execution failed: $STATUS" >&2
+                exit 1
+              fi
+              break
+            fi
+          fi
+          sleep 10
+        done
+
+        if [ "$SUCCEEDED" -ne 1 ]; then
+          echo "SSM command timed out waiting for SQL execution" >&2
+          exit 1
+        fi
+
+        echo "======================================"
+        echo "run-staging-sql complete."
+        echo "Actor    : ${{ github.actor }}"
+        echo "Reason   : ${{ inputs.reason }}"
+        echo "Run ID   : ${{ github.run_id }}"
+        echo "======================================"
