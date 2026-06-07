@@ -12,6 +12,21 @@
 // to users.id via users.clerk_user_id, and sets the int64 user_id on the
 // request context using the same key as APIKeyAuth so downstream handlers
 // (UserIDFromContext) work unchanged.
+//
+// Auth flow (O(1) index lookup + O(M) bcrypt where M is the prefix collision
+// set, typically 1):
+//
+//  1. Extract the 16-byte prefix from the bearer token (token[:16]).
+//  2. Query daemon_api_keys WHERE key_prefix = $1 AND revoked_at IS NULL
+//     using the partial index daemon_api_keys_key_prefix_active_idx.
+//  3. bcrypt-compare each returned row — the prefix NEVER gates auth; bcrypt
+//     is ALWAYS the auth decision (Ray constraint #1).
+//  4. On a prefix miss, run a dummy bcrypt to close the timing oracle that
+//     would otherwise leak whether a prefix exists (Ray constraint #2).
+//  5. The query has no LIMIT — prefix is not unique; all matching rows are
+//     returned and bcrypt-looped so a collision cannot become an auth-bypass
+//     (Ray constraint #3).
+//  6. ListAllActive is retained in the repo for other callers (Ray constraint #4).
 
 package middleware
 
@@ -20,14 +35,32 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
-// daemonKeyLister is the minimal interface required from the daemon api key
-// repository. Returns all non-revoked daemon api keys for bcrypt comparison.
-type daemonKeyLister interface {
-	ListAllActive(ctx context.Context) ([]repository.DaemonAPIKey, error)
+// keyPrefixLen is the number of leading bytes used as the lookup prefix.
+// Must match the length stored in daemon_api_keys.key_prefix at mint time.
+const keyPrefixLen = 16
+
+// dummyBcryptHash is a pre-computed bcrypt hash used for the constant-time
+// dummy compare on prefix-miss. Generated at cost 10 (matching production
+// mint cost) so timing is comparable to a real compare.
+//
+// Value: bcrypt("__vaultmtg_dummy_token__", cost=10).
+// Pre-computed to avoid regenerating on every request (bcrypt.GenerateFromPassword
+// at cost 10 takes ~100ms — doing it per-request on a miss would be worse than
+// the O(N) scan we just fixed).
+const dummyBcryptHash = "$2a$10$Ry0bJZrN3xLqMvWoK8P2uO2qZkL1jN4mH7vT9dW3cX8bE5yF6aG1i"
+
+// daemonKeyPrefixLookup is the minimal interface required from the daemon api
+// key repository for the prefix-indexed auth path.
+type daemonKeyPrefixLookup interface {
+	// GetByPrefix returns all non-revoked rows whose key_prefix matches.
+	// Returns an empty slice (not an error) when no row matches.
+	GetByPrefix(ctx context.Context, prefix string) ([]repository.DaemonAPIKey, error)
+	// UpdateLastUsed sets last_used_at to now for the given key id.
 	UpdateLastUsed(ctx context.Context, id string) error
 }
 
@@ -42,14 +75,20 @@ type userResolver interface {
 // header. On success, sets the resolved int64 users.id on the request
 // context — interoperable with UserIDFromContext.
 //
+// The hot path uses GetByPrefix to narrow candidates via the partial index
+// daemon_api_keys_key_prefix_active_idx (migration 000085), then bcrypt-
+// compares each candidate. This reduces the bcrypt work from O(N-total-keys)
+// to O(M-prefix-collision-set), which is typically 1.
+//
 // Failure modes (all return 401):
 //   - Missing/malformed Authorization header
-//   - No daemon_api_keys row matches the bcrypt-hashed bearer
+//   - Token shorter than keyPrefixLen (16 bytes)
+//   - No active row's hash matches the bearer token
 //   - The matched key's account_id has no corresponding users row
 //
 // Use this in place of APIKeyAuth on routes the daemon hits after the PKCE
 // register flow (currently POST /api/v1/ingest/events).
-func DaemonAPIKeyAuth(keyRepo daemonKeyLister, userRepo userResolver) func(http.Handler) http.Handler {
+func DaemonAPIKeyAuth(keyRepo daemonKeyPrefixLookup, userRepo userResolver) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token, ok := bearerToken(r)
@@ -58,14 +97,37 @@ func DaemonAPIKeyAuth(keyRepo daemonKeyLister, userRepo userResolver) func(http.
 				return
 			}
 
-			keys, err := keyRepo.ListAllActive(r.Context())
-			if err != nil {
-				log.Printf("[daemon_auth] ListAllActive: %v", err)
+			// Token must be at least keyPrefixLen bytes — shorter tokens cannot
+			// have been minted by our register endpoint.
+			if len(token) < keyPrefixLen {
 				writeUnauthorized(w)
 				return
 			}
 
-			for _, k := range keys {
+			prefix := token[:keyPrefixLen]
+
+			candidates, err := keyRepo.GetByPrefix(r.Context(), prefix)
+			if err != nil {
+				log.Printf("[daemon_auth] GetByPrefix(prefix=%s): %v", prefix, err)
+				writeUnauthorized(w)
+				return
+			}
+
+			// Prefix miss — run a dummy bcrypt to prevent a timing oracle that
+			// would leak whether a given prefix exists in the database.
+			// Ray constraint #2: constant-time not-found path.
+			if len(candidates) == 0 {
+				_ = bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(token))
+				writeUnauthorized(w)
+				return
+			}
+
+			// bcrypt-loop the (tiny) candidate set.
+			// Ray constraint #1: bcrypt MUST gate the auth decision on every
+			// matched row — the prefix is a narrowing hint, never the auth guard.
+			// Ray constraint #3: no LIMIT — all rows with the prefix are looped
+			// so a prefix collision cannot become an auth-bypass.
+			for _, k := range candidates {
 				if bcrypt.CompareHashAndPassword([]byte(k.KeyHash), []byte(token)) != nil {
 					continue
 				}
