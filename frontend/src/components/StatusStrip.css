@@ -1,0 +1,116 @@
+/* StatusStrip — persistent bottom status bar.
+   Replaces Footer.tsx per #1019 (Option A: retire Footer, promote StatusStrip).
+   Tokens from colors_and_type.css — no hardcoded hex.
+   Gilt tokens: --hollowmark-gilt (#B87D32) / --hollowmark-gilt-light (#C8913A).        */
+
+.status-strip {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  background-color: var(--vault-bg-raised);
+  border-top: 1px solid var(--vault-border);
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+}
+
+.status-strip-content {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  flex-wrap: nowrap;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--vault-fg-secondary);
+  overflow: hidden;
+}
+
+/* Eyebrow label — "All Time" */
+.status-strip-label {
+  font-weight: 600;
+  color: var(--vault-fg-muted);
+  text-transform: uppercase;
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+/* Stat item (label + value pair) */
+.status-strip-stat {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--vault-fg-secondary);
+  white-space: nowrap;
+}
+
+.status-strip-stat strong {
+  color: var(--vault-fg);
+  font-weight: 600;
+}
+
+/* Monospace numerics — JetBrains Mono with tabular numbers */
+.status-strip-num {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1;
+}
+
+/* Separator dot */
+.status-strip-sep {
+  color: var(--vault-border);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+/* Push separator pushes Last Played / Synced to the right */
+.status-strip-sep-push {
+  margin-left: auto;
+}
+
+/* Loading state */
+.status-strip-loading {
+  color: var(--vault-fg-secondary);
+  font-style: italic;
+}
+
+/* Streak coloring */
+.status-strip-streak-w {
+  color: var(--vault-success);
+}
+
+.status-strip-streak-l {
+  color: var(--vault-danger);
+}
+
+.status-strip-streak-w strong,
+.status-strip-streak-l strong {
+  color: inherit;
+}
+
+/* Synced / Daemon offline indicator */
+.status-strip-synced {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+/* Daemon healthy — green "Synced: HH:MM" */
+.status-strip-synced-ok {
+  color: var(--vault-success);
+}
+
+.status-strip-synced-ok strong {
+  color: var(--vault-success);
+}
+
+/* Daemon offline — red "Daemon offline" */
+.status-strip-offline {
+  color: var(--vault-danger);
+  font-weight: 600;
+}
