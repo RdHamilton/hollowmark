@@ -6,18 +6,19 @@ import * as path from 'path';
  * WildcardAdvisorPanel Visual Screenshot Capture — Staging (#424 / #421)
  *
  * Captures authenticated screenshots of the WildcardAdvisorPanel on the
- * live staging SPA (stg-app.vaultmtg.app) for Prof's visual PLAYER_VERDICT.
+ * live staging SPA (stg-app.hollowmark.app) for Prof's visual PLAYER_VERDICT.
  *
  * Auth: Clerk Backend API sign-in-token → FAPI ticket → session cookies.
  * Identical to the approach used in visual-auth-smoke.spec.ts.
  *
- * Account: ci-smoke-token (user_3EamRFdUZdQl1yYPf4Yg7OIQqm4, account_id=17)
- * seeded with ~10k card_inventory rows and 3 Standard mtgzone_archetypes.
+ * Account: ci-smoke@vaultmtg.app (user_3EmtmrSgZrtd0yRRdisTIIFYnnF in the Hollowmark
+ * staging Clerk instance). Override with CI_SMOKE_USER_ID if needed.
  *
  * Required environment variables:
  *   CLERK_SECRET_KEY     — Clerk Backend API secret (sk_live_*) for staging.
  *   SCREENSHOT_DIR       — Absolute path for saving PNGs. Required.
- *   CI_SMOKE_USER_ID     — Clerk user ID. Default: user_3EamRFdUZdQl1yYPf4Yg7OIQqm4
+ *   CLERK_FAPI_URL       — Clerk FAPI base URL. Default: https://clerk.stg-app.hollowmark.app
+ *   CI_SMOKE_USER_ID     — Clerk user ID. Default: user_3EmtmrSgZrtd0yRRdisTIIFYnnF
  *
  * Screenshots captured:
  *   (a) wildcard-panel-loaded.png      — Full-page panel with Craft Tonight /
@@ -32,9 +33,14 @@ import * as path from 'path';
 // ---------------------------------------------------------------------------
 
 const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY ?? '';
-const BASE_URL = process.env.STAGING_SPA_URL || 'https://stg-app.vaultmtg.app';
-const FAPI_BASE = 'https://clerk.stg-app.vaultmtg.app';
-const CI_SMOKE_USER_ID = process.env.CI_SMOKE_USER_ID || 'user_3EamRFdUZdQl1yYPf4Yg7OIQqm4';
+const BASE_URL = process.env.STAGING_SPA_URL || 'https://stg-app.hollowmark.app';
+// CLERK_FAPI_URL must match the Clerk instance the staging CLERK_SECRET_KEY belongs to.
+const FAPI_BASE = process.env.CLERK_FAPI_URL || 'https://clerk.stg-app.hollowmark.app';
+// Derive the __client cookie domain from FAPI_BASE: strip the scheme and prepend '.'.
+const CLERK_COOKIE_DOMAIN = '.' + FAPI_BASE.replace(/^https?:\/\//, '');
+// Derive the __client_uat cookie domain from BASE_URL: the top two domain segments.
+const UAT_COOKIE_DOMAIN = '.' + BASE_URL.replace(/^https?:\/\/[^.]+\./, '');
+const CI_SMOKE_USER_ID = process.env.CI_SMOKE_USER_ID || 'user_3EmtmrSgZrtd0yRRdisTIIFYnnF';
 const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR ?? '';
 
 // ---------------------------------------------------------------------------
@@ -163,7 +169,7 @@ async function injectClerkSession(context: BrowserContext, cookies: ClerkSession
     {
       name: '__client_uat',
       value: cookies.clientUat,
-      domain: '.vaultmtg.app',
+      domain: UAT_COOKIE_DOMAIN,
       path: '/',
       httpOnly: false,
       secure: true,
@@ -173,7 +179,7 @@ async function injectClerkSession(context: BrowserContext, cookies: ClerkSession
     {
       name: '__client_uat_hKdSwoMR',
       value: cookies.clientUatHkds,
-      domain: '.vaultmtg.app',
+      domain: UAT_COOKIE_DOMAIN,
       path: '/',
       httpOnly: false,
       secure: true,
@@ -183,7 +189,7 @@ async function injectClerkSession(context: BrowserContext, cookies: ClerkSession
     ...(cookies.clientCookie ? [{
       name: '__client',
       value: cookies.clientCookie,
-      domain: '.clerk.stg-app.vaultmtg.app',
+      domain: CLERK_COOKIE_DOMAIN,
       path: '/',
       httpOnly: true,
       secure: true,

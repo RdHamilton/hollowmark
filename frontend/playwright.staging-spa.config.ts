@@ -24,10 +24,12 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests/e2e/staging',
-  // Matches the SPA smoke spec, the WildcardAdvisorPanel visual capture spec,
-  // and the parameterized Prof visual capture harness.
-  // All require a real Clerk session against stg-app.vaultmtg.app.
-  testMatch: /(staging-spa-smoke|wildcard-panel-visual-424|prof-visual-capture)\.spec\.ts/,
+  // Matches only the SPA smoke spec. The WildcardAdvisorPanel and Prof visual
+  // capture specs require SCREENSHOT_DIR and run via their own dedicated workflow
+  // steps (wildcard-panel-visual-424.spec.ts uses SCREENSHOT_DIR=/tmp/wildcard-panel-screenshots;
+  // prof-visual-capture.spec.ts uses its own workflow step). Including them here
+  // caused SCREENSHOT_DIR-required failures in the SPA smoke step (#678 fix).
+  testMatch: /staging-spa-smoke\.spec\.ts/,
 
   // Individual test timeout — 60 s to handle CI runner latency (#1949)
   timeout: 60 * 1000,
