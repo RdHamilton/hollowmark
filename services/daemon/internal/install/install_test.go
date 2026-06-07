@@ -6,6 +6,7 @@ package install_test
 
 import (
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -203,6 +204,59 @@ func TestChannelVar_DefaultIsStable(t *testing.T) {
 	// the staging identity instead of prod.
 	assert.Equal(t, install.ChannelStable, install.Channel,
 		"Channel must default to 'stable' for local/dev builds")
+}
+
+// ---------------------------------------------------------------------------
+// ADR-022 C1 cutover-safety — hollowmark future-label constants (#999)
+//
+// IdentitySet must carry PlistLabelHollowmark and PlistPathHollowmark so
+// install/uninstall scripts can reference the future label by name without
+// hardcoding strings. Symmetric to the legacy mtga-companion handling.
+// ---------------------------------------------------------------------------
+
+func TestIdentity_StableChannel_HollowmarkLabel(t *testing.T) {
+	id := install.Identity(install.ChannelStable)
+	assert.Equal(t, "com.hollowmark.daemon", id.PlistLabelHollowmark,
+		"stable channel hollowmark label must be bare com.hollowmark.daemon")
+}
+
+func TestIdentity_StagingChannel_HollowmarkLabel(t *testing.T) {
+	id := install.Identity(install.ChannelStaging)
+	assert.Equal(t, "com.hollowmark.daemon.staging", id.PlistLabelHollowmark,
+		"staging channel hollowmark label must be com.hollowmark.daemon.staging")
+}
+
+func TestIdentity_StableChannel_HollowmarkPath(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("PlistPathHollowmark is only populated on Darwin")
+	}
+	id := install.Identity(install.ChannelStable)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	expected := home + "/Library/LaunchAgents/com.hollowmark.daemon.plist"
+	assert.Equal(t, expected, id.PlistPathHollowmark,
+		"stable channel hollowmark plist path must be under ~/Library/LaunchAgents")
+}
+
+func TestIdentity_StagingChannel_HollowmarkPath(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("PlistPathHollowmark is only populated on Darwin")
+	}
+	id := install.Identity(install.ChannelStaging)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	expected := home + "/Library/LaunchAgents/com.hollowmark.daemon.staging.plist"
+	assert.Equal(t, expected, id.PlistPathHollowmark,
+		"staging channel hollowmark plist path must carry staging suffix")
+}
+
+func TestIdentity_HollowmarkLabel_DoesNotCollideWithCurrentLabel(t *testing.T) {
+	stable := install.Identity(install.ChannelStable)
+	assert.NotEqual(t, stable.PlistLabel, stable.PlistLabelHollowmark,
+		"current and future plist labels must differ")
+	staging := install.Identity(install.ChannelStaging)
+	assert.NotEqual(t, staging.PlistLabel, staging.PlistLabelHollowmark,
+		"current and future staging plist labels must differ")
 }
 
 // ---------------------------------------------------------------------------
