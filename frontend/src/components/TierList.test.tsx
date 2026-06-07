@@ -707,8 +707,13 @@ describe('TierList Component', () => {
     // The oxblood F must render with a distinct, darker/more-dire hue than D.
     // This test asserts the tier badge background colors match the canonical
     // D17 token values so the severity hierarchy holds at real render scale.
-    const CANONICAL_TIER_F = '#7f1414'; // --vault-tier-f (normalised lowercase)
-    const CANONICAL_TIER_D = '#ef4444'; // --vault-tier-d (normalised lowercase)
+    //
+    // jsdom normalises hex inline style values to rgb() form, so the assertions
+    // compare against the rgb() equivalents of the canonical hex tokens:
+    //   #7F1414 → rgb(127, 20, 20)  →  after space-strip: 'rgb(127,20,20)'
+    //   #EF4444 → rgb(239, 68, 68)  →  after space-strip: 'rgb(239,68,68)'
+    const CANONICAL_TIER_F = 'rgb(127,20,20)'; // --vault-tier-f: #7F1414
+    const CANONICAL_TIER_D = 'rgb(239,68,68)'; // --vault-tier-d: #EF4444
 
     it('Tier-F badge uses the canonical deep-oxblood color from the D17 design spec', async () => {
       const cards = [
