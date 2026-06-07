@@ -101,3 +101,16 @@ fi
 if [ "${CHANNEL}" = "stable" ]; then
   PLIST_LABEL_LEGACY="com.mtga-companion.daemon"
 fi
+
+# ---------------------------------------------------------------------------
+# ADR-022 C1 cutover-safety: future hollowmark label constants (#999).
+#
+# PLIST_LABEL_HOLLOWMARK is the label the daemon will use after the v0.4.0
+# bundle-ID rename.  It is NOT loaded in v0.3.9 — it is present so that
+# install.sh and uninstall.sh can defensively boot it out if a v0.4.0+ daemon
+# is running and the user downgrades or reinstalls v0.3.9, preventing
+# double-launch (ADR-022 Constraint C1).  Symmetric to the PLIST_LABEL_LEGACY
+# (com.mtga-companion.daemon) pattern above which handles the past rename.
+# ---------------------------------------------------------------------------
+PLIST_LABEL_HOLLOWMARK="com.hollowmark.daemon${LABEL_SUFFIX}"
+PLIST_PATH_HOLLOWMARK="${HOME}/Library/LaunchAgents/${PLIST_LABEL_HOLLOWMARK}.plist"

@@ -212,3 +212,43 @@ COMMON_SH="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)/common.sh"
   [ "${stable}" = "api-key" ]
   [ "${staging}" = "api-key" ]
 }
+
+# ---------------------------------------------------------------------------
+# 8. PLIST_LABEL_HOLLOWMARK — future-label constant (#999 ADR-022 C1)
+#
+# common.sh must define PLIST_LABEL_HOLLOWMARK for the stable and staging
+# channels so install/uninstall scripts can reference the future hollowmark
+# label by name (without hardcoding it) in their defensive cleanup blocks.
+# ---------------------------------------------------------------------------
+
+@test "stable: PLIST_LABEL_HOLLOWMARK is com.hollowmark.daemon" {
+  run bash -c "CHANNEL=stable source ${COMMON_SH} && echo \"\$PLIST_LABEL_HOLLOWMARK\""
+  [ "${status}" -eq 0 ]
+  [ "${output}" = "com.hollowmark.daemon" ]
+}
+
+@test "staging: PLIST_LABEL_HOLLOWMARK is com.hollowmark.daemon.staging" {
+  run bash -c "CHANNEL=staging source ${COMMON_SH} && echo \"\$PLIST_LABEL_HOLLOWMARK\""
+  [ "${status}" -eq 0 ]
+  [ "${output}" = "com.hollowmark.daemon.staging" ]
+}
+
+@test "stable: PLIST_PATH_HOLLOWMARK is ~/Library/LaunchAgents/com.hollowmark.daemon.plist" {
+  expected="${HOME}/Library/LaunchAgents/com.hollowmark.daemon.plist"
+  run bash -c "CHANNEL=stable source ${COMMON_SH} && echo \"\$PLIST_PATH_HOLLOWMARK\""
+  [ "${status}" -eq 0 ]
+  [ "${output}" = "${expected}" ]
+}
+
+@test "staging: PLIST_PATH_HOLLOWMARK is ~/Library/LaunchAgents/com.hollowmark.daemon.staging.plist" {
+  expected="${HOME}/Library/LaunchAgents/com.hollowmark.daemon.staging.plist"
+  run bash -c "CHANNEL=staging source ${COMMON_SH} && echo \"\$PLIST_PATH_HOLLOWMARK\""
+  [ "${status}" -eq 0 ]
+  [ "${output}" = "${expected}" ]
+}
+
+@test "PLIST_LABEL_HOLLOWMARK does not collide with PLIST_LABEL" {
+  stable_current=$(bash -c "CHANNEL=stable source ${COMMON_SH} && echo \"\$PLIST_LABEL\"")
+  stable_future=$(bash -c "CHANNEL=stable source ${COMMON_SH} && echo \"\$PLIST_LABEL_HOLLOWMARK\"")
+  [ "${stable_current}" != "${stable_future}" ]
+}

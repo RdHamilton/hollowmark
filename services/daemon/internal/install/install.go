@@ -123,6 +123,21 @@ type IdentitySet struct {
 	// 9001 (stable) or 9011 (staging).
 	// Using distinct ports allows both daemons to bind simultaneously (ADR-049 §5 risk).
 	LocalAPIPort int
+
+	// PlistLabelHollowmark is the future macOS LaunchAgent label used when the
+	// bundle-ID renames to com.hollowmark.daemon at v0.4.0 (ADR-022 Phase 2).
+	// "com.hollowmark.daemon" (stable) or "com.hollowmark.daemon.staging" (staging).
+	//
+	// In v0.3.9 this label is NOT loaded — it is present only so install/uninstall
+	// scripts can defensively boot it out if a user has a v0.4.0+ daemon installed
+	// and then rolls back, preventing double-launch (ADR-022 Constraint C1).
+	// Symmetric to PlistLabelLegacy (com.mtga-companion.daemon) which handles the
+	// past rename.
+	PlistLabelHollowmark string
+
+	// PlistPathHollowmark is the ~/Library/LaunchAgents path for PlistLabelHollowmark.
+	// Only populated on Darwin; empty on other platforms (no launchd).
+	PlistPathHollowmark string
 }
 
 const (
@@ -164,14 +179,24 @@ func Identity(channel string) IdentitySet {
 		port = stablePort + stagingPortOffset
 	}
 
+	// ADR-022 C1 cutover-safety: future hollowmark label (v0.4.0 rename target).
+	// Not loaded in v0.3.9 — present for defensive boot-out in install/uninstall.
+	plistLabelHollowmark := "com.hollowmark.daemon" + s.Label
+	var plistPathHollowmark string
+	if runtime.GOOS == "darwin" {
+		plistPathHollowmark = filepath.Join(home, "Library", "LaunchAgents", plistLabelHollowmark+".plist")
+	}
+
 	return IdentitySet{
-		BinaryName:      "vaultmtg-daemon" + s.Bin,
-		PlistLabel:      "com.vaultmtg.daemon" + s.Label,
-		KeychainService: "com.vaultmtg.daemon" + s.Label,
-		ConfigDir:       configDir,
-		LogPath:         logPath,
-		AppBundlePath:   "/Applications/VaultMTG" + s.App + ".app",
-		TrayLabel:       "VaultMTG" + s.Display,
-		LocalAPIPort:    port,
+		BinaryName:           "vaultmtg-daemon" + s.Bin,
+		PlistLabel:           "com.vaultmtg.daemon" + s.Label,
+		KeychainService:      "com.vaultmtg.daemon" + s.Label,
+		ConfigDir:            configDir,
+		LogPath:              logPath,
+		AppBundlePath:        "/Applications/VaultMTG" + s.App + ".app",
+		TrayLabel:            "VaultMTG" + s.Display,
+		LocalAPIPort:         port,
+		PlistLabelHollowmark: plistLabelHollowmark,
+		PlistPathHollowmark:  plistPathHollowmark,
 	}
 }
