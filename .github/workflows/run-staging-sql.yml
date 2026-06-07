@@ -10,18 +10,28 @@
 #   - Trigger: workflow_dispatch only (write access required to dispatch)
 #   - Target: staging ONLY -- host and credentials are pulled from staging
 #     SSM paths exclusively; there is no input that selects a target
-#   - Identity guard: before running user SQL, a guard query asserts
-#     current_database() == "vaultmtg_staging" and inet_server_addr() does
-#     NOT match the prod RDS endpoint; aborts with exit 1 if either check
-#     fails
+#   - Identity guard: before running user SQL, a guard query asserts TWO
+#     independent factors:
+#       1. inet_server_addr() (server-reported IP) must match the IP that
+#          the staging RDS endpoint resolves to (resolved on the EC2 instance
+#          via `getent hosts`).  A prod endpoint resolves to a different RDS
+#          instance; its IP will not match -- hard abort.
+#       2. current_database() must equal "vaultmtg_staging" -- hard abort if
+#          the connected DB name differs.
+#     NOTE: IAM does NOT provide prod isolation here.  The
+#     vaultmtg-staging-deploy-provisioner role holds Secrets Manager read
+#     access that technically extends to the prod RDS credential path.
+#     Prod isolation is enforced by (a) hardcoded staging SSM paths and
+#     (b) the inet_server_addr() server-address assertion above.
 #   - Read-only default: when allow_write is false (the default), the user
 #     SQL is wrapped in a read-only transaction (SET TRANSACTION READ ONLY)
 #     so any accidental INSERT/UPDATE/DELETE/DDL fails at the Postgres level
 #   - DB user: staging master credential (mtga_admin_staging) fetched from
 #     Secrets Manager via the vaultmtg-staging-deploy-provisioner role; DDL
 #     is permitted only because the target is hard-guarded to staging
-#   - Output masking: ::add-mask:: applied to the DB password and connection
-#     string; credentials never appear in logs
+#   - Credential handling: PGPASSWORD is set as an environment variable on
+#     the EC2 instance and passed to psql directly; it is never echoed or
+#     printed to stdout/stderr in any log line
 #   - Execution path: psql runs on the EC2 instance via SSM RunShellScript
 #     (the staging RDS is in a private VPC subnet -- no direct runner access)
 #   - IAM: reuses the existing staging GitHub environment and
@@ -77,6 +87,9 @@ jobs:
     environment: staging
 
     steps:
+    - name: Checkout (for on-instance script template)
+      uses: actions/checkout@v4
+
     - name: Echo reason (audit log)
       run: |
         echo "==== STAGING SQL MAINTENANCE RUN ===="
@@ -118,15 +131,19 @@ jobs:
         echo "db_endpoint=${DB_ENDPOINT}" >> "$GITHUB_OUTPUT"
         echo "db_secret_arn=${DB_SECRET_ARN}" >> "$GITHUB_OUTPUT"
 
-    # Build the on-instance script as a single shell heredoc, base64-encode it
-    # to survive the SSM JSON parameter quoting rules, then decode + execute on EC2.
+    # The on-instance script lives in .github/scripts/run-staging-sql-oninstance.sh
+    # (checked out above).  We substitute runtime tokens into it, base64-encode
+    # the result, and ship it to EC2 via SSM RunShellScript.  This approach avoids
+    # embedding heredocs inside the run: block, which trips the YAML parser.
     #
     # The script:
     #   1. Assumes vaultmtg-staging-deploy-provisioner (same as migrations)
     #   2. Fetches staging master credentials from Secrets Manager
-    #   3. Applies ::add-mask:: equivalents via PGPASSWORD (never echoed)
-    #   4. Runs the identity guard query; aborts if current_database() != vaultmtg_staging
-    #      or if the server address matches the prod RDS endpoint
+    #   3. PGPASSWORD is set as an env var and never echoed/logged
+    #   4. Runs the identity guard -- TWO factors must pass before user SQL runs:
+    #        a) inet_server_addr() IP matches resolved staging RDS endpoint IP
+    #        b) current_database() == vaultmtg_staging
+    #      Hard-aborts (exit 1) if either check fails
     #   5. Wraps user SQL in BEGIN / SET TRANSACTION READ ONLY / ... / COMMIT
     #      when allow_write is false; or BEGIN / ... / COMMIT when allow_write is true
     #   6. Streams psql output back to SSM stdout (visible in workflow log)
@@ -141,206 +158,31 @@ jobs:
         ACTOR: ${{ github.actor }}
         RUN_ID: ${{ github.run_id }}
       run: |
-        # ---------------------------------------------------------------------------
-        # Build the on-instance shell script as a heredoc, then base64-encode it.
-        # The encoded string is passed as a single SSM parameter value; EC2 decodes
-        # and executes it.  This avoids all quoting hazards from embedding arbitrary
-        # SQL inside an SSM JSON command string.
-        # ---------------------------------------------------------------------------
-
-        # Escape USER_SQL for embedding inside a bash heredoc-quoted variable.
-        # We write it to a temp file on the runner; the base64 payload carries it.
+        # Encode user-supplied values so they survive token substitution safely.
         ENCODED_SQL=$(printf '%s' "$USER_SQL" | base64 -w 0)
         ENCODED_REASON=$(printf '%s' "$AUDIT_REASON" | base64 -w 0)
 
         PROVISIONER_ROLE_ARN="arn:aws:iam::901347789205:role/vaultmtg-staging-deploy-provisioner"
         EXPECTED_DB="vaultmtg_staging"
 
-        ONINSTANCE_SCRIPT=$(cat << 'SCRIPT_EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-PROVISIONER_ROLE_ARN="__PROVISIONER_ROLE_ARN__"
-EXPECTED_DB="__EXPECTED_DB__"
-DB_ENDPOINT="__DB_ENDPOINT__"
-DB_SECRET_ARN="__DB_SECRET_ARN__"
-ALLOW_WRITE="__ALLOW_WRITE__"
-ACTOR="__ACTOR__"
-RUN_ID="__RUN_ID__"
-ENCODED_SQL="__ENCODED_SQL__"
-ENCODED_REASON="__ENCODED_REASON__"
-
-USER_SQL=$(echo "$ENCODED_SQL" | base64 -d)
-AUDIT_REASON=$(echo "$ENCODED_REASON" | base64 -d)
-
-echo "[run-staging-sql] Actor     : ${ACTOR}"
-echo "[run-staging-sql] Run ID    : ${RUN_ID}"
-echo "[run-staging-sql] Reason    : ${AUDIT_REASON}"
-echo "[run-staging-sql] allow_write: ${ALLOW_WRITE}"
-
-# -----------------------------------------------------------------------
-# Step 1: Assume the scoped provisioner role (same pattern as
-# run-staging-migrations.sh) so all subsequent AWS calls are scoped to
-# the staging SSM namespace.  Clean up temporary credentials on exit.
-# -----------------------------------------------------------------------
-cleanup_creds() {
-    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-}
-trap cleanup_creds EXIT
-
-SESSION_NAME="staging-sql-$(date +%s)"
-
-if [[ -z "${AWS_PROFILE:-}" ]]; then
-    echo "[run-staging-sql] Assuming provisioner role..."
-    ASSUME_OUTPUT=$(aws sts assume-role \
-        --role-arn          "$PROVISIONER_ROLE_ARN" \
-        --role-session-name "$SESSION_NAME" \
-        --duration-seconds  900 \
-        --region            us-east-1 \
-        --query             'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
-        --output            text)
-
-    if [[ -z "$ASSUME_OUTPUT" ]]; then
-        echo "[run-staging-sql] ERROR: assume-role returned empty credentials." >&2
-        exit 1
-    fi
-
-    AWS_ACCESS_KEY_ID=$(echo     "$ASSUME_OUTPUT" | awk '{print $1}')
-    AWS_SECRET_ACCESS_KEY=$(echo "$ASSUME_OUTPUT" | awk '{print $2}')
-    AWS_SESSION_TOKEN=$(echo     "$ASSUME_OUTPUT" | awk '{print $3}')
-    export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-
-    CALLER_ARN=$(aws sts get-caller-identity --query Arn --output text)
-    case "$CALLER_ARN" in
-        *":assumed-role/vaultmtg-staging-deploy-provisioner/${SESSION_NAME}")
-            echo "[run-staging-sql] Provisioner role confirmed: ${CALLER_ARN}"
-            ;;
-        *)
-            echo "[run-staging-sql] ERROR: caller identity ${CALLER_ARN} is not the provisioner role." >&2
-            exit 1
-            ;;
-    esac
-fi
-
-# -----------------------------------------------------------------------
-# Step 2: Fetch staging master credentials from Secrets Manager.
-# PGPASSWORD is set but never echoed.
-# -----------------------------------------------------------------------
-SECRET_JSON=$(aws secretsmanager get-secret-value \
-    --region    us-east-1 \
-    --secret-id "$DB_SECRET_ARN" \
-    --query     "SecretString" \
-    --output    text)
-
-PGPASSWORD=$(echo "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['password'])")
-DB_USER=$(echo    "$SECRET_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['username'])")
-export PGPASSWORD
-
-# Never log PGPASSWORD.  Log the user so we know which role connected.
-echo "[run-staging-sql] DB user: ${DB_USER}"
-echo "[run-staging-sql] DB endpoint: ${DB_ENDPOINT}"
-
-# -----------------------------------------------------------------------
-# Step 3: Identity guard.
-#
-# Assert:
-#   a) current_database() == vaultmtg_staging
-#   b) inet_server_addr() (server-reported address) does NOT match the
-#      production RDS endpoint -- a different hostname means a different
-#      RDS instance.  We compare the resolved hostname prefix; any mismatch
-#      with the prod endpoint pattern is a hard abort.
-#
-# This is the exact "wrong DB" failure mode that prompted this workflow.
-# Both checks must pass before any user SQL is executed.
-# -----------------------------------------------------------------------
-echo "[run-staging-sql] Running identity guard..."
-GUARD_OUTPUT=$(PGPASSWORD="$PGPASSWORD" psql \
-    -h "$DB_ENDPOINT" \
-    -U "$DB_USER" \
-    -d "$EXPECTED_DB" \
-    --no-password \
-    -v ON_ERROR_STOP=1 \
-    -t -A \
-    -c "SELECT inet_server_addr()::text || '|' || current_database() || '|' || current_user;" \
-    2>&1)
-
-echo "[run-staging-sql] Guard query result: ${GUARD_OUTPUT}"
-
-CURRENT_DB=$(echo "$GUARD_OUTPUT" | cut -d'|' -f2)
-CURRENT_USER_DB=$(echo "$GUARD_OUTPUT" | cut -d'|' -f3)
-
-if [[ "$CURRENT_DB" != "$EXPECTED_DB" ]]; then
-    echo "[run-staging-sql] ABORT: current_database() is '${CURRENT_DB}', expected '${EXPECTED_DB}'." >&2
-    echo "[run-staging-sql] ABORT: refusing to execute user SQL against a non-staging database." >&2
-    exit 1
-fi
-
-echo "[run-staging-sql] Guard PASS: current_database()=${CURRENT_DB}, current_user=${CURRENT_USER_DB}"
-
-# -----------------------------------------------------------------------
-# Step 4: Build the final SQL to execute.
-#
-# Read-only (allow_write=false):
-#   BEGIN;
-#   SET TRANSACTION READ ONLY;
-#   <user SQL>
-#   COMMIT;
-#
-# Write-permitted (allow_write=true):
-#   BEGIN;
-#   <user SQL>
-#   COMMIT;
-#
-# Both modes wrap in a transaction so any accidental multi-statement partial
-# execution is rolled back by psql's ON_ERROR_STOP=1.
-# -----------------------------------------------------------------------
-if [[ "$ALLOW_WRITE" == "true" ]]; then
-    FULL_SQL="BEGIN;
-${USER_SQL}
-COMMIT;"
-    echo "[run-staging-sql] Mode: READ-WRITE (allow_write=true)"
-else
-    FULL_SQL="BEGIN;
-SET TRANSACTION READ ONLY;
-${USER_SQL}
-COMMIT;"
-    echo "[run-staging-sql] Mode: READ-ONLY (allow_write=false)"
-fi
-
-echo "[run-staging-sql] SQL to execute:"
-echo "---"
-echo "$FULL_SQL"
-echo "---"
-
-# -----------------------------------------------------------------------
-# Step 5: Execute user SQL.
-# -----------------------------------------------------------------------
-echo "[run-staging-sql] Executing SQL..."
-PGPASSWORD="$PGPASSWORD" psql \
-    -h "$DB_ENDPOINT" \
-    -U "$DB_USER" \
-    -d "$EXPECTED_DB" \
-    --no-password \
-    -v ON_ERROR_STOP=1 \
-    -c "$FULL_SQL"
-
-echo "[run-staging-sql] SQL execution complete."
-SCRIPT_EOF
-)
+        # Copy the checked-out script template to a working copy.
+        SCRIPT_FILE=$(mktemp /tmp/staging-sql-script.XXXXXX.sh)
+        cp .github/scripts/run-staging-sql-oninstance.sh "$SCRIPT_FILE"
 
         # Substitute runtime values into the script template.
-        ONINSTANCE_SCRIPT="${ONINSTANCE_SCRIPT//__PROVISIONER_ROLE_ARN__/$PROVISIONER_ROLE_ARN}"
-        ONINSTANCE_SCRIPT="${ONINSTANCE_SCRIPT//__EXPECTED_DB__/$EXPECTED_DB}"
-        ONINSTANCE_SCRIPT="${ONINSTANCE_SCRIPT//__DB_ENDPOINT__/$DB_ENDPOINT}"
-        ONINSTANCE_SCRIPT="${ONINSTANCE_SCRIPT//__DB_SECRET_ARN__/$DB_SECRET_ARN}"
-        ONINSTANCE_SCRIPT="${ONINSTANCE_SCRIPT//__ALLOW_WRITE__/$ALLOW_WRITE}"
-        ONINSTANCE_SCRIPT="${ONINSTANCE_SCRIPT//__ACTOR__/$ACTOR}"
-        ONINSTANCE_SCRIPT="${ONINSTANCE_SCRIPT//__RUN_ID__/$RUN_ID}"
-        ONINSTANCE_SCRIPT="${ONINSTANCE_SCRIPT//__ENCODED_SQL__/$ENCODED_SQL}"
-        ONINSTANCE_SCRIPT="${ONINSTANCE_SCRIPT//__ENCODED_REASON__/$ENCODED_REASON}"
+        sed -i "s|__PROVISIONER_ROLE_ARN__|${PROVISIONER_ROLE_ARN}|g" "$SCRIPT_FILE"
+        sed -i "s|__EXPECTED_DB__|${EXPECTED_DB}|g"                    "$SCRIPT_FILE"
+        sed -i "s|__DB_ENDPOINT__|${DB_ENDPOINT}|g"                    "$SCRIPT_FILE"
+        sed -i "s|__DB_SECRET_ARN__|${DB_SECRET_ARN}|g"               "$SCRIPT_FILE"
+        sed -i "s|__ALLOW_WRITE__|${ALLOW_WRITE}|g"                    "$SCRIPT_FILE"
+        sed -i "s|__ACTOR__|${ACTOR}|g"                                "$SCRIPT_FILE"
+        sed -i "s|__RUN_ID__|${RUN_ID}|g"                              "$SCRIPT_FILE"
+        sed -i "s|__ENCODED_SQL__|${ENCODED_SQL}|g"                    "$SCRIPT_FILE"
+        sed -i "s|__ENCODED_REASON__|${ENCODED_REASON}|g"              "$SCRIPT_FILE"
 
         # Base64-encode the complete script so it survives SSM JSON quoting.
-        ENCODED_SCRIPT=$(printf '%s' "$ONINSTANCE_SCRIPT" | base64 -w 0)
+        ENCODED_SCRIPT=$(base64 -w 0 "$SCRIPT_FILE")
+        rm -f "$SCRIPT_FILE"
 
         SSM_COMMAND="echo '${ENCODED_SCRIPT}' | base64 -d | bash"
 
