@@ -987,7 +987,7 @@ jobs:
           # which points at the Clerk Production instance.  The split mirrors the
           # cloud_url step above so all four placeholders track the same target.
           CLERK_FRONTEND_API_VALUE: ${{ contains(steps.cloud_url.outputs.url, 'staging-api') && 'https://clerk.stg-app.hollowmark.app' || 'https://clerk.hollowmark.app' }}
-          CLERK_PUBLISHABLE_KEY_VALUE: ${{ contains(steps.cloud_url.outputs.url, 'staging-api') && 'pk_live_Y2xlcmsuc3RnLWFwcC52YXVsdG10Zy5hcHAk' || vars.VITE_CLERK_PUBLISHABLE_KEY }}
+          CLERK_PUBLISHABLE_KEY_VALUE: ${{ contains(steps.cloud_url.outputs.url, 'staging-api') && 'pk_live_Y2xlcmsuc3RnLWFwcC5ob2xsb3dtYXJrLmFwcCQ' || vars.VITE_CLERK_PUBLISHABLE_KEY }}
           CLERK_OAUTH_CLIENT_ID_VALUE: ${{ contains(steps.cloud_url.outputs.url, 'staging-api') && secrets.CLERK_STAGING_OAUTH_CLIENT_ID || secrets.CLERK_OAUTH_CLIENT_ID }}
           VAULTMTG_CLOUD_API_URL_VALUE: ${{ steps.cloud_url.outputs.url }}
           # Build channel for __VAULTMTG_CHANNEL__ substitution (ADR-049 §1):
