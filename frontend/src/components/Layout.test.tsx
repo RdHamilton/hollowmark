@@ -54,7 +54,7 @@ vi.mock('@sentry/react', async (importOriginal) => {
 // after jsdom teardown (causes "window is not defined" ReferenceError in CI).
 vi.mock('./DaemonHealthIndicator', () => ({ default: () => null }));
 
-// Mock useDownload since Layout renders Footer which includes DownloadProgressBar
+// Mock useDownload since Layout renders StatusStrip which includes DownloadProgressBar
 vi.mock('@/context/DownloadContext', () => ({
   useDownload: () => ({
     state: { tasks: [], activeTask: null },
@@ -263,7 +263,7 @@ describe('Layout Component', () => {
       expect(screen.getByText('Test Content')).toBeInTheDocument();
     });
 
-    it('should render Footer component', () => {
+    it('should render StatusStrip component', () => {
       mockMatches.getStats.mockResolvedValue({
         TotalMatches: 0,
         MatchesWon: 0,
@@ -280,9 +280,8 @@ describe('Layout Component', () => {
         </Layout>
       );
 
-      // Footer should be present
-      const footer = document.querySelector('.app-footer');
-      expect(footer).toBeInTheDocument();
+      // StatusStrip should be present (replaces Footer per #1019)
+      expect(screen.getByTestId('status-strip')).toBeInTheDocument();
     });
   });
 
