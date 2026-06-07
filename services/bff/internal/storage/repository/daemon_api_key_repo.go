@@ -99,12 +99,54 @@ func (r *DaemonAPIKeyRepository) UpdateLastUsed(ctx context.Context, id string) 
 	return err
 }
 
+// GetByPrefix returns all non-revoked daemon_api_keys rows whose key_prefix
+// matches the given prefix exactly. Uses the partial index
+// daemon_api_keys_key_prefix_active_idx (migration 000085) so the scan is
+// index-only on the (tiny) matching set rather than a full table scan.
+//
+// The caller is responsible for bcrypt-comparing each returned row's KeyHash
+// against the full bearer token — the prefix is used only to narrow the
+// candidate set; it NEVER gates the auth decision on its own.
+//
+// Returns an empty (non-nil) slice when no active row has that prefix. An
+// empty result is NOT an error; the middleware uses it to trigger a
+// constant-time dummy bcrypt to close the prefix-enumeration timing oracle.
+//
+// IMPORTANT: no LIMIT is applied — prefix is NOT unique (collisions are
+// possible). The query returns the full matching set so the bcrypt loop can
+// find the one correct key even when multiple rows share the same prefix.
+func (r *DaemonAPIKeyRepository) GetByPrefix(ctx context.Context, prefix string) ([]DaemonAPIKey, error) {
+	const q = `
+		SELECT id, account_id, key_hash, key_prefix, device_id, platform, daemon_ver, created_at, last_used_at, revoked_at
+		FROM   daemon_api_keys
+		WHERE  key_prefix = $1 AND revoked_at IS NULL`
+
+	rows, err := r.db.QueryContext(ctx, q, prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	keys := make([]DaemonAPIKey, 0)
+	for rows.Next() {
+		var k DaemonAPIKey
+		if err := rows.Scan(&k.ID, &k.AccountID, &k.KeyHash, &k.KeyPrefix, &k.DeviceID, &k.Platform, &k.DaemonVer, &k.CreatedAt, &k.LastUsedAt, &k.RevokedAt); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
+}
+
 // ListAllActive returns all non-revoked daemon_api_keys rows. Used by the
 // daemon API key auth middleware to bcrypt-compare an incoming Bearer token
 // against every known hash.
 //
 // NOTE: full-table scan + bcrypt per request. Acceptable for v0.3.1 beta
 // scale; revisit with a prefix-index lookup if the key count grows large.
+//
+// Retained for callers and tests outside the hot-path auth middleware.
+// The auth middleware now uses GetByPrefix instead.
 func (r *DaemonAPIKeyRepository) ListAllActive(ctx context.Context) ([]DaemonAPIKey, error) {
 	const q = `
 		SELECT id, account_id, key_hash, key_prefix, device_id, platform, daemon_ver, created_at, last_used_at, revoked_at
