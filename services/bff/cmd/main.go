@@ -136,6 +136,14 @@ func main() {
 	}
 
 	if cfg.DatabaseURL != "" {
+		// Pre-flight: detect a rolled-back binary deployed against a DB that has
+		// already been migrated further.  This uses a throwaway connection (the
+		// shared pool is not open yet) and is fatal only when db > binary.
+		// An unreachable DB or absent schema_migrations table is fail-open — the
+		// retry loop in runMigrationsWithRetry will handle those cases.
+		if err := storage.CheckBinaryAheadOfDB(cfg.DatabaseURL); err != nil {
+			log.Fatalf("%v", err)
+		}
 		if err := runMigrationsWithRetry(cfg.DatabaseURL, 30*time.Second); err != nil {
 			log.Fatalf("migrations failed: %v", err)
 		}
