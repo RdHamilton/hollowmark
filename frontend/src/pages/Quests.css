@@ -139,7 +139,8 @@
 }
 
 .daily-wins-reward {
-  color: var(--warning);
+  /* #1018: quest gold-reward label uses gilt, not warning-yellow */
+  color: var(--hollowmark-gilt);
   font-weight: 500;
 }
 

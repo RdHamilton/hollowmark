@@ -434,7 +434,8 @@
 .wildcard-badge.common { background: var(--vault-rarity-common); color: var(--fg); }
 .wildcard-badge.uncommon { background: var(--fg-muted); color: var(--fg); }
 .wildcard-badge.rare { background: var(--vault-rarity-rare); color: var(--vault-fg-inverse); }
-.wildcard-badge.mythic { background: var(--vault-rarity-mythic); color: var(--fg); }
+/* #1018: mythic wildcard tally → gilt (aged brass) — "crafting/completion" gold-economy moment */
+.wildcard-badge.mythic { background: var(--hollowmark-gilt); color: var(--vault-fg-inverse); }
 
 /* Suggestions Grid */
 .suggestions-grid {
