@@ -121,7 +121,7 @@ GUARD_OUTPUT=$(PGPASSWORD="$PGPASSWORD" psql \
     --no-password \
     -v ON_ERROR_STOP=1 \
     -t -A \
-    -c "SELECT inet_server_addr()::text || '|' || current_database() || '|' || current_user;" \
+    -c "SELECT host(inet_server_addr()) || '|' || current_database() || '|' || current_user;" \
     2>&1)
 
 echo "[run-staging-sql] Guard query result: ${GUARD_OUTPUT}"
