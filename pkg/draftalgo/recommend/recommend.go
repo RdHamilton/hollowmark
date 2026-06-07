@@ -29,8 +29,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/rank"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo/rank"
 )
 
 // lowConfidenceGIHFloor is the minimum number of games-in-hand needed

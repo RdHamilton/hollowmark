@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/observability"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/observability"
 )
 
 // AccountRow holds the display columns from the accounts table for a single

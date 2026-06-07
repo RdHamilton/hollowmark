@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
-	contract "github.com/RdHamilton/vault-mtg/services/contract"
+	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	contract "github.com/RdHamilton/hollowmark/services/contract"
 	"github.com/posthog/posthog-go"
 )
 

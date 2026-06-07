@@ -12,7 +12,7 @@ name: Board Status Automation
 #
 # CROSS-REPO SUPPORT
 # ------------------
-# Board #40 aggregates issues from both RdHamilton/vault-mtg AND
+# Board #40 aggregates issues from both RdHamilton/hollowmark AND
 # RdHamilton/vault-mtg-tickets. The GitHub GraphQL closingIssuesReferences
 # field resolves linked issues regardless of repo, then projectItems returns
 # the item ID on board #40 directly — no per-repo fan-out needed.

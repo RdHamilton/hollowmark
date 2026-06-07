@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	contract "github.com/RdHamilton/vault-mtg/services/contract"
+	contract "github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // allowedAssetHosts is the set of hostnames permitted in release asset download
@@ -76,7 +76,7 @@ type ReleaseFetcher struct {
 }
 
 // NewReleaseFetcher creates a ReleaseFetcher. releasesURL is the GitHub Releases
-// API endpoint (e.g. "https://api.github.com/repos/RdHamilton/vault-mtg/releases").
+// API endpoint (e.g. "https://api.github.com/repos/RdHamilton/hollowmark/releases").
 // ttl is how long the cached result is valid. token is an optional GitHub token
 // used to authenticate the request (5000 req/hr instead of the 60 req/hr
 // anonymous limit); when empty, the request is sent anonymously. httpClient may

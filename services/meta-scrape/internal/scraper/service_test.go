@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/meta-scrape/internal/store"
+	"github.com/RdHamilton/hollowmark/services/meta-scrape/internal/store"
 )
 
 func createTestServers() (*httptest.Server, *httptest.Server) {

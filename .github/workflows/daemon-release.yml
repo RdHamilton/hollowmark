@@ -820,7 +820,7 @@ jobs:
           GOARCH: arm64
         run: |
           go build \
-            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X main.DefaultSPAURL=${{ steps.spa_urls.outputs.spa_url }} -X main.DefaultSetupURL=${{ steps.spa_urls.outputs.setup_url }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/install.Channel=${{ steps.channel.outputs.channel }}" \
+            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X main.DefaultSPAURL=${{ steps.spa_urls.outputs.spa_url }} -X main.DefaultSetupURL=${{ steps.spa_urls.outputs.setup_url }} -X github.com/RdHamilton/hollowmark/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }} -X github.com/RdHamilton/hollowmark/services/daemon/internal/install.Channel=${{ steps.channel.outputs.channel }}" \
             -o /tmp/vaultmtg-daemon-arm64 \
             ./cmd/daemon
 
@@ -834,7 +834,7 @@ jobs:
           GOARCH: amd64
         run: |
           go build \
-            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X main.DefaultSPAURL=${{ steps.spa_urls.outputs.spa_url }} -X main.DefaultSetupURL=${{ steps.spa_urls.outputs.setup_url }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }} -X github.com/RdHamilton/vault-mtg/services/daemon/internal/install.Channel=${{ steps.channel.outputs.channel }}" \
+            -ldflags "-s -w -X main.Version=${{ steps.semver.outputs.tag }} -X main.DefaultCloudAPIURL=${{ steps.default_url.outputs.url }} -X main.DefaultSentryDSN=${{ steps.sentry_dsn.outputs.dsn }} -X main.DefaultSPAURL=${{ steps.spa_urls.outputs.spa_url }} -X main.DefaultSetupURL=${{ steps.spa_urls.outputs.setup_url }} -X github.com/RdHamilton/hollowmark/services/daemon/internal/updatecheck.EmbeddedPublicKey=${{ steps.minisign_key.outputs.pub }} -X github.com/RdHamilton/hollowmark/services/daemon/internal/install.Channel=${{ steps.channel.outputs.channel }}" \
             -o /tmp/vaultmtg-daemon-amd64 \
             ./cmd/daemon
 

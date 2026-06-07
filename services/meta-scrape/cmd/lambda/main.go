@@ -41,10 +41,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/RdHamilton/vault-mtg/services/meta-scrape/internal/dbconn"
-	"github.com/RdHamilton/vault-mtg/services/meta-scrape/internal/handler"
-	"github.com/RdHamilton/vault-mtg/services/meta-scrape/internal/scraper"
-	"github.com/RdHamilton/vault-mtg/services/meta-scrape/internal/store"
+	"github.com/RdHamilton/hollowmark/services/meta-scrape/internal/dbconn"
+	"github.com/RdHamilton/hollowmark/services/meta-scrape/internal/handler"
+	"github.com/RdHamilton/hollowmark/services/meta-scrape/internal/scraper"
+	"github.com/RdHamilton/hollowmark/services/meta-scrape/internal/store"
 )
 
 func main() {

@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"testing"
 	"time"
-
 )
 
 // sampleBodyWithMeta returns a draft-ratings response that includes

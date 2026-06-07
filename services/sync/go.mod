@@ -1,4 +1,4 @@
-module github.com/RdHamilton/vault-mtg/services/sync
+module github.com/RdHamilton/hollowmark/services/sync
 
 go 1.25.0
 

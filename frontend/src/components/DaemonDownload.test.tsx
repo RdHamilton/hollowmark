@@ -6,9 +6,9 @@ import { useDaemonRelease } from '@/hooks/useDaemonRelease';
 import type { DaemonReleaseState } from '@/hooks/useDaemonRelease';
 
 const FALLBACK_RELEASES_BASE =
-  'https://github.com/RdHamilton/vault-mtg/releases/latest/download';
+  'https://github.com/RdHamilton/hollowmark/releases/latest/download';
 const RUNTIME_RELEASES_BASE =
-  'https://github.com/RdHamilton/vault-mtg/releases/download/daemon/v0.3.1';
+  'https://github.com/RdHamilton/hollowmark/releases/download/daemon/v0.3.1';
 
 // Mock useFeatureFlag so we can control the flag state per test suite.
 vi.mock('@/hooks/useFeatureFlag', () => ({

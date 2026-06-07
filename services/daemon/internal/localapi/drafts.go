@@ -29,11 +29,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/pickquality"
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/prediction"
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/recommend"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/draftstate"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo/pickquality"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo/prediction"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo/recommend"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/draftstate"
 )
 
 // DraftStore is the minimal read surface localapi needs from the

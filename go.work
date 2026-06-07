@@ -12,3 +12,26 @@ use (
 	./services/meta-scrape
 	./services/sync
 )
+
+// TEMPORARY-HOLLOWMARK-TRANSITION: These replace directives bridge the gap
+// between the module path rewrite (#995) and the new tag-cuts (#997).
+//
+// v0.1.5 / v0.1.2 / v0.1.4 are PERMANENTLY POISONED: the proxy.golang.org cache
+// serves those tags with the old vault-mtg module path (frozen at rename time,
+// per ADR-023 Immutability Principle). Using them would fail module-identity
+// validation at build time.
+//
+// v0.1.6 / v0.1.3 / v0.1.5 are the FRESH VIRGIN versions #997 will publish —
+// confirmed 404 on proxy.golang.org as of 2026-06-07 (ADR-023 Amendment V §D-V3).
+// Until #997 cuts those tags, workspace-local replace satisfies the require lines.
+//
+// REMOVE THIS BLOCK IN #997: after the fresh tags are published, delete all four
+// replace lines below, re-arm the "no replace in go.work" lint (ci.yml
+// gowork-replace-lint), and confirm `go build ./...` resolves from published tags.
+// See ADR-023 Amendment V D-V4.
+replace ( // TEMPORARY-HOLLOWMARK-TRANSITION
+	github.com/RdHamilton/hollowmark/pkg/draftalgo v0.1.3 => ./pkg/draftalgo
+	github.com/RdHamilton/hollowmark/pkg/logparse v0.1.5 => ./pkg/logparse
+	github.com/RdHamilton/hollowmark/services/contract v0.1.6 => ./services/contract
+	github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260603164737-e0e383f680c4 => ./services/daemon
+) // TEMPORARY-HOLLOWMARK-TRANSITION

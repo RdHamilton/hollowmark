@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // fleetHealthSnapshotter is the minimal interface required by

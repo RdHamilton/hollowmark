@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
 )
 
 // pingFake is a minimal Pinger fake used by healthz tests.

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/replay"
+	"github.com/RdHamilton/hollowmark/services/daemon/replay"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

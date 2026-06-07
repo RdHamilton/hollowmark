@@ -61,7 +61,8 @@ func TestCanaryKnownEntriesSubset(t *testing.T) {
 		}
 	}
 
-	assert.Empty(t, failures,
+	assert.Empty(
+		t, failures,
 		"COLLECTION_SCAN_DRIFT: known_entries mismatch — scanner returned wrong IDs/quantities.\n"+
 			"If MTGA patched and shifted the layout, re-derive per ADR-040 §G4.\n"+
 			"Failures:\n  "+strings.Join(failures, "\n  "),
@@ -147,7 +148,8 @@ func TestCanaryDriftTokenInFatalMessage(t *testing.T) {
 // canary failures.
 func TestCanaryManifestConsistency(t *testing.T) {
 	m := loadManifest(t)
-	assert.Equal(t, knownMinEntries, m.KnownMinEntries,
+	assert.Equal(
+		t, knownMinEntries, m.KnownMinEntries,
 		"manifest known_min_entries (%d) does not match knownMinEntries constant (%d) — "+
 			"update scanner_real_test.go to match the manifest",
 		m.KnownMinEntries, knownMinEntries,

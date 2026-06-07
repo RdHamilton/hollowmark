@@ -52,8 +52,8 @@ runs:
     - name: Build BFF binary
       shell: bash
       env:
-        GONOSUMDB: github.com/RdHamilton/vault-mtg
-        GOPRIVATE: github.com/RdHamilton/vault-mtg
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         GOOS: ${{ inputs.goos }}
         GOARCH: ${{ inputs.goarch }}
       run: |

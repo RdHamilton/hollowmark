@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/RdHamilton/vault-mtg/services/collection-agent-helper/internal/scanner"
+	"github.com/RdHamilton/hollowmark/services/collection-agent-helper/internal/scanner"
 )
 
 type manifestEntry struct {

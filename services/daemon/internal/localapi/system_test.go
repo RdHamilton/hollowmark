@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/localapi"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/localapi"
 )
 
 // startTestServer spins up a Server on an ephemeral port with a baseline

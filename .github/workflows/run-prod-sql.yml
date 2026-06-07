@@ -28,7 +28,7 @@
 #       1. host(inet_server_addr()) -- the server-reported IP using host()
 #          (NOT inet_server_addr()::text, which appends a /32 CIDR suffix
 #          and caused fail-closed behavior in the staging tool -- fixed in
-#          RdHamilton/vault-mtg#3021).  Must match the IP that the prod RDS
+#          RdHamilton/hollowmark#3021).  Must match the IP that the prod RDS
 #          endpoint resolves to on the EC2 instance (getent hosts).
 #       2. current_database() must equal "vaultmtg" (the production database
 #          name, read from /vaultmtg/app/production/db-name via SSM).

@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/recommend"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo/recommend"
 )
 
 // stubCardMeta satisfies draftalgo.CardMetaLookup.

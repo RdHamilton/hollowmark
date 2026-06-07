@@ -9,8 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
-	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
+	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
 	"github.com/go-chi/chi/v5"
 )
 

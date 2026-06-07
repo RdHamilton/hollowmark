@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"fyne.io/systray"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/install"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/install"
 )
 
 // NSApplicationActivationPolicy values, mirrored from AppKit so the
@@ -366,7 +366,7 @@ func (a *App) setup() {
 // in the default browser. Extracted so it can be tested without systray.
 func (a *App) openCheckForUpdates() {
 	if a.openURL != nil {
-		_ = a.openURL("https://github.com/RdHamilton/vault-mtg/releases?q=daemon")
+		_ = a.openURL("https://github.com/RdHamilton/hollowmark/releases?q=daemon")
 	}
 }
 

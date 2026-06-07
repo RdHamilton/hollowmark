@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/observability"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/observability"
 	"github.com/clerk/clerk-sdk-go/v2"
 )
 

@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
 	"github.com/getsentry/sentry-go"
 )
 

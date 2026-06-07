@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // TestDaemonEventRoundTrip verifies that a DaemonEvent can be marshaled and
@@ -712,7 +712,7 @@ func TestDaemonVersionResponseRoundTrip(t *testing.T) {
 	original := contract.DaemonVersionResponse{
 		Latest:      "v1.4.2",
 		ReleasedAt:  "2026-04-30T12:00:00Z",
-		DownloadURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv1.4.2/mtga-companion-daemon-windows-amd64.exe",
+		DownloadURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv1.4.2/mtga-companion-daemon-windows-amd64.exe",
 		Changelog:   "Bug fixes and performance improvements.",
 	}
 
