@@ -9,7 +9,7 @@ package rank
 import (
 	"sort"
 
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo"
 )
 
 // Card is one entry in a ranked pack — a card ID with its name, GIHWR,

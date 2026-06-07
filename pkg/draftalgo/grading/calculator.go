@@ -20,7 +20,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo"
 )
 
 // DraftGrade is the wire-shape the SPA's grading.DraftGrade type consumes.

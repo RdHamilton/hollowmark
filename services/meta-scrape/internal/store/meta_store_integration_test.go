@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/meta-scrape/internal/store"
+	"github.com/RdHamilton/hollowmark/services/meta-scrape/internal/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"

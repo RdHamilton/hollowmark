@@ -23,7 +23,7 @@
  *   crowd the first page at high release volume.
  */
 
-const GITHUB_REPO = 'RdHamilton/vault-mtg';
+const GITHUB_REPO = 'RdHamilton/hollowmark';
 const RELEASES_BASE = `https://github.com/${GITHUB_REPO}/releases/download`;
 const LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases`;
 

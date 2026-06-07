@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // ErrReauthRequired is returned by a Refresher when the token cannot be

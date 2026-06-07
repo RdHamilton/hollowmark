@@ -11,8 +11,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo/rank"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo/rank"
 )
 
 // Alternative represents an alternative card pick with its rating.

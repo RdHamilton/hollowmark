@@ -25,8 +25,8 @@ import (
 	"sort"
 	"strings"
 
-	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // collectionReader is the minimal repo surface the handler depends on. The

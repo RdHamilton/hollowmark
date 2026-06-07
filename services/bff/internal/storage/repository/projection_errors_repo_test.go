@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // TestProjectionErrorsRepository_Insert writes a dead-letter row and verifies

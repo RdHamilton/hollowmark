@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // insertTestMatchFull inserts a match with result and duration_seconds.

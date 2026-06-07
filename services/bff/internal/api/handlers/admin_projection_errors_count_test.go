@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

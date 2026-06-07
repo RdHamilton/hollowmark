@@ -8,8 +8,8 @@ import (
 func TestSelectInstallerURL_Darwin(t *testing.T) {
 	vr := VersionResponse{
 		Latest:              "0.3.7",
-		MacOSInstallerURL:   "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg",
-		WindowsInstallerURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe",
+		MacOSInstallerURL:   "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg",
+		WindowsInstallerURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe",
 	}
 
 	got := SelectInstallerURL(&vr, "darwin")
@@ -23,8 +23,8 @@ func TestSelectInstallerURL_Darwin(t *testing.T) {
 func TestSelectInstallerURL_Windows(t *testing.T) {
 	vr := VersionResponse{
 		Latest:              "0.3.7",
-		MacOSInstallerURL:   "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg",
-		WindowsInstallerURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe",
+		MacOSInstallerURL:   "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg",
+		WindowsInstallerURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe",
 	}
 
 	got := SelectInstallerURL(&vr, "windows")
@@ -39,8 +39,8 @@ func TestSelectInstallerURL_Windows(t *testing.T) {
 func TestSelectInstallerURL_UnknownOS(t *testing.T) {
 	vr := VersionResponse{
 		Latest:              "0.3.7",
-		MacOSInstallerURL:   "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg",
-		WindowsInstallerURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe",
+		MacOSInstallerURL:   "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg",
+		WindowsInstallerURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe",
 	}
 
 	got := SelectInstallerURL(&vr, "linux")
@@ -55,7 +55,7 @@ func TestSelectInstallerURL_DarwinMissingURL(t *testing.T) {
 	vr := VersionResponse{
 		Latest: "0.3.7",
 		// No MacOSInstallerURL
-		WindowsInstallerURL: "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe",
+		WindowsInstallerURL: "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-windows-amd64.exe",
 	}
 
 	got := SelectInstallerURL(&vr, "darwin")

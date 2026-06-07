@@ -3,7 +3,7 @@ package keychain_test
 import (
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/keychain"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/keychain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/zalando/go-keyring"

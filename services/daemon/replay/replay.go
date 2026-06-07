@@ -29,11 +29,11 @@ import (
 	"strings"
 	"time"
 
-	logparse "github.com/RdHamilton/vault-mtg/pkg/logparse"
-	"github.com/RdHamilton/vault-mtg/services/contract"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/classify"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/gre"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
+	logparse "github.com/RdHamilton/hollowmark/pkg/logparse"
+	"github.com/RdHamilton/hollowmark/services/contract"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/classify"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/gre"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 )
 
 // ParsedEvent is the result of parsing a single classified log entry.

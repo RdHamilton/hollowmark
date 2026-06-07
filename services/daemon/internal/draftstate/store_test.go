@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/draftstate"
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/logreader"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/draftstate"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 )
 
 // fixedClock returns a deterministic time.Now so synthetic session IDs

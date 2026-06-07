@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // ctxKeyUserID is the context key used to store the authenticated user ID.

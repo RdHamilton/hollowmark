@@ -1,4 +1,4 @@
-module github.com/RdHamilton/vault-mtg/pkg/logparse
+module github.com/RdHamilton/hollowmark/pkg/logparse
 
 go 1.25.0
 

@@ -211,6 +211,6 @@ func TestAppInstallUpdateChannel_NonBlocking(t *testing.T) {
 func TestAppNotifyUpdateAvailable_Noop(t *testing.T) {
 	a := newTestApp()
 	assert.NotPanics(t, func() {
-		a.NotifyUpdateAvailable("0.3.7", "https://github.com/RdHamilton/vault-mtg/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg")
+		a.NotifyUpdateAvailable("0.3.7", "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg")
 	})
 }

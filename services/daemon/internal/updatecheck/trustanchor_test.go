@@ -11,7 +11,7 @@ import (
 
 	"aead.dev/minisign"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/updatecheck"
 )
 
 // TestVerifySignature_Valid verifies that a SHA256SUMS file signed with a

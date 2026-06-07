@@ -16,9 +16,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/posthog/posthog-go"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // ─── stub repo ────────────────────────────────────────────────────────────────

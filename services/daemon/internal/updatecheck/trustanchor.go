@@ -34,7 +34,7 @@ import (
 // IMPORTANT: This is a placeholder value. The build pipeline must inject the real
 // production public key via ldflags:
 //
-//	-X github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck.EmbeddedPublicKey=<key>
+//	-X github.com/RdHamilton/hollowmark/services/daemon/internal/updatecheck.EmbeddedPublicKey=<key>
 //
 // until the key is finalized and baked in as a literal.
 var EmbeddedPublicKey = "PLACEHOLDER_REPLACE_WITH_REAL_MINISIGN_PUBKEY"

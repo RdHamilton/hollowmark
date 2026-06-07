@@ -38,7 +38,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/pkg/draftalgo"
+	"github.com/RdHamilton/hollowmark/pkg/draftalgo"
 	"golang.org/x/sync/singleflight"
 )
 

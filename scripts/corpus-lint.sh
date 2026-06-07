@@ -91,7 +91,7 @@ check_stale_repo_refs() {
     if grep -qE 'RdHamilton/MTGA-Companion|mtga-companion-web' "$file"; then
       local lines
       lines=$(grep -nE 'RdHamilton/MTGA-Companion|mtga-companion-web' "$file" | head -3)
-      fail "stale-repo-ref" "$file" "contains stale repo reference (use RdHamilton/vault-mtg):$( echo; echo "$lines" | sed 's/^/        /')"
+      fail "stale-repo-ref" "$file" "contains stale repo reference (use RdHamilton/hollowmark):$( echo; echo "$lines" | sed 's/^/        /')"
       found=1
     fi
   done < <(find "$AGENTS_DIR" -maxdepth 1 -name "*.md" -not -name "INVARIANTS.md" -print0)

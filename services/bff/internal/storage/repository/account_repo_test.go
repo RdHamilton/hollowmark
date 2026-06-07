@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/observability"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/observability"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 	"github.com/getsentry/sentry-go"
 )
 

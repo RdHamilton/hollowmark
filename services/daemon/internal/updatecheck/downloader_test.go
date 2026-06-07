@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/updatecheck"
 )
 
 // --- Helper functions ---

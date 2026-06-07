@@ -56,7 +56,7 @@ vi.mock('@/hooks/useDaemonStatus', () => ({
 //   vi.mocked(useDaemonRelease).mockReturnValue({ downloadBase: '...', loading: false, error: null })
 vi.mock('@/hooks/useDaemonRelease', () => ({
   useDaemonRelease: vi.fn(() => ({
-    downloadBase: 'https://github.com/RdHamilton/vault-mtg/releases/latest/download',
+    downloadBase: 'https://github.com/RdHamilton/hollowmark/releases/latest/download',
     loading: false,
     error: null,
   })),

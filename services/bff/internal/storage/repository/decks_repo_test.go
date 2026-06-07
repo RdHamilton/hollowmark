@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // insertTestDeck inserts a minimal deck row owned by accountID and returns the

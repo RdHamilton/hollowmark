@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/contract"
 )
 
 // corpusDir is the root of this corpus (the directory containing this file).

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/RdHamilton/vault-mtg/services/daemon/internal/updatecheck"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/updatecheck"
 )
 
 // captureLog redirects log output to a buffer for the duration of f, then

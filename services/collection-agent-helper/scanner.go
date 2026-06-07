@@ -1,6 +1,6 @@
 package main
 
-import "github.com/RdHamilton/vault-mtg/services/collection-agent-helper/internal/scanner"
+import "github.com/RdHamilton/hollowmark/services/collection-agent-helper/internal/scanner"
 
 const (
 	minGRPID = scanner.MinGRPID

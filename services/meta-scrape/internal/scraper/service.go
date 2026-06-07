@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/meta-scrape/internal/store"
+	"github.com/RdHamilton/hollowmark/services/meta-scrape/internal/store"
 )
 
 // archetypeUpserter is the write-side dependency PersistMeta needs from the

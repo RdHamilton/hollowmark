@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // insertTestSetCardWithLegalities inserts a set_cards row with a legalities JSON

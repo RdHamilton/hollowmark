@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
 // apiKeyCreator is the subset of APIKeyRepository used by APIKeysHandler.

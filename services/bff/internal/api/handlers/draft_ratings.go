@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/config"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/config"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 	"github.com/go-chi/chi/v5"
 )
 

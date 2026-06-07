@@ -12,15 +12,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
-	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/sse"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/config"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/dbpool"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/projection"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
-	contract "github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
+	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/sse"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/config"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/dbpool"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/projection"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
+	contract "github.com/RdHamilton/hollowmark/services/contract"
 	"github.com/getsentry/sentry-go"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
@@ -813,7 +813,7 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// (BFF_DAEMON_LATEST_VERSION) when the GitHub API is unreachable.
 	daemonVersionHandler := handlers.NewDaemonVersionHandler(cfg)
 	daemonVersionHandler.WithFetcher(handlers.NewReleaseFetcher(
-		"https://api.github.com/repos/RdHamilton/vault-mtg/releases",
+		"https://api.github.com/repos/RdHamilton/hollowmark/releases",
 		5*time.Minute,
 		cfg.GitHubToken, // optional GitHub token (BFF_GITHUB_TOKEN); anonymous when empty
 		nil,             // use default http.Client with 10s timeout

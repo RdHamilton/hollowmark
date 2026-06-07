@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
-	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/sse"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/config"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
-	contract "github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
+	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/sse"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/config"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
+	contract "github.com/RdHamilton/hollowmark/services/contract"
 	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/clerk/clerk-sdk-go/v2/clerktest"
 )

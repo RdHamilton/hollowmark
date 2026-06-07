@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	bffmiddleware "github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
+	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
 )
 
 // newBufLogger returns a slog.Logger that writes JSON to a bytes.Buffer and

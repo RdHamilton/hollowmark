@@ -12,10 +12,10 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/handlers"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/api/middleware"
-	"github.com/RdHamilton/vault-mtg/services/bff/internal/storage/repository"
-	contract "github.com/RdHamilton/vault-mtg/services/contract"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
+	contract "github.com/RdHamilton/hollowmark/services/contract"
 	"github.com/posthog/posthog-go"
 )
 
