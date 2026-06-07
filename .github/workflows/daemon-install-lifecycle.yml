@@ -382,8 +382,8 @@ jobs:
         working-directory: services/daemon
         env:
           CGO_ENABLED: '0'
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: |
           go mod download
           mkdir -p bin
@@ -436,8 +436,8 @@ jobs:
         # CLERK_* vars are zeroed so PKCE can never fire even on a code-path change.
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           MTGA_DAEMON_HEADLESS: "1"
           CLERK_PUBLISHABLE_KEY: ""
           CLERK_FRONTEND_API: ""
@@ -658,8 +658,8 @@ jobs:
         working-directory: services/daemon
         env:
           CGO_ENABLED: '0'
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: |
           go mod download
           mkdir -p bin
@@ -858,8 +858,8 @@ jobs:
       # -----------------------------------------------------------------------
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           MTGA_DAEMON_HEADLESS: "1"
           CLERK_PUBLISHABLE_KEY: ""
           CLERK_FRONTEND_API: ""
@@ -966,8 +966,8 @@ jobs:
         working-directory: services/daemon
         env:
           CGO_ENABLED: '0'
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: |
           echo "=== [STEP 4a] BUILD upgrade binary (version=ci-upgrade-v2) ==="
           go build \
@@ -1529,8 +1529,8 @@ jobs:
       # -----------------------------------------------------------------------
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOFLAGS: -mod=mod
         shell: bash
         run: go mod download
@@ -1547,8 +1547,8 @@ jobs:
           CGO_ENABLED: '0'
           GOOS: windows
           GOARCH: amd64
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         shell: bash
         run: |
           set -e
@@ -1797,8 +1797,8 @@ jobs:
         # CLERK_* vars are zeroed so PKCE can never fire even on a code-path change.
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           MTGA_DAEMON_HEADLESS: "1"
           CLERK_PUBLISHABLE_KEY: ""
           CLERK_FRONTEND_API: ""

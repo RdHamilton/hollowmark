@@ -448,8 +448,8 @@ jobs:
         id: build_harness
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOFLAGS: -mod=mod
         run: |
           set -euo pipefail
@@ -497,8 +497,8 @@ jobs:
         id: assert_outcomes
         working-directory: services/daemon
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: |
           set -euo pipefail
           ACCOUNT_ID=$(cat /tmp/replay-account-id.txt)

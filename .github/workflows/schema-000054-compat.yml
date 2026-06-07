@@ -76,8 +76,8 @@ jobs:
       - name: Download dependencies
         working-directory: services/bff
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go mod download
 
       - name: Cache migrate CLI binary
@@ -90,8 +90,8 @@ jobs:
       - name: Install golang-migrate CLI
         if: steps.cache-migrate.outputs.cache-hit != 'true'
         env:
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.3
 
       # ---------------------------------------------------------------------------
@@ -115,8 +115,8 @@ jobs:
         working-directory: services/bff
         env:
           DATABASE_URL: postgres://mtga:mtga@localhost:5432/mtga_compat_test?sslmode=disable
-          GONOSUMDB: github.com/RdHamilton/vault-mtg
-          GOPRIVATE: github.com/RdHamilton/vault-mtg
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: |
           echo "[schema-000054-compat] Running repository tests against consolidated-schema DB."
           echo "Any failure here means a query references a table absent from the 000054-only schema."
