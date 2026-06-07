@@ -83,8 +83,8 @@ function NavShell({
     <div className="app-container" data-testid="app-container">
       <div className="tab-bar" data-testid="nav-tab-bar">
         <div className="tab-bar-left">
-          <a href="/home" className="nav-brand" data-testid="nav-brand" aria-label="VaultMTG home">
-            <span className="nav-brand-wordmark">VaultMTG</span>
+          <a href="/home" className="nav-brand" data-testid="nav-brand" aria-label="Hollowmark home">
+            <span className="nav-brand-wordmark">Hollowmark</span>
           </a>
           <div className="tab-links">
             {NAV_LINKS.map(({ label, href }) => (
@@ -144,27 +144,30 @@ function NavShell({
         <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--text-sm)' }}>[page content slot]</p>
       </div>
 
-      {/* StatusStrip — replaces Footer per #1019 */}
-      <footer className="status-strip" data-testid="status-strip">
-        <div className="status-strip-content">
-          <span className="status-strip-label">All Time</span>
-          <span className="status-strip-sep">·</span>
-          <span className="status-strip-stat">
-            <strong>Matches:</strong>{' '}
-            <span className="status-strip-num">142</span>
-          </span>
-          <span className="status-strip-sep">·</span>
-          <span className="status-strip-stat">
-            <strong>Win Rate:</strong>{' '}
-            <span className="status-strip-num">58.5% (83-59)</span>
-          </span>
-          <span className="status-strip-sep status-strip-sep-push">·</span>
-          <span className="status-strip-synced status-strip-synced-ok">
-            <strong>Synced:</strong>{' '}
-            <span className="status-strip-num">10:18 PM</span>
-          </span>
-        </div>
-      </footer>
+      {/* StatusStrip — AC5: authenticated routes only (guard is isSignedIn).
+          Signed-out stories omit the strip to match production Layout behavior. */}
+      {signedIn && (
+        <footer className="status-strip" data-testid="status-strip">
+          <div className="status-strip-content">
+            <span className="status-strip-label">All Time</span>
+            <span className="status-strip-sep">·</span>
+            <span className="status-strip-stat">
+              <strong>Matches:</strong>{' '}
+              <span className="status-strip-num">142</span>
+            </span>
+            <span className="status-strip-sep">·</span>
+            <span className="status-strip-stat">
+              <strong>Win Rate:</strong>{' '}
+              <span className="status-strip-num">58.5% (83-59)</span>
+            </span>
+            <span className="status-strip-sep status-strip-sep-push">·</span>
+            <span className="status-strip-synced status-strip-synced-ok">
+              <strong>Synced:</strong>{' '}
+              <span className="status-strip-num">10:18 PM</span>
+            </span>
+          </div>
+        </footer>
+      )}
     </div>
   );
 }

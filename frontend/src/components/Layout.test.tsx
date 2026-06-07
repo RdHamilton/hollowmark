@@ -263,7 +263,7 @@ describe('Layout Component', () => {
       expect(screen.getByText('Test Content')).toBeInTheDocument();
     });
 
-    it('should render StatusStrip component', () => {
+    it('should render StatusStrip component when signed in', () => {
       mockMatches.getStats.mockResolvedValue({
         TotalMatches: 0,
         MatchesWon: 0,
@@ -281,6 +281,50 @@ describe('Layout Component', () => {
       );
 
       // StatusStrip should be present (replaces Footer per #1019)
+      expect(screen.getByTestId('status-strip')).toBeInTheDocument();
+    });
+  });
+
+  describe('AC5: StatusStrip auth guard — structural', () => {
+    // AC5: StatusStrip must NOT render on unauthenticated routes (/download, /setup).
+    // Layout wraps all routes; the guard is isSignedIn from useAuth().
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let useAuthSpy: ReturnType<typeof vi.spyOn<any, any>> | undefined;
+
+    afterEach(() => {
+      useAuthSpy?.mockRestore();
+      useAuthSpy = undefined;
+    });
+
+    it('hides StatusStrip when user is not signed in', async () => {
+      const clerkModule = await import('@clerk/react');
+      useAuthSpy = vi.spyOn(clerkModule, 'useAuth').mockReturnValue({
+        isLoaded: true,
+        isSignedIn: false,
+        getToken: () => Promise.resolve(null),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      render(
+        <Layout>
+          <div>Public Content</div>
+        </Layout>,
+        { initialRoute: '/download' }
+      );
+
+      expect(screen.queryByTestId('status-strip')).not.toBeInTheDocument();
+    });
+
+    it('shows StatusStrip when user is signed in', () => {
+      // Default mock has isSignedIn: true (no spy override needed)
+      render(
+        <Layout>
+          <div>Authenticated Content</div>
+        </Layout>,
+        { initialRoute: '/home' }
+      );
+
       expect(screen.getByTestId('status-strip')).toBeInTheDocument();
     });
   });

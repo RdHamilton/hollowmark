@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { EventsOn } from '@/services/websocketClient';
 import { matches, system } from '@/services/api';
 import { models } from '@/types/models';
@@ -19,7 +19,7 @@ const StatusStrip = ({ daemonStatus }: StatusStripProps) => {
   const [lastSynced, setLastSynced] = useState<string>('');
   const [loading, setLoading] = useState(true);
 
-  const loadStats = async () => {
+  const loadStats = useCallback(async () => {
     try {
       const filter = new models.StatsFilter();
       const statsData = await matches.getStats(matches.statsFilterToRequest(filter));
@@ -64,15 +64,15 @@ const StatusStrip = ({ daemonStatus }: StatusStripProps) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []); // no external deps — only stable setters and imported API fns
 
   useEffect(() => {
-    loadStats();
-  }, []);
+    void loadStats();
+  }, [loadStats]);
 
   useEffect(() => {
     const unsubscribe = EventsOn('stats:updated', () => {
-      loadStats();
+      void loadStats();
     });
 
     return () => {
@@ -80,7 +80,7 @@ const StatusStrip = ({ daemonStatus }: StatusStripProps) => {
         unsubscribe();
       }
     };
-  }, []);
+  }, [loadStats]);
 
   const isDaemonOffline = daemonStatus !== 'connected';
 
