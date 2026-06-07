@@ -24,7 +24,7 @@
 #     Prod isolation is enforced by (a) hardcoded staging SSM paths and
 #     (b) the inet_server_addr() server-address assertion above.
 #   - Read-only default: when allow_write is false (the default), the user
-#     SQL is wrapped in a read-only transaction (SET TRANSACTION READ ONLY)
+#     SQL runs in a session-level read-only guard (SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY)
 #     so any accidental INSERT/UPDATE/DELETE/DDL fails at the Postgres level
 #   - DB user: staging master credential (mtga_admin_staging) fetched from
 #     Secrets Manager via the vaultmtg-staging-deploy-provisioner role; DDL
@@ -53,14 +53,14 @@ on:
       sql:
         description: >
           SQL statement(s) to run against vaultmtg_staging. Read-only by
-          default (SET TRANSACTION READ ONLY); set allow_write=true to
+          default (session-level read-only guard); set allow_write=true to
           permit DDL/DML.
         required: true
         type: string
       allow_write:
         description: >
           Set to true to allow DDL/DML (e.g. DROP CONSTRAINT). Defaults to
-          false -- SQL runs inside a read-only transaction.
+          false -- session is set read-only (injection-proof; COMMIT in user SQL cannot escape the guard).
         required: false
         default: 'false'
         type: boolean
@@ -144,8 +144,7 @@ jobs:
     #        a) inet_server_addr() IP matches resolved staging RDS endpoint IP
     #        b) current_database() == vaultmtg_staging
     #      Hard-aborts (exit 1) if either check fails
-    #   5. Wraps user SQL in BEGIN / SET TRANSACTION READ ONLY / ... / COMMIT
-    #      when allow_write is false; or BEGIN / ... / COMMIT when allow_write is true
+    #   5. For allow_write=false: sets SESSION-level read-only guard (injection-proof) before user SQL; for allow_write=true: runs BEGIN / ... / COMMIT
     #   6. Streams psql output back to SSM stdout (visible in workflow log)
     - name: Execute SQL on staging EC2 via SSM
       env:

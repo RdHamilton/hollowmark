@@ -159,21 +159,31 @@ fi
 echo "[run-staging-sql] Guard PASS factor 2: current_database()=${CURRENT_DB}, current_user=${CURRENT_USER_DB}"
 
 # -----------------------------------------------------------------------
-# Step 4: Build the final SQL to execute.
+# Step 4: Apply session-level read-only guard (allow_write=false only),
+# then build the user SQL block.
 #
 # Read-only (allow_write=false):
-#   BEGIN;
-#   SET TRANSACTION READ ONLY;
-#   <user SQL>
-#   COMMIT;
+#   Layer 1 guard: SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY
+#   is issued as a separate psql command BEFORE the user SQL so that the
+#   session-level read-only flag applies to EVERY transaction on this
+#   connection.  This is injection-proof: a user payload of
+#   "COMMIT; INSERT INTO ..." still executes inside a read-only session and
+#   is rejected by Postgres with "cannot execute INSERT in a read-only
+#   transaction" -- the injected COMMIT cannot escape the session-level flag.
+#
+#   The per-transaction BEGIN/COMMIT framing is retained for explicit
+#   transaction boundaries; the session-level setting is the load-bearing
+#   write-protection guarantee.
+#
+#   This is the identical fix applied to run-prod-sql-oninstance.sh (#3023).
 #
 # Write-permitted (allow_write=true):
 #   BEGIN;
 #   <user SQL>
 #   COMMIT;
 #
-# Both modes wrap in a transaction so any accidental multi-statement partial
-# execution is rolled back by psql's ON_ERROR_STOP=1.
+# Both modes wrap the user SQL in a transaction so any accidental
+# multi-statement partial execution is rolled back by ON_ERROR_STOP=1.
 # -----------------------------------------------------------------------
 if [[ "$ALLOW_WRITE" == "true" ]]; then
     FULL_SQL="BEGIN;
@@ -181,11 +191,22 @@ ${USER_SQL}
 COMMIT;"
     echo "[run-staging-sql] Mode: READ-WRITE (allow_write=true)"
 else
+    echo "[run-staging-sql] Mode: READ-ONLY (allow_write=false) -- applying session-level read-only guard"
+    # Issue the session-level read-only flag BEFORE the user SQL block.
+    # This is the injection-proof guarantee: any COMMIT in USER_SQL opens a
+    # new transaction that is also read-only at the session level.
+    PGPASSWORD="$PGPASSWORD" psql \
+        -h "$DB_ENDPOINT" \
+        -U "$DB_USER" \
+        -d "$EXPECTED_DB" \
+        --no-password \
+        -v ON_ERROR_STOP=1 \
+        -c "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;"
+    echo "[run-staging-sql] Session read-only guard set."
+
     FULL_SQL="BEGIN;
-SET TRANSACTION READ ONLY;
 ${USER_SQL}
 COMMIT;"
-    echo "[run-staging-sql] Mode: READ-ONLY (allow_write=false)"
 fi
 
 echo "[run-staging-sql] SQL to execute:"
