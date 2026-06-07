@@ -78,6 +78,8 @@ func TestShellGoAgreement_StableChannel(t *testing.T) {
 		{"KEYCHAIN_SERVICE", id.KeychainService},
 		{"APP_BUNDLE_PATH", id.AppBundlePath},
 		{"TRAY_LABEL", id.TrayLabel},
+		// ADR-022 C1 cutover-safety (#999): future hollowmark label must match Go.
+		{"PLIST_LABEL_HOLLOWMARK", id.PlistLabelHollowmark},
 	}
 
 	for _, tc := range cases {
@@ -110,6 +112,8 @@ func TestShellGoAgreement_StagingChannel(t *testing.T) {
 		{"KEYCHAIN_SERVICE", id.KeychainService},
 		{"APP_BUNDLE_PATH", id.AppBundlePath},
 		{"TRAY_LABEL", id.TrayLabel},
+		// ADR-022 C1 cutover-safety (#999): future hollowmark label must match Go.
+		{"PLIST_LABEL_HOLLOWMARK", id.PlistLabelHollowmark},
 	}
 
 	for _, tc := range cases {
