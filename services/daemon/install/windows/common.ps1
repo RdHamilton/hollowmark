@@ -72,9 +72,11 @@ $TaskName       = "VaultMTG-Daemon${LabelSuffix}"
 $LegacyTaskName = 'MTGA-Companion-Daemon'
 
 # Windows Credential Manager target (go-keyring format: "<service>:<account>")
-# Lowercase suffix to match the macOS keychain naming convention
-$CredTarget  = "com.vaultmtg.daemon${Suffix}:api-key"
-$CredService = "com.vaultmtg.daemon${Suffix}"
+# Lowercase suffix to match the macOS keychain naming convention.
+# ADR-022 Phase 3 (v0.3.9): service name advances to hollowmark namespace.
+# Mirrors Go Identity(channel).KeychainService (ADR-049 §2 single-source-of-truth).
+$CredService = "com.hollowmark.daemon${Suffix}"
+$CredTarget  = "${CredService}:api-key"
 
 # Config dir: %APPDATA%\vaultmtg (stable) or %APPDATA%\vaultmtg-staging (staging)
 $ConfigDir   = Join-Path $Env:APPDATA "vaultmtg${Suffix}"
