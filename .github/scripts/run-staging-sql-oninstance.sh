@@ -96,13 +96,20 @@ echo "[run-staging-sql] DB endpoint: ${DB_ENDPOINT}"
 # instance psql actually connected to.  We resolve the staging endpoint
 # hostname to its IP on-instance (getent hosts) and compare.  A prod
 # endpoint resolves to a different RDS instance IP -- mismatch = hard abort.
+# This is a corroborating check, not the primary isolation barrier.
 #
-# Factor 2 (database name): current_database() must equal EXPECTED_DB.
+# Factor 2 (database name): current_database() must equal EXPECTED_DB
+# (vaultmtg_staging).  This is the structural guard against executing SQL
+# on the wrong database.
 #
 # NOTE: IAM does NOT provide prod isolation here (the provisioner role holds
 # Secrets Manager read access that extends to the prod RDS credential path).
-# Prod isolation is enforced by (a) hardcoded staging SSM paths and
-# (b) this inet_server_addr() server-address assertion.
+# Prod isolation rests on: (a) the staging-scoped SSM endpoint
+# (/vaultmtg/app/staging/db-endpoint -- read-only, not user-supplied) which
+# cannot be redirected to the prod RDS, and (b) the current_database()
+# assertion (Factor 2).  inet_server_addr() (Factor 1) is a corroborating
+# server-side address check -- it detects connection to an unexpected host but
+# it is not the load-bearing isolation factor.
 #
 # Both factors must pass before any user SQL runs.
 # -----------------------------------------------------------------------
