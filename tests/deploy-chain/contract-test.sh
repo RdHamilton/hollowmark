@@ -184,6 +184,12 @@ for script in "${CONSUMER_SCRIPTS[@]}"; do
       # provision-db-url.sh under the provisioner role); it is NOT a
       # deploy-env.sh constant.  See PR #2542 / #2461 env-file pattern.
       DATABASE_URL) continue;;
+      # FORCE_RESTART is an operator-injected break-glass override for the
+      # migration-skew guard (#1036).  Set at SSM RunShellScript invocation
+      # time, not in deploy-env.sh -- it is not a structural deploy constant.
+      # BFF_PORT / BFF_STAGING_PORT are optional runtime overrides (not
+      # declared in deploy-env.sh; they default inside the restart scripts).
+      FORCE_RESTART|BFF_PORT|BFF_STAGING_PORT) continue;;
     esac
 
     # Allowed if defined in deploy-env.sh.
@@ -534,6 +540,38 @@ for f in "${all_sh[@]+"${all_sh[@]}"}"; do
   fi
 done
 [[ "$c9_ok" -eq 1 ]] && pass "Every script that references deploy-env.sh constants sources the file"
+echo
+
+# ---- C10: migration-skew guard presence in restart scripts (#1036) ----------
+echo '== C10: restart scripts contain migration-skew guard =='
+# Both restart-bff.sh and restart-bff-staging.sh MUST contain the migration-skew
+# guard introduced in #1036.  The guard must:
+#   1. Read /healthz migration_version (curl + migration_version JSON key)
+#   2. Read the DB schema_migrations MAX version (schema_migrations)
+#   3. Provide a FORCE_RESTART break-glass override
+# A restart script that lacks any of these elements cannot prevent the
+# crash-loop described in the 2026-06-07 incident.
+c10_ok=1
+for f in "$DEPLOY_SCRIPTS_DIR"/restart-bff.sh "$DEPLOY_SCRIPTS_DIR"/restart-bff-staging.sh; do
+  [[ -f "$f" ]] || { fail "$(basename "$f") missing -- cannot verify migration-skew guard"; c10_ok=0; continue; }
+  label=$(basename "$f")
+
+  if ! grep -q "migration_version" "$f"; then
+    fail "$label: does not read migration_version from /healthz -- migration-skew guard missing (#1036)"
+    c10_ok=0
+  fi
+
+  if ! grep -q "schema_migrations" "$f"; then
+    fail "$label: does not query schema_migrations -- migration-skew guard missing (#1036)"
+    c10_ok=0
+  fi
+
+  if ! grep -q "FORCE_RESTART" "$f"; then
+    fail "$label: missing FORCE_RESTART break-glass override (#1036)"
+    c10_ok=0
+  fi
+done
+[[ "$c10_ok" -eq 1 ]] && pass "restart-bff.sh and restart-bff-staging.sh both contain the migration-skew guard"
 echo
 
 # ---- summary ---------------------------------------------------------------
