@@ -314,6 +314,41 @@ describe('Footer Component', () => {
     });
   });
 
+  describe('App-shell status strip (#1019)', () => {
+    it('renders with data-testid="app-status-footer" in loading state', () => {
+      mockMatches.getStats.mockImplementation(() => new Promise(() => {}));
+      mockMatches.getMatches.mockImplementation(() => new Promise(() => {}));
+
+      render(<Footer />);
+
+      expect(screen.getByTestId('app-status-footer')).toBeInTheDocument();
+    });
+
+    it('renders with data-testid="app-status-footer" in empty state', async () => {
+      const emptyStats = createMockStatistics({ TotalMatches: 0 });
+      mockMatches.getStats.mockResolvedValue(emptyStats);
+      mockMatches.getMatches.mockResolvedValue([]);
+
+      render(<Footer />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('app-status-footer')).toBeInTheDocument();
+      });
+    });
+
+    it('renders with data-testid="app-status-footer" with match data', async () => {
+      const stats = createMockStatistics({ TotalMatches: 50 });
+      mockMatches.getStats.mockResolvedValue(stats);
+      mockMatches.getMatches.mockResolvedValue([]);
+
+      render(<Footer />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('app-status-footer')).toBeInTheDocument();
+      });
+    });
+  });
+
   describe('Visual Elements', () => {
     it('should display All Time label', async () => {
       const stats = createMockStatistics();
