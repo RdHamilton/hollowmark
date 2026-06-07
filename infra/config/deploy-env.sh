@@ -127,6 +127,9 @@ DB_STAGING_NAME="vaultmtg_staging"
 # ───────────────────────────────────────────────────────────────────────────
 SSM_PROD_DB_SECRET_ARN="/vaultmtg/app/production/db-secret-arn"
 SSM_PROD_APP_DB_SECRET_ARN="/vaultmtg/app/production/app-db-secret-arn"
+# Read-only DB credential for diagnostic / analytics access as vaultmtg_ro.
+# Provisioned by migration 000108 (#971); consumed by run-prod-sql.yml.
+SSM_PROD_RO_DB_SECRET_ARN="/vaultmtg/app/production/ro-db-secret-arn"
 SSM_PROD_DB_ENDPOINT="/vaultmtg/app/production/db-endpoint"
 SSM_PROD_DB_NAME="/vaultmtg/app/production/db-name"
 SSM_PROD_ALLOWED_ORIGINS="/vaultmtg/app/production/ALLOWED_ORIGINS"
