@@ -48,13 +48,37 @@ jobs:
 
       - name: Fail if go.work contains a replace directive
         run: |
-          if grep -E '^\s*replace\b' go.work 2>/dev/null; then
-            echo "ERROR: go.work contains a 'replace' directive."
+          # Marker-keyed exemption (ADR-023 Amendment V, D-V2):
+          # A replace block is ALLOWED if the opening `replace (` line carries the
+          # TEMPORARY-HOLLOWMARK-TRANSITION marker. This exempts the narrow #995→#997
+          # transition window. ALL other replace directives are forbidden.
+          # #997 must delete the block and re-arm this check (hard-fail again).
+          #
+          # Check: does go.work contain any `replace` keyword at all?
+          if ! grep -qE '^\s*replace\b' go.work 2>/dev/null; then
+            echo "go.work is clean — no replace directives found."
+            exit 0
+          fi
+          # go.work has a replace block. It is only allowed when the opening
+          # `replace (` line carries the TEMPORARY-HOLLOWMARK-TRANSITION marker.
+          # Any replace block WITHOUT the marker (including bare `replace X => Y`
+          # one-liners) is forbidden.
+          UNMARKED_REPLACE=$(grep -E '^\s*replace\b' go.work 2>/dev/null \
+            | grep -v 'TEMPORARY-HOLLOWMARK-TRANSITION' || true)
+          if [ -n "$UNMARKED_REPLACE" ]; then
+            echo "ERROR: go.work contains a 'replace' directive without the TEMPORARY-HOLLOWMARK-TRANSITION marker."
             echo "Local replace directives must be removed before merging to main."
-            echo "See ADR-001 Go Workspace Rules."
+            echo "Allowed exception (ADR-023 Amendment V, D-V2): the replace block's opening"
+            echo "  'replace (' line must carry the // TEMPORARY-HOLLOWMARK-TRANSITION comment."
+            echo "Strip the block + re-arm in #997."
+            echo ""
+            echo "Offending replace line(s):"
+            echo "$UNMARKED_REPLACE"
             exit 1
           fi
-          echo "go.work is clean — no replace directives found."
+          echo "go.work contains a marked TEMPORARY-HOLLOWMARK-TRANSITION replace block."
+          echo "Exempted per ADR-023 Amendment V, D-V2."
+          echo "REMINDER: #997 must strip this block and re-arm this lint to hard-fail."
 
   lint-workflows:
     name: Lint GitHub Actions workflows

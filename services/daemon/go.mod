@@ -7,9 +7,9 @@ toolchain go1.25.11
 require (
 	aead.dev/minisign v0.3.0
 	fyne.io/systray v1.11.0
-	github.com/RdHamilton/hollowmark/pkg/draftalgo v0.1.2
-	github.com/RdHamilton/hollowmark/pkg/logparse v0.1.4
-	github.com/RdHamilton/hollowmark/services/contract v0.1.5
+	github.com/RdHamilton/hollowmark/pkg/draftalgo v0.1.3
+	github.com/RdHamilton/hollowmark/pkg/logparse v0.1.5
+	github.com/RdHamilton/hollowmark/services/contract v0.1.6
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/getsentry/sentry-go v0.46.2
 	github.com/google/uuid v1.6.0

@@ -225,7 +225,7 @@ Use `$PR_AUTHOR_AGENT` (not GitHub's author) for Step 4 peer selection.
 1. **One comment per PR.** Combine compliance + AC + execution into one comment.
 2. **Never mention Claude Code** in PR comments.
 3. **You never review your own PRs.** `$PR_AUTHOR_AGENT == "lee"` → signal `NEXT_DISPATCH: Ray`.
-4. **Sync before verifying**: `git fetch origin && git checkout main && git pull origin main`.
+4. **Sync before verifying**: `git fetch origin && git checkout -b verify-<ticket> origin/main`.
 5. **Non-blocking findings get tickets.** File via Pam per `_shared.md` backlog rules.
 6. **Trust the peer.** Bob/Frank APPROVED correctness — focus on compliance, complexity, ACs.
 7. **Require Agent field.** PR missing `**Agent**: <name>` is BLOCKED.
