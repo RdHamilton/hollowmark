@@ -68,11 +68,12 @@ func TestGet_CorruptedLegacyEntry(t *testing.T) {
 
 	logBuf := captureLog(t)
 
-	_, err := Get()
+	_, migrated, err := Get()
 	// Must return ErrNotFound (not a raw keyring error) so callers that check
 	// errors.Is(err, ErrNotFound) can trigger re-auth cleanly.
 	assert.ErrorIs(t, err, ErrNotFound,
 		"corrupted legacy entry must fall through to ErrNotFound, not crash")
+	assert.False(t, migrated, "corrupted legacy entry must return migrated=false")
 
 	// Confirm we actually hit the corrupted-legacy branch (not the
 	// neither-entry-present branch) by checking the warning was logged.
@@ -99,9 +100,10 @@ func TestGet_NeitherEntryPresent(t *testing.T) {
 
 	logBuf := captureLog(t)
 
-	_, err := Get()
+	_, migrated, err := Get()
 	assert.ErrorIs(t, err, ErrNotFound,
 		"absent entries on both names must return ErrNotFound")
+	assert.False(t, migrated, "neither-entry-present branch must return migrated=false")
 
 	// The corruption-warning log line must NOT appear for the neither-present case.
 	assert.NotContains(t, logBuf.String(), "could not read legacy entry",

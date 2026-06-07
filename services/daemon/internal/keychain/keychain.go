@@ -1,9 +1,9 @@
 // Package keychain provides CGO-free OS keychain access for daemon API key storage.
 //
-// Service names (ADR-022 Phase 2):
+// Service names (ADR-022 Phase 3 — v0.3.9 hollowmark credential shim):
 //
-//	ServiceNameNew    = "com.vaultmtg.daemon"     (production — all writes go here)
-//	ServiceNameLegacy = "com.mtga-companion.daemon" (read-only fallback for upgrade)
+//	ServiceNameNew    = "com.hollowmark.daemon"  (production — all writes go here)
+//	ServiceNameLegacy = "com.vaultmtg.daemon"    (read-only fallback for v0.3.8 upgrade)
 //
 // Account key:  api-key
 //
@@ -15,9 +15,17 @@
 // Upgrade migration (ADR-022 Constraint 1):
 // On startup, Get() first tries ServiceNameNew.  If the entry is absent it tries
 // ServiceNameLegacy; when found there, it copies the key forward to ServiceNameNew
-// (so subsequent reads hit the new name) and logs the migration at INFO.  The
-// legacy entry is RETAINED — never deleted — to allow safe downgrade. Deletion of
-// the legacy entry is deferred to Phase 6.
+// (so subsequent reads hit the new name), returns migrated=true so the caller can
+// emit the keychain.migrated telemetry event, and logs the migration at INFO.  The
+// legacy entry is RETAINED — never deleted — to allow safe downgrade.  Deletion of
+// the legacy entry is deferred to Phase 6, gated on AC16 adoption telemetry.
+//
+// NOTE: the com.mtga-companion.daemon constant (ADR-022 Phase 1) is no longer
+// present in this package — any install that still had credentials only at that
+// name would have been migrated to com.vaultmtg.daemon during the v0.3.x cycle
+// (ADR-022 Phase 2), and that cohort is below the 5% threshold per ADR-022 §cleanup.
+// The launchd orphan-job cleanup in install.sh still references com.mtga-companion.daemon
+// independently and is NOT removed here.
 //
 // See ADR-020 §Keychain Storage for the full design rationale.
 package keychain
@@ -32,14 +40,16 @@ import (
 
 const (
 	// ServiceNameNew is the current OS keychain service identifier for the daemon
-	// (ADR-022 Phase 2 brand rename).  All writes target this name.
-	ServiceNameNew = "com.vaultmtg.daemon"
+	// (ADR-022 Phase 3 hollowmark credential shim — v0.3.9).  All writes target this name.
+	// In v0.4.0 the bundle ID will also rename to com.hollowmark.daemon; v0.3.9 ships
+	// only this credential shim so existing users' keys survive the flip.
+	ServiceNameNew = "com.hollowmark.daemon"
 
-	// ServiceNameLegacy is the pre-rename OS keychain service identifier retained
-	// for read-only upgrade migration.  Do NOT write to this name in production code.
+	// ServiceNameLegacy is the v0.3.8 OS keychain service identifier retained for
+	// read-only upgrade migration.  Do NOT write to this name in production code.
 	// This constant is used ONLY in the Get() fallback branch and in tests.
-	// Deletion of the legacy entry is deferred to Phase 6.
-	ServiceNameLegacy = "com.mtga-companion.daemon"
+	// Deletion of the legacy entry is deferred to Phase 6, gated on AC16 adoption telemetry.
+	ServiceNameLegacy = "com.vaultmtg.daemon"
 
 	// AccountKey is the OS keychain account name under which the API key is stored.
 	AccountKey = "api-key"
@@ -90,23 +100,28 @@ func SetForService(service, apiKey string) error {
 
 // Get retrieves the daemon API key from the OS keychain.
 //
-// Migration path (ADR-022 Constraint 1):
-//  1. Try ServiceNameNew.  If found → return it.
-//  2. Try ServiceNameLegacy.  If found → copy key forward to ServiceNameNew,
-//     log the migration at INFO, and return the key.  The legacy entry is
-//     retained (NOT deleted) for downgrade safety.
-//  3. Neither entry present → return ErrNotFound (triggers normal PKCE re-auth).
+// Migration path (ADR-022 Constraint 1, Phase 3):
+//  1. Try ServiceNameNew ("com.hollowmark.daemon").  If found → return (key, false, nil).
+//  2. Try ServiceNameLegacy ("com.vaultmtg.daemon").  If found → copy key forward to
+//     ServiceNameNew, log the migration at INFO, and return (key, true, nil).
+//     The legacy entry is retained (NOT deleted) for downgrade safety.
+//     The caller MUST emit the keychain.migrated telemetry event when migrated=true.
+//  3. Neither entry present → return ("", false, ErrNotFound) (triggers normal PKCE re-auth).
 //
 // A corrupted / unreadable legacy entry is treated as absent and falls through
 // to ErrNotFound so the caller initiates re-auth rather than crashing.
-func Get() (string, error) {
+//
+// The migrated bool is the idempotency signal: once the hollowmark entry is written,
+// subsequent calls find it at step 1 and return migrated=false — the copy-forward
+// and telemetry event fire exactly once per install.
+func Get() (apiKey string, migrated bool, err error) {
 	// ── 1. Try new service name first ────────────────────────────────────────
-	val, err := keyringGet(ServiceNameNew, AccountKey)
-	if err == nil {
-		return val, nil
+	val, getErr := keyringGet(ServiceNameNew, AccountKey)
+	if getErr == nil {
+		return val, false, nil
 	}
-	if !isNotFound(err) {
-		return "", fmt.Errorf("keychain: get %q: %w", ServiceNameNew, err)
+	if !isNotFound(getErr) {
+		return "", false, fmt.Errorf("keychain: get %q: %w", ServiceNameNew, getErr)
 	}
 
 	// ── 2. Fall back to legacy service name ──────────────────────────────────
@@ -114,24 +129,26 @@ func Get() (string, error) {
 	if legacyErr != nil {
 		if isNotFound(legacyErr) {
 			// Neither entry present — fresh install or wiped keychain.
-			return "", ErrNotFound
+			return "", false, ErrNotFound
 		}
 		// Corrupted / unreadable legacy entry: log a warning and fall through
 		// to ErrNotFound so normal PKCE re-auth is triggered rather than crashing.
 		log.Printf("[keychain] warn: could not read legacy entry %q: %v — falling through to re-auth", ServiceNameLegacy, legacyErr)
-		return "", ErrNotFound
+		return "", false, ErrNotFound
 	}
 
 	// ── 3. Copy forward to new service name ──────────────────────────────────
 	// The legacy entry is RETAINED (not deleted) for downgrade safety.
 	// Deletion of the legacy entry is deferred to Phase 6.
 	if copyErr := keyring.Set(ServiceNameNew, AccountKey, legacyVal); copyErr != nil {
-		log.Printf("[keychain] warn: could not copy legacy keychain entry to %q: %v — proceeding with legacy key", ServiceNameNew, copyErr)
-	} else {
-		log.Printf("[keychain] INFO: migrated keychain entry from %q to %q (legacy entry retained for downgrade safety)", ServiceNameLegacy, ServiceNameNew)
+		log.Printf("[keychain] warn: could not copy legacy keychain entry to %q: %v — proceeding with legacy key for this run", ServiceNameNew, copyErr)
+		// Copy failed: return the key so the daemon continues, but migrated=false
+		// since the new entry was not actually written (next run retries the copy).
+		return legacyVal, false, nil
 	}
+	log.Printf("[keychain] INFO: migrated keychain entry from %q to %q (legacy entry retained for downgrade safety)", ServiceNameLegacy, ServiceNameNew)
 
-	return legacyVal, nil
+	return legacyVal, true, nil
 }
 
 // Set stores the daemon API key in the OS keychain under ServiceNameNew,
