@@ -701,6 +701,106 @@ describe('TierList Component', () => {
     });
   });
 
+  describe('Tier severity color ordering — #1024 (D17 / ADR-074)', () => {
+    // Design spec: --vault-tier-f: #7F1414 (deep oxblood, most dire)
+    //              --vault-tier-d: #EF4444 (bright red, below average)
+    // The oxblood F must render with a distinct, darker/more-dire hue than D.
+    // This test asserts the tier badge background colors match the canonical
+    // D17 token values so the severity hierarchy holds at real render scale.
+    const CANONICAL_TIER_F = '#7f1414'; // --vault-tier-f (normalised lowercase)
+    const CANONICAL_TIER_D = '#ef4444'; // --vault-tier-d (normalised lowercase)
+
+    it('Tier-F badge uses the canonical deep-oxblood color from the D17 design spec', async () => {
+      const cards = [
+        createMockCardRating({ name: 'F-Tier Card', mtga_id: 10, tier: 'F' }),
+      ];
+      mockRatings(cards);
+      mockCards.getSetCards.mockResolvedValue([]);
+
+      render(<TierList {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('F-Tier Card')).toBeInTheDocument();
+      });
+
+      // The .tier-badge element in the tier-group header carries the background color
+      const tierBadges = document.querySelectorAll('.tier-badge');
+      const fBadge = Array.from(tierBadges).find(el => el.textContent?.trim() === 'F');
+      expect(fBadge, 'F tier-badge element must be present in the DOM').toBeTruthy();
+
+      const fBgColor = (fBadge as HTMLElement).style.backgroundColor;
+      // Accept both hex and rgb() representations — normalise to hex for comparison
+      // The spec value is #7F1414; the WRONG legacy value is #ff4444 (too bright)
+      const fBgNorm = fBgColor.toLowerCase().replace(/\s/g, '');
+      expect(
+        fBgNorm,
+        `Tier-F badge backgroundColor must be the D17 oxblood ${CANONICAL_TIER_F}, got ${fBgNorm} — ` +
+        `the getTierColor() function in TierList.tsx must reference var(--vault-tier-f) ` +
+        `not the legacy hardcoded #ff4444`,
+      ).toBe(CANONICAL_TIER_F);
+    });
+
+    it('Tier-D badge uses the canonical bright-red color from the D17 design spec', async () => {
+      const cards = [
+        createMockCardRating({ name: 'D-Tier Card', mtga_id: 11, tier: 'D' }),
+      ];
+      mockRatings(cards);
+      mockCards.getSetCards.mockResolvedValue([]);
+
+      render(<TierList {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('D-Tier Card')).toBeInTheDocument();
+      });
+
+      const tierBadges = document.querySelectorAll('.tier-badge');
+      const dBadge = Array.from(tierBadges).find(el => el.textContent?.trim() === 'D');
+      expect(dBadge, 'D tier-badge element must be present in the DOM').toBeTruthy();
+
+      const dBgColor = (dBadge as HTMLElement).style.backgroundColor;
+      const dBgNorm = dBgColor.toLowerCase().replace(/\s/g, '');
+      expect(
+        dBgNorm,
+        `Tier-D badge backgroundColor must be the D17 bright-red ${CANONICAL_TIER_D}, got ${dBgNorm} — ` +
+        `the getTierColor() function in TierList.tsx must reference var(--vault-tier-d) ` +
+        `not the legacy hardcoded #888888`,
+      ).toBe(CANONICAL_TIER_D);
+    });
+
+    it('Tier-F and Tier-D badges are distinct (F is darker/more dire than D)', async () => {
+      const cards = [
+        createMockCardRating({ name: 'D-Tier Card', mtga_id: 20, tier: 'D' }),
+        createMockCardRating({ name: 'F-Tier Card', mtga_id: 21, tier: 'F' }),
+      ];
+      mockRatings(cards);
+      mockCards.getSetCards.mockResolvedValue([]);
+
+      render(<TierList {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('D-Tier Card')).toBeInTheDocument();
+        expect(screen.getByText('F-Tier Card')).toBeInTheDocument();
+      });
+
+      const tierBadges = document.querySelectorAll('.tier-badge');
+      const dBadge = Array.from(tierBadges).find(el => el.textContent?.trim() === 'D') as HTMLElement;
+      const fBadge = Array.from(tierBadges).find(el => el.textContent?.trim() === 'F') as HTMLElement;
+
+      expect(dBadge, 'D tier-badge must exist').toBeTruthy();
+      expect(fBadge, 'F tier-badge must exist').toBeTruthy();
+
+      const dColor = dBadge.style.backgroundColor.toLowerCase();
+      const fColor = fBadge.style.backgroundColor.toLowerCase();
+
+      // The two badges must differ — same color means the severity hierarchy is broken
+      expect(
+        dColor === fColor,
+        `Tier-D and Tier-F badges must not share the same background color ` +
+        `(both rendered as ${dColor}) — this collapses the severity hierarchy`,
+      ).toBe(false);
+    });
+  });
+
   describe('Cache Degraded Notice', () => {
     it('should not show degraded notice when cache is healthy', async () => {
       const cards = [createMockCardRating({ name: 'Lightning Bolt', mtga_id: 1, tier: 'S' })];
