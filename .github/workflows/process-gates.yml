@@ -205,3 +205,65 @@ jobs:
           else
             echo "Stale-repo grep: PASS — no stale references found in source files."
           fi
+
+  # ---------------------------------------------------------------------------
+  # Gate #9 — Migration-without-release warning (RULE-INFRA-01: PERMANENT soft-fail)
+  #
+  # Warns when a PR adds a migration file without also changing the Release
+  # workflow (.github/workflows/release.yml).  A migration-only PR is
+  # legitimate (e.g. a batched schema change released in a future binary), so
+  # this MUST remain continue-on-error: true permanently — it is a reminder,
+  # not a hard block.
+  #
+  # The companion runtime guard lives in scripts/deploy/restart-bff.sh and
+  # restart-bff-staging.sh (#1036 Layer 2).
+  # ---------------------------------------------------------------------------
+  migration-release-warning:
+    name: Migration without release-workflow change (warning only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    # RULE-INFRA-01: permanently soft-fail — batched migration-only PRs are
+    # legitimate; do NOT change this to continue-on-error: false.
+    continue-on-error: true
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check migration + release workflow pairing
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "Checking whether this PR adds a migration without a release workflow change..."
+
+          CHANGED_FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || \
+                          git diff --name-only HEAD~1 HEAD 2>/dev/null || true)
+
+          HAS_MIGRATION=$(echo "$CHANGED_FILES" | grep -c \
+            'services/bff/internal/storage/migrations/postgres/.*\.up\.sql$' || true)
+          HAS_RELEASE_CHANGE=$(echo "$CHANGED_FILES" | grep -c \
+            '\.github/workflows/release\.yml$' || true)
+
+          echo "Migration files added   : $HAS_MIGRATION"
+          echo "Release workflow changed: $HAS_RELEASE_CHANGE"
+
+          if [ "$HAS_MIGRATION" -gt 0 ] && [ "$HAS_RELEASE_CHANGE" -eq 0 ]; then
+            echo ""
+            echo "WARN: This PR adds $HAS_MIGRATION migration file(s) but does NOT touch"
+            echo ".github/workflows/release.yml."
+            echo ""
+            echo "This is allowed — batched migration-only PRs are legitimate."
+            echo "If this migration MUST ship with the next binary release, confirm that"
+            echo "release.yml will be updated in the same or an immediately-following PR"
+            echo "(BROADCAST directive 5 — coupled changes ship together)."
+            echo ""
+            echo "Runtime guard: restart-bff.sh and restart-bff-staging.sh will abort"
+            echo "a restart if the DB schema is ahead of the deployed binary (#1036)."
+            exit 1
+          else
+            echo "Migration-release pairing check: PASS (no unpaired migrations in this PR)."
+          fi
