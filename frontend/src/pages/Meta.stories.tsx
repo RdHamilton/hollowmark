@@ -6,7 +6,7 @@ import './Meta.css';
  *
  * The component fetches archetype data from the BFF at mount time via
  * `meta.getMetaArchetypes`, so it cannot be rendered in isolation without
- * mocking the API call.  Following the same pattern as Footer.stories.tsx,
+ * mocking the API call.  Following the same pattern as StatusStrip.stories.tsx,
  * each story renders a static HTML representation using the component's own
  * CSS classes so Chromatic gets stable snapshots across CI runs.
  *
