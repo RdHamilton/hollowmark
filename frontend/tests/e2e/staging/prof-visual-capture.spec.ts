@@ -14,7 +14,7 @@ import * as path from 'path';
  * NO settings changes, NO destructive actions.
  *
  * Auth: Clerk Backend API sign-in-token → FAPI ticket → session cookies.
- * Account: ci-smoke-token (user_3EamRFdUZdQl1yYPf4Yg7OIQqm4, account_id=17)
+ * Account: ci-smoke-token (user_3EmtmrSgZrtd0yRRdisTIIFYnnF, account_id=17)
  *   — seeded with ~10k card_inventory rows and 3 Standard mtgzone_archetypes.
  *
  * Supported routes (PROF_ROUTE env var):
@@ -43,7 +43,7 @@ import * as path from 'path';
  *   PROF_ROUTE         — Which surface to visit (see supported routes above)
  *   PROF_ACTION        — What to do before screenshotting (see above)
  *   PROF_LABEL         — Label prefix for screenshot filenames (e.g. "wildcard-v1")
- *   STAGING_SPA_URL    — Override staging SPA URL (optional, default: stg-app.vaultmtg.app)
+ *   STAGING_SPA_URL    — Override staging SPA URL (optional, default: stg-app.hollowmark.app)
  *   CI_SMOKE_USER_ID   — Override ci-smoke Clerk user ID (optional)
  */
 
@@ -52,9 +52,11 @@ import * as path from 'path';
 // ---------------------------------------------------------------------------
 
 const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY ?? '';
-const BASE_URL = process.env.STAGING_SPA_URL || 'https://stg-app.vaultmtg.app';
-const FAPI_BASE = 'https://clerk.stg-app.vaultmtg.app';
-const CI_SMOKE_USER_ID = process.env.CI_SMOKE_USER_ID || 'user_3EamRFdUZdQl1yYPf4Yg7OIQqm4';
+const BASE_URL = process.env.STAGING_SPA_URL || 'https://stg-app.hollowmark.app';
+// CLERK_FAPI_URL must match the Clerk instance the staging CLERK_SECRET_KEY belongs to.
+// Updated for Hollowmark staging cutover — old instance was clerk.stg-app.vaultmtg.app.
+const FAPI_BASE = process.env.CLERK_FAPI_URL || 'https://clerk.stg-app.hollowmark.app';
+const CI_SMOKE_USER_ID = process.env.CI_SMOKE_USER_ID || 'user_3EmtmrSgZrtd0yRRdisTIIFYnnF';
 const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR ?? '';
 const PROF_ROUTE = process.env.PROF_ROUTE ?? 'collection';
 const PROF_ACTION = process.env.PROF_ACTION ?? 'screenshot-only';
@@ -201,11 +203,15 @@ async function processFapiSignIn(ticketToken: string): Promise<ClerkSessionCooki
 async function injectClerkSession(context: BrowserContext, cookies: ClerkSessionCookies): Promise<void> {
   const expiry = Math.floor(Date.now() / 1000) + 86400 * 30;
 
+  // Derive cookie domains from runtime config so they always match the active instance.
+  const uatDomain = '.' + BASE_URL.replace(/^https?:\/\/[^.]+\./, '');
+  const clientDomain = '.' + FAPI_BASE.replace(/^https?:\/\//, '');
+
   await context.addCookies([
     {
       name: '__client_uat',
       value: cookies.clientUat,
-      domain: '.vaultmtg.app',
+      domain: uatDomain,
       path: '/',
       httpOnly: false,
       secure: true,
@@ -215,7 +221,7 @@ async function injectClerkSession(context: BrowserContext, cookies: ClerkSession
     {
       name: '__client_uat_hKdSwoMR',
       value: cookies.clientUatHkds,
-      domain: '.vaultmtg.app',
+      domain: uatDomain,
       path: '/',
       httpOnly: false,
       secure: true,
@@ -225,7 +231,7 @@ async function injectClerkSession(context: BrowserContext, cookies: ClerkSession
     ...(cookies.clientCookie ? [{
       name: '__client',
       value: cookies.clientCookie,
-      domain: '.clerk.stg-app.vaultmtg.app',
+      domain: clientDomain,
       path: '/',
       httpOnly: true,
       secure: true,
