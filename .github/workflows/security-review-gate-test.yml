@@ -378,6 +378,7 @@ jobs:
 
           echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
           echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+          echo "summary=${SUMMARY}" >> "$GITHUB_OUTPUT"
 
       - name: "AC5: assert conclusion=success"
         env:
