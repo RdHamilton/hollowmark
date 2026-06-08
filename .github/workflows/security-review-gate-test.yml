@@ -1,33 +1,45 @@
 # security-review-gate-test.yml
 #
-# S-07 Gate Staleness Logic — Unit Tests
+# S-07 Gate Logic — Unit Tests
 #
 # PURPOSE
 # -------
-# Verifies the two critical properties of the SHA-delta staleness check in
-# security-review-gate.yml (ticket vault-mtg-tickets#231):
+# Verifies the critical properties of the SHA-delta staleness check (AC3/AC3b/AC4)
+# and the check-run conclusion decision logic (AC5/AC6/AC7) in
+# security-review-gate.yml.
 #
-#   AC3: A verdict approved before an update-branch merge commit, where the
-#        merge commit touches ONLY non-S07-1A paths, keeps the gate GREEN.
-#        (No false-positive staleness on security-inert rebases.)
+# AC3:  A verdict approved before an update-branch merge commit, where the
+#       merge commit touches ONLY non-S07-1A paths, keeps the gate GREEN.
+#       (No false-positive staleness on security-inert rebases.)
 #
-#   AC4: A verdict approved before a commit that touches an S07-1A path is
-#        correctly marked STALE. The gate stays RED and Sarah must re-review.
-#        (Gate integrity preserved for real security changes.)
+# AC4:  A verdict approved before a commit that touches an S07-1A path is
+#       correctly marked STALE. The gate stays RED and Sarah must re-review.
+#       (Gate integrity preserved for real security changes.)
+#
+# AC3b: Fast-path — verdict timestamp is newer than the push timestamp;
+#       verdict is trivially fresh without needing a delta walk.
+#
+# AC5:  Gate required + fresh matching verdict → decision conclusion = "success".
+#       (The happy path: Sarah approved, check-run turns green.)
+#
+# AC6:  Gate required + no verdict found after retry exhaustion →
+#       decision conclusion = "failure".
+#       (True-negative: no approval comment → merge stays blocked.)
+#
+# AC7:  Gate required + verdict exists but verdict pre-dates a post-verdict
+#       §1A-path commit → decision conclusion = "failure".
+#       (Staleness caught: Sarah must re-review the new security-sensitive code.)
 #
 # HOW IT WORKS
 # ------------
-# The test harness replicates the exact bash staleness-check logic from the
-# "Scan PR comments for security review verdict" step in security-review-gate.yml,
-# using injected synthetic commit lists and path sets rather than live GitHub API
-# calls. No real PR is required.
+# The test harness replicates the exact bash decision logic from the gate
+# steps in security-review-gate.yml using injected synthetic data rather
+# than live GitHub API calls. No real PR is required.
 #
 # Each test case:
-#   1. Sets VERDICT_TIMESTAMP (simulated Sarah approval time).
-#   2. Sets LAST_PUSH_TIMESTAMP (simulated update-branch commit time).
-#   3. Provides a COMMITS_AFTER list with associated file paths.
-#   4. Runs the delta check logic.
-#   5. Asserts the expected outcome (fresh or stale).
+#   1. Sets input env vars (timestamps, paths, gate/verdict state).
+#   2. Runs the replicated decision logic.
+#   3. Asserts the expected conclusion output.
 #
 # TRIGGER
 # -------
@@ -35,7 +47,7 @@
 # this is a test harness, not a gate enforcement workflow.
 #
 # Runbook: vault-mtg-docs/engineering/runbooks/infra-security-review-gate.md
-# Ticket:  vault-mtg-tickets#231
+# Ticket:  vault-mtg-tickets#231, RdHamilton/hollowmark#2420
 
 name: S-07 Gate Staleness Tests
 
@@ -54,7 +66,7 @@ jobs:
       # files (newline-separated) and the S-07 §1A trigger globs.
       #
       # Inputs (env vars expected by this step's logic, set per test case):
-      #   VERDICT_TIMESTAMP  -- ISO8601 UTC timestamp of the APPROVED comment
+      #   VERDICT_TIMESTAMP   -- ISO8601 UTC timestamp of the APPROVED comment
       #   LAST_PUSH_TIMESTAMP -- ISO8601 UTC timestamp of the current HEAD commit
       #   COMMIT_FILES        -- newline-separated list of files changed after verdict
       #
@@ -317,17 +329,236 @@ jobs:
           echo "PASS: AC3b — fast path correctly identifies fresh verdict."
 
       # -----------------------------------------------------------------------
+      # AC5: Gate required + fresh matching verdict → conclusion = "success"
+      #
+      # Verifies the check-run conclusion decision logic added by ticket #2420:
+      # when the gate IS required and the verdict scan returns approved=true
+      # (verdict is fresh), the conclusion emitted is "success".
+      # -----------------------------------------------------------------------
+      - name: "AC5 setup: gate required, verdict present and fresh"
+        run: |
+          {
+            echo "GATE_REQUIRED=true"
+            echo "APPROVED=true"
+            echo "VERDICT_TIMESTAMP=2026-05-29T10:05:00Z"
+            echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:00:00Z"
+            echo "STALENESS_CHECK=fresh"
+          } >> "$GITHUB_ENV"
+
+      - name: "AC5: run conclusion decision — expect conclusion=success"
+        id: ac5_check
+        env:
+          GATE_REQUIRED:      ${{ env.GATE_REQUIRED }}
+          APPROVED:           ${{ env.APPROVED }}
+          STALENESS_CHECK:    ${{ env.STALENESS_CHECK }}
+        run: |
+          set -euo pipefail
+
+          # Replicate the conclusion-decision logic from the
+          # "Publish check-run result" step in security-review-gate.yml.
+          #
+          # Logic:
+          #   gate not required            → conclusion = success  (gate skipped)
+          #   gate required + approved     → conclusion = success  (verdict accepted)
+          #   gate required + not approved → conclusion = failure  (blocked)
+
+          if [ "${GATE_REQUIRED}" != "true" ]; then
+            CONCLUSION="success"
+            TITLE="Security Review Gate: Not Required"
+            SUMMARY="This PR does not match S-07 trigger criteria. Gate skipped."
+          elif [ "${APPROVED}" = "true" ]; then
+            CONCLUSION="success"
+            TITLE="Security Review Gate: PASSED"
+            SUMMARY="S-07 effect-enumeration review complete. Staleness check: ${STALENESS_CHECK}."
+          else
+            CONCLUSION="failure"
+            TITLE="Security Review Gate: BLOCKED"
+            SUMMARY="No APPROVED verdict found. Merge is blocked until Sarah posts the verdict."
+          fi
+
+          echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+
+      - name: "AC5: assert conclusion=success"
+        env:
+          RESULT: ${{ steps.ac5_check.outputs.conclusion }}
+        run: |
+          echo "AC5 result: conclusion=${RESULT}"
+          if [ "${RESULT}" != "success" ]; then
+            echo "FAIL: AC5 — expected conclusion=success (gate required + fresh verdict),"
+            echo "      but got conclusion=${RESULT}."
+            echo "      A required gate with a fresh APPROVED verdict MUST publish success."
+            exit 1
+          fi
+          echo "PASS: AC5 — required gate + fresh verdict produces conclusion=success."
+
+      # -----------------------------------------------------------------------
+      # AC6: Gate required + no verdict after retries → conclusion = "failure"
+      #
+      # Verifies that when the gate IS required but no APPROVED comment is found
+      # (the retry loop exhausted), the conclusion is "failure" (merge blocked).
+      # -----------------------------------------------------------------------
+      - name: "AC6 setup: gate required, no verdict found"
+        run: |
+          {
+            echo "GATE_REQUIRED=true"
+            echo "APPROVED=false"
+            echo "VERDICT_TIMESTAMP="
+            echo "LAST_PUSH_TIMESTAMP="
+            echo "STALENESS_CHECK="
+          } >> "$GITHUB_ENV"
+
+      - name: "AC6: run conclusion decision — expect conclusion=failure"
+        id: ac6_check
+        env:
+          GATE_REQUIRED:   ${{ env.GATE_REQUIRED }}
+          APPROVED:        ${{ env.APPROVED }}
+          STALENESS_CHECK: ${{ env.STALENESS_CHECK }}
+        run: |
+          set -euo pipefail
+
+          if [ "${GATE_REQUIRED}" != "true" ]; then
+            CONCLUSION="success"
+          elif [ "${APPROVED}" = "true" ]; then
+            CONCLUSION="success"
+          else
+            CONCLUSION="failure"
+          fi
+
+          echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
+
+      - name: "AC6: assert conclusion=failure"
+        env:
+          RESULT: ${{ steps.ac6_check.outputs.conclusion }}
+        run: |
+          echo "AC6 result: conclusion=${RESULT}"
+          if [ "${RESULT}" != "failure" ]; then
+            echo "FAIL: AC6 — expected conclusion=failure (gate required + no verdict),"
+            echo "      but got conclusion=${RESULT}."
+            echo "      A required gate with no APPROVED verdict MUST publish failure."
+            exit 1
+          fi
+          echo "PASS: AC6 — required gate + no verdict produces conclusion=failure."
+
+      # -----------------------------------------------------------------------
+      # AC7: Gate required + verdict exists but §1A commit after verdict →
+      #      staleness catches it → approved=false → conclusion = "failure"
+      #
+      # Verifies the end-to-end chain: a post-verdict §1A-path push marks
+      # approved=false via the staleness check, which then flows through to
+      # conclusion=failure (gate stays red, Sarah must re-review).
+      # -----------------------------------------------------------------------
+      - name: "AC7 setup: gate required, verdict staled by post-verdict 1A commit"
+        run: |
+          # Verdict posted at T=0; engineer pushes a services/bff/cmd/ change at T=+2m.
+          # Staleness check sets approved=false (S07_DELTA_FOUND=true).
+          {
+            echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
+            echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:02:00Z"
+          } >> "$GITHUB_ENV"
+          {
+            printf 'COMMIT_FILES_AC7<<EOF\n'
+            printf 'services/bff/cmd/main.go\n'
+            printf 'EOF\n'
+          } >> "$GITHUB_ENV"
+
+      - name: "AC7: run staleness check then conclusion decision — expect conclusion=failure"
+        id: ac7_check
+        env:
+          VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
+          LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
+          COMMIT_FILES:        ${{ env.COMMIT_FILES_AC7 }}
+        run: |
+          set -euo pipefail
+
+          # Step 1: staleness check (same as AC3/AC4 logic)
+          VERDICT_AFTER_PUSH=$(python3 -c "
+          from datetime import datetime, timezone
+          def p(t):
+              t = t.strip()
+              if t.endswith('Z'):
+                  t = t[:-1] + '+00:00'
+              return datetime.fromisoformat(t).astimezone(timezone.utc)
+          verdict = p('${VERDICT_TIMESTAMP}')
+          push   = p('${LAST_PUSH_TIMESTAMP}')
+          print('true' if verdict > push else 'false')
+          ")
+
+          APPROVED="false"
+
+          if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
+            APPROVED="true"
+          else
+            TRIGGER_GLOBS=(
+              ".github/workflows/deploy-bff.yml"
+              ".github/workflows/deploy-spa.yml"
+              ".github/workflows/deploy-spa-staging.yml"
+              ".github/workflows/release.yml"
+              ".github/workflows/rollback.yml"
+              ".github/workflows/staging-deploy.yml"
+              ".github/workflows/daemon-release.yml"
+              ".github/workflows/frontend.yml"
+              "services/bff/cmd/"
+              "services/daemon/cmd/"
+              "scripts/deploy/"
+            )
+
+            S07_DELTA_FOUND=false
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "S-07 §1A path match: ${FILE} -> staling verdict"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${COMMIT_FILES}"
+
+            if [ "${S07_DELTA_FOUND}" = "false" ]; then
+              APPROVED="true"
+            fi
+          fi
+
+          echo "After staleness check: approved=${APPROVED}"
+
+          # Step 2: conclusion decision
+          if [ "${APPROVED}" = "true" ]; then
+            CONCLUSION="success"
+          else
+            CONCLUSION="failure"
+          fi
+
+          echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
+
+      - name: "AC7: assert conclusion=failure"
+        env:
+          RESULT: ${{ steps.ac7_check.outputs.conclusion }}
+        run: |
+          echo "AC7 result: conclusion=${RESULT}"
+          if [ "${RESULT}" != "failure" ]; then
+            echo "FAIL: AC7 — expected conclusion=failure (verdict staled by post-verdict §1A commit),"
+            echo "      but got conclusion=${RESULT}."
+            echo "      A staled verdict MUST flow through to conclusion=failure."
+            exit 1
+          fi
+          echo "PASS: AC7 — post-verdict §1A-path commit stales verdict and produces conclusion=failure."
+
+      # -----------------------------------------------------------------------
       # Summary
       # -----------------------------------------------------------------------
       - name: Test summary
         run: |
           echo "======================================================"
-          echo "  S-07 Gate Staleness Tests: ALL PASSED"
+          echo "  S-07 Gate Tests: ALL PASSED"
           echo "======================================================"
           echo ""
-          echo "AC3 : security-inert update-branch does not stale verdict  PASS"
-          echo "AC3b: fast path (verdict newer than head) works correctly   PASS"
-          echo "AC4 : real §1A-path change after verdict stales correctly   PASS"
+          echo "AC3 : security-inert update-branch does not stale verdict        PASS"
+          echo "AC3b: fast path (verdict newer than head) works correctly         PASS"
+          echo "AC4 : real §1A-path change after verdict stales correctly         PASS"
+          echo "AC5 : gate required + fresh verdict -> conclusion=success         PASS"
+          echo "AC6 : gate required + no verdict   -> conclusion=failure          PASS"
+          echo "AC7 : gate required + staled verdict -> conclusion=failure        PASS"
           echo ""
-          echo "Gate integrity properties verified."
-          echo "Ticket: vault-mtg-tickets#231"
+          echo "Gate integrity and check-run conclusion properties verified."
+          echo "Tickets: vault-mtg-tickets#231, RdHamilton/hollowmark#2420"
