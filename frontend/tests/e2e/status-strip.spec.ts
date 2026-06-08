@@ -1,12 +1,17 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * StatusStrip E2E tests — #1019 AC6
+ * StatusStrip E2E tests — #1019 AC6 + regression guard
  *
  * Asserts that the persistent app-shell status strip:
  *  - is visible on authenticated routes (Home, Match History)
  *  - contains all 5 expected value labels
- *  - is absent on pre-auth routes (/download)
+ *  - is absent on public routes (/download, /setup) even for a signed-in user
+ *
+ * Regression: PR #3045 used an isSignedIn-only guard — the staging CI smoke
+ * account IS signed in, so it saw the strip on /download and /setup (count=1,
+ * expected 0).  The fix adds a PUBLIC_ROUTES route check in addition to isSignedIn.
+ * These tests are the regression gate for that fix.
  *
  * These tests run against a locally built/served SPA with mock auth.
  * Tagged @smoke so the CI smoke project includes them.
@@ -48,11 +53,21 @@ test.describe('StatusStrip — app-shell bottom status strip (#1019)', () => {
     await expect(page.locator('[data-testid="status-strip"]')).toBeVisible();
   });
 
-  test('strip is absent on pre-auth download route', async ({ page }) => {
+  test('@smoke strip is absent on /download — signed-in user (regression guard)', async ({ page }) => {
+    // Regression: isSignedIn-only guard let the strip appear here for signed-in users.
+    // This test uses the same signed-in session as the smoke suite — if the guard
+    // reverts to isSignedIn-only, this test fails (count=1, expected 0).
     await page.goto(`${BASE_URL}/download`);
 
-    // If /download redirects to sign-in, the app-container may not be present —
-    // but the status strip MUST NOT be present in either case.
+    // /download is a public route — the strip must never appear regardless of auth state.
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('[data-testid="status-strip"]')).not.toBeAttached();
+  });
+
+  test('@smoke strip is absent on /setup — signed-in user (regression guard)', async ({ page }) => {
+    // Regression: /setup is also a public route that must never show the strip.
+    await page.goto(`${BASE_URL}/setup`);
+
     await page.waitForLoadState('networkidle');
     await expect(page.locator('[data-testid="status-strip"]')).not.toBeAttached();
   });
