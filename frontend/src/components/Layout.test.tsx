@@ -285,9 +285,10 @@ describe('Layout Component', () => {
     });
   });
 
-  describe('AC5: StatusStrip auth guard — structural', () => {
-    // AC5: StatusStrip must NOT render on unauthenticated routes (/download, /setup).
-    // Layout wraps all routes; the guard is isSignedIn from useAuth().
+  describe('AC5: StatusStrip auth guard — signed-in user on public routes (regression fix)', () => {
+    // Regression: isSignedIn guard alone is insufficient — a signed-in user navigating
+    // to /download or /setup must NOT see the StatusStrip.  This describe block adds
+    // the missing "signed-in AND on a public route" coverage that Tim's staging smoke caught.
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let useAuthSpy: ReturnType<typeof vi.spyOn<any, any>> | undefined;
@@ -316,13 +317,49 @@ describe('Layout Component', () => {
       expect(screen.queryByTestId('status-strip')).not.toBeInTheDocument();
     });
 
-    it('shows StatusStrip when user is signed in', () => {
+    it('shows StatusStrip when user is signed in on an app route', () => {
       // Default mock has isSignedIn: true (no spy override needed)
       render(
         <Layout>
           <div>Authenticated Content</div>
         </Layout>,
         { initialRoute: '/home' }
+      );
+
+      expect(screen.getByTestId('status-strip')).toBeInTheDocument();
+    });
+
+    it('hides StatusStrip when signed-in user is on /download', async () => {
+      // Regression: the isSignedIn-only guard lets the strip appear here.
+      // isSignedIn: true is the default test mock — no spy override needed.
+      render(
+        <Layout>
+          <div>Download Page</div>
+        </Layout>,
+        { initialRoute: '/download' }
+      );
+
+      expect(screen.queryByTestId('status-strip')).not.toBeInTheDocument();
+    });
+
+    it('hides StatusStrip when signed-in user is on /setup', async () => {
+      // Regression: /setup is also a public route that should never show the strip.
+      render(
+        <Layout>
+          <div>Setup Page</div>
+        </Layout>,
+        { initialRoute: '/setup' }
+      );
+
+      expect(screen.queryByTestId('status-strip')).not.toBeInTheDocument();
+    });
+
+    it('shows StatusStrip on /match-history (app route, signed in)', () => {
+      render(
+        <Layout>
+          <div>Match History</div>
+        </Layout>,
+        { initialRoute: '/match-history' }
       );
 
       expect(screen.getByTestId('status-strip')).toBeInTheDocument();
