@@ -8,7 +8,7 @@ name: Prof Visual Capture (staging)
 # READ-ONLY: navigate + screenshot ONLY. No mutations, no crafting, no settings
 # changes, no destructive actions.
 #
-# Auth: reads CLERK_SECRET_KEY from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY.
+# Auth: reads CLERK_SECRET_KEY from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY
 # Account: ci-smoke-token (user_3EmtmrSgZrtd0yRRdisTIIFYnnF, account_id=17)
 #   — seeded with ~10k card_inventory rows and 3 Standard mtgzone_archetypes.
 #
@@ -89,10 +89,11 @@ on:
         default: 'prof-capture'
 
       staging_spa_url:
-        description: 'Staging SPA URL override (leave blank for default stg-app.hollowmark.app)'
+        description: 'Staging SPA URL override (leave blank for default stg-app.vaultmtg.app)'
         required: false
         type: string
-        default: 'https://stg-app.hollowmark.app'
+        # TODO(#1068): switch back to stg-app.hollowmark.app once staging host is provisioned
+        default: 'https://stg-app.vaultmtg.app'
 
 permissions:
   contents: read
@@ -167,7 +168,8 @@ jobs:
             --reporter=list
         env:
           CI: true
-          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.hollowmark.app' }}
+          # TODO(#1068): switch back to stg-app.hollowmark.app once staging host is provisioned
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.vaultmtg.app' }}
           CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
           SCREENSHOT_DIR: /tmp/prof-screenshots
           CI_SMOKE_USER_ID: user_3EmtmrSgZrtd0yRRdisTIIFYnnF

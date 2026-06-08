@@ -191,7 +191,7 @@ jobs:
       # ── SPA authenticated smoke (#678) ──────────────────────────────────────
       # Exercises every protected SPA route via Clerk testing token injection.
       # CLERK_STAGING_SECRET_KEY is sourced from GitHub Actions secrets (provisioned
-      # from SSM /vaultmtg/staging/CLERK_SECRET_KEY at environment setup time).
+      # from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY at environment setup time).
       # If absent, the suite FAILS with INCONCLUSIVE — it does NOT skip.
       - name: Run SPA browser smoke suite
         working-directory: frontend
