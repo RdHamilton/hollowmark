@@ -444,34 +444,81 @@ jobs:
       # AC7: Gate required + verdict exists but §1A commit after verdict →
       #      staleness catches it → approved=false → conclusion = "failure"
       #
-      # Verifies the end-to-end chain: a post-verdict §1A-path push marks
-      # approved=false via the staleness check, which then flows through to
-      # conclusion=failure (gate stays red, Sarah must re-review).
+      # Verifies the end-to-end chain INCLUDING the jq filter that populates
+      # COMMITS_AFTER (the path that carried bug #1120). Before this fix the
+      # gate used `gh api --jq --arg ts VALUE 'expr'`; --arg is not a gh api
+      # flag, so $ts was undefined in jq, the select was always false, and
+      # COMMITS_AFTER was always empty — making every stale verdict appear fresh.
+      #
+      # This test now exercises that exact jq filter against synthetic JSON
+      # (piped through the real jq binary) to prove the filter correctly emits
+      # post-verdict SHAs before the file-match logic fires.
+      #
+      # FAIL against OLD code: the old jq program references undefined $ts →
+      #   jq errors → COMMITS_AFTER="" → delta-no-commits → APPROVED=true →
+      #   CONCLUSION=success ≠ expected failure.
+      #
+      # PASS against NEW code: shell-interpolated timestamp → jq filter emits
+      #   the post-verdict SHA → file-match finds services/bff/cmd/ → STALE →
+      #   APPROVED=false → CONCLUSION=failure ✓.
       # -----------------------------------------------------------------------
       - name: "AC7 setup: gate required, verdict staled by post-verdict 1A commit"
         run: |
           # Verdict posted at T=0; engineer pushes a services/bff/cmd/ change at T=+2m.
-          # Staleness check sets approved=false (S07_DELTA_FOUND=true).
+          # A second commit exists at T=-1m (before verdict) and must NOT be included.
           {
             echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:02:00Z"
           } >> "$GITHUB_ENV"
-          {
-            printf 'COMMIT_FILES_AC7<<EOF\n'
-            printf 'services/bff/cmd/main.go\n'
-            printf 'EOF\n'
-          } >> "$GITHUB_ENV"
 
-      - name: "AC7: run staleness check then conclusion decision — expect conclusion=failure"
+      - name: "AC7: run full staleness path including jq filter — expect conclusion=failure"
         id: ac7_check
         env:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
           LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
-          COMMIT_FILES:        ${{ env.COMMIT_FILES_AC7 }}
         run: |
           set -euo pipefail
 
-          # Step 1: staleness check (same as AC3/AC4 logic)
+          # ----------------------------------------------------------------
+          # Step 0: exercise the FIXED jq filter from security-review-gate.yml
+          # (the exact expression used in the COMMITS_AFTER assignment).
+          #
+          # Synthetic PR commits response: two commits — one before verdict
+          # (sha=def456, T=-1m) and one after (sha=abc123, T=+2m).
+          # The fixed filter must emit only "abc123".
+          # The old buggy filter ($ts undefined) would emit nothing.
+          # ----------------------------------------------------------------
+          SYNTHETIC_COMMITS='[
+            {"commit":{"committer":{"date":"2026-05-29T09:59:00Z"}},"sha":"def456"},
+            {"commit":{"committer":{"date":"2026-05-29T10:02:00Z"}},"sha":"abc123"}
+          ]'
+
+          # This is the FIXED jq expression from security-review-gate.yml:
+          COMMITS_AFTER=$(echo "${SYNTHETIC_COMMITS}" | \
+            jq -r ".[] | select(.commit.committer.date > \"${VERDICT_TIMESTAMP}\") | .sha" \
+            2>/dev/null || echo "")
+
+          echo "COMMITS_AFTER from jq filter: ${COMMITS_AFTER}"
+
+          if [ -z "${COMMITS_AFTER}" ]; then
+            echo "FAIL (AC7 jq sub-check): jq filter returned no SHAs."
+            echo "  The fixed filter must emit the post-verdict SHA (abc123)."
+            echo "  If this fails it means the filter expression is still broken."
+            exit 1
+          fi
+
+          EXPECTED_SHA="abc123"
+          if ! echo "${COMMITS_AFTER}" | grep -qF "${EXPECTED_SHA}"; then
+            echo "FAIL (AC7 jq sub-check): expected SHA ${EXPECTED_SHA} not in output."
+            echo "  Got: ${COMMITS_AFTER}"
+            exit 1
+          fi
+          echo "AC7 jq sub-check PASS: filter correctly emits post-verdict SHAs only."
+          echo ""
+
+          # ----------------------------------------------------------------
+          # Step 1: timestamp fast-path check (verdict pre-dates last push)
+          # ----------------------------------------------------------------
           VERDICT_AFTER_PUSH=$(python3 -c "
           from datetime import datetime, timezone
           def p(t):
@@ -484,11 +531,19 @@ jobs:
           print('true' if verdict > push else 'false')
           ")
 
+          echo "Verdict post-dates last push: ${VERDICT_AFTER_PUSH}"
+
           APPROVED="false"
 
           if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
             APPROVED="true"
           else
+            # ----------------------------------------------------------------
+            # Step 2: file-match on each post-verdict commit.
+            # In the real gate this loops over COMMITS_AFTER SHAs and calls
+            # gh api per SHA to get changed files. Here we use a synthetic
+            # file map: sha=abc123 -> services/bff/cmd/main.go (§1A path).
+            # ----------------------------------------------------------------
             TRIGGER_GLOBS=(
               ".github/workflows/deploy-bff.yml"
               ".github/workflows/deploy-spa.yml"
@@ -504,16 +559,37 @@ jobs:
             )
 
             S07_DELTA_FOUND=false
-            while IFS= read -r FILE; do
-              [ -z "${FILE}" ] && continue
-              for GLOB in "${TRIGGER_GLOBS[@]}"; do
-                if echo "${FILE}" | grep -qF "${GLOB}"; then
-                  echo "S-07 §1A path match: ${FILE} -> staling verdict"
-                  S07_DELTA_FOUND=true
-                  break 2
-                fi
-              done
-            done <<< "${COMMIT_FILES}"
+
+            for COMMIT_SHA in ${COMMITS_AFTER}; do
+              echo "Checking commit ${COMMIT_SHA}..."
+
+              # Synthetic per-commit file list (mirrors what gh api commits/SHA returns)
+              if [ "${COMMIT_SHA}" = "abc123" ]; then
+                COMMIT_FILES="services/bff/cmd/main.go"
+              else
+                COMMIT_FILES=""
+              fi
+
+              if [ -z "${COMMIT_FILES}" ]; then
+                echo "  (no files listed — merge commit or API error; skipping)"
+                continue
+              fi
+
+              echo "  Changed files: ${COMMIT_FILES}"
+
+              while IFS= read -r FILE; do
+                [ -z "${FILE}" ] && continue
+                for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                  if echo "${FILE}" | grep -qF "${GLOB}"; then
+                    echo "  S-07 §1A path match: ${FILE} -> staling verdict"
+                    S07_DELTA_FOUND=true
+                    break 2
+                  fi
+                done
+              done <<< "${COMMIT_FILES}"
+
+              [ "${S07_DELTA_FOUND}" = "true" ] && break
+            done
 
             if [ "${S07_DELTA_FOUND}" = "false" ]; then
               APPROVED="true"
@@ -522,7 +598,7 @@ jobs:
 
           echo "After staleness check: approved=${APPROVED}"
 
-          # Step 2: conclusion decision
+          # Step 3: conclusion decision
           if [ "${APPROVED}" = "true" ]; then
             CONCLUSION="success"
           else

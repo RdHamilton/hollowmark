@@ -419,16 +419,14 @@ jobs:
 
               # List all commits on the PR; filter to those whose committer date
               # is strictly after the verdict timestamp.
-              # shellcheck disable=SC2016  # $ts is a jq variable, not a shell variable
+              # gh api --jq takes a single jq expression string; it does not
+              # accept --arg (that is a standalone jq binary flag). Embed the
+              # timestamp directly via shell interpolation so the filter is a
+              # self-contained string that gh api can evaluate. Bug: #1120.
               COMMITS_AFTER=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" \
                 --paginate \
-                --jq --arg ts "${COMMENT_TIMESTAMP}" '
-                  .[] |
-                  select(
-                    (.commit.committer.date | . > $ts)
-                  ) |
-                  .sha
-                ' 2>/dev/null || echo "")
+                --jq ".[] | select(.commit.committer.date > \"${COMMENT_TIMESTAMP}\") | .sha" \
+                2>/dev/null || echo "")
 
               if [ -z "${COMMITS_AFTER}" ]; then
                 # No commits registered after the verdict -- likely a race between
