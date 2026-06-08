@@ -93,7 +93,7 @@ jobs:
         run: |
           npx playwright test \
             tests/e2e/staging/wildcard-panel-visual-424.spec.ts \
-            --config=playwright.staging-spa.config.ts \
+            --config=playwright.visual-capture.config.ts \
             --reporter=list
         env:
           CI: true
