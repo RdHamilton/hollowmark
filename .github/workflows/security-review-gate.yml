@@ -19,6 +19,8 @@
 #     sets initial failing state and re-evaluates when the PR diff changes.
 #   - issue_comment events (created) -- re-evaluates when a new comment is posted,
 #     picking up the VERDICT comment the moment Sarah posts it.
+#   - workflow_dispatch with a pr_number input -- for live testing on a disposable
+#     test PR without needing to post a comment or push a commit (ticket #2420).
 #
 # The gate PASSES only when a PR comment matches ALL of:
 #   1. Body contains "## S-07 Security Review" (SOP header).
@@ -27,6 +29,21 @@
 #
 # The gate SKIPS (passes neutrally) when the PR does not match any S-07 trigger
 # glob, so it never blocks unrelated PRs.
+#
+# RESULT PUBLISHING (ticket #2420)
+# ---------------------------------
+# The job is named "Security Review Gate Runner" so that the runner's own
+# auto-status check registers under a NON-required context. The actual required
+# "Security Review Gate" check-run context is written explicitly via the
+# checks.create REST API using the live PR-head SHA (resolved via pulls.get so
+# that issue_comment and workflow_dispatch triggers bind to the correct commit,
+# not to the commit that triggered the workflow run). This means:
+#
+#   - issue_comment runs (which execute at the *main* HEAD SHA) now correctly
+#     flip the required "Security Review Gate" check on the PR head commit.
+#   - No manual re-run is needed after Sarah posts the VERDICT comment.
+#   - The job always exits 0; pass/fail is expressed only via the check-run
+#     conclusion ("success" or "failure").
 #
 # BYPASS RISK (single-account repo)
 # ----------------------------------
@@ -88,40 +105,69 @@ on:
     branches: [main]
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to evaluate (for live testing)'
+        required: true
+        type: string
 
 # Queue (do not cancel) concurrent runs on the same PR -- any one may be the
 # run that finds the APPROVED verdict.
 concurrency:
-  group: security-review-gate-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: security-review-gate-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number }}
   cancel-in-progress: false
 
 permissions:
   contents: read
   pull-requests: read
+  checks: write
 
 jobs:
   security-review-gate:
-    name: Security Review Gate
+    # Renamed from "Security Review Gate" to "Security Review Gate Runner" so
+    # this job's auto-status registers under a NON-required context. The
+    # required "Security Review Gate" check is written explicitly via
+    # checks.create in the final step, bound to the live PR-head SHA.
+    name: Security Review Gate Runner
     # For issue_comment events only run when the comment is on a pull request
     if: >
       github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: Resolve PR number
+      - name: Resolve PR number and head SHA
         id: pr_info
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
+
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             PR_NUMBER="${{ github.event.pull_request.number }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PR_NUMBER="${{ github.event.inputs.pr_number }}"
           else
             PR_NUMBER="${{ github.event.issue.number }}"
           fi
+
+          # Always re-fetch the live PR head SHA via the API.
+          # Do NOT use event.pull_request.head.sha -- it is stale on
+          # issue_comment and workflow_dispatch triggers (they run at the
+          # SHA of the commit that triggered the workflow, not the PR head).
+          # This is the root cause fixed by ticket #2420.
+          HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
+            --jq '.head.sha' 2>/dev/null || echo "")
+
           echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
+          echo "PR number: ${PR_NUMBER}"
+          echo "PR head SHA (live): ${HEAD_SHA}"
 
       - name: Check whether S-07 gate is required for this PR
         id: gate_required
@@ -166,7 +212,7 @@ jobs:
             # daemon-release.yml: pushes GitHub Releases, uses SENTRY_DSN_DAEMON_PRODUCTION,
             # APPLE_* signing secrets, and GH_VARIABLES_PAT. (#98)
             ".github/workflows/daemon-release.yml"
-            # frontend.yml: production SPA deploy — AWS_DEPLOY_ROLE_ARN, DEPLOY_BUCKET,
+            # frontend.yml: production SPA deploy -- AWS_DEPLOY_ROLE_ARN, DEPLOY_BUCKET,
             # EC2_INSTANCE_ID (SSM Run Command against production instance). (#98)
             ".github/workflows/frontend.yml"
             "services/bff/cmd/"
@@ -215,13 +261,6 @@ jobs:
             { echo "required=false"; echo "reason=no trigger match"; } >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Gate not required for this PR
-        if: steps.gate_required.outputs.required == 'false'
-        run: |
-          echo "This PR does not match S-07 trigger criteria."
-          echo "Security review gate: NOT REQUIRED"
-          echo "Gate skipped (no IAM/security-sensitive paths, labels, or keywords detected)."
-
       - name: Scan PR comments for security review verdict
         if: steps.gate_required.outputs.required == 'true'
         id: verdict_check
@@ -246,11 +285,10 @@ jobs:
 
           # ------------------------------------------------------------------
           # 1. Resolve current HEAD SHA and its committer timestamp.
-          #    Using commit committer date (UTC ISO8601) -- not PR updated_at,
-          #    which drifts on label/assignee mutations unrelated to code pushes.
+          #    HEAD_SHA already resolved in pr_info step; re-use it here.
+          #    Fetch the committer timestamp from the commits API.
           # ------------------------------------------------------------------
-          HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
-            --jq '.head.sha' 2>/dev/null || echo "")
+          HEAD_SHA="${{ steps.pr_info.outputs.head_sha }}"
           LAST_PUSH_TIMESTAMP=$(gh api "repos/${REPO}/commits/${HEAD_SHA}" \
             --jq '.commit.committer.date' 2>/dev/null || echo "")
 
@@ -381,16 +419,14 @@ jobs:
 
               # List all commits on the PR; filter to those whose committer date
               # is strictly after the verdict timestamp.
-              # shellcheck disable=SC2016  # $ts is a jq variable, not a shell variable
+              # gh api --jq takes a single jq expression string; it does not
+              # accept --arg (that is a standalone jq binary flag). Embed the
+              # timestamp directly via shell interpolation so the filter is a
+              # self-contained string that gh api can evaluate. Bug: #1120.
               COMMITS_AFTER=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" \
                 --paginate \
-                --jq --arg ts "${COMMENT_TIMESTAMP}" '
-                  .[] |
-                  select(
-                    (.commit.committer.date | . > $ts)
-                  ) |
-                  .sha
-                ' 2>/dev/null || echo "")
+                --jq ".[] | select(.commit.committer.date > \"${COMMENT_TIMESTAMP}\") | .sha" \
+                2>/dev/null || echo "")
 
               if [ -z "${COMMITS_AFTER}" ]; then
                 # No commits registered after the verdict -- likely a race between
@@ -469,43 +505,93 @@ jobs:
             fi
           fi
 
-      - name: Gate PASSED
-        if: steps.gate_required.outputs.required == 'true' && steps.verdict_check.outputs.approved == 'true'
-        run: |
-          echo "Security review gate: PASSED"
-          echo "S-07 effect-enumeration review complete."
-          echo "Reviewer:            @${{ steps.verdict_check.outputs.approver }}"
-          echo "Comment ID:          ${{ steps.verdict_check.outputs.comment_id }}"
-          echo "Approval timestamp:  ${{ steps.verdict_check.outputs.comment_timestamp }}"
-          echo "Last push timestamp: ${{ steps.verdict_check.outputs.last_push_timestamp }}"
-          echo "Staleness check:     ${{ steps.verdict_check.outputs.staleness_check }}"
-          echo "This PR is cleared for merge (security review requirement satisfied)."
+      - name: Publish check-run result
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          HEAD_SHA: ${{ steps.pr_info.outputs.head_sha }}
+          GATE_REQUIRED: ${{ steps.gate_required.outputs.required }}
+          APPROVED: ${{ steps.verdict_check.outputs.approved }}
+          APPROVER: ${{ steps.verdict_check.outputs.approver }}
+          COMMENT_ID: ${{ steps.verdict_check.outputs.comment_id }}
+          COMMENT_TIMESTAMP: ${{ steps.verdict_check.outputs.comment_timestamp }}
+          LAST_PUSH_TIMESTAMP: ${{ steps.verdict_check.outputs.last_push_timestamp }}
+          STALENESS_CHECK: ${{ steps.verdict_check.outputs.staleness_check }}
+        with:
+          script: |
+            const headSha    = process.env.HEAD_SHA;
+            const required   = process.env.GATE_REQUIRED === 'true';
+            const approved   = process.env.APPROVED === 'true';
+            const approver   = process.env.APPROVER   || '';
+            const commentId  = process.env.COMMENT_ID || '';
+            const verdictTs  = process.env.COMMENT_TIMESTAMP    || '';
+            const pushTs     = process.env.LAST_PUSH_TIMESTAMP  || '';
+            const staleness  = process.env.STALENESS_CHECK       || '';
 
-      - name: Gate BLOCKED
-        if: steps.gate_required.outputs.required == 'true' && steps.verdict_check.outputs.approved != 'true'
-        run: |
-          echo "==========================================================="
-          echo "  SECURITY REVIEW GATE: BLOCKED"
-          echo "==========================================================="
-          echo ""
-          echo "This PR matches S-07 infra security review criteria."
-          echo "Merge is blocked until Sarah posts the APPROVED verdict."
-          echo ""
-          echo "Required action:"
-          echo "  Sarah must run the S-07 effect-enumeration SOP and post a"
-          echo "  PR comment containing BOTH:"
-          echo ""
-          echo "    1. Header line:   ## S-07 Security Review"
-          echo "    2. Verdict line:  VERDICT: APPROVED"
-          echo ""
-          echo "  (or VERDICT: BLOCKED -- <reason> to explicitly block the PR)"
-          echo ""
-          echo "  If the verdict was posted before an update-branch merge commit,"
-          echo "  the gate will carry it forward automatically provided no S-07"
-          echo "  §1A trigger paths changed in the commits since the verdict."
-          echo "  Re-review is only required when new security-sensitive code"
-          echo "  was pushed after the last approval."
-          echo ""
-          echo "Runbook: vault-mtg-docs/engineering/runbooks/infra-security-review-gate.md"
-          echo "Ticket:  RdHamilton/hollowmark#2365"
-          exit 1
+            let conclusion, title, summary;
+
+            if (!required) {
+              conclusion = 'success';
+              title      = 'Security Review Gate: Not Required';
+              summary    = 'This PR does not match S-07 trigger criteria. Gate skipped (no IAM/security-sensitive paths, labels, or keywords detected).';
+            } else if (approved) {
+              conclusion = 'success';
+              title      = 'Security Review Gate: PASSED';
+              summary    = [
+                'S-07 effect-enumeration review complete.',
+                '',
+                `Reviewer:             @${approver}`,
+                `Comment ID:           ${commentId}`,
+                `Approval timestamp:   ${verdictTs}`,
+                `Last push timestamp:  ${pushTs}`,
+                `Staleness check:      ${staleness}`,
+                '',
+                'This PR is cleared for merge (security review requirement satisfied).',
+              ].join('\n');
+            } else {
+              conclusion = 'failure';
+              title      = 'Security Review Gate: BLOCKED';
+              summary    = [
+                'This PR matches S-07 infra security review criteria.',
+                'Merge is blocked until Sarah posts the APPROVED verdict.',
+                '',
+                'Required action:',
+                '  Sarah must run the S-07 effect-enumeration SOP and post a',
+                '  PR comment containing BOTH:',
+                '',
+                '    1. Header line:   ## S-07 Security Review',
+                '    2. Verdict line:  VERDICT: APPROVED',
+                '',
+                '  (or VERDICT: BLOCKED -- <reason> to explicitly block the PR)',
+                '',
+                '  If the verdict was posted before an update-branch merge commit,',
+                '  the gate will carry it forward automatically provided no S-07',
+                '  §1A trigger paths changed in the commits since the verdict.',
+                '  Re-review is only required when new security-sensitive code',
+                '  was pushed after the last approval.',
+                '',
+                'Runbook: vault-mtg-docs/engineering/runbooks/infra-security-review-gate.md',
+                'Ticket:  RdHamilton/hollowmark#2365',
+              ].join('\n');
+            }
+
+            if (!headSha) {
+              core.warning('HEAD SHA is empty -- cannot publish check-run. PR may have been deleted or the API call failed.');
+              return;
+            }
+
+            await github.rest.checks.create({
+              owner:       context.repo.owner,
+              repo:        context.repo.repo,
+              name:        'Security Review Gate',
+              head_sha:    headSha,
+              status:      'completed',
+              conclusion:  conclusion,
+              output: {
+                title:   title,
+                summary: summary,
+              },
+            });
+
+            core.info(`Published check-run "Security Review Gate" on ${headSha} with conclusion=${conclusion}`);
+            // Job always exits 0 -- pass/fail is expressed only via the check-run conclusion.
