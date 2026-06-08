@@ -1,21 +1,29 @@
 name: Board Status Automation
 
 # ---------------------------------------------------------------------------
-# Automatically transitions board #46 (v0.3.9) Status based on PR lifecycle.
+# Automatically transitions board #46 (v0.4.0) Status based on PR lifecycle
+# and issue close events.
 #
 # TARGET BEHAVIOR
 # ---------------
-# PR opened / ready-for-review → linked board items set to "PR Review"
-# PR merged                    → linked board items set to "Done"
+# PR opened / ready-for-review  -> linked board items set to "PR Review"
+# PR merged                     -> linked board items set to "Done"
+# Issue closed                  -> linked board items set to "Done"
+#                                  (catches manual/superseded/cross-repo closes
+#                                   that never get a PR-merge event)
 #
-# "In Progress" is OUT OF SCOPE — set at dispatch by the orchestrator/engineer.
+# "In Progress" is OUT OF SCOPE -- set at dispatch by the orchestrator/engineer.
 #
 # CROSS-REPO SUPPORT
 # ------------------
 # Board #46 aggregates issues from both RdHamilton/hollowmark AND
 # RdHamilton/hollowmark-tickets. The GitHub GraphQL closingIssuesReferences
 # field resolves linked issues regardless of repo, then projectItems returns
-# the item ID on board #46 directly — no per-repo fan-out needed.
+# the item ID on board #46 directly -- no per-repo fan-out needed.
+#
+# For the issue-close path, this workflow runs in RdHamilton/hollowmark.
+# Issues in RdHamilton/hollowmark-tickets need the same trigger in that repo.
+# The issue-close job looks up the closed issue's own project membership.
 #
 # LINKING CONVENTION
 # ------------------
@@ -24,15 +32,35 @@ name: Board Status Automation
 #   closes RdHamilton/hollowmark-tickets#NNN       (cross-repo)
 # Both forms are resolved by closingIssuesReferences.
 #
-# TOKEN REQUIREMENT (S-20 FLAG — see below)
-# -----------------------------------------
-# GITHUB_TOKEN cannot write to ProjectV2 — it has no `project` scope.
-# This workflow requires GH_PROJECT_PAT (a classic PAT with `project` scope,
-# or a fine-grained PAT with "Projects: Read and write").
-# If GH_PROJECT_PAT is absent the step warns and exits 0 (does not fail CI).
+# TOKEN REQUIREMENT
+# -----------------
+# GITHUB_TOKEN cannot write to ProjectV2 -- it lacks `project` scope.
+# This workflow requires BOARD_AUTOMATION_TOKEN (a fine-grained PAT with
+# "Projects: Read and write" permission, or a classic PAT with `project` scope).
+# If BOARD_AUTOMATION_TOKEN is absent the jobs warn and exit 0 (does not fail
+# CI). This allows the PR to be safely merged before Ramone provisions the token.
 #
-# S-20 FLAG: GH_PROJECT_PAT is a NEW credential. Provisioning it requires
-# Ramone's explicit approval before it is stored as a repo secret.
+# TOKEN CREATION INSTRUCTIONS (for Ramone)
+# -----------------------------------------
+# Option A -- Fine-grained PAT (recommended):
+#   1. github.com -> Settings -> Developer settings -> Personal access tokens
+#      -> Fine-grained tokens -> Generate new token
+#   2. Token name: "vaultmtg-board-automation"
+#   3. Resource owner: RdHamilton
+#   4. Repository access: All repositories (needs cross-repo project access)
+#   5. Permissions:
+#        Repository permissions: Contents = Read-only, Pull requests = Read-only
+#        Organization/user permissions: Projects = Read and write
+#   6. Copy the token value.
+#   7. Set as a secret named BOARD_AUTOMATION_TOKEN in EACH of the three repos:
+#        RdHamilton/hollowmark -> Settings -> Secrets and variables -> Actions
+#        RdHamilton/hollowmark-infra -> Settings -> Secrets and variables -> Actions
+#        RdHamilton/hollowmark-docs -> Settings -> Secrets and variables -> Actions
+#      (Or set it as an organization-level secret under RdHamilton if GitHub
+#       supports user-level org secrets -- if not, per-repo is the safe path.)
+#
+# NOTE: The old GH_PROJECT_PAT secret can be deleted once BOARD_AUTOMATION_TOKEN
+# is set and a test PR confirms the automation is working.
 #
 # BOARD / FIELD CONSTANTS (board #46 as of 2026-06-07)
 # -----------------------------------------------------
@@ -44,22 +72,42 @@ name: Board Status Automation
 #
 # PER-WAVE UPDATE CHECKLIST
 # -------------------------
-# When advancing to a new board, update TWO env vars at the top of this file:
-#   TARGET_BOARD_NUMBER — the new board number (e.g. "47")
-#   PROJECT_ID          — the new board's project node ID
-#   STATUS_FIELD_ID     — the new board's Status field ID
+# When advancing to a new board, update these env vars at the top of this file:
+#   TARGET_BOARD_NUMBER -- the new board number (e.g. "47")
+#   PROJECT_ID          -- the new board's project node ID
+#   STATUS_FIELD_ID     -- the new board's Status field ID
 # Status option IDs (PR Review / Done) are typically stable across boards.
+# Run the following to get the new board's IDs:
+#   gh api graphql -f query='query { repositoryOwner(login:"RdHamilton") {
+#     ... on User { projectV2(number: N) { id fields(first:20) { nodes {
+#       ... on ProjectV2SingleSelectField { id name options { id name } }
+#     }}}}}}' | python3 -m json.tool
+#
+# RE-MILESTONE HANDLING
+# ---------------------
+# When a ticket is re-milestoned to a different wave, it remains a member of the
+# old board. This automation does NOT remove board membership -- there is no
+# ProjectV2 API to delete an item from a board without archiving it. The intended
+# workflow for stranded re-milestoned items (#2591/#2600 class):
+#   1. Pam (board hygiene) or the orchestrator identifies stranded items via:
+#        gh project item-list <board-number> --owner RdHamilton --limit 200 \
+#          --format json | python3 -c "import json,sys; [...]"
+#   2. Archive or move them manually in the GitHub Projects UI, OR
+#      use the ProjectV2 archiveProjectV2Item GraphQL mutation (sets archivedAt).
+#   This is documented in vault-mtg-docs/engineering/runbooks/board-hygiene.md.
+#   A future automation pass could add a "re-milestone detected" cleanup job --
+#   file a follow-up ticket if that need recurs frequently.
 #
 # S-07 REVIEW STATUS
 # ------------------
-# This file is NOT in the S-07 §1A trigger path list. It does not touch
+# This file is NOT in the S-07 section 1A trigger path list. It does not touch
 # IAM, trust policies, security groups, SSM, Secrets Manager, KMS, OIDC,
 # or the specific listed deploy/release workflow names.
 # No Sarah security review gate is required.
 #
 # TICKET
 # ------
-# Fix #1016 — board-status-automation hardcoded to deleted board #40 (Bob, 2026-06-07)
+# Fix #1087 -- harden board-status-automation token, fail-loud, issue-close (Ben, 2026-06-07)
 # ---------------------------------------------------------------------------
 
 on:
@@ -69,14 +117,17 @@ on:
   pull_request_target:
     types: [closed]
     branches: [main]
+  issues:
+    types: [closed]
 
 concurrency:
-  group: board-status-${{ github.event.pull_request.number }}
+  group: board-status-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false
 
 permissions:
   contents: read
   pull-requests: read
+  issues: read
 
 env:
   PROJECT_ID: "PVT_kwHOABsZ684BZZgf"
@@ -104,7 +155,7 @@ jobs:
     steps:
       - name: Move linked board items to PR Review
         env:
-          GH_TOKEN: ${{ secrets.GH_PROJECT_PAT }}
+          GH_TOKEN: ${{ secrets.BOARD_AUTOMATION_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
@@ -113,13 +164,14 @@ jobs:
           set -euo pipefail
 
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "WARNING: GH_PROJECT_PAT secret is not set."
-            echo "ProjectV2 mutations require a PAT with 'project' scope."
-            echo "Skipping board status update — no failure raised."
+            echo "WARNING: BOARD_AUTOMATION_TOKEN secret is not set."
+            echo "ProjectV2 mutations require a PAT with 'project' scope (Projects: Read and write)."
+            echo "See TOKEN CREATION INSTRUCTIONS in this workflow file for how to provision it."
+            echo "Skipping board status update -- no failure raised (safe to merge before token is provisioned)."
             exit 0
           fi
 
-          echo "PR #${PR_NUMBER} opened/ready — fetching linked closing issues..."
+          echo "PR #${PR_NUMBER} opened/ready -- fetching linked closing issues..."
 
           RESPONSE=$(gh api graphql \
             -f query='query($owner: String!, $repo: String!, $pr: Int!) {
@@ -156,16 +208,17 @@ jobs:
           except (json.JSONDecodeError, AttributeError):
               pr_node = None
           if not pr_node:
+              print('board-move failed: GraphQL returned null pullRequest -- token may lack ProjectV2 read access', file=sys.stderr)
               sys.exit(0)
           target = int(os.environ.get('TARGET_BOARD_NUMBER', '0'))
-          for issue in pr_node['closingIssuesReferences']['nodes']:
-              for item in issue['projectItems']['nodes']:
-                  if item['project']['number'] == target:
+          for issue in (pr_node.get('closingIssuesReferences') or {}).get('nodes') or []:
+              for item in (issue.get('projectItems') or {}).get('nodes') or []:
+                  if (item.get('project') or {}).get('number') == target:
                       print(item['id'])
           ")
 
           if [ -z "${ITEM_IDS}" ]; then
-            echo "No board #${TARGET_BOARD_NUMBER} items found linked to PR #${PR_NUMBER} — nothing to update."
+            echo "No board #${TARGET_BOARD_NUMBER} items found linked to PR #${PR_NUMBER} -- nothing to update."
             exit 0
           fi
 
@@ -193,13 +246,15 @@ jobs:
               -f fieldId="${STATUS_FIELD_ID}" \
               -f optionId="${STATUS_PR_REVIEW}" 2>&1)
 
-            if echo "${RESULT}" | python3 -c \
-                "import json,sys; d=json.load(sys.stdin); print(d['data']['updateProjectV2ItemFieldValue']['projectV2Item']['id'])" \
-                2>/dev/null | grep -q "PVTI_"; then
+            UPDATED_ID=$(echo "${RESULT}" | python3 -c "import json,sys; d=json.load(sys.stdin); i=((d.get('data') or {}).get('updateProjectV2ItemFieldValue') or {}).get('projectV2Item') or {}; iid=(i.get('id') or ''); print(iid) if iid[:5] == 'PVTI_' else None" 2>/dev/null)
+
+            if [ -n "${UPDATED_ID}" ]; then
               echo "    OK: ${ITEM_ID} -> PR Review"
               UPDATED=$((UPDATED + 1))
             else
-              echo "    FAILED for ${ITEM_ID}: ${RESULT}"
+              echo "    FAILED for ${ITEM_ID}"
+              echo "    Response: ${RESULT}"
+              echo "    board-move failed: token may lack ProjectV2 write access (Projects: Read and write required)"
               FAILED=$((FAILED + 1))
             fi
           done <<< "${ITEM_IDS}"
@@ -209,14 +264,14 @@ jobs:
           [ "${FAILED}" -eq 0 ] || exit 1
 
   # -------------------------------------------------------------------------
-  # Job: set-done
+  # Job: set-done-on-pr-merge
   # Runs when a PR is merged (pull_request_target closed + merged == true).
   # pull_request_target runs in the base-branch context, giving access to
   # secrets even for PRs from feature branches.
   # Sets Status = "Done" on every board-#46 item linked to this PR.
   # -------------------------------------------------------------------------
-  set-done:
-    name: Set board status to Done
+  set-done-on-pr-merge:
+    name: Set board status to Done (PR merged)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: |
@@ -227,7 +282,7 @@ jobs:
     steps:
       - name: Move linked board items to Done
         env:
-          GH_TOKEN: ${{ secrets.GH_PROJECT_PAT }}
+          GH_TOKEN: ${{ secrets.BOARD_AUTOMATION_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
@@ -236,13 +291,14 @@ jobs:
           set -euo pipefail
 
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "WARNING: GH_PROJECT_PAT secret is not set."
-            echo "ProjectV2 mutations require a PAT with 'project' scope."
-            echo "Skipping board status update — no failure raised."
+            echo "WARNING: BOARD_AUTOMATION_TOKEN secret is not set."
+            echo "ProjectV2 mutations require a PAT with 'project' scope (Projects: Read and write)."
+            echo "See TOKEN CREATION INSTRUCTIONS in this workflow file for how to provision it."
+            echo "Skipping board status update -- no failure raised (safe to merge before token is provisioned)."
             exit 0
           fi
 
-          echo "PR #${PR_NUMBER} merged — fetching linked closing issues..."
+          echo "PR #${PR_NUMBER} merged -- fetching linked closing issues..."
 
           RESPONSE=$(gh api graphql \
             -f query='query($owner: String!, $repo: String!, $pr: Int!) {
@@ -279,16 +335,17 @@ jobs:
           except (json.JSONDecodeError, AttributeError):
               pr_node = None
           if not pr_node:
+              print('board-move failed: GraphQL returned null pullRequest -- token may lack ProjectV2 read access', file=sys.stderr)
               sys.exit(0)
           target = int(os.environ.get('TARGET_BOARD_NUMBER', '0'))
-          for issue in pr_node['closingIssuesReferences']['nodes']:
-              for item in issue['projectItems']['nodes']:
-                  if item['project']['number'] == target:
+          for issue in (pr_node.get('closingIssuesReferences') or {}).get('nodes') or []:
+              for item in (issue.get('projectItems') or {}).get('nodes') or []:
+                  if (item.get('project') or {}).get('number') == target:
                       print(item['id'])
           ")
 
           if [ -z "${ITEM_IDS}" ]; then
-            echo "No board #${TARGET_BOARD_NUMBER} items found linked to PR #${PR_NUMBER} — nothing to update."
+            echo "No board #${TARGET_BOARD_NUMBER} items found linked to PR #${PR_NUMBER} -- nothing to update."
             exit 0
           fi
 
@@ -316,13 +373,142 @@ jobs:
               -f fieldId="${STATUS_FIELD_ID}" \
               -f optionId="${STATUS_DONE}" 2>&1)
 
-            if echo "${RESULT}" | python3 -c \
-                "import json,sys; d=json.load(sys.stdin); print(d['data']['updateProjectV2ItemFieldValue']['projectV2Item']['id'])" \
-                2>/dev/null | grep -q "PVTI_"; then
+            UPDATED_ID=$(echo "${RESULT}" | python3 -c "import json,sys; d=json.load(sys.stdin); i=((d.get('data') or {}).get('updateProjectV2ItemFieldValue') or {}).get('projectV2Item') or {}; iid=(i.get('id') or ''); print(iid) if iid[:5] == 'PVTI_' else None" 2>/dev/null)
+
+            if [ -n "${UPDATED_ID}" ]; then
               echo "    OK: ${ITEM_ID} -> Done"
               UPDATED=$((UPDATED + 1))
             else
-              echo "    FAILED for ${ITEM_ID}: ${RESULT}"
+              echo "    FAILED for ${ITEM_ID}"
+              echo "    Response: ${RESULT}"
+              echo "    board-move failed: token may lack ProjectV2 write access (Projects: Read and write required)"
+              FAILED=$((FAILED + 1))
+            fi
+          done <<< "${ITEM_IDS}"
+
+          echo ""
+          echo "Result: ${UPDATED} updated, ${FAILED} failed."
+          [ "${FAILED}" -eq 0 ] || exit 1
+
+  # -------------------------------------------------------------------------
+  # Job: set-done-on-issue-close
+  # Runs when an issue is closed in this repo.
+  # Covers: manual closes, orchestrator-inline closes, "Closes #N" in a PR
+  # body on a cross-repo PR that GitHub does not always propagate as a merge
+  # event to this repo's workflow.
+  #
+  # This catches the stranded-item classes:
+  #   - #1860, #644->#406, #965: closed via gh issue close or superseded,
+  #     no PR-merge event fired in this repo
+  #   - Cross-repo closes from hollowmark-tickets PRs where the issue repo
+  #     is hollowmark-tickets but the project item lives on board #46
+  #
+  # NOTE: The issues: [closed] trigger in hollowmark fires for issues in
+  # RdHamilton/hollowmark only. Issues in RdHamilton/hollowmark-tickets need
+  # the same trigger in that repo's copy of this workflow.
+  # -------------------------------------------------------------------------
+  set-done-on-issue-close:
+    name: Set board status to Done (issue closed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'issues' && github.event.action == 'closed'
+
+    steps:
+      - name: Move closed issue board item to Done
+        env:
+          GH_TOKEN: ${{ secrets.BOARD_AUTOMATION_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          # shellcheck disable=SC2016  # single-quoted $vars are GraphQL placeholders, not shell expansions
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "WARNING: BOARD_AUTOMATION_TOKEN secret is not set."
+            echo "ProjectV2 mutations require a PAT with 'project' scope (Projects: Read and write)."
+            echo "See TOKEN CREATION INSTRUCTIONS in this workflow file for how to provision it."
+            echo "Skipping board status update -- no failure raised (safe to merge before token is provisioned)."
+            exit 0
+          fi
+
+          echo "Issue #${ISSUE_NUMBER} closed -- fetching its board project memberships..."
+
+          RESPONSE=$(gh api graphql \
+            -f query='query($owner: String!, $repo: String!, $issue: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $issue) {
+                  projectItems(first: 10) {
+                    nodes {
+                      id
+                      project { id number }
+                    }
+                  }
+                }
+              }
+            }' \
+            -f owner="${REPO_OWNER}" \
+            -f repo="${REPO_NAME}" \
+            -F issue="${ISSUE_NUMBER}" 2>&1)
+
+          echo "GraphQL response received."
+
+          ITEM_IDS=$(echo "${RESPONSE}" | python3 -c "
+          import json, sys, os
+          raw = sys.stdin.read()
+          try:
+              data = json.loads(raw)
+              repo = (data.get('data') or {}).get('repository') or {}
+              issue_node = repo.get('issue')
+          except (json.JSONDecodeError, AttributeError):
+              issue_node = None
+          if not issue_node:
+              print('board-move failed: GraphQL returned null issue -- token may lack ProjectV2 read access', file=sys.stderr)
+              sys.exit(0)
+          target = int(os.environ.get('TARGET_BOARD_NUMBER', '0'))
+          for item in (issue_node.get('projectItems') or {}).get('nodes') or []:
+              if (item.get('project') or {}).get('number') == target:
+                  print(item['id'])
+          ")
+
+          if [ -z "${ITEM_IDS}" ]; then
+            echo "Issue #${ISSUE_NUMBER} has no board #${TARGET_BOARD_NUMBER} membership -- nothing to update."
+            exit 0
+          fi
+
+          echo "Board #${TARGET_BOARD_NUMBER} items for issue #${ISSUE_NUMBER}:"
+          echo "${ITEM_IDS}"
+
+          UPDATED=0
+          FAILED=0
+          while IFS= read -r ITEM_ID; do
+            [ -z "${ITEM_ID}" ] && continue
+            echo "  Setting ${ITEM_ID} to Done..."
+            RESULT=$(gh api graphql \
+              -f query='mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId
+                  itemId: $itemId
+                  fieldId: $fieldId
+                  value: { singleSelectOptionId: $optionId }
+                }) {
+                  projectV2Item { id }
+                }
+              }' \
+              -f projectId="${PROJECT_ID}" \
+              -f itemId="${ITEM_ID}" \
+              -f fieldId="${STATUS_FIELD_ID}" \
+              -f optionId="${STATUS_DONE}" 2>&1)
+
+            UPDATED_ID=$(echo "${RESULT}" | python3 -c "import json,sys; d=json.load(sys.stdin); i=((d.get('data') or {}).get('updateProjectV2ItemFieldValue') or {}).get('projectV2Item') or {}; iid=(i.get('id') or ''); print(iid) if iid[:5] == 'PVTI_' else None" 2>/dev/null)
+
+            if [ -n "${UPDATED_ID}" ]; then
+              echo "    OK: ${ITEM_ID} -> Done"
+              UPDATED=$((UPDATED + 1))
+            else
+              echo "    FAILED for ${ITEM_ID}"
+              echo "    Response: ${RESULT}"
+              echo "    board-move failed: token may lack ProjectV2 write access (Projects: Read and write required)"
               FAILED=$((FAILED + 1))
             fi
           done <<< "${ITEM_IDS}"
