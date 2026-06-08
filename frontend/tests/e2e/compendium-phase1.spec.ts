@@ -16,16 +16,11 @@ const __dirname = path.dirname(__filename);
  *   - MERGED  #1019        Status footer data-testid (PR #3041) — present on all routes
  *   - MERGED  #1020        Hollowmark stamp logo + wordmark in nav (PR #3040)
  *   - MERGED  #1021        Gilt progress bars on Quests (PR #3042)
+ *   - MERGED  #1019  PR #3045  StatusStrip dedicated component refactor — data-testid="status-strip"
  *
  * NOT YET MERGED (Chromatic accept pending):
  *   - OPEN    #1026  PR #3044  nav-tile glyphs
  *   - OPEN    #1024  PR #3048  tier-badge D17 color gate (Vitest only — no E2E surface yet)
- *   - OPEN    #1019  PR #3045  StatusStrip-as-dedicated-component refactor
- *     NOTE: The current Footer already satisfies the "persistent bottom status strip"
- *     requirement per PR #3041 — it carries data-testid="app-status-footer" on all three
- *     render paths (loading / empty / data). The PR #3045 refactor renames it to a
- *     dedicated StatusStrip component; those tests are marked pending below and will be
- *     enabled once that PR merges.
  *
  * Auth approach: VITE_CLERK_TEST_MODE=true (set in playwright.config.ts webServer)
  * aliases @clerk/react to src/test/mocks/clerkMock.tsx. Auth state is injected via
@@ -55,17 +50,17 @@ async function setClerkSignedIn(page: Page): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Mock the Footer's BFF dependencies (stats + health) so the status strip
+ * Mock the StatusStrip's BFF dependencies (stats + health) so the strip
  * renders in the "loading" → "empty" terminal state without a live BFF.
  *
- * The Footer calls:
+ * StatusStrip calls:
  *   POST /api/v1/matches/stats    → Statistics
  *   POST /api/v1/matches          → { Matches, Total, Page, Limit }
  *   GET  /api/v1/health/daemon    → daemon health
  *
- * Returning empty-but-valid data gets the Footer out of its loading state
- * and into the "No matches yet" render path. The footer element itself
- * (data-testid="app-status-footer") is present on all three paths.
+ * Returning empty-but-valid data gets the strip out of its loading state
+ * and into the "No matches yet" render path. The strip element itself
+ * (data-testid="status-strip") is present on all three paths.
  */
 async function mockStatusFooterEndpoints(page: Page): Promise<void> {
   await page.route('**/api/v1/matches/stats', (route) => {
@@ -215,7 +210,7 @@ test.describe('Compendium Phase-1 — Status Strip presence @smoke', () => {
     await mockHomeEndpoints(page);
     await page.goto('/home');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
-    await expect(page.locator('[data-testid="app-status-footer"]')).toBeAttached();
+    await expect(page.locator('[data-testid="status-strip"]')).toBeAttached();
   });
 
   test('@smoke status strip present on /match-history', async ({ page }) => {
@@ -235,14 +230,14 @@ test.describe('Compendium Phase-1 — Status Strip presence @smoke', () => {
     });
     await page.goto('/match-history');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
-    await expect(page.locator('[data-testid="app-status-footer"]')).toBeAttached();
+    await expect(page.locator('[data-testid="status-strip"]')).toBeAttached();
   });
 
   test('@smoke status strip present on /quests', async ({ page }) => {
     await mockQuestsEndpoints(page);
     await page.goto('/quests');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
-    await expect(page.locator('[data-testid="app-status-footer"]')).toBeAttached();
+    await expect(page.locator('[data-testid="status-strip"]')).toBeAttached();
   });
 
   test('@smoke status strip present on /decks', async ({ page }) => {
@@ -255,7 +250,7 @@ test.describe('Compendium Phase-1 — Status Strip presence @smoke', () => {
     });
     await page.goto('/decks');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
-    await expect(page.locator('[data-testid="app-status-footer"]')).toBeAttached();
+    await expect(page.locator('[data-testid="status-strip"]')).toBeAttached();
   });
 
   test('@smoke status strip present on /collection', async ({ page }) => {
@@ -277,20 +272,19 @@ test.describe('Compendium Phase-1 — Status Strip presence @smoke', () => {
     });
     await page.goto('/collection');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
-    await expect(page.locator('[data-testid="app-status-footer"]')).toBeAttached();
+    await expect(page.locator('[data-testid="status-strip"]')).toBeAttached();
   });
 
   // ---------------------------------------------------------------------------
   // PENDING: daemon-offline / synced state distinctions
   //
-  // The current Footer renders a single element (data-testid="app-status-footer")
+  // StatusStrip renders a single element (data-testid="status-strip")
   // regardless of daemon health state. Detailed daemon-state assertions
   // (offline indicator, "Synced:" timestamp vs. no-timestamp) belong on
   // DaemonHealthIndicator — already covered in daemon-health-indicator.spec.ts.
   //
-  // The StatusStrip dedicated-component refactor (PR #3045) may introduce
-  // explicit offline/synced slots with distinct testids. These assertions will
-  // be enabled once that PR merges.
+  // Future StatusStrip iterations may introduce explicit offline/synced slots
+  // with distinct testids. These assertions will be enabled then.
   //
   // test('status strip shows daemon-offline indicator when daemon disconnected', ...)
   // test('status strip shows Synced timestamp when daemon connected', ...)
