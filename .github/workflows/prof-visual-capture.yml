@@ -9,7 +9,7 @@ name: Prof Visual Capture (staging)
 # changes, no destructive actions.
 #
 # Auth: reads CLERK_SECRET_KEY from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY.
-# Account: ci-smoke-token (user_3EamRFdUZdQl1yYPf4Yg7OIQqm4, account_id=17)
+# Account: ci-smoke-token (user_3EmtmrSgZrtd0yRRdisTIIFYnnF, account_id=17)
 #   — seeded with ~10k card_inventory rows and 3 Standard mtgzone_archetypes.
 #
 # Container: uses mcr.microsoft.com/playwright:v1.56.1-jammy (same as e2e-smoke.yml).
@@ -89,10 +89,10 @@ on:
         default: 'prof-capture'
 
       staging_spa_url:
-        description: 'Staging SPA URL override (leave blank for default stg-app.vaultmtg.app)'
+        description: 'Staging SPA URL override (leave blank for default stg-app.hollowmark.app)'
         required: false
         type: string
-        default: 'https://stg-app.vaultmtg.app'
+        default: 'https://stg-app.hollowmark.app'
 
 permissions:
   contents: read
@@ -167,10 +167,10 @@ jobs:
             --reporter=list
         env:
           CI: true
-          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.vaultmtg.app' }}
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.hollowmark.app' }}
           CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
           SCREENSHOT_DIR: /tmp/prof-screenshots
-          CI_SMOKE_USER_ID: user_3EamRFdUZdQl1yYPf4Yg7OIQqm4
+          CI_SMOKE_USER_ID: user_3EmtmrSgZrtd0yRRdisTIIFYnnF
           PROF_ROUTE: ${{ inputs.route }}
           PROF_ACTION: ${{ inputs.action }}
           PROF_LABEL: ${{ inputs.label || 'prof-capture' }}
