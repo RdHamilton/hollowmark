@@ -56,12 +56,12 @@
   --vault-mtg-colorless:    #8B9BB4;
   --vault-mtg-pip-fg:       #0D1117;   /* dark text on the light pip backgrounds */
 
-  /* ---- Tier Rating Colors ---- */
+  /* ---- Tier Rating Colors (D17 / ADR-074 canonical — Compendium design system) ---- */
   --vault-tier-a:           #4A90D9;   /* sapphire — exceptional */
   --vault-tier-b:           #22C55E;   /* green — above average */
   --vault-tier-c:           #94A3B8;   /* slate — average */
-  --vault-tier-d:           #EAB308;   /* yellow — below average */
-  --vault-tier-f:           #EF4444;   /* red — avoid */
+  --vault-tier-d:           #EF4444;   /* red — below average (NEVER gold; gold = economy only) */
+  --vault-tier-f:           #7F1414;   /* deep oxblood — avoid (rendered near-solid, the most dire) */
 
   /* ---- Win / Loss Indicators (#328, Ramone 2026-05-31) ----
      Win reads on-brand (sapphire accent), NOT generic green — leaves green

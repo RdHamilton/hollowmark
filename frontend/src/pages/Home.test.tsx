@@ -769,4 +769,56 @@ describe('Home Page Command Strip (#689)', () => {
       });
     });
   });
+
+  // ── #1026 — Magic-native nav-tile glyphs ─────────────────
+  // Verifies that each nav tile renders its Magic-native glyph
+  // (LedgerGlyph / FanCardsGlyph / DeckStackGlyph / BinderGlyph)
+  // instead of the former generic Heroicon outlines.
+  // Strategy: each MagicGlyphs component exposes a data-glyph attribute
+  // on its <svg> element so tests can distinguish it from generic icons.
+  describe('#1026 Magic-native nav-tile glyphs', () => {
+    it('Match History tile renders LedgerGlyph (data-glyph="ledger")', async () => {
+      mockEmptyState();
+      await act(async () => {
+        render(<Home />);
+      });
+      await waitFor(() => expect(screen.getByTestId('home-nav-match-history')).toBeInTheDocument());
+      const tile = screen.getByTestId('home-nav-match-history');
+      const svg = tile.querySelector('svg[data-glyph="ledger"]');
+      expect(svg).not.toBeNull();
+    });
+
+    it('Draft tile renders FanCardsGlyph (data-glyph="fan-cards")', async () => {
+      mockEmptyState();
+      await act(async () => {
+        render(<Home />);
+      });
+      await waitFor(() => expect(screen.getByTestId('home-nav-draft')).toBeInTheDocument());
+      const tile = screen.getByTestId('home-nav-draft');
+      const svg = tile.querySelector('svg[data-glyph="fan-cards"]');
+      expect(svg).not.toBeNull();
+    });
+
+    it('Decks tile renders DeckStackGlyph (data-glyph="deck-stack")', async () => {
+      mockEmptyState();
+      await act(async () => {
+        render(<Home />);
+      });
+      await waitFor(() => expect(screen.getByTestId('home-nav-decks')).toBeInTheDocument());
+      const tile = screen.getByTestId('home-nav-decks');
+      const svg = tile.querySelector('svg[data-glyph="deck-stack"]');
+      expect(svg).not.toBeNull();
+    });
+
+    it('Collection tile renders BinderGlyph (data-glyph="binder")', async () => {
+      mockEmptyState();
+      await act(async () => {
+        render(<Home />);
+      });
+      await waitFor(() => expect(screen.getByTestId('home-nav-collection')).toBeInTheDocument());
+      const tile = screen.getByTestId('home-nav-collection');
+      const svg = tile.querySelector('svg[data-glyph="binder"]');
+      expect(svg).not.toBeNull();
+    });
+  });
 });
