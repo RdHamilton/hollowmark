@@ -12,6 +12,11 @@ import vaultMark from '@/assets/logo-vaultmtg-mark.svg';
 import { getHomeSummary } from '@/services/api/bffHomeSummary';
 import './Layout.css';
 
+// Routes that share the Layout shell but are not part of the authenticated app.
+// StatusStrip (and any other app-shell chrome) must not render on these paths
+// even when the user is signed in.
+const PUBLIC_ROUTES = new Set(['/download', '/setup']);
+
 interface LayoutProps {
   children: React.ReactNode;
 }
@@ -323,10 +328,13 @@ const Layout = ({ children }: LayoutProps) => {
         {children}
       </div>
 
-      {/* StatusStrip — authenticated routes only (AC5: auth guard is structural).
-          isSignedIn from useAuth() — Layout mounts on public routes (/download, /setup)
-          too, so we guard here rather than in the router. */}
-      {isSignedIn && <StatusStrip daemonStatus={daemonStatus} />}
+      {/* StatusStrip — app-shell chrome; never render on public routes.
+          Guard: signed-in AND not on a public route (/download, /setup).
+          isSignedIn alone is insufficient — the staging CI smoke account is signed in
+          when it visits /download and /setup, which caused the #1019 regression. */}
+      {isSignedIn && !PUBLIC_ROUTES.has(location.pathname) && (
+        <StatusStrip daemonStatus={daemonStatus} />
+      )}
 
       {/* Daemon onboarding modal — shown on first login if daemon not connected
           and account has no existing data (accountDataState === 'empty').
