@@ -376,9 +376,11 @@ jobs:
             SUMMARY="No APPROVED verdict found. Merge is blocked until Sarah posts the verdict."
           fi
 
-          echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
-          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
-          echo "summary=${SUMMARY}" >> "$GITHUB_OUTPUT"
+          {
+            echo "conclusion=${CONCLUSION}"
+            echo "title=${TITLE}"
+            echo "summary=${SUMMARY}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: "AC5: assert conclusion=success"
         env:
