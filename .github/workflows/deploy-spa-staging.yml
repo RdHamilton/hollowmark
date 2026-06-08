@@ -160,7 +160,7 @@ jobs:
       - name: Post-deploy SPA smoke check
         run: |
           for i in $(seq 1 6); do
-            if curl -fsSL https://stg-app.vaultmtg.app/ | grep -q '<div id="root"'; then
+            if curl -fsSL https://stg-app.hollowmark.app/ | grep -q '<div id="root"'; then
               echo "Staging SPA smoke check passed."
               exit 0
             fi
@@ -208,7 +208,7 @@ jobs:
         working-directory: frontend
         run: npm run test:staging
         env:
-          STAGING_API_URL: ${{ vars.STAGING_API_URL || 'https://staging-api.vaultmtg.app' }}
+          STAGING_API_URL: ${{ vars.STAGING_API_URL || 'https://staging-api.hollowmark.app' }}
           STAGING_SMOKE_TOKEN: ${{ steps.ssm.outputs.staging_smoke_token }}
 
       - name: Upload Playwright SPA smoke report

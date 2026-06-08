@@ -39,16 +39,15 @@ on:
   workflow_call:
     inputs:
       staging_spa_url:
-        description: 'Staging SPA URL (e.g. https://stg-app.vaultmtg.app)'
+        description: 'Staging SPA URL (e.g. https://stg-app.hollowmark.app)'
         required: false
         type: string
-        # TODO(#1068): switch back to stg-app.hollowmark.app once staging host is provisioned
-        default: 'https://stg-app.vaultmtg.app'
+        default: 'https://stg-app.hollowmark.app'
       staging_api_url:
-        description: 'Staging BFF URL (e.g. https://staging-api.vaultmtg.app)'
+        description: 'Staging BFF URL (e.g. https://staging-api.hollowmark.app)'
         required: false
         type: string
-        default: 'https://staging-api.vaultmtg.app'
+        default: 'https://staging-api.hollowmark.app'
 
   workflow_dispatch:
     inputs:
@@ -56,13 +55,12 @@ on:
         description: 'Staging SPA URL'
         required: false
         type: string
-        # TODO(#1068): switch back to stg-app.hollowmark.app once staging host is provisioned
-        default: 'https://stg-app.vaultmtg.app'
+        default: 'https://stg-app.hollowmark.app'
       staging_api_url:
         description: 'Staging BFF URL'
         required: false
         type: string
-        default: 'https://staging-api.vaultmtg.app'
+        default: 'https://staging-api.hollowmark.app'
 
 permissions:
   contents: read
