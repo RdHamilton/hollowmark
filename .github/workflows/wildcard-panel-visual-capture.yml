@@ -22,7 +22,8 @@ on:
         description: 'Staging SPA URL'
         required: false
         type: string
-        default: 'https://stg-app.hollowmark.app'
+        # TODO(#1068): switch back to stg-app.hollowmark.app once staging host is provisioned
+        default: 'https://stg-app.vaultmtg.app'
 
 permissions:
   contents: read
@@ -97,7 +98,8 @@ jobs:
             --reporter=list
         env:
           CI: true
-          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.hollowmark.app' }}
+          # TODO(#1068): switch back to stg-app.hollowmark.app once staging host is provisioned
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.vaultmtg.app' }}
           CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
           SCREENSHOT_DIR: /tmp/wildcard-panel-screenshots
           CI_SMOKE_USER_ID: user_3EmtmrSgZrtd0yRRdisTIIFYnnF
