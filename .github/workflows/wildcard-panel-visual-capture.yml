@@ -6,7 +6,7 @@ name: WildcardAdvisorPanel Visual Capture (staging)
 # Dispatched manually by Tim after the WildcardAdvisorPanel ships (#421/#424).
 # Uploads screenshots as an artifact so Prof can give his visual PLAYER_VERDICT.
 #
-# Auth: reads CLERK_SECRET_KEY from SSM /vaultmtg/staging/CLERK_SECRET_KEY
+# Auth: reads CLERK_SECRET_KEY from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY
 # (SecureString, same path as the staging auth smoke suite).
 # Account: ci-smoke-token user (user_3EamRFdUZdQl1yYPf4Yg7OIQqm4, account_id=17)
 # — has ~10k card_inventory rows and 3 seeded Standard mtgzone_archetypes.
@@ -75,7 +75,7 @@ jobs:
         id: ssm
         run: |
           CLERK_SECRET_KEY=$(aws ssm get-parameter \
-            --name /vaultmtg/staging/CLERK_SECRET_KEY \
+            --name /vaultmtg/app/staging/CLERK_SECRET_KEY \
             --with-decryption \
             --region us-east-1 \
             --query Parameter.Value \
