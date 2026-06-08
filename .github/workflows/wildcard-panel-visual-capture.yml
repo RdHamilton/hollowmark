@@ -8,7 +8,7 @@ name: WildcardAdvisorPanel Visual Capture (staging)
 #
 # Auth: reads CLERK_SECRET_KEY from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY
 # (SecureString, same path as the staging auth smoke suite).
-# Account: ci-smoke-token user (user_3EamRFdUZdQl1yYPf4Yg7OIQqm4, account_id=17)
+# Account: ci-smoke-token user (user_3EmtmrSgZrtd0yRRdisTIIFYnnF, account_id=17)
 # — has ~10k card_inventory rows and 3 seeded Standard mtgzone_archetypes.
 #
 # Container: uses mcr.microsoft.com/playwright:v1.56.1-jammy (same as e2e-smoke.yml).
@@ -22,7 +22,7 @@ on:
         description: 'Staging SPA URL'
         required: false
         type: string
-        default: 'https://stg-app.vaultmtg.app'
+        default: 'https://stg-app.hollowmark.app'
 
 permissions:
   contents: read
@@ -97,10 +97,10 @@ jobs:
             --reporter=list
         env:
           CI: true
-          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.vaultmtg.app' }}
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.hollowmark.app' }}
           CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
           SCREENSHOT_DIR: /tmp/wildcard-panel-screenshots
-          CI_SMOKE_USER_ID: user_3EamRFdUZdQl1yYPf4Yg7OIQqm4
+          CI_SMOKE_USER_ID: user_3EmtmrSgZrtd0yRRdisTIIFYnnF
 
       - name: Upload screenshots artifact
         uses: actions/upload-artifact@v4
