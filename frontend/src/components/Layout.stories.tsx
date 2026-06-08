@@ -23,11 +23,12 @@ import './StatusStrip.css';
  * that mount the actual component.
  *
  * States covered:
- *   - SignedIn        — nav shell with UserButton, connected daemon (green dot)
- *   - SignedOut       — nav shell with sign-in/sign-up buttons, no daemon dot
- *   - ActiveTab       — Home tab highlighted as active
- *   - DraftSubNav     — draft sub-navigation bar visible
- *   - DaemonLoading   — gray indicator dot (checking connection state)
+ *   - SignedIn             — nav shell with UserButton, connected daemon (green dot)
+ *   - SignedOut            — nav shell with sign-in/sign-up buttons, no daemon dot
+ *   - SignedInPublicRoute  — signed-in user on /download; StatusStrip absent (regression guard)
+ *   - ActiveTab            — Home tab highlighted as active
+ *   - DraftSubNav          — draft sub-navigation bar visible
+ *   - DaemonLoading        — gray indicator dot (checking connection state)
  */
 const meta: Meta = {
   title: 'Organisms/Layout',
@@ -64,11 +65,13 @@ const NAV_LINKS = [
 function NavShell({
   activeTab = '',
   signedIn = true,
+  isPublicRoute = false,
   daemonStatus = 'loading',
   children,
 }: {
   activeTab?: string;
   signedIn?: boolean;
+  isPublicRoute?: boolean;
   daemonStatus?: 'connected' | 'disconnected' | 'loading';
   children?: React.ReactNode;
 }) {
@@ -144,9 +147,10 @@ function NavShell({
         <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--text-sm)' }}>[page content slot]</p>
       </div>
 
-      {/* StatusStrip — AC5: authenticated routes only (guard is isSignedIn).
-          Signed-out stories omit the strip to match production Layout behavior. */}
-      {signedIn && (
+      {/* StatusStrip — app-shell chrome.
+          Guard mirrors production: signed-in AND not on a public route.
+          Signed-out stories and public-route stories omit the strip. */}
+      {signedIn && !isPublicRoute && (
         <footer className="status-strip" data-testid="status-strip">
           <div className="status-strip-content">
             <span className="status-strip-label">All Time</span>
@@ -189,6 +193,20 @@ export const SignedIn: Story = {
 export const SignedOut: Story = {
   render: () => (
     <NavShell activeTab="" signedIn={false} daemonStatus="disconnected" />
+  ),
+};
+
+/**
+ * SignedInPublicRoute — signed-in user on the /download page.
+ *
+ * Regression guard for the #1019 fix-forward: the StatusStrip MUST be absent
+ * even though the user is authenticated.  The Download tab is highlighted and
+ * the footer chrome is suppressed — matching what the staging CI smoke account
+ * sees in production.
+ */
+export const SignedInPublicRoute: Story = {
+  render: () => (
+    <NavShell activeTab="Download" signedIn isPublicRoute daemonStatus="connected" />
   ),
 };
 
