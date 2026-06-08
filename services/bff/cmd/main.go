@@ -1,3 +1,4 @@
+// probe: disposable §1A-path PR for S-07 staleness (c) re-validation — DELETE ME
 package main
 
 import (
