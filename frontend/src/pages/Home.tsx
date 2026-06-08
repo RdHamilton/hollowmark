@@ -21,15 +21,17 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth, useUser } from '@clerk/react';
 import {
-  ClockIcon,
-  RectangleStackIcon,
-  Squares2X2Icon,
-  ArchiveBoxIcon,
   FireIcon,
   ArrowTrendingDownIcon,
   CalendarDaysIcon,
   ChartBarIcon,
 } from '@heroicons/react/24/outline';
+import {
+  LedgerGlyph,
+  FanCardsGlyph,
+  DeckStackGlyph,
+  BinderGlyph,
+} from '../components/MagicGlyphs';
 import ManaWheel from '../components/ManaWheel';
 import {
   getHomeSummary,
@@ -206,7 +208,7 @@ function QuickNavStrip({ navigate }: QuickNavStripProps) {
         onClick={() => navigate('/match-history')}
         aria-label="Match History"
       >
-        <ClockIcon className="home-nav-icon" aria-hidden="true" />
+        <LedgerGlyph className="home-nav-icon" size={20} />
         <span className="home-nav-label">Match History</span>
       </button>
       <button
@@ -215,7 +217,7 @@ function QuickNavStrip({ navigate }: QuickNavStripProps) {
         onClick={() => navigate('/draft')}
         aria-label="Draft"
       >
-        <RectangleStackIcon className="home-nav-icon" aria-hidden="true" />
+        <FanCardsGlyph className="home-nav-icon" size={20} />
         <span className="home-nav-label">Draft</span>
       </button>
       <button
@@ -224,7 +226,7 @@ function QuickNavStrip({ navigate }: QuickNavStripProps) {
         onClick={() => navigate('/decks')}
         aria-label="Decks"
       >
-        <Squares2X2Icon className="home-nav-icon" aria-hidden="true" />
+        <DeckStackGlyph className="home-nav-icon" size={20} />
         <span className="home-nav-label">Decks</span>
       </button>
       <button
@@ -233,7 +235,7 @@ function QuickNavStrip({ navigate }: QuickNavStripProps) {
         onClick={() => navigate('/collection')}
         aria-label="Collection"
       >
-        <ArchiveBoxIcon className="home-nav-icon" aria-hidden="true" />
+        <BinderGlyph className="home-nav-icon" size={20} />
         <span className="home-nav-label">Collection</span>
       </button>
     </div>
