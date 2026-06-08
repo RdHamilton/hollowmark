@@ -6,7 +6,7 @@ name: E2E Staging Auth Smoke (vmt-t#678)
 #
 # Auth-enforcement contract (vmt-t#678):
 #   - CLERK_SECRET_KEY is sourced from the CLERK_STAGING_SECRET_KEY GitHub Actions
-#     secret (provisioned from SSM /vaultmtg/staging/CLERK_SECRET_KEY at
+#     secret (provisioned from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY at
 #     environment setup time, stored as a repo/environment secret for CI use).
 #   - If CLERK_STAGING_SECRET_KEY is absent the suite FAILs with INCONCLUSIVE —
 #     it does NOT skip and report PASS. A smoke that skips all authenticated
@@ -39,10 +39,11 @@ on:
   workflow_call:
     inputs:
       staging_spa_url:
-        description: 'Staging SPA URL (e.g. https://stg-app.hollowmark.app)'
+        description: 'Staging SPA URL (e.g. https://stg-app.vaultmtg.app)'
         required: false
         type: string
-        default: 'https://stg-app.hollowmark.app'
+        # TODO(#1068): switch back to stg-app.hollowmark.app once staging host is provisioned
+        default: 'https://stg-app.vaultmtg.app'
       staging_api_url:
         description: 'Staging BFF URL (e.g. https://staging-api.vaultmtg.app)'
         required: false
@@ -55,7 +56,8 @@ on:
         description: 'Staging SPA URL'
         required: false
         type: string
-        default: 'https://stg-app.hollowmark.app'
+        # TODO(#1068): switch back to stg-app.hollowmark.app once staging host is provisioned
+        default: 'https://stg-app.vaultmtg.app'
       staging_api_url:
         description: 'Staging BFF URL'
         required: false
@@ -102,7 +104,7 @@ jobs:
           CI: true
           STAGING_SPA_URL: ${{ inputs.staging_spa_url }}
           # CLERK_SECRET_KEY (sk_live_*) is stored as the CLERK_STAGING_SECRET_KEY
-          # GitHub Actions secret (provisioned from SSM /vaultmtg/staging/CLERK_SECRET_KEY).
+          # GitHub Actions secret (provisioned from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY).
           # GHA secrets propagate into container steps (unlike OIDC env vars).
           CLERK_SECRET_KEY: ${{ secrets.CLERK_STAGING_SECRET_KEY }}
           # CLERK_FAPI_URL: Hollowmark staging Clerk instance FAPI base URL.
@@ -140,7 +142,8 @@ jobs:
             --reporter=list
         env:
           CI: true
-          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.hollowmark.app' }}
+          # TODO(#1068): switch back to stg-app.hollowmark.app once staging host is provisioned
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url || 'https://stg-app.vaultmtg.app' }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_STAGING_SECRET_KEY }}
           CLERK_FAPI_URL: https://clerk.stg-app.hollowmark.app
           SCREENSHOT_DIR: /tmp/wildcard-panel-screenshots
