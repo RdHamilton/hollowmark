@@ -414,6 +414,7 @@ while IFS= read -r literal; do
   c6_ok=0
 done < <(
   grep -hoE '/vaultmtg/app/[a-z]+/[A-Za-z0-9_./-]+' "$WORKFLOWS_DIR"/*.yml 2>/dev/null \
+    | sed -E 's/[.,;:]+$//' \
     | sort -u
 )
 [[ "$c6_ok" -eq 1 ]] && pass "Every /vaultmtg/app/* literal in workflows maps to a deploy-env.sh constant"
