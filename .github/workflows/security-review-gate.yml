@@ -151,6 +151,14 @@ jobs:
             PR_NUMBER="${{ github.event.pull_request.number }}"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             PR_NUMBER="${{ github.event.inputs.pr_number }}"
+            # Fix 2 (Sarah Finding 3 / #261): guard against malformed pr_number input
+            # before it reaches any gh api URL. A non-numeric value (e.g. "12; rm -rf /")
+            # would previously just result in a 404 -- not exploitable, but fail fast
+            # with a clear error is better hygiene.
+            if ! echo "${PR_NUMBER}" | grep -qE '^[0-9]+$'; then
+              echo "ERROR: pr_number input '${PR_NUMBER}' is not a valid PR number (must match ^[0-9]+\$)" >&2
+              exit 1
+            fi
           else
             PR_NUMBER="${{ github.event.issue.number }}"
           fi
@@ -215,6 +223,10 @@ jobs:
             # frontend.yml: production SPA deploy -- AWS_DEPLOY_ROLE_ARN, DEPLOY_BUCKET,
             # EC2_INSTANCE_ID (SSM Run Command against production instance). (#98)
             ".github/workflows/frontend.yml"
+            # Fix 1 (Sarah Finding 1 / #261): gate self-coverage -- a change to the gate
+            # workflow itself must also require an S-07 verdict, so the gate can't be
+            # weakened without Sarah's review. Mirrors the entry in the staleness check below.
+            ".github/workflows/security-review-gate.yml"
             "services/bff/cmd/"
             "services/daemon/cmd/"
             "scripts/deploy/"
@@ -455,6 +467,8 @@ jobs:
                   ".github/workflows/staging-deploy.yml"
                   ".github/workflows/daemon-release.yml"
                   ".github/workflows/frontend.yml"
+                  # Fix 1 (#261): mirrors gate_required TRIGGER_GLOBS above -- keep in sync.
+                  ".github/workflows/security-review-gate.yml"
                   "services/bff/cmd/"
                   "services/daemon/cmd/"
                   "scripts/deploy/"
