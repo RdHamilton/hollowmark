@@ -7,5 +7,6 @@
 // DO NOT MERGE — this file and its branch will be deleted after validation.
 //
 // Probe ID: s07-live-validation-2026-06-08
+// Probe commit 2: staleness validation push (§1A path change after verdict)
 
 package main
