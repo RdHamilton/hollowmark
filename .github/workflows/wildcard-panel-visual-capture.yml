@@ -9,11 +9,14 @@ name: WildcardAdvisorPanel Visual Capture (staging)
 # Auth: reads CLERK_SECRET_KEY from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY
 # (SecureString, same path as the staging auth smoke suite).
 # Account: ci-smoke-token user (user_3EmtmrSgZrtd0yRRdisTIIFYnnF, account_id=17)
-# — has ~10k card_inventory rows and 3 seeded Standard mtgzone_archetypes.
+# -- has ~10k card_inventory rows. mtgzone_archetypes is populated by the
+# staging meta-scrape Lambda (#1098). A pre-check gate asserts the table is
+# non-empty before screenshots run; if the Lambda has not run yet, the workflow
+# fails with a clear diagnostic. (#1101)
 #
 # Container: uses mcr.microsoft.com/playwright:v1.56.1-jammy (same as e2e-smoke.yml).
-# Chromium is pre-installed in the image — no playwright install step, no CDN
-# download, no timeout risk. (#855 — eliminated cold-install cancellations)
+# Chromium is pre-installed in the image -- no playwright install step, no CDN
+# download, no timeout risk. (#855 -- eliminated cold-install cancellations)
 
 on:
   workflow_dispatch:
@@ -36,7 +39,7 @@ jobs:
     environment: staging
     # -------------------------------------------------------------------------
     # Use the official Playwright Docker container.
-    # Chromium is PRE-INSTALLED — no playwright install step, no CDN download.
+    # Chromium is PRE-INSTALLED -- no playwright install step, no CDN download.
     # Tag must match @playwright/test version in frontend/package.json (1.56.1).
     # PLAYWRIGHT_BROWSERS_PATH=/ms-playwright is set in the image; tests find
     # browsers automatically.
@@ -63,14 +66,135 @@ jobs:
           aws-region: us-east-1
 
       # The Playwright container image does not ship the AWS CLI.
-      # Install it here so the Read SSM secrets step can call `aws ssm get-parameter`.
+      # Install it here so SSM parameter reads and the pre-check send-command
+      # step can call aws CLI commands.
       - name: Install AWS CLI
         run: |
-          apt-get update -qq && apt-get install -y -qq unzip curl
+          apt-get update -qq && apt-get install -y -qq unzip curl jq
           curl -sSfL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
           unzip -q /tmp/awscliv2.zip -d /tmp/awscliv2
           /tmp/awscliv2/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli
           aws --version
+
+      # Fetch structural SSM facts (not secrets) needed by the pre-check step.
+      # DB endpoint is a hostname (non-secret); secret ARN is a pointer (non-secret).
+      # The actual DB password is fetched on-instance inside the SSM RunShellScript.
+      - name: Fetch staging SSM facts
+        id: ssm_facts
+        run: |
+          DB_ENDPOINT=$(aws ssm get-parameter \
+            --name "/vaultmtg/app/staging/db-endpoint" \
+            --region us-east-1 \
+            --query "Parameter.Value" \
+            --output text)
+
+          DB_SECRET_ARN=$(aws ssm get-parameter \
+            --name "/vaultmtg/app/staging/db-secret-arn" \
+            --region us-east-1 \
+            --query "Parameter.Value" \
+            --output text)
+
+          # DB_ENDPOINT is a hostname -- safe to log.
+          echo "Staging DB endpoint: ${DB_ENDPOINT}"
+          echo "db_endpoint=${DB_ENDPOINT}" >> "$GITHUB_OUTPUT"
+          echo "db_secret_arn=${DB_SECRET_ARN}" >> "$GITHUB_OUTPUT"
+
+      # Pre-check: assert mtgzone_archetypes is populated with Lambda-produced data
+      # before screenshots run. An empty table means the staging meta-scrape Lambda
+      # (#1098) has not run yet. Fails loudly with a diagnostic so the caller knows
+      # to run the Lambda first rather than silently producing empty screenshots.
+      #
+      # Pattern: mirrors run-staging-sql.yml -- the checked-out script
+      # (scripts/test/check-mtgzone-archetypes.sh) has token placeholders
+      # substituted at runtime, is base64-encoded, and shipped to EC2 via SSM
+      # RunShellScript. The on-instance script assumes vaultmtg-staging-deploy-
+      # provisioner, fetches DB credentials from Secrets Manager, and runs the
+      # COUNT query. PGPASSWORD is never written to the runner environment.
+      - name: Pre-check -- assert mtgzone_archetypes has Lambda-produced data
+        env:
+          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+          DB_ENDPOINT: ${{ steps.ssm_facts.outputs.db_endpoint }}
+          DB_SECRET_ARN: ${{ steps.ssm_facts.outputs.db_secret_arn }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          PROVISIONER_ROLE_ARN="arn:aws:iam::901347789205:role/vaultmtg-staging-deploy-provisioner"
+
+          # Copy the checked-out script template to a working copy.
+          SCRIPT_FILE=$(mktemp /tmp/check-mtgzone-archetypes.XXXXXX.sh)
+          cp scripts/test/check-mtgzone-archetypes.sh "$SCRIPT_FILE"
+
+          # Substitute runtime values into the script template.
+          sed -i "s|__PROVISIONER_ROLE_ARN__|${PROVISIONER_ROLE_ARN}|g" "$SCRIPT_FILE"
+          sed -i "s|__DB_ENDPOINT__|${DB_ENDPOINT}|g"                    "$SCRIPT_FILE"
+          sed -i "s|__DB_SECRET_ARN__|${DB_SECRET_ARN}|g"                "$SCRIPT_FILE"
+          sed -i "s|__RUN_ID__|${RUN_ID}|g"                              "$SCRIPT_FILE"
+
+          # Base64-encode the complete script so it survives SSM JSON quoting.
+          ENCODED_SCRIPT=$(base64 -w 0 "$SCRIPT_FILE")
+          rm -f "$SCRIPT_FILE"
+
+          SSM_COMMAND="echo '${ENCODED_SCRIPT}' | base64 -d | bash"
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "${EC2_INSTANCE_ID}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "commands=[\"${SSM_COMMAND}\"]" \
+            --region us-east-1 \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM Command ID: ${COMMAND_ID}"
+
+          SUCCEEDED=0
+          for i in $(seq 1 30); do
+            set +e
+            RAW=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "${EC2_INSTANCE_ID}" \
+              --region us-east-1 \
+              --output json 2>&1)
+            RC=$?
+            set -e
+            if [ "$RC" -ne 0 ]; then
+              if echo "$RAW" | grep -q "InvocationDoesNotExist"; then
+                echo "[$i/30] Status: Pending (invocation not yet registered)"
+              else
+                echo "[$i/30] API error (rc=$RC): $RAW"
+              fi
+            else
+              STATUS=$(echo "$RAW" | jq -r '.Status // "Unknown"')
+              STDOUT=$(echo "$RAW" | jq -r '.StandardOutputContent // ""')
+              STDERR=$(echo "$RAW" | jq -r '.StandardErrorContent // ""')
+              echo "[$i/30] Status: $STATUS"
+              if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || \
+                 [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+                if [ -n "$STDOUT" ]; then
+                  echo "=== STDOUT ==="
+                  echo "$STDOUT"
+                fi
+                if [ -n "$STDERR" ]; then
+                  echo "=== STDERR ==="
+                  echo "$STDERR"
+                fi
+                if [ "$STATUS" = "Success" ]; then
+                  SUCCEEDED=1
+                else
+                  echo "" >&2
+                  echo "Pre-check failed: mtgzone_archetypes empty or Lambda has not run." >&2
+                  echo "Run the staging meta-scrape Lambda first (#1098), then re-trigger" >&2
+                  echo "this workflow once it has completed successfully." >&2
+                  exit 1
+                fi
+                break
+              fi
+            fi
+            sleep 10
+          done
+
+          if [ "$SUCCEEDED" -ne 1 ]; then
+            echo "SSM command timed out waiting for pre-check result" >&2
+            exit 1
+          fi
 
       - name: Read SSM secrets
         id: ssm
@@ -84,7 +208,7 @@ jobs:
           echo "::add-mask::${CLERK_SECRET_KEY}"
           echo "clerk_secret_key=${CLERK_SECRET_KEY}" >> "$GITHUB_OUTPUT"
 
-      # No playwright install steps — browsers are pre-installed in the container.
+      # No playwright install steps -- browsers are pre-installed in the container.
 
       - name: Create screenshot output directory
         run: mkdir -p /tmp/wildcard-panel-screenshots
