@@ -151,11 +151,10 @@ SSM_PROD_PORT="/vaultmtg/app/production/PORT"
 #   POSTHOG_HOST         — PostHog ingestion host (us.i.posthog.com).
 #                          Plain String — not a secret.
 #   SecureString for all DSN/API-key paths; String for POSTHOG_HOST.
-#   Staging mirror is deliberately deferred: the existing staging
-#   `sentry-bff-dsn` parameter (provision-staging-env.sh line 231)
-#   covers staging BFF observability. PostHog and Sentry SDKs tag events
-#   with `environment: production|staging` at init time, so a single
-#   PostHog API key + single SPA Sentry DSN per surface is workable.
+#   Staging mirrors exist under /vaultmtg/app/staging/ (added by ticket #1072):
+#     sentry-dsn-bff  (canonical name, matches prod)
+#     posthog-api-key
+#     posthog-host
 SSM_PROD_SENTRY_DSN_BFF="/vaultmtg/app/production/sentry-dsn-bff"
 SSM_PROD_SENTRY_DSN_SPA="/vaultmtg/app/production/sentry-dsn-spa"
 SSM_PROD_POSTHOG_API_KEY="/vaultmtg/app/production/posthog-api-key"
@@ -170,6 +169,9 @@ SSM_PROD_BFF_DAEMON_RELEASED_AT="/vaultmtg/app/production/BFF_DAEMON_RELEASED_AT
 
 # ───────────────────────────────────────────────────────────────────────────
 # SSM PARAMETER PATHS — STAGING
+#   All staging BFF-runtime params live under /vaultmtg/app/staging/*.
+#   SPA/build-time params remain under /vaultmtg/staging/* (separate surface).
+#   See provision-staging-env.sh header for the full inventory and KEEP table.
 # ───────────────────────────────────────────────────────────────────────────
 SSM_STAGING_DB_SECRET_ARN="/vaultmtg/app/staging/db-secret-arn"
 SSM_STAGING_DB_ENDPOINT="/vaultmtg/app/staging/db-endpoint"
@@ -182,15 +184,32 @@ SSM_STAGING_CLERK_PUBLISHABLE_KEY="/vaultmtg/app/staging/CLERK_PUBLISHABLE_KEY"
 SSM_STAGING_CLERK_FRONTEND_API="/vaultmtg/app/staging/CLERK_FRONTEND_API"
 SSM_STAGING_PORT="/vaultmtg/app/staging/PORT"
 
+# Daemon JWT secret — M2M auth for daemon->BFF ingest (staging mirror of prod).
+# SecureString. Created by ticket #1072; was previously absent from
+# /vaultmtg/app/staging/, causing staging daemon JWT auth to fail silently.
+SSM_STAGING_DAEMON_JWT_SECRET="/vaultmtg/app/staging/daemon-jwt-secret"
+
 # Daemon version metadata — staging mirror (see production block above).
 SSM_STAGING_BFF_DAEMON_LATEST_VERSION="/vaultmtg/app/staging/BFF_DAEMON_LATEST_VERSION"
 SSM_STAGING_BFF_DAEMON_RELEASED_AT="/vaultmtg/app/staging/BFF_DAEMON_RELEASED_AT"
 
 # ───────────────────────────────────────────────────────────────────────────
-# SSM PARAMETER PATHS — VAULTMTG SHARED SERVICES
+# SSM PARAMETER PATHS — VAULTMTG SHARED SERVICES (staging)
 # ───────────────────────────────────────────────────────────────────────────
 SSM_VAULTMTG_STAGING_RESEND_API_KEY="/vaultmtg/app/staging/resend-api-key"
-SSM_VAULTMTG_STAGING_SENTRY_DSN="/vaultmtg/app/staging/sentry-bff-dsn"
+
+# Sentry DSN for the staging BFF.
+#   Canonical name: sentry-dsn-bff (matches prod sentry-dsn-bff, ADR-075 D4 symmetry).
+#   Legacy alias sentry-bff-dsn remains in SSM until all callers migrate;
+#   it will be deleted in a follow-up cleanup once no consumer references it.
+#   Ticket #1072 creates the canonical-name param; both exist simultaneously.
+SSM_VAULTMTG_STAGING_SENTRY_DSN="/vaultmtg/app/staging/sentry-dsn-bff"
+
+# PostHog analytics — staging mirror of prod (ticket #1072, previously absent).
+#   POSTHOG_API_KEY: SecureString. POSTHOG_HOST: String (same value as prod).
+SSM_STAGING_POSTHOG_API_KEY="/vaultmtg/app/staging/posthog-api-key"
+SSM_STAGING_POSTHOG_HOST="/vaultmtg/app/staging/posthog-host"
+
 SSM_VAULTMTG_STAGING_DISCORD_BOT_TOKEN="/vaultmtg/app/staging/discord-bot-token"
 SSM_VAULTMTG_STAGING_DISCORD_GUILD_ID="/vaultmtg/app/staging/discord-guild-id"
 SSM_VAULTMTG_STAGING_MAILCHIMP_API_KEY="/vaultmtg/app/staging/mailchimp-api-key"
