@@ -117,7 +117,7 @@ jobs:
 
     steps:
       - name: Checkout vault-mtg
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # Node.js and npm are pre-installed in the Playwright container.
       # No setup-node or browser cache steps required.
