@@ -167,6 +167,13 @@ SSM_PROD_POSTHOG_HOST="/vaultmtg/app/production/posthog-host"
 SSM_PROD_BFF_DAEMON_LATEST_VERSION="/vaultmtg/app/production/BFF_DAEMON_LATEST_VERSION"
 SSM_PROD_BFF_DAEMON_RELEASED_AT="/vaultmtg/app/production/BFF_DAEMON_RELEASED_AT"
 
+# Daemon JWT secret -- M2M auth for daemon->BFF ingest.
+#   SecureString.  Written by ec2-bootstrap.sh at first provision;
+#   survives every deploy on prod because the prod env file is never
+#   truncated (per-key upsert model, Option B -- ADR-075 D3).
+#   Documented here for FF-2 set-parity (#1075) and future migration.
+SSM_PROD_DAEMON_JWT_SECRET="/vaultmtg/app/production/daemon-jwt-secret"
+
 # ───────────────────────────────────────────────────────────────────────────
 # SSM PARAMETER PATHS — STAGING
 #   All staging BFF-runtime params live under /vaultmtg/app/staging/*.

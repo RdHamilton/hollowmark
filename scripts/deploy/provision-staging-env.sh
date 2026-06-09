@@ -191,117 +191,112 @@ mkdir -p "$ENV_DIR"
 : > "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
-# Helper: fetch an SSM parameter value and append KEY=VALUE to the env file.
-# Usage: write_param ENV_KEY SSM_PATH [--with-decryption]
-write_param() {
-  local key="$1"
-  local path="$2"
-  local decrypt="${3:-}"
+# Source shared helpers (write_param, write_database_url) from provision-lib.sh.
+# provision-lib.sh is downloaded alongside this script from S3 into /tmp/
+# before execution.  It requires REGION and ENV_FILE to already be set.
+. /tmp/provision-lib.sh
 
-  if [ "$decrypt" = "--with-decryption" ]; then
-    VALUE=$(aws ssm get-parameter \
-      --name "$path" \
-      --with-decryption \
-      --region "$REGION" \
-      --query Parameter.Value \
-      --output text)
-  else
-    VALUE=$(aws ssm get-parameter \
-      --name "$path" \
-      --region "$REGION" \
-      --query Parameter.Value \
-      --output text)
-  fi
+# Source the key manifest (pure declarative data -- no executable logic).
+# ssm-key-manifest.sh is downloaded alongside this script from S3 into /tmp/.
+# ADR-075 D3: single source of truth for the BFF env-var <-> SSM mapping.
+. /tmp/ssm-key-manifest.sh
 
-  if [ -z "$VALUE" ]; then
-    echo "ERROR: SSM parameter ${path} is empty." >&2
-    exit 1
-  fi
-
-  printf '%s=%s\n' "$key" "$VALUE" >> "$ENV_FILE"
-  echo "${key} provisioned."
-}
-
-# AWS region — required by the BFF's Secrets Manager client at startup.
+# AWS region -- required by the BFF's Secrets Manager client at startup.
 printf 'AWS_DEFAULT_REGION=%s\n' "$REGION" >> "$ENV_FILE"
 echo "AWS_DEFAULT_REGION provisioned."
 
-# Core BFF settings
-write_param PORT                    "$SSM_STAGING_PORT"
-write_param ALLOWED_ORIGINS         "$SSM_STAGING_ALLOWED_ORIGINS"
-write_param CLERK_PUBLISHABLE_KEY   "$SSM_STAGING_CLERK_PUBLISHABLE_KEY"
-write_param CLERK_SECRET_KEY        "$SSM_STAGING_CLERK_SECRET_KEY" --with-decryption
-write_param CLERK_FRONTEND_API      "$SSM_STAGING_CLERK_FRONTEND_API"
-
-# DB credentials: provisioner-side fetch + splice (#2461).
+# DATABASE_URL: provisioner-side fetch + credential splice (#2461).
 #
-# Previously the BFF binary called Secrets Manager at startup to resolve
-# DB_SECRET_ARN. That required secretsmanager:GetSecretValue on the EC2
-# instance role, which is intentionally narrowed (S-02 / #2375). The
-# scoped vaultmtg-staging-deploy-provisioner role this script already
-# assumes (see step 1 above) holds the grant on the staging RDS secret
-# arn:aws:secretsmanager:...:secret:rds!db-12c647a0-* via the
+# The scoped vaultmtg-staging-deploy-provisioner role this script already
+# assumes holds the grant on the staging RDS secret via the
 # StagingProvisioningSecretsManager statement in staging-deploy-role.yml.
+# write_database_url() fetches the JSON secret, URL-encodes credentials via
+# jq @uri, and writes the complete DATABASE_URL to the env file.  No
+# DB_SECRET_ARN is written -- the BFF's runtime SM path stays dormant.
+# Rotation impact: re-run the staging deploy to pick up a rotated password.
+write_database_url "$SSM_STAGING_DB_SECRET_ARN" "$SSM_STAGING_DB_ENDPOINT" "$SSM_STAGING_DB_NAME"
+
+# Manifest-driven provisioning loop (ADR-075 D3).
 #
-# We fetch the JSON secret once, here, and write a credential-laden
-# DATABASE_URL into the env file. The BFF reads it inline at startup,
-# never constructs an AWS SDK client for SM, and never needs the EC2
-# instance role to be re-widened. DB_SECRET_ARN is deliberately NOT
-# written — the BFF's runtime-resolution path is now opt-in via
-# BFF_DB_RESOLVE_FROM_SM=true (also not written) and stays dormant.
+# Iterates over every entry in ssm-key-manifest.sh and provisions keys
+# scoped to "staging" or "both".  Keys scoped to "prod-only" are skipped.
+# Per-env SSM path overrides are applied in the case statement below for
+# entries whose prod path (recorded in the manifest) differs from staging.
 #
-# Rotation impact: when AWS rotates the RDS secret, the staging deploy
-# must be re-run to pick up the new password. This trade-off is accepted
-# until automated rotation (S-19 / #2356) is wired.
-DB_SECRET_ARN_VALUE=$(aws ssm get-parameter \
-  --name "$SSM_STAGING_DB_SECRET_ARN" \
-  --region "$REGION" \
-  --query Parameter.Value \
-  --output text)
-DB_ENDPOINT=$(aws ssm get-parameter --name "$SSM_STAGING_DB_ENDPOINT" --region "$REGION" --query Parameter.Value --output text)
-DB_NAME=$(aws ssm get-parameter --name "$SSM_STAGING_DB_NAME" --region "$REGION" --query Parameter.Value --output text)
-DB_SECRET_JSON=$(aws secretsmanager get-secret-value \
-  --secret-id "$DB_SECRET_ARN_VALUE" \
-  --region "$REGION" \
-  --query SecretString \
-  --output text)
-DB_USERNAME=$(printf '%s' "$DB_SECRET_JSON" | jq -r '.username // empty')
-DB_PASSWORD=$(printf '%s' "$DB_SECRET_JSON" | jq -r '.password // empty')
-if [ -z "$DB_USERNAME" ] || [ -z "$DB_PASSWORD" ]; then
-  echo "ERROR: RDS secret JSON missing username or password." >&2
-  exit 1
-fi
-# URL-encode credentials so any special characters (`@`, `:`, `/`, `?`,
-# `#`, `%`, etc.) in the rotated password do not break URL parsing.
-DB_USERNAME_ENC=$(jq -rn --arg v "$DB_USERNAME" '$v|@uri')
-DB_PASSWORD_ENC=$(jq -rn --arg v "$DB_PASSWORD" '$v|@uri')
-printf 'DATABASE_URL=postgresql://%s:%s@%s:%s/%s?%s\n' \
-  "$DB_USERNAME_ENC" "$DB_PASSWORD_ENC" "$DB_ENDPOINT" "$DB_PORT" "$DB_NAME" "$DB_SSL_MODE" \
-  >> "$ENV_FILE"
-unset DB_SECRET_JSON DB_USERNAME DB_PASSWORD DB_USERNAME_ENC DB_PASSWORD_ENC
-echo "DATABASE_URL provisioned (credentials spliced from Secrets Manager under provisioner role)."
+# Note on DAEMON_JWT_SECRET: scope is "both" in the manifest; staging
+# provisions it from SSM_STAGING_DAEMON_JWT_SECRET.  On prod this key is
+# bootstrap-carried (Option B -- ADR-075 D3) and is NOT in the deploy loop
+# there; see ssm-key-manifest.sh entry 5 for the full annotation.
+i=0
+while [ "$i" -lt "$MANIFEST_KEY_COUNT" ]; do
+  eval "KEY_NAME=\${MANIFEST_KEY_${i}_NAME}"
+  eval "KEY_TYPE=\${MANIFEST_KEY_${i}_TYPE}"
+  eval "KEY_SCOPE=\${MANIFEST_KEY_${i}_SCOPE}"
 
-# VaultMTG service keys
-write_param RESEND_API_KEY          "$SSM_VAULTMTG_STAGING_RESEND_API_KEY"          --with-decryption
-# SENTRY_DSN reads canonical sentry-dsn-bff (added by #1072; matches prod name).
-write_param SENTRY_DSN              "$SSM_VAULTMTG_STAGING_SENTRY_DSN"              --with-decryption
-write_param DISCORD_BOT_TOKEN       "$SSM_VAULTMTG_STAGING_DISCORD_BOT_TOKEN"       --with-decryption
-write_param DISCORD_GUILD_ID        "$SSM_VAULTMTG_STAGING_DISCORD_GUILD_ID"
-write_param MAILCHIMP_API_KEY       "$SSM_VAULTMTG_STAGING_MAILCHIMP_API_KEY"       --with-decryption
-write_param MAILCHIMP_LIST_ID       "$SSM_VAULTMTG_STAGING_MAILCHIMP_LIST_ID"
-write_param CRISP_WEBSITE_ID        "$SSM_VAULTMTG_STAGING_CRISP_WEBSITE_ID"
+  # Skip DATABASE_URL -- handled above by write_database_url().
+  if [ "$KEY_NAME" = "DATABASE_URL" ]; then
+    i=$((i + 1))
+    continue
+  fi
 
-# Daemon JWT secret -- M2M auth for daemon->BFF ingest (added by #1072).
-write_param DAEMON_JWT_SECRET       "$SSM_STAGING_DAEMON_JWT_SECRET"                --with-decryption
+  # Skip prod-only entries.
+  case "$KEY_SCOPE" in
+    prod-only)
+      i=$((i + 1))
+      continue
+      ;;
+  esac
 
-# PostHog analytics (added by #1072 -- was previously absent from staging).
-write_param POSTHOG_API_KEY         "$SSM_STAGING_POSTHOG_API_KEY"                  --with-decryption
-write_param POSTHOG_HOST            "$SSM_STAGING_POSTHOG_HOST"
+  # Resolve the staging SSM path.
+  # Most staging-only entries already use the staging SSM_VAR from the manifest.
+  # For "both" entries, the manifest records the prod SSM_VAR; we override here
+  # to the staging mirror path.
+  case "$KEY_NAME" in
+    SENTRY_DSN)
+      SSM_PATH="$SSM_VAULTMTG_STAGING_SENTRY_DSN"
+      ;;
+    DAEMON_JWT_SECRET)
+      SSM_PATH="$SSM_STAGING_DAEMON_JWT_SECRET"
+      ;;
+    BFF_DAEMON_LATEST_VERSION)
+      SSM_PATH="$SSM_STAGING_BFF_DAEMON_LATEST_VERSION"
+      ;;
+    BFF_DAEMON_RELEASED_AT)
+      SSM_PATH="$SSM_STAGING_BFF_DAEMON_RELEASED_AT"
+      ;;
+    ALLOWED_ORIGINS)
+      SSM_PATH="$SSM_STAGING_ALLOWED_ORIGINS"
+      ;;
+    CLERK_SECRET_KEY)
+      SSM_PATH="$SSM_STAGING_CLERK_SECRET_KEY"
+      ;;
+    CLERK_FRONTEND_API)
+      SSM_PATH="$SSM_STAGING_CLERK_FRONTEND_API"
+      ;;
+    *)
+      # staging-only entries: the manifest SSM_VAR already points to the staging path.
+      eval "SSM_VAR=\${MANIFEST_KEY_${i}_SSM_VAR}"
+      eval "SSM_PATH=\${$SSM_VAR}"
+      ;;
+  esac
 
-# Daemon version metadata -- lets BFF serve correct data from
-# GET /api/v1/daemon/version instead of falling back to the 0.1.0 default.
-write_param BFF_DAEMON_LATEST_VERSION "$SSM_STAGING_BFF_DAEMON_LATEST_VERSION"
-write_param BFF_DAEMON_RELEASED_AT    "$SSM_STAGING_BFF_DAEMON_RELEASED_AT"
+  DECRYPT_FLAG=""
+  if [ "$KEY_TYPE" = "secret" ]; then
+    DECRYPT_FLAG="--with-decryption"
+  fi
+
+  write_param "$KEY_NAME" "$SSM_PATH" $DECRYPT_FLAG
+
+  i=$((i + 1))
+done
+
+# PostHog analytics -- staging instance added by #1072.
+# Provisioned outside the manifest loop because the v2 manifest records
+# POSTHOG_* as prod-only (the staging params did not exist when the plan was
+# approved).  Ticket #1075 (FF-2 parity check) will reconcile the manifest
+# scope if the staging PostHog params are promoted to long-term status.
+write_param POSTHOG_API_KEY "$SSM_STAGING_POSTHOG_API_KEY" --with-decryption
+write_param POSTHOG_HOST    "$SSM_STAGING_POSTHOG_HOST"
 
 chmod 600 "$ENV_FILE"
 echo "Staging env provisioned at ${ENV_FILE}."
