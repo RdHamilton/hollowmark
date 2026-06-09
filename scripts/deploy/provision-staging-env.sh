@@ -44,11 +44,11 @@
 #   /vaultmtg/app/staging/db-secret-arn
 #   /vaultmtg/app/staging/db-endpoint
 #   /vaultmtg/app/staging/db-name
-#   /vaultmtg/app/staging/resend-api-key          (String, plain — no KMS)
+#   /vaultmtg/app/staging/resend-api-key          (SecureString, --with-decryption)
 #   /vaultmtg/app/staging/sentry-bff-dsn          (SecureString, --with-decryption)
-#   /vaultmtg/app/staging/discord-bot-token       (String, plain — no KMS)
+#   /vaultmtg/app/staging/discord-bot-token       (SecureString, --with-decryption)
 #   /vaultmtg/app/staging/discord-guild-id
-#   /vaultmtg/app/staging/mailchimp-api-key       (String, plain — no KMS)
+#   /vaultmtg/app/staging/mailchimp-api-key       (SecureString, --with-decryption)
 #   /vaultmtg/app/staging/mailchimp-list-id
 #   /vaultmtg/app/staging/crisp-website-id
 #   /vaultmtg/app/staging/BFF_DAEMON_LATEST_VERSION  (String, plain — semver e.g. 0.3.5)
@@ -229,11 +229,11 @@ unset DB_SECRET_JSON DB_USERNAME DB_PASSWORD DB_USERNAME_ENC DB_PASSWORD_ENC
 echo "DATABASE_URL provisioned (credentials spliced from Secrets Manager under provisioner role)."
 
 # VaultMTG service keys
-write_param RESEND_API_KEY          "$SSM_VAULTMTG_STAGING_RESEND_API_KEY"
-write_param SENTRY_DSN              "$SSM_VAULTMTG_STAGING_SENTRY_DSN"            --with-decryption
-write_param DISCORD_BOT_TOKEN       "$SSM_VAULTMTG_STAGING_DISCORD_BOT_TOKEN"
+write_param RESEND_API_KEY          "$SSM_VAULTMTG_STAGING_RESEND_API_KEY"          --with-decryption
+write_param SENTRY_DSN              "$SSM_VAULTMTG_STAGING_SENTRY_DSN"              --with-decryption
+write_param DISCORD_BOT_TOKEN       "$SSM_VAULTMTG_STAGING_DISCORD_BOT_TOKEN"       --with-decryption
 write_param DISCORD_GUILD_ID        "$SSM_VAULTMTG_STAGING_DISCORD_GUILD_ID"
-write_param MAILCHIMP_API_KEY       "$SSM_VAULTMTG_STAGING_MAILCHIMP_API_KEY"
+write_param MAILCHIMP_API_KEY       "$SSM_VAULTMTG_STAGING_MAILCHIMP_API_KEY"       --with-decryption
 write_param MAILCHIMP_LIST_ID       "$SSM_VAULTMTG_STAGING_MAILCHIMP_LIST_ID"
 write_param CRISP_WEBSITE_ID        "$SSM_VAULTMTG_STAGING_CRISP_WEBSITE_ID"
 
