@@ -130,7 +130,6 @@ jobs:
           TRIGGER_GLOBS=(
             ".github/workflows/deploy-bff.yml"
             ".github/workflows/deploy-spa.yml"
-            ".github/workflows/deploy-spa-staging.yml"
             ".github/workflows/release.yml"
             ".github/workflows/rollback.yml"
             ".github/workflows/staging-deploy.yml"
@@ -223,7 +222,6 @@ jobs:
           TRIGGER_GLOBS=(
             ".github/workflows/deploy-bff.yml"
             ".github/workflows/deploy-spa.yml"
-            ".github/workflows/deploy-spa-staging.yml"
             ".github/workflows/release.yml"
             ".github/workflows/rollback.yml"
             ".github/workflows/staging-deploy.yml"
@@ -550,7 +548,6 @@ jobs:
             TRIGGER_GLOBS=(
               ".github/workflows/deploy-bff.yml"
               ".github/workflows/deploy-spa.yml"
-              ".github/workflows/deploy-spa-staging.yml"
               ".github/workflows/release.yml"
               ".github/workflows/rollback.yml"
               ".github/workflows/staging-deploy.yml"
