@@ -191,6 +191,13 @@ for script in "${CONSUMER_SCRIPTS[@]}"; do
       # declared in deploy-env.sh; they default inside the restart scripts).
       # STAGING_MTGA_SYNC_PASSWORD is operator-supplied at invocation time -- see hollowmark-tickets#1097
       FORCE_RESTART|BFF_PORT|BFF_STAGING_PORT|STAGING_MTGA_SYNC_PASSWORD) continue;;
+      # Manifest-loop iteration vars (provision-staging-env.sh loop over ssm-key-manifest.sh).
+      # These are shell local variables set via eval inside the loop body, not
+      # deploy-env.sh constants.  ADR-075 D3 / ticket #1074.
+      KEY_NAME|KEY_SCOPE|KEY_TYPE|SSM_VAR|SSM_PATH|MANIFEST_KEY_COUNT) continue;;
+      # MANIFEST_KEY_* is the eval-constructed variable prefix for manifest entries.
+      # The regex extractor will surface MANIFEST_KEY_ as a ref; skip it.
+      MANIFEST_KEY_) continue;;
     esac
 
     # Allowed if defined in deploy-env.sh.
@@ -302,7 +309,19 @@ check_inline_dburl() {
 
 c4_ok=1
 check_inline_dburl "$PROD_DBURL_FILE"          "production"  || c4_ok=0
-check_inline_dburl "$STAGING_PROVISION_FILE"   "staging"     || c4_ok=0
+# Since ADR-075 D3 (#1074), the staging inline-credential splice logic lives
+# in provision-lib.sh (write_database_url), sourced by provision-staging-env.sh
+# at deploy time.  Check either file for the splice pattern -- the contract is
+# that the splice happens somewhere in the staging deploy chain, not necessarily
+# inline in provision-staging-env.sh itself.
+PROVISION_LIB_FILE="${DEPLOY_SCRIPTS_DIR}/provision-lib.sh"
+if [[ -f "$PROVISION_LIB_FILE" ]]; then
+  # provision-lib.sh is the canonical home of write_database_url post-#1074.
+  check_inline_dburl "$PROVISION_LIB_FILE"         "staging (via provision-lib.sh)" || c4_ok=0
+else
+  # Fallback: pre-#1074 inline splice in provision-staging-env.sh.
+  check_inline_dburl "$STAGING_PROVISION_FILE"     "staging" || c4_ok=0
+fi
 
 # ADR-024 / #2223: provision-db-url.sh MUST fetch the app-role secret
 # (SSM_PROD_APP_DB_SECRET_ARN) so the BFF connects as vaultmtg_app, NOT the
@@ -527,6 +546,13 @@ if [[ ${#all_sh[@]} -eq 0 ]]; then
   warn "No .sh files found under scripts/deploy or infra/scripts"
 fi
 for f in "${all_sh[@]+"${all_sh[@]}"}"; do
+  # Exclude library scripts that are sourced by consumers rather than standalone.
+  # provision-lib.sh relies on the caller (provision-staging-env.sh) to have
+  # sourced deploy-env.sh before calling into its functions (ADR-075 D3 / #1074).
+  # ssm-key-manifest.sh is pure declarative data with no deploy-env.sh refs.
+  case "$(basename "$f")" in
+    provision-lib.sh|ssm-key-manifest.sh) continue;;
+  esac
   uses_constant=0
   for v in "${DEFINED_VARS[@]+"${DEFINED_VARS[@]}"}"; do
     if grep -qE "\\\$\\{?${v}\\}?" "$f"; then
