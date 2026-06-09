@@ -167,9 +167,13 @@ jobs:
 
     # Provision env on EC2.
     # Staging: provision-staging-env.sh renders /etc/mtga-companion-staging/env from
-    #   the full /vaultmtg/staging/* SSM hierarchy.
-    # Production: provision-env.sh + provision-db-url.sh + CLERK_SECRET_KEY in one
-    #   sequential shell command (preserves the original release.yml order).
+    #   the full /vaultmtg/app/staging/* SSM hierarchy (matches ec2.yml IAM Statement 3).
+    #   Consumers: deploy-bff.yml (this file, staging path) and staging-replay-gate.yml
+    #   (called by staging-deploy.yml after a successful staging deploy).
+    # Production: provision-env.sh + provision-db-url.sh render 9 params in one
+    #   sequential shell command: ALLOWED_ORIGINS, DATABASE_URL (via provision-db-url.sh),
+    #   CLERK_SECRET_KEY, CLERK_FRONTEND_API, SENTRY_DSN, POSTHOG_API_KEY, POSTHOG_HOST,
+    #   BFF_DAEMON_LATEST_VERSION, BFF_DAEMON_RELEASED_AT.
     # Credentials are read ON the EC2 instance under its IAM role — never on the runner.
     # deploy-env.sh (canonical SSM paths + service names) is downloaded first so
     # all EC2-side scripts can source it via `. /tmp/deploy-env.sh`.
