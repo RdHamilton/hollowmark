@@ -36,7 +36,7 @@
 # infra/config/deploy-env.sh -- do NOT hardcode them here.
 #
 # ============================================================================
-# STAGING SSM PARAMETER INVENTORY (ADR-075 D4 -- updated by ticket #1072)
+# STAGING SSM PARAMETER INVENTORY (ADR-075 D4 -- updated by tickets #1072, #1097)
 # ============================================================================
 #
 # NAMESPACE SPLIT:
@@ -69,6 +69,16 @@
 #   BFF_DAEMON_LATEST_VERSION    String        BFF_DAEMON_LATEST_VERSION
 #   BFF_DAEMON_RELEASED_AT       String        BFF_DAEMON_RELEASED_AT
 #
+# /vaultmtg/app/staging/* LAMBDA M2M DB-PASSWORD PARAMS (seeded by this script, NOT
+# written to BFF env file -- consumed by Lambda execution roles at deploy time):
+#   PARAM                        TYPE          CONSUMER
+#   ---------------------------  ------------  -----------------------------------
+#   meta-scrape-db-password      SecureString  meta-scrape Lambda (ssm:GetParameter)
+#   sync-db-password             SecureString  sync Lambda (ssm:GetParameter)
+#   Seeded idempotently via --no-overwrite (ticket #1097, ADR-075 Amendment II SS B-7).
+#   To rotate: change the DB role password, delete the params, then re-run; or use
+#   aws ssm put-parameter --overwrite directly after updating the mtga_sync role.
+#
 # SENTRY NAME ASYMMETRY (resolved by #1072, ADR-075 D4):
 #   prod canonical    = /vaultmtg/app/production/sentry-dsn-bff
 #   staging canonical = /vaultmtg/app/staging/sentry-dsn-bff   <-- added #1072
@@ -80,7 +90,6 @@
 #   bff-admin-token      -- prod bootstrap-carried; staging does not provision
 #                           admin endpoints via this path (ticket #1074)
 #   canary-clerk-*       -- prod canary is prod-only; no staging canary service
-#   meta-scrape-db-password / sync-db-password -- Lambda-specific; no staging Lambda yet
 #   ro-db-secret-arn / app-db-secret-arn       -- prod-only DB access patterns
 #
 # /vaultmtg/staging/* SPA/BUILD-TIME + CI PARAMS (KEEP -- do NOT delete):
@@ -296,3 +305,58 @@ write_param BFF_DAEMON_RELEASED_AT    "$SSM_STAGING_BFF_DAEMON_RELEASED_AT"
 
 chmod 600 "$ENV_FILE"
 echo "Staging env provisioned at ${ENV_FILE}."
+
+# ---------------------------------------------------------------------------
+# Lambda M2M DB-password SSM params (ticket #1097, ADR-075 Amendment II SS B-7)
+#
+# Seed the two SecureString params consumed by the staging meta-scrape and sync
+# Lambda stacks at deploy time (ticket #1098). Both params use --no-overwrite so
+# a re-run never silently clobbers a live (possibly rotated) credential. On
+# ParameterAlreadyExists the AWS CLI exits non-zero; we swallow that specific
+# error and continue so the rest of the provisioning script is unaffected.
+#
+# The password value (STAGING_MTGA_SYNC_PASSWORD) must be supplied by the caller
+# as an environment variable. It must equal the password on the mtga_sync role in
+# the staging RDS instance. To rotate: change the DB role password first, then
+# delete the SSM params and re-run (or use put-parameter --overwrite directly).
+#
+# The provisioner role (vaultmtg-staging-deploy-provisioner) assumed above holds
+# ssm:PutParameter on /vaultmtg/app/staging/* via StagingProvisioningSSMWrite in
+# staging-deploy-role.yml; kms:GenerateDataKey on alias/aws/ssm is included.
+# ---------------------------------------------------------------------------
+seed_lambda_ssm_param() {
+  local name="$1"
+  local value="$2"
+
+  if [ -z "$value" ]; then
+    echo "ERROR: password value for ${name} is empty -- set STAGING_MTGA_SYNC_PASSWORD." >&2
+    exit 1
+  fi
+
+  local output
+  if output=$(aws ssm put-parameter \
+    --name "$name" \
+    --type SecureString \
+    --value "$value" \
+    --no-overwrite \
+    --region "$REGION" 2>&1); then
+    echo "Lambda SSM param seeded: ${name} (Version 1)."
+  else
+    case "$output" in
+      *ParameterAlreadyExists*)
+        echo "Lambda SSM param already exists (skipped, --no-overwrite): ${name}."
+        ;;
+      *)
+        echo "ERROR seeding Lambda SSM param ${name}: ${output}" >&2
+        exit 1
+        ;;
+    esac
+  fi
+}
+
+if [ -n "${STAGING_MTGA_SYNC_PASSWORD:-}" ]; then
+  seed_lambda_ssm_param "/vaultmtg/app/staging/meta-scrape-db-password" "$STAGING_MTGA_SYNC_PASSWORD"
+  seed_lambda_ssm_param "/vaultmtg/app/staging/sync-db-password"         "$STAGING_MTGA_SYNC_PASSWORD"
+else
+  echo "STAGING_MTGA_SYNC_PASSWORD not set -- skipping Lambda SSM param seeding (params already exist or first-time setup not yet run)."
+fi

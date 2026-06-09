@@ -189,7 +189,8 @@ for script in "${CONSUMER_SCRIPTS[@]}"; do
       # time, not in deploy-env.sh -- it is not a structural deploy constant.
       # BFF_PORT / BFF_STAGING_PORT are optional runtime overrides (not
       # declared in deploy-env.sh; they default inside the restart scripts).
-      FORCE_RESTART|BFF_PORT|BFF_STAGING_PORT) continue;;
+      # STAGING_MTGA_SYNC_PASSWORD is operator-supplied at invocation time -- see hollowmark-tickets#1097
+      FORCE_RESTART|BFF_PORT|BFF_STAGING_PORT|STAGING_MTGA_SYNC_PASSWORD) continue;;
     esac
 
     # Allowed if defined in deploy-env.sh.
