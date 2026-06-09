@@ -1,17 +1,61 @@
-name: Deploy SPA to S3 + CloudFront
+# Unified env-parameterized SPA deploy workflow.
+# Replaces the former deploy-spa.yml (prod-only) + deploy-spa-staging.yml (staging-only) twin files.
+# Closes: hollowmark-tickets#1110 (ADR-075 Amendment IV §IV-4 -- eliminate the twin-file split).
+#
+# Design: Resolution (b) per Ray's plan approval -- one env-parameterized workflow_call on the
+# deploy-bff.yml reference pattern (principle #7); per-env SSM-backed builds (Clerk PK always from
+# SSM, never from vars.*); promote the DEPLOY (bucket/distribution swap). Byte-identical SPA artifact
+# promotion is deferred to the runtime-config-key work (ADR-075 §IV-5 item iii, strategic backlog)
+# because VITE_CLERK_PUBLISHABLE_KEY is baked at Vite build time and ADR-072 requires separate
+# per-env Clerk instances.
+#
+# Env-varying values resolved from the `environment` input:
+#   - S3 bucket name:             /vaultmtg/{env}/spa-bucket-name
+#   - CloudFront distribution ID: /vaultmtg/{env}/spa-distribution-id
+#   - Sentry SPA DSN:             /vaultmtg/{env}/sentry-*-dsn  (see SSM step for full paths)
+#   - Clerk publishable key:      /vaultmtg/{env}/CLERK_PUBLISHABLE_KEY  (String -- public)
+#   - CI smoke token (staging):   /vaultmtg/staging/ci-smoke-token
+#   - Clerk secret key (staging): /vaultmtg/app/staging/CLERK_SECRET_KEY (SecureString)
+#
+# SSM namespace note (prod spa-* params):
+#   spa-bucket-name and spa-distribution-id live in the legacy /vaultmtg/production/ namespace
+#   (not /vaultmtg/app/production/). Live verification 2026-06-09: aws ssm get-parameters-by-path
+#   --path /vaultmtg/production returns spa-bucket-name and spa-distribution-id;
+#   /vaultmtg/app/production/ has no spa-* params.
+#   TODO(#1072 follow-on): once D4 namespace-symmetry work migrates spa-* params to
+#   /vaultmtg/app/production/, update the prod SSM reads here accordingly.
+#
+# Job graph:
+#   deploy (builds SPA, syncs to S3, invalidates CloudFront, unauthenticated smoke)
+#   +-- staging-smoke (staging only: authed Playwright + BFF API smoke suites)
+#
+# Callers:
+#   release.yml:        uses: ./.github/workflows/deploy-spa.yml  with: environment: production
+#   staging-deploy.yml: uses: ./.github/workflows/deploy-spa.yml  with: environment: staging
+#   daemon-release.yml: gh workflow run deploy-spa.yml --field environment=staging
+
+name: Deploy SPA (unified)
 
 on:
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+  workflow_call:
     inputs:
+      environment:
+        description: 'Target environment: staging or production'
+        required: false
+        default: 'production'
+        type: string
       ref:
         description: 'Git ref/SHA to deploy. Empty = workflow source ref.'
         required: false
         default: ''
         type: string
-  workflow_call:
+  workflow_dispatch:
     inputs:
+      environment:
+        description: 'Target environment: staging or production'
+        required: false
+        default: 'production'
+        type: string
       ref:
         description: 'Git ref/SHA to deploy. Empty = workflow source ref.'
         required: false
@@ -24,16 +68,23 @@ permissions:
 
 jobs:
   deploy:
-    name: Build and Deploy SPA
+    name: Build and Deploy SPA (${{ inputs.environment || 'production' }})
     runs-on: ubuntu-latest
-    environment: production
+    # FF-8 (AC6): prod job declares environment: production so it inherits the live
+    # required_reviewers protection rule (GitHub Environment id 14832332216,
+    # protection_rules:[{type:required_reviewers,reviewers:[RdHamilton]}]).
+    # Staging jobs declare environment: staging (no required_reviewers -- CD path).
+    environment: ${{ inputs.environment || 'production' }}
+    # Hard cap prevents the "Install Playwright browsers" step from hanging the runner
+    # for GitHub's default 6-hour job timeout when ubuntu-latest 24.04 (>=20260525.161)
+    # causes apt-get's needrestart post-install hook to block in non-interactive CI.
+    # 20 min is generous: build+deploy typically completes in ~5 min.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          # When inputs.ref is empty, actions/checkout falls back to the
-          # workflow source ref (existing default behaviour for push: tags).
           ref: ${{ inputs.ref }}
 
       - name: Set up Node.js
@@ -47,16 +98,34 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      # Resolve the semver string for Sentry release tagging.
-      # Uses `git describe` against `app/v*` tags (ADR-023 namespacing) and strips
-      # the `app/v` prefix so the value matches the BFF ldflag output (e.g. "0.3.3").
-      # Falls back to an empty string on an untagged ref (e.g. manual workflow_dispatch
-      # on a branch commit) — Sentry.init skips the release field when the value is empty.
-      - name: Resolve SPA version from git tag
+      # Resolve the environment value to a single output used by subsequent steps.
+      # workflow_call callers and workflow_dispatch callers both flow through here.
+      - name: Resolve environment
+        id: resolve-env
+        run: |
+          ENV="${{ inputs.environment || 'production' }}"
+          # Guard: only staging and production are valid deployment targets.
+          if [ "$ENV" != "staging" ] && [ "$ENV" != "production" ]; then
+            echo "ERROR: invalid environment '$ENV' -- must be 'staging' or 'production'" >&2
+            exit 1
+          fi
+          echo "env=$ENV" >> "$GITHUB_OUTPUT"
+
+      # Resolve SPA version and Sentry environment tag.
+      # Production: strips the app/v* tag prefix (e.g. app/v0.4.1 -> 0.4.1); falls back to empty.
+      # Staging: always uses the full git SHA so every merge to main is uniquely traceable in Sentry.
+      - name: Resolve SPA version
         id: version
         run: |
-          RAW=$(git describe --tags --match 'app/v*' --abbrev=0 2>/dev/null || echo '')
-          echo "version=${RAW#app/v}" >> "$GITHUB_OUTPUT"
+          ENV="${{ steps.resolve-env.outputs.env }}"
+          if [ "$ENV" = "staging" ]; then
+            echo "version=staging-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "sentry_env=staging" >> "$GITHUB_OUTPUT"
+          else
+            RAW=$(git describe --tags --match 'app/v*' --abbrev=0 2>/dev/null || echo '')
+            echo "version=${RAW#app/v}" >> "$GITHUB_OUTPUT"
+            echo "sentry_env=production" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -64,74 +133,254 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
-      # Read S3 bucket name, CloudFront distribution ID, and Sentry DSN from SSM at deploy
-      # time. Keeps infrastructure config out of repository vars/secrets and in one central
-      # place (canonical SSM-as-source-of-truth pattern established in vault-mtg-tickets#16).
+      # Read all env-varying SSM parameters at deploy time.
+      # Keeps infrastructure config out of repository vars/secrets (SSM-as-source-of-truth).
+      #
+      # AC3 / D5/#975 class fix: Clerk publishable key is ALWAYS read from SSM (never vars.*).
+      #   Prod:    /vaultmtg/app/production/CLERK_PUBLISHABLE_KEY (String -- public)
+      #   Staging: /vaultmtg/staging/CLERK_PUBLISHABLE_KEY        (String -- public)
+      #
+      # Sentry DSN:
+      #   Prod:    /vaultmtg/app/production/sentry-dsn-spa (SecureString)
+      #   Staging: /vaultmtg/staging/sentry-spa-dsn        (SecureString)
+      #
+      # spa-bucket-name / spa-distribution-id:
+      #   Prod:    /vaultmtg/production/spa-*    (legacy namespace, see TODO in file header)
+      #   Staging: /vaultmtg/staging/spa-*
+      #
+      # D1 / Erratum E-1: staging CLERK_SECRET_KEY from /vaultmtg/app/staging/CLERK_SECRET_KEY
+      #   (SecureString, canonical post-R-13 path; /vaultmtg/staging/CLERK_SECRET_KEY is
+      #   ParameterNotFound -- verified 2026-06-09). OIDC role SSMParameterRead Sid grants
+      #   parameter/vaultmtg/* (iam-gha-roles.yml:556) -- covers both prefixes; no IAM widening.
       - name: Read SSM parameters
         id: ssm
         run: |
-          BUCKET=$(aws ssm get-parameter \
-            --name /vaultmtg/production/spa-bucket-name \
-            --region us-east-1 \
-            --query Parameter.Value \
-            --output text)
-          DIST_ID=$(aws ssm get-parameter \
-            --name /vaultmtg/production/spa-distribution-id \
-            --region us-east-1 \
-            --query Parameter.Value \
-            --output text)
-          SENTRY_DSN=$(aws ssm get-parameter \
-            --name /vaultmtg/app/production/sentry-dsn-spa \
-            --region us-east-1 \
-            --with-decryption \
-            --query Parameter.Value \
-            --output text)
+          ENV="${{ steps.resolve-env.outputs.env }}"
+
+          if [ "$ENV" = "production" ]; then
+            # TODO(#1072 follow-on): once hollowmark-tickets#1072 D4 spa-param migration completes, update
+            #   spa-bucket-name and spa-distribution-id reads to the /vaultmtg/app/production/ namespace.
+            BUCKET=$(aws ssm get-parameter \
+              --name /vaultmtg/production/spa-bucket-name \
+              --region us-east-1 --query Parameter.Value --output text)
+            DIST_ID=$(aws ssm get-parameter \
+              --name /vaultmtg/production/spa-distribution-id \
+              --region us-east-1 --query Parameter.Value --output text)
+            SENTRY_DSN=$(aws ssm get-parameter \
+              --name /vaultmtg/app/production/sentry-dsn-spa \
+              --region us-east-1 --with-decryption --query Parameter.Value --output text)
+            # AC3: Clerk PK from canonical /vaultmtg/app/production/ namespace (String -- public).
+            CLERK_PUBLISHABLE_KEY=$(aws ssm get-parameter \
+              --name /vaultmtg/app/production/CLERK_PUBLISHABLE_KEY \
+              --region us-east-1 --query Parameter.Value --output text)
+          else
+            # staging
+            BUCKET=$(aws ssm get-parameter \
+              --name /vaultmtg/staging/spa-bucket-name \
+              --region us-east-1 --query Parameter.Value --output text)
+            DIST_ID=$(aws ssm get-parameter \
+              --name /vaultmtg/staging/spa-distribution-id \
+              --region us-east-1 --query Parameter.Value --output text)
+            SENTRY_DSN=$(aws ssm get-parameter \
+              --name /vaultmtg/staging/sentry-spa-dsn \
+              --region us-east-1 --with-decryption --query Parameter.Value --output text)
+            # AC3: Clerk PK from /vaultmtg/staging/ namespace (String -- public).
+            # If D4 (#1072) relocates this to /vaultmtg/app/staging/, that PR updates
+            # this read path (coupling rule already carried by #1072).
+            CLERK_PUBLISHABLE_KEY=$(aws ssm get-parameter \
+              --name /vaultmtg/staging/CLERK_PUBLISHABLE_KEY \
+              --region us-east-1 --query Parameter.Value --output text)
+          fi
+
           # Mask the Sentry DSN immediately so it never appears in log output.
           echo "::add-mask::${SENTRY_DSN}"
           {
             echo "bucket=$BUCKET"
             echo "dist_id=$DIST_ID"
             echo "sentry_dsn=$SENTRY_DSN"
+            echo "clerk_publishable_key=$CLERK_PUBLISHABLE_KEY"
           } >> "$GITHUB_OUTPUT"
 
+      # Build the React SPA with environment-resolved config.
+      # AC3 + AC7 (D5/#975 class closed): VITE_CLERK_PUBLISHABLE_KEY comes exclusively from SSM
+      # via steps.ssm.outputs.clerk_publishable_key -- never from vars.VITE_CLERK_PUBLISHABLE_KEY.
+      # The "staging SPA built with the prod key" failure is now structurally unrepresentable.
       - name: Build React SPA
         working-directory: frontend
         run: npm run build
         env:
           VITE_BFF_URL: ${{ vars.VITE_BFF_URL }}
-          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+          # AC3: Clerk publishable key always from SSM, never from vars.*
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ steps.ssm.outputs.clerk_publishable_key }}
           VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
           # #818: pin PostHog ingest host explicitly. Falls back to app.posthog.com
-          # if the repo var is not yet set (safe — the redirect still works).
+          # if the repo var is not yet set (safe -- the redirect still works).
           VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST || 'https://app.posthog.com' }}
           VITE_SENTRY_DSN: ${{ steps.ssm.outputs.sentry_dsn }}
           VITE_APP_VERSION: ${{ steps.version.outputs.version }}
-          VITE_SENTRY_ENV: production
+          VITE_SENTRY_ENV: ${{ steps.version.outputs.sentry_env }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          # Staging: daemon binds port 9011 (stable=9001). Without this the env-aware SPA
+          # client falls back to 9001 and the staging install cannot reach its daemon.
+          # Value is a loopback port only -- not a secret. Coupled to #667.
+          # Production: unset so the SPA uses the stable default port 9001.
+          VITE_DAEMON_URL: ${{ steps.resolve-env.outputs.env == 'staging' && (vars.VITE_DAEMON_URL || 'http://localhost:9011/api/v1') || '' }}
+          # Staging: pins daemon downloads to the latest signed pre-release build.
+          # Updated automatically by daemon-release.yml. Production omits this var.
+          VITE_DAEMON_VERSION: ${{ steps.resolve-env.outputs.env == 'staging' && vars.VITE_DAEMON_VERSION || '' }}
 
       - name: Sync build output to S3
         run: |
-          aws s3 sync frontend/dist/ s3://${{ steps.ssm.outputs.bucket }} \
+          aws s3 sync frontend/dist/ "s3://${{ steps.ssm.outputs.bucket }}" \
             --delete \
             --region us-east-1
 
       - name: Invalidate CloudFront cache
         run: |
           aws cloudfront create-invalidation \
-            --distribution-id ${{ steps.ssm.outputs.dist_id }} \
+            --distribution-id "${{ steps.ssm.outputs.dist_id }}" \
             --paths "/*"
 
+      # Post-deploy unauthenticated smoke check.
+      # Staging: checks stg-app.hollowmark.app
+      # Production: checks app.vaultmtg.app
+      # Authenticated smoke (staging only) runs in the staging-smoke job below.
       - name: Post-deploy SPA smoke check
         run: |
+          ENV="${{ steps.resolve-env.outputs.env }}"
+          if [ "$ENV" = "staging" ]; then
+            SMOKE_URL="https://stg-app.hollowmark.app/"
+          else
+            SMOKE_URL="https://app.vaultmtg.app/"
+          fi
           for i in $(seq 1 6); do
-            if curl -fsSL https://app.vaultmtg.app/ | grep -q '<div id="root"'; then
-              echo "SPA smoke check passed."
+            if curl -fsSL "$SMOKE_URL" | grep -q '<div id="root"'; then
+              echo "SPA smoke check passed (${ENV})."
               exit 0
             fi
             echo "Attempt $i/6 failed, waiting 10s..."
             sleep 10
           done
-          echo "SPA smoke check failed after 60s"
+          echo "SPA smoke check failed after 60s (${ENV})"
           exit 1
+
+  # Staging-only authenticated smoke suites.
+  # Runs after the deploy job so the artifact is live before Playwright hits it.
+  # Not run for production: authenticated coverage lives in the separate prod canary
+  # (collection-canary.yml / scheduled-prod-canary.yml family), not the deploy workflow.
+  # AC8: preserves the full authed Playwright + BFF API smoke from deploy-spa-staging.yml.
+  staging-smoke:
+    name: Staging Authenticated Smoke
+    needs: deploy
+    if: ${{ (inputs.environment || 'production') == 'staging' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # Cache Playwright browser binaries keyed on package-lock.json so the
+      # 173 MB Chromium zip is only re-downloaded when playwright version changes.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-staging-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            playwright-staging-${{ runner.os }}-
+            playwright-${{ runner.os }}-
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      # Re-read staging SSM secrets for the smoke suites.
+      # Sensitive outputs are not passed across jobs (GHA security model) -- re-read here.
+      # D1 / Erratum E-1: CLERK_SECRET_KEY from /vaultmtg/app/staging/ (canonical post-R-13 path).
+      - name: Read staging smoke SSM parameters
+        id: smoke-ssm
+        run: |
+          STAGING_SMOKE_TOKEN=$(aws ssm get-parameter \
+            --name /vaultmtg/staging/ci-smoke-token \
+            --with-decryption \
+            --region us-east-1 \
+            --query Parameter.Value \
+            --output text)
+          echo "::add-mask::${STAGING_SMOKE_TOKEN}"
+          CLERK_SECRET_KEY=$(aws ssm get-parameter \
+            --name /vaultmtg/app/staging/CLERK_SECRET_KEY \
+            --with-decryption \
+            --region us-east-1 \
+            --query Parameter.Value \
+            --output text)
+          echo "::add-mask::${CLERK_SECRET_KEY}"
+          {
+            echo "staging_smoke_token=${STAGING_SMOKE_TOKEN}"
+            echo "clerk_secret_key=${CLERK_SECRET_KEY}"
+          } >> "$GITHUB_OUTPUT"
+
+      # On ubuntu-latest 24.04 (>=20260525.161) the apt-get needrestart post-install hook
+      # hangs indefinitely in CI without DEBIAN_FRONTEND=noninteractive.
+      - name: Install Playwright browsers (cache miss -- full install)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: frontend
+        run: npx playwright install chromium --with-deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - name: Install Playwright system dependencies (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: frontend
+        run: npx playwright install-deps chromium
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      # SPA authenticated smoke (#678): exercises every protected SPA route via Clerk
+      # testing token injection. CLERK_SECRET_KEY from SSM (ADR-075 D1 + Erratum E-1 -- #1071).
+      # If absent the suite FAILS with INCONCLUSIVE -- does NOT skip.
+      - name: Run SPA browser smoke suite
+        working-directory: frontend
+        run: npm run test:e2e:staging-spa
+        env:
+          STAGING_SPA_URL: ${{ vars.STAGING_SPA_URL }}
+          CLERK_SECRET_KEY: ${{ steps.smoke-ssm.outputs.clerk_secret_key }}
+
+      # BFF API authenticated smoke (#678): exercises auth-gated BFF endpoints (matches, SSE)
+      # with a pre-issued staging Clerk JWT from SSM /vaultmtg/staging/ci-smoke-token.
+      # If STAGING_SMOKE_TOKEN is absent the suite FAILS with INCONCLUSIVE.
+      - name: Run BFF API authenticated smoke suite
+        working-directory: frontend
+        run: npm run test:staging
+        env:
+          STAGING_API_URL: ${{ vars.STAGING_API_URL || 'https://staging-api.hollowmark.app' }}
+          STAGING_SMOKE_TOKEN: ${{ steps.smoke-ssm.outputs.staging_smoke_token }}
+
+      - name: Upload Playwright SPA smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-staging-spa-report
+          path: |
+            frontend/playwright-report-staging-spa/
+            frontend/playwright-report-staging/
+          retention-days: 7
