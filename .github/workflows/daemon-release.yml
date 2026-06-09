@@ -1282,8 +1282,9 @@ jobs:
             --env staging \
             --body "${{ github.ref_name }}" \
             --repo "${{ github.repository }}"
-          gh workflow run deploy-spa-staging.yml \
+          gh workflow run deploy-spa.yml \
             --ref main \
+            --field environment=staging \
             --repo "${{ github.repository }}"
 
       - name: Update BFF_DAEMON_LATEST_VERSION + BFF_DAEMON_RELEASED_AT in SSM

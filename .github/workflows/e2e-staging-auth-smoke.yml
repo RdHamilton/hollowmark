@@ -32,7 +32,7 @@ name: E2E Staging Auth Smoke (vmt-t#678)
 #   FAIL     = at least one surface errored, or auth was unavailable (INCONCLUSIVE)
 #
 # Triggered by:
-#   - workflow_call: from deploy-spa-staging.yml post-deploy
+#   - workflow_call: from deploy-spa.yml (environment: staging) post-deploy
 #   - workflow_dispatch: manual trigger for ad-hoc re-runs
 
 on:
