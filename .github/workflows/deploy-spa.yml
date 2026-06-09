@@ -158,7 +158,8 @@ jobs:
           ENV="${{ steps.resolve-env.outputs.env }}"
 
           if [ "$ENV" = "production" ]; then
-            # TODO(#1072 follow-on): update to /vaultmtg/app/production/spa-* once D4 migration completes.
+            # TODO(#1072 follow-on): once hollowmark-tickets#1072 D4 spa-param migration completes, update
+            #   spa-bucket-name and spa-distribution-id reads to the /vaultmtg/app/production/ namespace.
             BUCKET=$(aws ssm get-parameter \
               --name /vaultmtg/production/spa-bucket-name \
               --region us-east-1 --query Parameter.Value --output text)
