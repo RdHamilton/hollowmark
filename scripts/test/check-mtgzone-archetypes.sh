@@ -16,7 +16,7 @@
 #   environment and the screenshots would be meaningless.
 #
 # Pass condition:
-#   COUNT(*) WHERE format_name = 'Standard' >= 1
+#   COUNT(*) WHERE format = 'standard' >= 1
 #
 # Fail condition (exits 1):
 #   COUNT = 0 -- no Lambda-produced archetypes exist in staging.
@@ -112,7 +112,7 @@ COUNT=$(PGPASSWORD="$PGPASSWORD" psql \
     --no-password \
     -v ON_ERROR_STOP=1 \
     -t -A \
-    -c "SELECT COUNT(*) FROM mtgzone_archetypes WHERE format_name = 'Standard';")
+    -c "SELECT COUNT(*) FROM mtgzone_archetypes WHERE format = 'standard';")
 
 echo "[check-mtgzone-archetypes] mtgzone_archetypes Standard count: ${COUNT}"
 
@@ -121,7 +121,7 @@ if [[ -z "$COUNT" || "$COUNT" -eq 0 ]]; then
     echo "====================================================================" >&2
     echo "PRECHECK FAILED: No Lambda-produced archetypes found in staging." >&2
     echo "" >&2
-    echo "  SELECT COUNT(*) FROM mtgzone_archetypes WHERE format_name = 'Standard'" >&2
+    echo "  SELECT COUNT(*) FROM mtgzone_archetypes WHERE format = 'standard'" >&2
     echo "  returned: ${COUNT:-<empty>}" >&2
     echo "" >&2
     echo "  The meta-scrape Lambda has not run for this staging environment." >&2

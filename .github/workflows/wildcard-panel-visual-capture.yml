@@ -152,11 +152,15 @@ jobs:
               --command-id "$COMMAND_ID" \
               --instance-id "${EC2_INSTANCE_ID}" \
               --region us-east-1 \
-              --output json 2>&1)
+              --no-cli-pager \
+              --output json 2>/dev/null)
             RC=$?
             set -e
             if [ "$RC" -ne 0 ]; then
-              if echo "$RAW" | grep -q "InvocationDoesNotExist"; then
+              # With 2>/dev/null, stderr (including InvocationDoesNotExist) is discarded.
+              # A non-zero RC with empty RAW means the invocation is not yet registered.
+              # A non-zero RC with non-empty RAW means an unexpected API error.
+              if [ -z "$RAW" ]; then
                 echo "[$i/30] Status: Pending (invocation not yet registered)"
               else
                 echo "[$i/30] API error (rc=$RC): $RAW"
