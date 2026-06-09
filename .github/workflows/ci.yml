@@ -655,3 +655,150 @@ jobs:
         name: playwright-e2e-report
         path: frontend/playwright-report
         retention-days: 7
+
+  # --------------------------------------------------------------------------
+  # ff3-secrets-grep: No GitHub Actions secret for deploy
+  # Static grep over the deploy/release/rollback workflow file set for
+  # hardcoded AWS account IDs, Clerk secret key patterns, and
+  # credential-like variable names in env: or with: blocks.
+  # Scoped to a named 8-file array (deploy path only, Ray C1 condition) --
+  # e2e test jobs and daemon-release Authenticode signing excluded by design.
+  # ADR-075 FF-3 / RULE-INFRA-01 staged enablement.
+  # Ray PLAN_VERDICT: APPROVED with condition C1 -- #1129#issuecomment-4664207551
+  # Structural template: hollowmark-infra ssm-parity-fitness.yml ff4 (line 125).
+  # --------------------------------------------------------------------------
+  ff3-secrets-grep:
+    name: FF-3 -- No GitHub Actions secret for deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # RULE-INFRA-01: continue-on-error during staged-enablement warn phase.
+    # Remove this line when promoting to hard-fail after a clean release cycle.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4 SHA-pinned
+
+      - name: FF-3 -- Grep deploy workflows for hardcoded secrets patterns
+        # Guards the D1 failure class: SSM-resident secrets (Clerk secret key,
+        # credentials) being wired as GitHub Actions secrets into deploy/release/
+        # rollback workflows instead of being read from SSM at runtime on EC2.
+        #
+        # Scoped to 8 deploy workflow files (named array, Ray C1 condition).
+        # Excludes:
+        #   - e2e-smoke.yml / e2e-staging-auth-smoke.yml: legitimate test-harness
+        #     Clerk session minting -- not a deploy job.
+        #   - daemon-release.yml: AZURE_CLIENT_SECRET is Authenticode signing (ADR-073).
+        #   - All other CI/lint/utility workflows.
+        #
+        # 0-violation baseline confirmed on main (Ray C1 condition satisfied).
+        # Promote to hard-fail after a clean release cycle (flip continue-on-error).
+        run: |
+          set +e  # Handle failures manually for WARN_ONLY behavior
+
+          VIOLATIONS=0
+
+          # Named file array -- mirrors ff4 scoping discipline in ssm-parity-fitness.yml.
+          # Extended to full credentialed-deploy-path class per Ray C1 condition
+          # (#1129#issuecomment-4664207551): 8 files covering all deploy paths.
+          DEPLOY_FILES=(
+            ".github/workflows/deploy-bff.yml"
+            ".github/workflows/deploy-spa.yml"
+            ".github/workflows/staging-deploy.yml"
+            ".github/workflows/release.yml"
+            ".github/workflows/rollback.yml"
+            ".github/workflows/frontend.yml"
+            ".github/workflows/run-prod-sql.yml"
+            ".github/workflows/run-staging-sql.yml"
+          )
+
+          echo "======================================================="
+          echo "FF-3: No GitHub Actions secret for deploy"
+          echo "Scanning deploy/release/rollback workflow file set for credential antipatterns"
+          echo "File set (8 files -- Ray C1 condition):"
+          for f in "${DEPLOY_FILES[@]}"; do
+            echo "  ${f}"
+          done
+          echo "======================================================="
+
+          for f in "${DEPLOY_FILES[@]}"; do
+            if [[ ! -f "$f" ]]; then
+              echo "  SKIP: ${f} not found"
+              continue
+            fi
+
+            # P1: Clerk secret key referenced via GHA secrets in a deploy workflow.
+            # Guards D1 regression: CLERK_STAGING_SECRET_KEY wired as a GHA secret
+            # instead of being read from SSM at runtime.
+            matches_p1=$(grep -n \
+              "secrets\..*CLERK.*SECRET\|secrets\..*SK_\|secrets\.CLERK_SECRET" "$f" \
+              | grep -v "^\s*#" \
+              | grep -v "GITHUB_TOKEN\|GH_PAT\|AWS_.*ROLE_ARN\|AWS_ACCOUNT_ID" \
+              || true)
+            if [[ -n "$matches_p1" ]]; then
+              echo ""
+              echo "VIOLATION: [FF-3-P1] Clerk secret key passed via GHA secret in ${f}:"
+              while IFS= read -r line; do echo "  ${line}"; done <<< "$matches_p1"
+              VIOLATIONS=$((VIOLATIONS + 1))
+            fi
+
+            # P2: Any GHA secrets.* reference whose name contains SECRET_KEY or similar.
+            # Guards against new credentials being added as GHA secrets instead of SSM.
+            # Allowlist: AZURE_CLIENT_SECRET (ADR-073 signing, excluded from file set
+            # but allowlisted as belt-and-suspenders).
+            matches_p2=$(grep -n "secrets\." "$f" \
+              | grep -iE "SECRET_KEY|_SECRET[^_]|SK_LIVE|SK_TEST" \
+              | grep -v "^\s*#" \
+              | grep -v \
+                "GITHUB_TOKEN\|GH_PAT\|AWS_.*ROLE_ARN\|CODECOV\|ACTIONS_\|AZURE_CLIENT_SECRET" \
+              || true)
+            if [[ -n "$matches_p2" ]]; then
+              echo ""
+              echo "VIOLATION: [FF-3-P2] Secret key pattern via GHA secrets in ${f} (use SSM):"
+              while IFS= read -r line; do echo "  ${line}"; done <<< "$matches_p2"
+              VIOLATIONS=$((VIOLATIONS + 1))
+            fi
+
+            # P3: Hardcoded AWS account ID literals (901347789205).
+            # Should be read from SSM or the OIDC role ARN, not hardcoded.
+            # Allowlist: arn:aws:iam:: role ARNs (OIDC trust -- expected and correct).
+            matches_p3=$(grep -n "901347789205" "$f" \
+              | grep -v "^\s*#" \
+              | grep -v "arn:aws:iam::901347789205:role/" \
+              || true)
+            if [[ -n "$matches_p3" ]]; then
+              echo ""
+              echo "VIOLATION: [FF-3-P3] Hardcoded AWS account ID in ${f} (use role ARN or SSM):"
+              while IFS= read -r line; do echo "  ${line}"; done <<< "$matches_p3"
+              VIOLATIONS=$((VIOLATIONS + 1))
+            fi
+          done
+
+          echo ""
+          echo "======================================================="
+          echo "FF-3 Summary: ${VIOLATIONS} violation class(es) found"
+
+          if [[ "$VIOLATIONS" -eq 0 ]]; then
+            echo "FF-3: PASS"
+          else
+            echo "FF-3: WARN (WARN_ONLY -- non-blocking per ADR-075 RULE-INFRA-01)"
+            echo "Remediation: move flagged values to SSM; read via aws ssm get-parameter."
+            echo "Promote to hard-fail after a clean release cycle (flip continue-on-error)."
+          fi
+          # Always exit 0 in staged-enablement. continue-on-error: true is the belt;
+          # this exit 0 is the suspenders.
+          exit 0
+
+      - name: Write step summary
+        if: always()
+        run: |
+          {
+            echo "### FF-3 -- No GitHub Actions Secret for Deploy"
+            echo ""
+            echo "Scope: 8-file deploy/release/rollback array (Ray C1 condition)"
+            echo ""
+            echo "- **WARN_ONLY** (ADR-075 RULE-INFRA-01 staged enablement)"
+            echo "- See job log for VIOLATION lines, if any."
+            echo "- Promote to hard-fail after a clean release cycle."
+            echo "- Ref: ADR-075 FF-3, Ray PLAN_VERDICT #1129#issuecomment-4664207551"
+          } >> "$GITHUB_STEP_SUMMARY"
