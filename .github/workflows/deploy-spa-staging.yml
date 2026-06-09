@@ -97,6 +97,23 @@ jobs:
             --output text)
           # Mask the smoke token immediately so it never appears in log output.
           echo "::add-mask::${STAGING_SMOKE_TOKEN}"
+          # CLERK_SECRET_KEY (sk_*) is a SecureString; --with-decryption is required.
+          # Read via OIDC->SSM (same role already decrypts sentry-spa-dsn and ci-smoke-token
+          # via the alias/aws/ssm ViaService key policy — no explicit kms:Decrypt grant needed).
+          # ADR-075 D1 + Erratum E-1: canonical path is /vaultmtg/app/staging/CLERK_SECRET_KEY.
+          # /vaultmtg/staging/CLERK_SECRET_KEY (the ADR-075 §A-3 original path) is
+          # ParameterNotFound; /vaultmtg/app/staging/ is the correct post-R-13 namespace.
+          # GitHub secret CLERK_STAGING_SECRET_KEY is intentionally retained until all 3
+          # consumers (deploy-spa-staging.yml, e2e-staging-auth-smoke.yml, e2e-smoke.yml)
+          # are migrated (AC3 deferral per hollowmark-tickets#1071).
+          CLERK_SECRET_KEY=$(aws ssm get-parameter \
+            --name /vaultmtg/app/staging/CLERK_SECRET_KEY \
+            --with-decryption \
+            --region us-east-1 \
+            --query Parameter.Value \
+            --output text)
+          # Mask the Clerk secret key immediately so it never appears in log output.
+          echo "::add-mask::${CLERK_SECRET_KEY}"
           # Publishable key is a plain String (pk_live_* values are public) — no --with-decryption.
           CLERK_PUBLISHABLE_KEY=$(aws ssm get-parameter \
             --name /vaultmtg/staging/CLERK_PUBLISHABLE_KEY \
@@ -108,6 +125,7 @@ jobs:
             echo "dist_id=$DIST_ID"
             echo "sentry_dsn=$SENTRY_DSN"
             echo "staging_smoke_token=${STAGING_SMOKE_TOKEN}"
+            echo "clerk_secret_key=${CLERK_SECRET_KEY}"
             echo "clerk_publishable_key=${CLERK_PUBLISHABLE_KEY}"
           } >> "$GITHUB_OUTPUT"
 
@@ -190,15 +208,15 @@ jobs:
 
       # ── SPA authenticated smoke (#678) ──────────────────────────────────────
       # Exercises every protected SPA route via Clerk testing token injection.
-      # CLERK_STAGING_SECRET_KEY is sourced from GitHub Actions secrets (provisioned
-      # from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY at environment setup time).
+      # CLERK_SECRET_KEY is read from SSM /vaultmtg/app/staging/CLERK_SECRET_KEY
+      # via OIDC->SSM in the ssm step above (ADR-075 D1 + Erratum E-1 — #1071).
       # If absent, the suite FAILS with INCONCLUSIVE — it does NOT skip.
       - name: Run SPA browser smoke suite
         working-directory: frontend
         run: npm run test:e2e:staging-spa
         env:
           STAGING_SPA_URL: ${{ vars.STAGING_SPA_URL }}
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_STAGING_SECRET_KEY }}
+          CLERK_SECRET_KEY: ${{ steps.ssm.outputs.clerk_secret_key }}
 
       # ── BFF API authenticated smoke (#678) ──────────────────────────────────
       # Exercises auth-gated BFF endpoints (matches, SSE) with a pre-issued
