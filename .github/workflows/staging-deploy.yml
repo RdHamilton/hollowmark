@@ -96,5 +96,14 @@ jobs:
     secrets:
       AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
       EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
-      # DEPLOY_BUCKET is not needed for staging — bucket is passed as an input above.
+      # DEPLOY_BUCKET is not needed for staging -- bucket is passed as an input above.
       # Omitting it so the reusable workflow falls back to the input value.
+
+  deploy-spa-staging:
+    name: Deploy SPA to Staging
+    needs: resolve-ref
+    uses: ./.github/workflows/deploy-spa.yml
+    with:
+      environment: staging
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+    secrets: inherit
