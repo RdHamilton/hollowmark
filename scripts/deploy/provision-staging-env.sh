@@ -16,7 +16,7 @@
 #   3. The temporary credentials returned by AssumeRole are exported as
 #      AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN, scoping
 #      every subsequent aws ssm get-parameter and aws secretsmanager call
-#      to the provisioner role's permissions (/vaultmtg/staging/* +
+#      to the provisioner role's permissions (/vaultmtg/app/staging/* +
 #      kms:Decrypt via SSM + secretsmanager on mtga-companion/staging/*).
 #   4. An EXIT trap unsets the env vars after the env file is written so
 #      that no leftover creds remain in the SSM shell environment.
@@ -35,28 +35,72 @@
 # SSM parameter names and file paths are sourced from
 # infra/config/deploy-env.sh -- do NOT hardcode them here.
 #
-# SSM parameters read (all from /vaultmtg/app/staging/* -- matches ec2.yml IAM Statement 3):
-#   /vaultmtg/app/staging/PORT
-#   /vaultmtg/app/staging/ALLOWED_ORIGINS
-#   /vaultmtg/app/staging/CLERK_PUBLISHABLE_KEY  (SecureString, --with-decryption)
-#   /vaultmtg/app/staging/CLERK_SECRET_KEY        (SecureString, --with-decryption)
-#   /vaultmtg/app/staging/CLERK_FRONTEND_API      (SecureString, --with-decryption)
-#   /vaultmtg/app/staging/db-secret-arn
-#   /vaultmtg/app/staging/db-endpoint
-#   /vaultmtg/app/staging/db-name
-#   /vaultmtg/app/staging/resend-api-key          (SecureString, --with-decryption)
-#   /vaultmtg/app/staging/sentry-bff-dsn          (SecureString, --with-decryption)
-#   /vaultmtg/app/staging/discord-bot-token       (SecureString, --with-decryption)
-#   /vaultmtg/app/staging/discord-guild-id
-#   /vaultmtg/app/staging/mailchimp-api-key       (SecureString, --with-decryption)
-#   /vaultmtg/app/staging/mailchimp-list-id
-#   /vaultmtg/app/staging/crisp-website-id
-#   /vaultmtg/app/staging/BFF_DAEMON_LATEST_VERSION  (String, plain — semver e.g. 0.3.5)
-#   /vaultmtg/app/staging/BFF_DAEMON_RELEASED_AT     (String, plain — RFC3339 timestamp)
+# ============================================================================
+# STAGING SSM PARAMETER INVENTORY (ADR-075 D4 -- updated by ticket #1072)
+# ============================================================================
 #
-# Any new parameter added here MUST also be granted in the provisioner
-# role's StagingProvisioningSSMRead policy in
-# mtga-companion-infra/cloudformation/staging-deploy-role.yml.
+# NAMESPACE SPLIT:
+#   /vaultmtg/app/staging/*  -- BFF runtime params (read by THIS script)
+#   /vaultmtg/staging/*      -- SPA/build-time + CI params (see KEEP table below)
+#
+# /vaultmtg/app/staging/* BFF-RUNTIME PARAMS READ BY THIS SCRIPT:
+# (types match prod mirrors in ADR-075 D2; all under ec2.yml IAM Statement 3)
+#
+#   PARAM                        TYPE          ENV KEY WRITTEN
+#   ---------------------------  ------------  ---------------------------
+#   PORT                         String        PORT
+#   ALLOWED_ORIGINS              String        ALLOWED_ORIGINS
+#   CLERK_PUBLISHABLE_KEY        String        CLERK_PUBLISHABLE_KEY
+#   CLERK_SECRET_KEY             SecureString  CLERK_SECRET_KEY
+#   CLERK_FRONTEND_API           String        CLERK_FRONTEND_API
+#   db-secret-arn                String        (used to build DATABASE_URL)
+#   db-endpoint                  String        (used to build DATABASE_URL)
+#   db-name                      String        (used to build DATABASE_URL)
+#   resend-api-key               SecureString  RESEND_API_KEY
+#   sentry-dsn-bff               SecureString  SENTRY_DSN   (canonical name; #1072)
+#   daemon-jwt-secret            SecureString  DAEMON_JWT_SECRET  (added by #1072)
+#   discord-bot-token            SecureString  DISCORD_BOT_TOKEN
+#   discord-guild-id             String        DISCORD_GUILD_ID
+#   mailchimp-api-key            SecureString  MAILCHIMP_API_KEY
+#   mailchimp-list-id            String        MAILCHIMP_LIST_ID
+#   crisp-website-id             String        CRISP_WEBSITE_ID
+#   posthog-api-key              SecureString  POSTHOG_API_KEY    (added by #1072)
+#   posthog-host                 String        POSTHOG_HOST       (added by #1072)
+#   BFF_DAEMON_LATEST_VERSION    String        BFF_DAEMON_LATEST_VERSION
+#   BFF_DAEMON_RELEASED_AT       String        BFF_DAEMON_RELEASED_AT
+#
+# SENTRY NAME ASYMMETRY (resolved by #1072, ADR-075 D4):
+#   prod canonical    = /vaultmtg/app/production/sentry-dsn-bff
+#   staging canonical = /vaultmtg/app/staging/sentry-dsn-bff   <-- added #1072
+#   staging legacy    = /vaultmtg/app/staging/sentry-bff-dsn   <-- to be deleted after
+#   This script reads the canonical name. Legacy alias stays in SSM until a
+#   follow-up confirms no remaining consumers reference it.
+#
+# PARAMS INTENTIONALLY ABSENT FROM /vaultmtg/app/staging/:
+#   bff-admin-token      -- prod bootstrap-carried; staging does not provision
+#                           admin endpoints via this path (ticket #1074)
+#   canary-clerk-*       -- prod canary is prod-only; no staging canary service
+#   meta-scrape-db-password / sync-db-password -- Lambda-specific; no staging Lambda yet
+#   ro-db-secret-arn / app-db-secret-arn       -- prod-only DB access patterns
+#
+# /vaultmtg/staging/* SPA/BUILD-TIME + CI PARAMS (KEEP -- do NOT delete):
+#   PARAM                    TYPE          CONSUMER
+#   -----------------------  ------------  -----------------------------------------
+#   spa-bucket-name          String        deploy-spa-staging.yml (S3 deploy target)
+#   spa-distribution-id      String        deploy-spa-staging.yml (CF invalidation)
+#   sentry-spa-dsn           SecureString  deploy-spa-staging.yml (VITE_SENTRY_DSN)
+#   sentry-auth-token        SecureString  deploy-spa-staging.yml (Sentry release)
+#   ci-smoke-token           SecureString  deploy-spa-staging.yml (smoke auth JWT)
+#   CLERK_PUBLISHABLE_KEY    String        deploy-spa-staging.yml (VITE_CLERK_PK)
+#   CLERK_FRONTEND_API       String        staging-auth-smoke.sh:41 (cross-check)
+#   canary-clerk-secret-key  SecureString  staging-replay-gate.yml:162
+#   canary-clerk-user-id     SecureString  staging-replay-gate.yml:163
+#   ec2-instance-id          String        staging-replay-gate.yml:581 (teardown)
+#
+# Any new BFF-runtime parameter added here MUST also be granted in the
+# provisioner role's StagingProvisioningSSMRead policy in
+# hollowmark-infra/cloudformation/staging-deploy-role.yml.
+# ============================================================================
 
 set -e
 
@@ -176,9 +220,9 @@ echo "AWS_DEFAULT_REGION provisioned."
 # Core BFF settings
 write_param PORT                    "$SSM_STAGING_PORT"
 write_param ALLOWED_ORIGINS         "$SSM_STAGING_ALLOWED_ORIGINS"
-write_param CLERK_PUBLISHABLE_KEY   "$SSM_STAGING_CLERK_PUBLISHABLE_KEY" --with-decryption
+write_param CLERK_PUBLISHABLE_KEY   "$SSM_STAGING_CLERK_PUBLISHABLE_KEY"
 write_param CLERK_SECRET_KEY        "$SSM_STAGING_CLERK_SECRET_KEY" --with-decryption
-write_param CLERK_FRONTEND_API      "$SSM_STAGING_CLERK_FRONTEND_API" --with-decryption
+write_param CLERK_FRONTEND_API      "$SSM_STAGING_CLERK_FRONTEND_API"
 
 # DB credentials: provisioner-side fetch + splice (#2461).
 #
@@ -230,6 +274,7 @@ echo "DATABASE_URL provisioned (credentials spliced from Secrets Manager under p
 
 # VaultMTG service keys
 write_param RESEND_API_KEY          "$SSM_VAULTMTG_STAGING_RESEND_API_KEY"          --with-decryption
+# SENTRY_DSN reads canonical sentry-dsn-bff (added by #1072; matches prod name).
 write_param SENTRY_DSN              "$SSM_VAULTMTG_STAGING_SENTRY_DSN"              --with-decryption
 write_param DISCORD_BOT_TOKEN       "$SSM_VAULTMTG_STAGING_DISCORD_BOT_TOKEN"       --with-decryption
 write_param DISCORD_GUILD_ID        "$SSM_VAULTMTG_STAGING_DISCORD_GUILD_ID"
@@ -237,7 +282,14 @@ write_param MAILCHIMP_API_KEY       "$SSM_VAULTMTG_STAGING_MAILCHIMP_API_KEY"   
 write_param MAILCHIMP_LIST_ID       "$SSM_VAULTMTG_STAGING_MAILCHIMP_LIST_ID"
 write_param CRISP_WEBSITE_ID        "$SSM_VAULTMTG_STAGING_CRISP_WEBSITE_ID"
 
-# Daemon version metadata — lets BFF serve correct data from
+# Daemon JWT secret -- M2M auth for daemon->BFF ingest (added by #1072).
+write_param DAEMON_JWT_SECRET       "$SSM_STAGING_DAEMON_JWT_SECRET"                --with-decryption
+
+# PostHog analytics (added by #1072 -- was previously absent from staging).
+write_param POSTHOG_API_KEY         "$SSM_STAGING_POSTHOG_API_KEY"                  --with-decryption
+write_param POSTHOG_HOST            "$SSM_STAGING_POSTHOG_HOST"
+
+# Daemon version metadata -- lets BFF serve correct data from
 # GET /api/v1/daemon/version instead of falling back to the 0.1.0 default.
 write_param BFF_DAEMON_LATEST_VERSION "$SSM_STAGING_BFF_DAEMON_LATEST_VERSION"
 write_param BFF_DAEMON_RELEASED_AT    "$SSM_STAGING_BFF_DAEMON_RELEASED_AT"
