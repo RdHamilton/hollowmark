@@ -126,7 +126,7 @@ export function DangerZoneSection({
       if (pollTicksRef.current > POLL_MAX_TICKS) {
         stopPolling();
         setDeletionErrorMsg(
-          'Deletion is taking longer than expected -- check your email for a confirmation.',
+          "Deletion is taking longer than expected, but it's still processing — your data will be removed. You can safely close this page.",
         );
         setDeletionPhase('terminal-error');
         return;
@@ -143,7 +143,7 @@ export function DangerZoneSection({
         // Transport error mid-poll -- stop and show error
         stopPolling();
         setDeletionErrorMsg(
-          'Account deletion encountered an error. Please contact support if you do not receive an email confirmation within 24 hours.',
+          'Account deletion encountered an error. Please contact support if the problem persists.',
         );
         setDeletionPhase('terminal-error');
       }
@@ -159,7 +159,7 @@ export function DangerZoneSection({
       startPolling(response.job_id);
     } catch {
       setDeletionErrorMsg(
-        'Account deletion encountered an error. Please contact support if you do not receive an email confirmation within 24 hours.',
+        'Account deletion encountered an error. Please contact support if the problem persists.',
       );
       setDeletionPhase('terminal-error');
     }
@@ -315,9 +315,8 @@ export function DangerZoneSection({
                 className="setting-hint settings-section-description"
                 data-testid="account-deletion-polling"
               >
-                Your account deletion has been submitted. All personal data associated with your
-                account will be permanently removed. Your data will be deleted -- check your email
-                for confirmation when the process is complete.
+                Your account deletion is being processed. All personal data associated with your
+                account will be permanently removed. This may take a few moments.
               </div>
             )}
 
@@ -326,9 +325,8 @@ export function DangerZoneSection({
                 className="setting-hint settings-success-box"
                 data-testid="account-deletion-success"
               >
-                Your account deletion has been submitted. All personal data associated with your
-                account will be permanently removed. Your data will be deleted -- check your email
-                for confirmation when the process is complete.
+                Your account deletion has been scheduled. Your data will be permanently removed
+                within 30 days.
               </div>
             )}
 
@@ -338,7 +336,7 @@ export function DangerZoneSection({
                 data-testid="account-deletion-error"
               >
                 {deletionErrorMsg ??
-                  'Account deletion encountered an error. Please contact support if you do not receive an email confirmation within 24 hours.'}
+                  'Account deletion encountered an error. Please contact support if the problem persists.'}
               </div>
             )}
           </div>
