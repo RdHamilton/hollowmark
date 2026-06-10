@@ -29,7 +29,6 @@ func TestPrintEmbeddedVersionFlag(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "mtga-bff-test")
 	build := exec.Command("go", "build", "-o", binary, ".")
-	build.Dir = "/tmp/claude-worktrees/agent-ae4ed16c9c733271d/services/bff/cmd"
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build failed: %v\n%s", err, out)
