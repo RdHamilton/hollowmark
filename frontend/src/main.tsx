@@ -12,6 +12,7 @@ import { initializeServices, servicesInitMs } from './services/adapter'
 import { trackEvent, initAnalytics } from './services/analytics'
 import StagingErrorBoundary from './components/StagingErrorBoundary'
 import { runLocalStorageMigration, runLocalStorageMigrationV2 } from './utils/localStorageMigration'
+import { clerkLocalization } from './config/clerkLocalization'
 
 // Run localStorage key migrations BEFORE rendering so every component reads
 // from the canonical hollowmark-* keys only.
@@ -80,7 +81,11 @@ const renderApp = () => {
     <StrictMode>
       <Sentry.ErrorBoundary fallback={<p>Something went wrong</p>}>
         <StagingErrorBoundary>
-          <ClerkProvider publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY} ui={ui}>
+          <ClerkProvider
+            publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY}
+            ui={ui}
+            localization={clerkLocalization}
+          >
             <AppProvider>
               <DownloadProvider>
                 <TaskProgressProvider>
