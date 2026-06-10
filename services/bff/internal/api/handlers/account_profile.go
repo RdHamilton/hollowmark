@@ -15,8 +15,9 @@ import (
 	"github.com/RdHamilton/hollowmark/services/bff/internal/identityhash"
 )
 
-// rectificationAuditWriter is the minimal repository surface
-// AccountProfileHandler needs to write audit-log rows.
+// rectificationAuditWriter is the minimal surface AccountProfileHandler needs
+// to write a single audit-log row without a surrounding transaction.
+// Used for display_name changes (audit-only; no DB email sync required).
 type rectificationAuditWriter interface {
 	InsertRectificationEvent(
 		ctx context.Context,
@@ -27,9 +28,19 @@ type rectificationAuditWriter interface {
 	) error
 }
 
-// emailSyncer is the minimal repository surface needed to update users.email.
-type emailSyncer interface {
-	UpdateEmail(ctx context.Context, userID int64, email string) error
+// profileEmailRectifier is the minimal surface for the email-change path.
+// It atomically writes an audit-log row AND updates users.email in a single
+// *sql.Tx (Bianca V1 BLOCK — a real shared transaction, not sequencing).
+// Satisfied by *repository.RectificationService.
+type profileEmailRectifier interface {
+	RectifyProfileTx(
+		ctx context.Context,
+		userID int64,
+		fieldName string,
+		oldValueHash *string,
+		newValueHash string,
+		email string,
+	) error
 }
 
 // ProfileAccountLookup resolves a users.id to the user's account_id.
@@ -76,8 +87,8 @@ var (
 //   - display_name — audit row only (Clerk-owned, not persisted in our DB)
 //   - date_of_birth_year — explicitly rejected with 400 (COPPA-gated, Ray Issue 2)
 type AccountProfileHandler struct {
-	audit        rectificationAuditWriter
-	emailDB      emailSyncer
+	audit        rectificationAuditWriter // display_name audit-only writes
+	emailRectify profileEmailRectifier    // email: atomic audit + users.email UPDATE
 	accounts     ProfileAccountLookup
 	piiSalt      string
 	clerkFetcher clerkPrimaryEmailFetcher // nil in local dev without Clerk
@@ -85,8 +96,9 @@ type AccountProfileHandler struct {
 
 // NewAccountProfileHandler wires the handler with its dependencies.
 //
-//   - audit: rectification audit log repository
-//   - emailDB: users email update repository
+//   - audit: rectification audit log writer (display_name path — audit-only).
+//   - emailRectify: atomic service that writes audit + users.email in one *sql.Tx.
+//     Satisfied by *repository.RectificationService (Bianca V1 BLOCK fix).
 //   - accounts: account lookup repository
 //   - piiSalt: server-side salt for HashPII; sourced from cfg.AnalyticsPIISalt
 //     (SSM /vaultmtg/{env}/analytics-pii-salt, SecureString)
@@ -94,14 +106,14 @@ type AccountProfileHandler struct {
 //     pass nil only in local development (Clerk unavailable)
 func NewAccountProfileHandler(
 	audit rectificationAuditWriter,
-	emailDB emailSyncer,
+	emailRectify profileEmailRectifier,
 	accounts ProfileAccountLookup,
 	piiSalt string,
 	clerkFetcher clerkPrimaryEmailFetcher,
 ) *AccountProfileHandler {
 	return &AccountProfileHandler{
 		audit:        audit,
-		emailDB:      emailDB,
+		emailRectify: emailRectify,
 		accounts:     accounts,
 		piiSalt:      piiSalt,
 		clerkFetcher: clerkFetcher,
@@ -236,26 +248,14 @@ func (h *AccountProfileHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		// Step 6b: Hash with server-side salt — never store raw email in audit log.
 		newHash := identityhash.HashPII(h.piiSalt, clerkEmail)
 
-		// Step 6c: Atomic INSERT into rectification_audit_log + UPDATE users.email.
-		// Both writes are dispatched here; in production they share a *sql.Tx via
-		// the RectificationAuditRepository + UserRepository transactional wrapper
-		// (see services/bff/internal/storage/repository/rectification_service.go).
-		// If the audit INSERT fails, UpdateEmail is not called (short-circuit).
-		// If UpdateEmail fails, the audit INSERT is already in the log — the client
-		// can safely retry (two audit rows for the same change are valid evidence).
-		//
-		// For full crash-safety the caller of this handler must use
-		// RectifyProfileTx (see main.go wiring) which wraps both in one tx.
-		if err := h.audit.InsertRectificationEvent(
-			r.Context(), userID, "email", nil, newHash,
+		// Step 6c: Atomically INSERT audit row + UPDATE users.email in one *sql.Tx.
+		// RectifyProfileTx begins a transaction, runs both writes, and commits.
+		// If either write fails the transaction is rolled back — no partial state
+		// is committed (Bianca V1 BLOCK fix: real shared tx, not sequencing).
+		if err := h.emailRectify.RectifyProfileTx(
+			r.Context(), userID, "email", nil, newHash, clerkEmail,
 		); err != nil {
-			log.Printf("[AccountProfileHandler] InsertRectificationEvent email userID=%d: %v", userID, err)
-			writeJSONError(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		if err := h.emailDB.UpdateEmail(r.Context(), userID, clerkEmail); err != nil {
-			log.Printf("[AccountProfileHandler] UpdateEmail userID=%d: %v", userID, err)
+			log.Printf("[AccountProfileHandler] RectifyProfileTx email userID=%d: %v", userID, err)
 			writeJSONError(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
