@@ -39,6 +39,17 @@ var version string
 
 var port = flag.Int("port", 8080, "HTTP server port")
 
+// printEmbeddedVersion is set by --print-embedded-version.  When true, the
+// binary prints the highest embedded migration version as a bare integer and
+// exits immediately — with no DB connection and no config/SSM load.
+//
+// Used by restart-bff.sh and restart-bff-staging.sh during deployment:
+// the staged binary (already mv'd to /usr/local/bin/ by stage-binary.sh) is
+// invoked with this flag to read the staged embedded version before the
+// service is restarted, so the migration-skew guard compares the about-to-
+// start binary against the DB — not the currently-running binary (#1151).
+var printEmbeddedVersion = flag.Bool("print-embedded-version", false, "print the highest embedded migration version as a bare integer and exit")
+
 func runMigrationsWithRetry(dsn string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -58,6 +69,19 @@ func runMigrationsWithRetry(dsn string, timeout time.Duration) error {
 
 func main() {
 	flag.Parse()
+
+	// --print-embedded-version: print the highest embedded migration version as
+	// a bare integer and exit.  No DB, no config, no SSM — safe to call
+	// mid-deploy against the staged binary.
+	if *printEmbeddedVersion {
+		v, err := storage.EmbeddedMaxVersion()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: EmbeddedMaxVersion: %v\n", err)
+			os.Exit(2)
+		}
+		fmt.Printf("%d\n", v)
+		os.Exit(0)
+	}
 
 	// BFF_PORT env var is used as a fallback when -port is not explicitly
 	// provided on the command line.  This lets the staging systemd unit set
