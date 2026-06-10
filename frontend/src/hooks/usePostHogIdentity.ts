@@ -30,6 +30,7 @@ import {
   trackEvent,
   identifyUser,
   hashPII,
+  hashAccountID,
   resetIdentity,
   startSessionReplay,
   stopSessionReplay,
@@ -58,12 +59,6 @@ export function usePostHogIdentity(): void {
 
     if (isSignedIn && user?.id) {
       if (!identifiedRef.current) {
-        // #819: pass hashed email as person property for PostHog targeting.
-        // hashPII runs client-side — raw email never leaves the browser.
-        void identifyUser(
-          user.id,
-          user.primaryEmailAddress?.emailAddress,
-        );
         // Enable session replay now that we have a confirmed signed-in user.
         // Recording is disabled at init time and only starts here.
         startSessionReplay();
@@ -77,29 +72,45 @@ export function usePostHogIdentity(): void {
           platform: PLATFORM,
         });
 
-        // Fire app_user_identified on every successful identify.
-        // NOTE: user_id is intentionally omitted — frontend hashing pending.
-        trackEvent({
-          name: 'app_user_identified',
-          properties: { auth_method: 'email' },
-        });
+        // Hash the Clerk user_id once for use across all PostHog calls in this
+        // sign-in block. Raw Clerk user_ids must never reach PostHog (ADR-027 /
+        // I-10 / ticket #82). hashAccountID uses unsalted SHA-256 hex[:16] —
+        // the only honest choice when a secret salt cannot be held in a browser
+        // bundle (Ray Q2 ruling, #82). identifyUser also calls hashAccountID
+        // internally; we compute it here so we can use the hash in events too.
+        void (async () => {
+          const hashedUserId = await hashAccountID(user.id);
 
-        // Fire funnel_sign_up_completed once per session.
-        // ADR-027: user_id must be SHA-256 hashed (hex[:16]) before sending to
-        // PostHog — raw Clerk user IDs are never sent as event properties.
-        if (!sessionStorage.getItem(SESSION_KEY)) {
-          void (async () => {
-            const hashedUserId = await hashPII(user.id);
+          // #819: pass hashed email as person property for PostHog targeting.
+          // hashPII runs client-side — raw email never leaves the browser.
+          // identifyUser passes the hashed distinct_id to posthog.identify().
+          await identifyUser(
+            user.id,
+            user.primaryEmailAddress?.emailAddress,
+          );
+
+          // Fire app_user_identified with the hashed user_id (AC3, ticket #82).
+          // ADR-027: cite ADR-027 — this is the analytics identity event.
+          trackEvent({
+            name: 'app_user_identified',
+            properties: { auth_method: 'email', user_id: hashedUserId },
+          });
+
+          // Fire funnel_sign_up_completed once per session.
+          // ADR-027: user_id must be SHA-256 hashed (hex[:16]) before sending to
+          // PostHog — raw Clerk user IDs are never sent as event properties.
+          if (!sessionStorage.getItem(SESSION_KEY)) {
+            const hashedUserIdForFunnel = await hashPII(user.id);
             trackEvent({
               name: 'funnel_sign_up_completed',
               properties: {
                 auth_method: 'email',
-                user_id: hashedUserId,
+                user_id: hashedUserIdForFunnel,
               },
             });
-          })();
-          sessionStorage.setItem(SESSION_KEY, '1');
-        }
+            sessionStorage.setItem(SESSION_KEY, '1');
+          }
+        })();
 
         // Fetch device list and register/unregister device_id super-property.
         // N == 1: register device_id (unambiguous single device).

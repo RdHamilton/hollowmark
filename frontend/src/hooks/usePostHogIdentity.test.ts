@@ -15,7 +15,7 @@ vi.mock('posthog-js', () => ({
   },
 }));
 
-// Mock analytics module so we can spy on identifyUser / trackEvent / hashPII.
+// Mock analytics module so we can spy on identifyUser / trackEvent / hashPII / hashAccountID.
 const mockIdentifyUser = vi.fn();
 const mockTrackEvent = vi.fn();
 const mockResetIdentity = vi.fn();
@@ -26,11 +26,14 @@ const mockUnregisterSuperProperty = vi.fn();
 // hashPII mock returns a deterministic fake hash — sufficiently unlike the raw input
 // to validate the negative assertion that raw IDs are never forwarded.
 const mockHashPII = vi.fn().mockResolvedValue('abcd1234abcd1234');
+// hashAccountID mock: same contract as hashPII but semantically for Clerk user_id distinct_id.
+const mockHashAccountID = vi.fn().mockResolvedValue('abcd1234abcd1234');
 
 vi.mock('@/services/analytics', () => ({
   identifyUser: (...args: unknown[]) => mockIdentifyUser(...args),
   trackEvent: (...args: unknown[]) => mockTrackEvent(...args),
   hashPII: (...args: unknown[]) => mockHashPII(...args),
+  hashAccountID: (...args: unknown[]) => mockHashAccountID(...args),
   resetIdentity: () => mockResetIdentity(),
   startSessionReplay: () => mockStartSessionReplay(),
   stopSessionReplay: () => mockStopSessionReplay(),
@@ -65,6 +68,8 @@ describe('usePostHogIdentity', () => {
     mockGetToken.mockResolvedValue('test-token');
     // Reset hashPII to default deterministic fake hash.
     mockHashPII.mockResolvedValue('abcd1234abcd1234');
+    // Reset hashAccountID to default deterministic fake hash.
+    mockHashAccountID.mockResolvedValue('abcd1234abcd1234');
   });
 
   // ── Pre-existing behaviour (preserved) ─────────────────────────────────────
@@ -88,8 +93,14 @@ describe('usePostHogIdentity', () => {
     const { usePostHogIdentity } = await import('./usePostHogIdentity');
     renderHook(() => usePostHogIdentity());
 
+    // identifyUser is now called inside an async IIFE — flush it.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
     // identifyUser is called with (userId, email?). When no primaryEmailAddress is
-    // set, the second arg is undefined.
+    // set, the second arg is undefined. The hook passes the raw id; analytics.ts
+    // hashes it internally before calling posthog.identify.
     expect(mockIdentifyUser).toHaveBeenCalledWith('user_abc', undefined);
   });
 
@@ -107,6 +118,11 @@ describe('usePostHogIdentity', () => {
     const { usePostHogIdentity } = await import('./usePostHogIdentity');
     renderHook(() => usePostHogIdentity());
 
+    // identifyUser is now inside an async IIFE — flush it.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
     expect(mockIdentifyUser).toHaveBeenCalledWith('user_abc', 'user@example.com');
   });
 
@@ -123,6 +139,11 @@ describe('usePostHogIdentity', () => {
     });
     const { usePostHogIdentity } = await import('./usePostHogIdentity');
     renderHook(() => usePostHogIdentity());
+
+    // identifyUser is now inside an async IIFE — flush it.
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     const [, emailArg] = mockIdentifyUser.mock.calls[0] as [string, string];
     // Hook passes raw email — analytics.ts hashes it before calling posthog.identify.
@@ -274,38 +295,61 @@ describe('usePostHogIdentity', () => {
 
   // ── New behaviour (session lifecycle) ──────────────────────────────────────
 
-  it('fires app_user_identified on successful identify (no user_id in payload)', async () => {
+  // #82 (AC3): app_user_identified now MUST include a hashed user_id field.
+  // These tests replace the prior "no user_id" assertions — the prior behaviour
+  // was intentional deferral; this ticket adds the field with the hashed value.
+
+  it('#82 AC3: fires app_user_identified with hashed user_id field', async () => {
+    const rawUserId = 'user_abc';
+    mockHashAccountID.mockResolvedValue('abcd1234abcd1234');
     mockUseUser.mockReturnValue({
       isLoaded: true,
       isSignedIn: true,
-      user: { id: 'user_abc' },
+      user: { id: rawUserId },
     });
     const { usePostHogIdentity } = await import('./usePostHogIdentity');
     renderHook(() => usePostHogIdentity());
+
+    // Flush async hashAccountID IIFE so trackEvent is called.
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     const identifiedCalls = mockTrackEvent.mock.calls.filter(
       ([e]: [{ name: string }]) => e.name === 'app_user_identified',
     );
     expect(identifiedCalls).toHaveLength(1);
-    // CRITICAL: user_id must NOT appear in the payload (Ray adj. Q3)
-    expect(identifiedCalls[0][0].properties).not.toHaveProperty('user_id');
+    // CRITICAL: user_id MUST appear in the payload (AC3) — this replaces the
+    // prior "not.toHaveProperty('user_id')" assertion from the deferred state.
+    expect(identifiedCalls[0][0].properties).toHaveProperty('user_id');
+    expect(identifiedCalls[0][0].properties.user_id).toBe('abcd1234abcd1234');
   });
 
-  it('NEGATIVE: app_user_identified event never contains user_id field', async () => {
+  it('#82 NEGATIVE: app_user_identified user_id is the hashed value, never the raw Clerk id', async () => {
+    const rawUserId = 'user_secret_id_that_must_never_appear';
+    mockHashAccountID.mockResolvedValue('deadbeef12345678');
     mockUseUser.mockReturnValue({
       isLoaded: true,
       isSignedIn: true,
-      user: { id: 'user_secret_id' },
+      user: { id: rawUserId },
     });
     const { usePostHogIdentity } = await import('./usePostHogIdentity');
     renderHook(() => usePostHogIdentity());
 
+    await act(async () => {
+      await Promise.resolve();
+    });
+
     mockTrackEvent.mock.calls
       .filter(([e]: [{ name: string }]) => e.name === 'app_user_identified')
       .forEach(([e]: [{ properties: Record<string, unknown> }]) => {
-        expect(Object.keys(e.properties)).not.toContain('user_id');
-        // Explicitly confirm no value was snuck in
-        expect(e.properties.user_id).toBeUndefined();
+        // user_id must be present (AC3)
+        expect(e.properties).toHaveProperty('user_id');
+        // user_id must be the hashed value, not the raw Clerk id
+        expect(e.properties.user_id).toBe('deadbeef12345678');
+        expect(e.properties.user_id).not.toBe(rawUserId);
+        // Must not carry 'user_' prefix — raw Clerk ids always start with 'user_'
+        expect(e.properties.user_id as string).not.toMatch(/^user_/);
       });
   });
 
@@ -547,6 +591,33 @@ describe('usePostHogIdentity', () => {
     );
     expect(deviceIdRegisterCall).toBeUndefined();
     unmount();
+  });
+
+  // ── #82: hashAccountID called for app_user_identified user_id ───────────────
+
+  it('#82: hashAccountID is called with the raw Clerk user_id for app_user_identified', async () => {
+    const rawUserId = 'user_clerk_id_for_hash_test';
+    mockHashAccountID.mockResolvedValue('cafe0000cafe0000');
+    mockUseUser.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      user: { id: rawUserId },
+    });
+    const { usePostHogIdentity } = await import('./usePostHogIdentity');
+    renderHook(() => usePostHogIdentity());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // hashAccountID must have been called with the raw Clerk user_id
+    expect(mockHashAccountID).toHaveBeenCalledWith(rawUserId);
+
+    // app_user_identified must carry the result
+    const identifiedCalls = mockTrackEvent.mock.calls.filter(
+      ([e]: [{ name: string }]) => e.name === 'app_user_identified',
+    );
+    expect(identifiedCalls[0][0].properties.user_id).toBe('cafe0000cafe0000');
   });
 
   // T6 (Ray-mandated): single-device → multi-device transition also triggers unregister
