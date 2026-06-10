@@ -1,0 +1,60 @@
+# Build-failure alert caller — hollowmark repo.
+#
+# Fires whenever a tracked workflow run on main completes. If conclusion is
+# 'failure', delegates to the reusable build-failure-alert.yml in hollowmark-infra
+# which reads the Discord bot token from SSM and posts to #team.
+#
+# AC3: only 'failure' triggers a notification; 'cancelled' and 'success' are
+# explicitly ignored (the if: condition below).
+#
+# AC5: scheduled workflow runs fire workflow_run like any other run; the filter
+# on branches: [main] is honoured for both push-triggered and scheduled runs.
+#
+# Loop prevention: this caller listens only to the workflows listed below.
+# "Build Failure Alert (reusable)" is not listed, so this workflow cannot
+# trigger itself.
+#
+# IAM: uses AWS_DEPLOY_ROLE_ARN (github-actions-oidc-deploy). The SSMParameterRead
+# Sid in that role grants ssm:GetParameter on arn:aws:ssm:...:parameter/vaultmtg/*,
+# which covers /vaultmtg/prod/discord-bot-token. No new IAM changes required.
+
+name: Build Failure Notify (hollowmark)
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+      - Integration Tests
+      - Daemon CI
+      - Daemon Install Lifecycle
+      - Daemon Release
+      - Staging Deploy
+      - Release
+      - E2E Smoke Tests
+      - E2E Smoke -- Staging Rebuild Gate (R-17)
+      - E2E Staging Auth Smoke (vmt-t#678)
+      - Security Review Gate (S-07)
+      - Schema-Compat Gate
+      - Sync Service CI
+      - Meta-Scrape Service CI
+      - Layer-5 Replay Reconcile (ADR-052 Mode A)
+      - Staging Corpus-Replay Gate
+      - Tag Namespace Fitness (ADR-023)
+      - Verify macOS Release Notarization
+      - Collection Sync Canary
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  alert:
+    name: Alert on failure
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    uses: RdHamilton/hollowmark-infra/.github/workflows/build-failure-alert.yml@main
+    with:
+      workflow_name: ${{ github.event.workflow_run.name }}
+      run_url: ${{ github.event.workflow_run.html_url }}
+      repo: RdHamilton/hollowmark
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
