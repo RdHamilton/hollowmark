@@ -1032,3 +1032,66 @@ func TestRouter_CORS_SSE_ValidJWT_StreamResponseHasCredentialHeaders(t *testing.
 	}
 	// Deferred cancel() terminates the SSE connection; ts.Close() then completes cleanly.
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Data export route (#886)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// stubExportDeps satisfies the three handler-internal interfaces used by
+// DataExportHandler (exportRateLimiter, dataGatherer, exportAccountLookup) via
+// structural typing.  No real DB access — used only for router-level tests that
+// never reach the handler body (auth middleware fires first).
+type stubExportDeps struct{}
+
+func (s *stubExportDeps) CheckRecentExport(_ context.Context, _ int64) (bool, int64, error) {
+	return false, 0, nil
+}
+
+func (s *stubExportDeps) RecordExport(_ context.Context, _ int64) (string, error) {
+	return "", nil
+}
+
+func (s *stubExportDeps) GatherForUser(_ context.Context, _, _ int64) (*handlers.ExportPayload, error) {
+	return &handlers.ExportPayload{}, nil
+}
+
+func (s *stubExportDeps) GetAccountIDByUserID(_ context.Context, _ int64) (int64, bool, error) {
+	return 1, true, nil
+}
+
+// TestRouter_DataExport_Returns401_WithoutToken verifies that
+// GET /api/v1/account/data-export requires a valid Clerk JWT — the Clerk
+// middleware returns 401 before the handler is invoked.
+func TestRouter_DataExport_Returns401_WithoutToken(t *testing.T) {
+	stub := &stubExportDeps{}
+	deps := depsWithClerk(t)
+	deps.DataExportHandler = handlers.NewDataExportHandler(stub, stub, stub)
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/account/data-export", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/account/data-export without token: want 401, got %d", rr.Code)
+	}
+}
+
+// TestRouter_DataExport_RouteAbsent_WhenHandlerNil verifies that when
+// DataExportHandler is nil (DB not available) the route is not registered —
+// requests receive 404 rather than a panic or 500.
+func TestRouter_DataExport_RouteAbsent_WhenHandlerNil(t *testing.T) {
+	deps := depsWithClerk(t)
+	deps.DataExportHandler = nil // explicitly unset
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/account/data-export", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("GET /api/v1/account/data-export with nil handler: want 404, got %d", rr.Code)
+	}
+}
