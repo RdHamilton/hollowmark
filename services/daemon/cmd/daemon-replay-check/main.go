@@ -7,8 +7,14 @@
 //	  -bff       <staging BFF base URL, e.g. https://staging-api.vaultmtg.app/api/v1> \
 //	  -api-key   <daemon API key for the synthetic account> \
 //	  -account   <synthetic account ID> \
-//	  -golden    <path to staging-outcome.json; default: services/daemon/testdata/corpus/replay-expected/staging-outcome.json> \
+//	  -golden    <path to staging-outcome.json (required)> \
 //	  [-update]  <regenerate the golden artifact from a fresh staging read instead of asserting>
+//
+// The -golden flag is required; there is no default.  Always supply an
+// explicit path.  The canonical corpus artifact lives at
+// services/daemon/testdata/corpus/replay-expected/staging-outcome.json
+// relative to the repo root, but the binary does not infer a path from its
+// working directory (_shared.md §9 — no CWD-relative defaults in binaries).
 //
 // The harness reads the staging state back via the BFF read API scoped to the
 // synthetic account, diffs it against the golden artifact, and exits non-zero
@@ -26,12 +32,13 @@
 //   - Sequence (per-session monotonic counter reset on daemon restart)
 //   - collection.updated, Premier-draft events (FORMAT-CONFIRMED-not-promoted)
 //
-// How #642 invokes this harness:
+// How #642 invokes this harness (note: -golden is required):
 //
 //	VAULTMTG_REPLAY_BFF_URL=https://staging-api.vaultmtg.app/api/v1 \
 //	VAULTMTG_REPLAY_API_KEY=<ssm-secret> \
 //	VAULTMTG_REPLAY_ACCOUNT_ID=<ssm-param> \
-//	  ./daemon-replay-check -golden ./services/daemon/testdata/corpus/replay-expected/staging-outcome.json
+//	  ./daemon-replay-check \
+//	    -golden services/daemon/testdata/corpus/replay-expected/staging-outcome.json
 //
 // All env vars can be overridden by the corresponding flags.
 package main
@@ -52,18 +59,12 @@ func main() {
 	bffFlag := flag.String("bff", envOrDefault("VAULTMTG_REPLAY_BFF_URL", ""), "BFF base URL (required)")
 	apiKeyFlag := flag.String("api-key", envOrDefault("VAULTMTG_REPLAY_API_KEY", ""), "daemon API key for the synthetic account")
 	accountFlag := flag.String("account", envOrDefault("VAULTMTG_REPLAY_ACCOUNT_ID", ""), "synthetic account ID")
-	goldenFlag := flag.String("golden", defaultGoldenPath(), "path to staging-outcome.json")
+	goldenFlag := flag.String("golden", "", "path to staging-outcome.json (required — no default)")
 	updateFlag := flag.Bool("update", false, "regenerate the golden artifact from staging instead of asserting")
 	flag.Parse()
 
-	if *bffFlag == "" {
-		log.Fatal("[replay-check] -bff / VAULTMTG_REPLAY_BFF_URL is required")
-	}
-	if *apiKeyFlag == "" {
-		log.Fatal("[replay-check] -api-key / VAULTMTG_REPLAY_API_KEY is required")
-	}
-	if *accountFlag == "" {
-		log.Fatal("[replay-check] -account / VAULTMTG_REPLAY_ACCOUNT_ID is required")
+	if err := validateFlags(*bffFlag, *apiKeyFlag, *accountFlag, *goldenFlag); err != nil {
+		log.Fatalf("[replay-check] %v", err)
 	}
 
 	actual, err := fetchStagingOutcome(*bffFlag, *apiKeyFlag, *accountFlag)
@@ -102,8 +103,24 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
-func defaultGoldenPath() string {
-	return "services/daemon/testdata/corpus/replay-expected/staging-outcome.json"
+// validateFlags checks that all required flags are non-empty and returns a
+// descriptive error if any are missing.  Extracted from main() so it is
+// testable without invoking os.Exit — the caller (main) calls log.Fatal on
+// the returned error.
+func validateFlags(bff, apiKey, account, golden string) error {
+	if bff == "" {
+		return fmt.Errorf("-bff / VAULTMTG_REPLAY_BFF_URL is required")
+	}
+	if apiKey == "" {
+		return fmt.Errorf("-api-key / VAULTMTG_REPLAY_API_KEY is required")
+	}
+	if account == "" {
+		return fmt.Errorf("-account / VAULTMTG_REPLAY_ACCOUNT_ID is required")
+	}
+	if golden == "" {
+		return fmt.Errorf("-golden is required: supply an explicit path to staging-outcome.json (no CWD-relative default exists)")
+	}
+	return nil
 }
 
 // ─── Golden artifact types ────────────────────────────────────────────────────
