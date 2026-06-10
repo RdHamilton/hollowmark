@@ -274,6 +274,7 @@ func main() {
 		systemAccountHandler              *handlers.SystemAccountHandler
 		wildcardRecommendationsHandler    *handlers.WildcardRecommendationsHandler
 		consentHandler                    *handlers.ConsentHandler
+		dataExportHandler                 *handlers.DataExportHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -509,6 +510,15 @@ func main() {
 			},
 		)
 
+		// DataExportHandler — GET /api/v1/account/data-export (#886).
+		// Synchronous GDPR Art.15 data export; rate-limited to 1 export/24h/user
+		// via dsr_access_log table. Protected by composeClerkAuth.
+		dataExportHandler = handlers.NewDataExportHandler(
+			repository.NewDSRAccessLogRepository(sqlDB),
+			repository.NewDataExportRepository(sqlDB),
+			accountRepo,
+		)
+
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
 		// userRepo was created above for daemonRegisterHandler/daemonAPIKeyAuthMiddl.
 		clerkUserResolver = bffmiddleware.ClerkUserResolver(userRepo)
@@ -603,6 +613,7 @@ func main() {
 		SystemAccountHandler:              systemAccountHandler,
 		WildcardRecommendationsHandler:    wildcardRecommendationsHandler,
 		ConsentHandler:                    consentHandler,
+		DataExportHandler:                 dataExportHandler,
 		HealthzHandler:                    healthzHandler,
 		ClerkAuthMiddl:                    clerkAuthMiddl,
 		ClerkAuthSSEMiddl:                 clerkAuthSSEMiddl,
@@ -764,6 +775,10 @@ type RouterDeps struct {
 	// install dialog) as append-only rows in consent_log.
 	// Protected by composeClerkAuth.
 	ConsentHandler *handlers.ConsentHandler
+	// DataExportHandler serves GET /api/v1/account/data-export (#886).
+	// Synchronous GDPR Art.15 Right of Access export; rate-limited 1/24h/user.
+	// Protected by composeClerkAuth.
+	DataExportHandler *handlers.DataExportHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -1222,6 +1237,19 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 			r.With(auth).Post("/api/v1/account/consent", deps.ConsentHandler.RecordConsent)
 		} else {
 			log.Println("WARN: POST /api/v1/account/consent disabled — Clerk auth middleware not configured")
+		}
+	}
+
+	// GET /api/v1/account/data-export — GDPR Art.15 data export (#886).
+	// Synchronous export of all user-keyed personal data; rate-limited to 1
+	// request per 24-hour window per user (returns 429 + Retry-After if exceeded).
+	// Protected by composeClerkAuth (Clerk session JWT required).
+	if deps.DataExportHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Get("/api/v1/account/data-export", deps.DataExportHandler.Export)
+		} else {
+			log.Println("WARN: GET /api/v1/account/data-export disabled — Clerk auth middleware not configured")
 		}
 	}
 
