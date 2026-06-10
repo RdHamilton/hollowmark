@@ -187,7 +187,7 @@ jobs:
       # ------------------------------------------------------------------
       - name: Assume staging OIDC role
         id: oidc
-        uses: aws-actions/configure-aws-credentials@796449b3e38e3c256861227399e58b780e0e5538  # v6 SHA-pinned
+        uses: aws-actions/configure-aws-credentials@eeef3173841c75826130305a0459e396522e8777  # v6 SHA-pinned
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
