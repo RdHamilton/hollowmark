@@ -178,7 +178,7 @@ SSM_PROD_DAEMON_JWT_SECRET="/vaultmtg/app/production/daemon-jwt-secret"
 #   analytics values before they leave the BFF (ticket #1597, PR #3094).
 #   SecureString.  Required at BFF startup (AnalyticsPIISalt in config.go);
 #   missing value causes config.Load() to abort.
-SSM_PROD_ANALYTICS_PII_SALT="/vaultmtg/prod/analytics-pii-salt"
+SSM_PROD_ANALYTICS_PII_SALT="/vaultmtg/app/production/analytics-pii-salt"
 
 # ───────────────────────────────────────────────────────────────────────────
 # SSM PARAMETER PATHS — STAGING
@@ -204,7 +204,7 @@ SSM_STAGING_DAEMON_JWT_SECRET="/vaultmtg/app/staging/daemon-jwt-secret"
 
 # Analytics PII salt -- staging mirror of prod (ticket #1597).
 # SecureString. Provisioned alongside the prod param.
-SSM_STAGING_ANALYTICS_PII_SALT="/vaultmtg/staging/analytics-pii-salt"
+SSM_STAGING_ANALYTICS_PII_SALT="/vaultmtg/app/staging/analytics-pii-salt"
 
 # Daemon version metadata — staging mirror (see production block above).
 SSM_STAGING_BFF_DAEMON_LATEST_VERSION="/vaultmtg/app/staging/BFF_DAEMON_LATEST_VERSION"
