@@ -88,7 +88,7 @@ jobs:
 
     steps:
     - name: Checkout (for on-instance script template)
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Echo reason (audit log)
       run: |
