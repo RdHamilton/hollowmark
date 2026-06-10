@@ -97,3 +97,69 @@ func TestUserRepository_GetByClerkUserID_NotFound(t *testing.T) {
 		t.Errorf("expected nil for unknown clerk ID, got %+v", u)
 	}
 }
+
+// TestUserRepository_UpdateCOPPAColumns_SetRestricted verifies that
+// UpdateCOPPAColumns stores date_of_birth_year and coppa_restricted correctly.
+// Requires DATABASE_URL + migration for COPPA columns applied.
+func TestUserRepository_UpdateCOPPAColumns_SetRestricted(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewUserRepository(db)
+
+	clerkID := "user_coppa_test_" + t.Name()
+	u, err := repo.UpsertByClerkUserID(context.Background(), clerkID)
+	if err != nil {
+		t.Fatalf("UpsertByClerkUserID: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM users WHERE clerk_user_id = $1", clerkID)
+	})
+
+	dobYear := int16(2014)
+	if err := repo.UpdateCOPPAColumns(context.Background(), u.ID, &dobYear, true); err != nil {
+		t.Fatalf("UpdateCOPPAColumns: %v", err)
+	}
+
+	// Read back and assert.
+	var gotDOBYear *int16
+	var gotCOPPARestricted bool
+	err = db.QueryRowContext(
+		context.Background(),
+		`SELECT date_of_birth_year, coppa_restricted FROM users WHERE id = $1`,
+		u.ID,
+	).Scan(&gotDOBYear, &gotCOPPARestricted)
+	if err != nil {
+		t.Fatalf("SELECT users COPPA columns: %v", err)
+	}
+
+	if gotDOBYear == nil || *gotDOBYear != dobYear {
+		t.Errorf("date_of_birth_year: want %d, got %v", dobYear, gotDOBYear)
+	}
+	if !gotCOPPARestricted {
+		t.Errorf("coppa_restricted: want true, got false")
+	}
+}
+
+// TestUserRepository_UpdateCOPPAColumns_Idempotent verifies that calling
+// UpdateCOPPAColumns twice with the same values is a no-op (no error).
+func TestUserRepository_UpdateCOPPAColumns_Idempotent(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewUserRepository(db)
+
+	clerkID := "user_coppa_idempotent_" + t.Name()
+	u, err := repo.UpsertByClerkUserID(context.Background(), clerkID)
+	if err != nil {
+		t.Fatalf("UpsertByClerkUserID: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM users WHERE clerk_user_id = $1", clerkID)
+	})
+
+	dobYear := int16(2015)
+	if err := repo.UpdateCOPPAColumns(context.Background(), u.ID, &dobYear, false); err != nil {
+		t.Fatalf("first UpdateCOPPAColumns: %v", err)
+	}
+	// Second call with same values — must not error.
+	if err := repo.UpdateCOPPAColumns(context.Background(), u.ID, &dobYear, false); err != nil {
+		t.Fatalf("second UpdateCOPPAColumns (idempotent): %v", err)
+	}
+}

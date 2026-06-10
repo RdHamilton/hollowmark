@@ -161,6 +161,47 @@ func TestLoad_DatabaseURL_StoredInConfig(t *testing.T) {
 	}
 }
 
+// TestLoad_TOSVersion_DefaultWhenUnset verifies that TOSVersion falls back to
+// the compiled-in default when BFF_TOS_VERSION is not set.
+func TestLoad_TOSVersion_DefaultWhenUnset(t *testing.T) {
+	t.Setenv("MTGA_ENV", "development")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("BFF_TOS_VERSION", "")
+	t.Setenv("BFF_PRIVACY_POLICY_VERSION", "")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.TOSVersion == "" {
+		t.Error("TOSVersion: expected non-empty compiled-in fallback, got empty string")
+	}
+	if cfg.PrivacyPolicyVersion == "" {
+		t.Error("PrivacyPolicyVersion: expected non-empty compiled-in fallback, got empty string")
+	}
+}
+
+// TestLoad_TOSVersion_FromEnv verifies that BFF_TOS_VERSION overrides the default.
+func TestLoad_TOSVersion_FromEnv(t *testing.T) {
+	t.Setenv("MTGA_ENV", "development")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("BFF_TOS_VERSION", "2099-01-01")
+	t.Setenv("BFF_PRIVACY_POLICY_VERSION", "2099-02-01")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.TOSVersion != "2099-01-01" {
+		t.Errorf("TOSVersion: want %q, got %q", "2099-01-01", cfg.TOSVersion)
+	}
+	if cfg.PrivacyPolicyVersion != "2099-02-01" {
+		t.Errorf("PrivacyPolicyVersion: want %q, got %q", "2099-02-01", cfg.PrivacyPolicyVersion)
+	}
+}
+
 func TestLoad_StalenessThreshold_ValidPositive(t *testing.T) {
 	t.Setenv("MTGA_ENV", "development")
 	t.Setenv("DATABASE_URL", "")
