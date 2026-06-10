@@ -1,6 +1,7 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import { useAuth, SignInButton } from '@clerk/react';
 import { trackEvent } from '@/services/analytics';
+import ConsentGate from './ConsentGate';
 import './ProtectedRoute.css';
 
 interface ProtectedRouteProps {
@@ -66,10 +67,14 @@ const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
   }
 
   if (children === undefined) {
-    return <Outlet />;
+    return (
+      <ConsentGate>
+        <Outlet />
+      </ConsentGate>
+    );
   }
 
-  return <>{children}</>;
+  return <ConsentGate>{children}</ConsentGate>;
 };
 
 export default ProtectedRoute;

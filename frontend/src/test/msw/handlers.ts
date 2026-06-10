@@ -781,6 +781,18 @@ export const handlers = [
       total: 2,
     });
   }),
+
+  // Consent endpoint (COPPA #884) — always succeeds in integration tests.
+  // E2E post-count tracking happens via window.__CONSENT_POST_COUNT__ in
+  // consentHandler (exported below); the inline handler here uses the same
+  // 201 response shape.
+  http.post(`${BFF_BASE}/account/consent`, () => {
+    if (typeof window !== 'undefined') {
+      const w = window as unknown as Record<string, unknown>;
+      w.__CONSENT_POST_COUNT__ = ((w.__CONSENT_POST_COUNT__ as number | undefined) ?? 0) + 1;
+    }
+    return new HttpResponse(null, { status: 201 });
+  }),
 ];
 
 /**
@@ -807,6 +819,33 @@ export const emptyCollectionHandler = http.post(`${BFF_BASE}/collection`, () => 
 export const errorCollectionHandler = http.post(`${BFF_BASE}/collection`, () => {
   return HttpResponse.json(
     { error: 'Internal Server Error', message: 'Database error', code: 500 },
+    { status: 500 }
+  );
+});
+
+// ─── Consent endpoint (COPPA #884) ───────────────────────────────────────────
+
+/**
+ * Default consent handler — returns 201 and increments the
+ * window.__CONSENT_POST_COUNT__ counter so E2E tests can assert exactly
+ * how many times the POST was made (regression guard for the A4 dup-POST
+ * scenario: returning-user-fresh-tab must count == 0).
+ */
+export const consentHandler = http.post(`${BFF_BASE}/account/consent`, () => {
+  if (typeof window !== 'undefined') {
+    const w = window as unknown as Record<string, unknown>;
+    w.__CONSENT_POST_COUNT__ = ((w.__CONSENT_POST_COUNT__ as number | undefined) ?? 0) + 1;
+  }
+  return new HttpResponse(null, { status: 201 });
+});
+
+/**
+ * Error handler for the consent endpoint — returns 500.
+ * Used to test the ConsentGate error state in integration tests.
+ */
+export const consentErrorHandler = http.post(`${BFF_BASE}/account/consent`, () => {
+  return HttpResponse.json(
+    { error: 'Internal Server Error', message: 'Failed to record consent' },
     { status: 500 }
   );
 });
