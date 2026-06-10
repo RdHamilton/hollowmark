@@ -33,17 +33,6 @@ import (
 	"time"
 )
 
-// tableAccountIDIsNotNullable asserts that account_id on the named table is NOT NULL.
-func tableAccountIDIsNotNullable(t *testing.T, ctx context.Context, db interface {
-	QueryRowContext(ctx context.Context, query string, args ...interface{}) interface {
-		Scan(...interface{}) error
-	}
-}, table string,
-) {
-	t.Helper()
-	// Unused helper — tests use db.QueryRowContext directly via *sql.DB
-}
-
 // TestMigration119AccountID_NotNullEnforced verifies that account_id is NOT NULL
 // on all five tables after migration 000119.
 func TestMigration119AccountID_NotNullEnforced(t *testing.T) {
