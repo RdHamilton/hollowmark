@@ -1149,3 +1149,47 @@ func TestRouter_CollectionImport_RouteAbsent_WhenHandlerNil(t *testing.T) {
 		t.Errorf("POST /api/v1/collection/import with nil handler: want 404, got %d", rr.Code)
 	}
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// /internal/v1 route group (ADR-070 — internal service-to-service auth)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// internalSvcConfig returns a Config with InternalSvcSecret set so the
+// RequireInternalSvcAuth middleware can be constructed in router tests.
+func internalSvcConfig() *config.Config {
+	cfg := minimalConfig()
+	cfg.InternalSvcSecret = "aabbccdd1122334455667788990011aabbccdd1122334455667788990011aabb"
+	return cfg
+}
+
+// TestRouter_InternalHealth_NoToken_Returns401 verifies that
+// GET /internal/v1/health with no token returns 401 (middleware rejects it
+// before the handler runs).
+func TestRouter_InternalHealth_NoToken_Returns401(t *testing.T) {
+	r := BuildRouter(internalSvcConfig(), depsNoAuth(t))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /internal/v1/health no token: want 401, got %d", rr.Code)
+	}
+}
+
+// TestRouter_InternalHealth_NoSecret_Returns401 verifies that when
+// InternalSvcSecret is empty (misconfigured) ALL requests to /internal/v1/*
+// are rejected — fail-closed behaviour.
+func TestRouter_InternalHealth_NoSecret_Returns401(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.InternalSvcSecret = "" // deliberately empty
+	r := BuildRouter(cfg, depsNoAuth(t))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /internal/v1/health empty secret: want 401, got %d", rr.Code)
+	}
+}
