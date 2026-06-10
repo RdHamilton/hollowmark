@@ -112,6 +112,22 @@ type MailchimpPermanentDeleter interface {
 	DeletePermanent(ctx context.Context, email string) error
 }
 
+// ErrorReporter is satisfied by observability.Reporter (a zero-value adapter
+// wrapping the package-level observability.ReportError function).  It is
+// separated into an interface so RunErasureCascade remains independently
+// testable without a real Sentry hub.
+//
+// The signature mirrors observability.ReportError exactly:
+//
+//	func ReportError(ctx context.Context, err error, tags ...map[string]string)
+//
+// A nil Reporter field is legal — the alert is silently skipped (e.g. in
+// tests that do not need Sentry assertions).  Production wires in
+// observability.Reporter{} via the Deps struct.
+type ErrorReporter interface {
+	ReportError(ctx context.Context, err error, tags ...map[string]string)
+}
+
 // DBOps is the combined interface that the deletion repository must satisfy.
 // It groups all database-side operations for the cascade.
 type DBOps interface {
@@ -133,6 +149,10 @@ type Deps struct {
 	PostHog   PostHogDeleter
 	Clerk     ClerkDeleter
 	Mailchimp MailchimpPermanentDeleter
+	// Reporter receives a Sentry alert when a cascade step fails (#887 AC5).
+	// Nil is safe — the alert is skipped when not wired (e.g. unit tests that
+	// do not assert Sentry behavior).  Production sets this to observability.Reporter{}.
+	Reporter ErrorReporter
 }
 
 // RunErasureCascade executes the full 9-step GDPR Art.17 erasure cascade for a
@@ -150,7 +170,33 @@ type Deps struct {
 // On any step failure the cascade halts and returns the error; the
 // deletion_audit_log row retains a NULL completed_at so the AC7 runbook can
 // identify and re-trigger incomplete jobs by job_id.
+//
+// When deps.Reporter is non-nil, a Sentry alert is fired on the first step
+// failure with structured tags: step (short key e.g. "step4a"), job_id, and
+// account_id_hash (SHA-256 prefix of the accountID string — no raw PII).
 func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, accountID int64, deps Deps) error {
+	// accountIDHash is the privacy-safe tag value used in Sentry alerts.
+	// It reuses the same identityhash.HashAccountID function used by PostHog
+	// emits throughout the BFF (FM-2 / I-10: single implementation).
+	accountIDHash := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
+
+	// reportStepErr fires a Sentry alert via deps.Reporter (when non-nil), then
+	// wraps and returns the error so the caller can halt the cascade.
+	//
+	//   stepKey — short canonical identifier written to the "step" Sentry tag
+	//             (e.g. "step4a"); keep stable — runbooks key on these values.
+	//   desc    — human-readable label included in the wrapped error message.
+	reportStepErr := func(stepKey, desc string, err error) error {
+		if deps.Reporter != nil {
+			deps.Reporter.ReportError(ctx, err, map[string]string{
+				"step":            stepKey,
+				"job_id":          jobID,
+				"account_id_hash": accountIDHash,
+			})
+		}
+		return fmt.Errorf("erasure %s (%s): %w", stepKey, desc, err)
+	}
+
 	// -----------------------------------------------------------------------
 	// Step 0 — Capture email + all client_id strings BEFORE any deletion.
 	//
@@ -161,7 +207,7 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// -----------------------------------------------------------------------
 	email, clientIDs, err := deps.DB.CapturePreJobData(ctx, userID, accountID)
 	if err != nil {
-		return fmt.Errorf("erasure step0 (capture pre-job data): %w", err)
+		return reportStepErr("step0", "capture pre-job data", err)
 	}
 
 	// -----------------------------------------------------------------------
@@ -172,20 +218,18 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// blocks new daemon ingest writes from hitting the tenant.
 	// -----------------------------------------------------------------------
 	if err := deps.DB.SoftDeleteUser(ctx, userID); err != nil {
-		return fmt.Errorf("erasure step1 (soft-delete user): %w", err)
+		return reportStepErr("step1", "soft-delete user", err)
 	}
 
 	// -----------------------------------------------------------------------
 	// Step 2 — PostHog bulk-delete.
 	//
 	// The distinct_id is SHA-256(accountID string)[:16] — the same hash used
-	// by all PostHog emits in the BFF (identityhash.HashAccountID).  We
-	// recompute it here from the accountID, which must still be live in Clerk
-	// at this point (Clerk delete is Step 5, AFTER this step).
+	// by all PostHog emits in the BFF (identityhash.HashAccountID).  We pass
+	// accountIDHash computed above — both uses derive from the same accountID.
 	// -----------------------------------------------------------------------
-	distinctID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
-	if err := deps.PostHog.DeletePerson(ctx, distinctID); err != nil {
-		return fmt.Errorf("erasure step2 (posthog bulk-delete): %w", err)
+	if err := deps.PostHog.DeletePerson(ctx, accountIDHash); err != nil {
+		return reportStepErr("step2", "posthog bulk-delete", err)
 	}
 
 	// Step 3 — ML training data: no-op.  ML data is anonymous (D7a, ADR-058
@@ -202,30 +246,30 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// deleted using the client_ids captured in Step 0.
 	// (quest_session_tracking has a BIGINT FK and is handled by Step 4e cascade.)
 	if err := deps.DB.DeleteTextKeyedRows(ctx, clientIDs); err != nil {
-		return fmt.Errorf("erasure step4a (text-keyed delete): %w", err)
+		return reportStepErr("step4a", "text-keyed delete", err)
 	}
 
 	// 4b — Anonymize consent_log in-place: null ip_address_hash + metadata.
 	// The accounts hard-delete (step4e) then fires the SET NULL cascade on
 	// consent_log.account_id (migration #885, coupled with #891).
 	if err := deps.DB.AnonymizeConsentLog(ctx, accountID); err != nil {
-		return fmt.Errorf("erasure step4b (anonymize consent_log): %w", err)
+		return reportStepErr("step4b", "anonymize consent_log", err)
 	}
 
 	// 4c — waitlist_entries PII: DELETE WHERE email = <captured> (CITEXT match).
 	if err := deps.DB.DeleteWaitlistEntry(ctx, email); err != nil {
-		return fmt.Errorf("erasure step4c (waitlist delete): %w", err)
+		return reportStepErr("step4c", "waitlist delete", err)
 	}
 
 	// 4d — Hard-delete users row; cascades to api_keys via users(id) FK.
 	if err := deps.DB.HardDeleteUser(ctx, userID); err != nil {
-		return fmt.Errorf("erasure step4d (hard-delete user): %w", err)
+		return reportStepErr("step4d", "hard-delete user", err)
 	}
 
 	// 4e — Hard-delete accounts row; fires ON DELETE CASCADE on all BIGINT FK
 	// user-keyed tables (25+ tables, ADR-056 FM-3) and SET NULL on consent_log.
 	if err := deps.DB.HardDeleteAccount(ctx, accountID); err != nil {
-		return fmt.Errorf("erasure step4e (hard-delete account): %w", err)
+		return reportStepErr("step4e", "hard-delete account", err)
 	}
 
 	// -----------------------------------------------------------------------
@@ -235,7 +279,7 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// would destroy the hash mapping used by PostHog.
 	// -----------------------------------------------------------------------
 	if err := deps.Clerk.DeleteUser(ctx, clerkUserID); err != nil {
-		return fmt.Errorf("erasure step5 (clerk delete): %w", err)
+		return reportStepErr("step5", "clerk delete", err)
 	}
 
 	// -----------------------------------------------------------------------
@@ -246,7 +290,7 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// Unsubscribe — Unsubscribe retains the contact record (Q2 ruling).
 	// -----------------------------------------------------------------------
 	if err := deps.Mailchimp.DeletePermanent(ctx, email); err != nil {
-		return fmt.Errorf("erasure step6 (mailchimp delete-permanent): %w", err)
+		return reportStepErr("step6", "mailchimp delete-permanent", err)
 	}
 
 	// Step 7 — Cache invalidation: no-op (no Redis in current architecture).
@@ -257,7 +301,7 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// Step 8 — Mark deletion_audit_log.completed_at = NOW().
 	// -----------------------------------------------------------------------
 	if err := deps.DB.RecordJobComplete(ctx, jobID); err != nil {
-		return fmt.Errorf("erasure step8 (record job complete): %w", err)
+		return reportStepErr("step8", "record job complete", err)
 	}
 
 	return nil
