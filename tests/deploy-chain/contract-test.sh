@@ -574,7 +574,9 @@ echo
 echo '== C10: restart scripts contain migration-skew guard =='
 # Both restart-bff.sh and restart-bff-staging.sh MUST contain the migration-skew
 # guard introduced in #1036.  The guard must:
-#   1. Read /healthz migration_version (curl + migration_version JSON key)
+#   1. Read the STAGED binary's embedded migration version via
+#      --print-embedded-version (the guard validates the binary it is about
+#      to START, not the old running one — see #1151)
 #   2. Read the DB schema_migrations MAX version (schema_migrations)
 #   3. Provide a FORCE_RESTART break-glass override
 # A restart script that lacks any of these elements cannot prevent the
@@ -584,8 +586,8 @@ for f in "$DEPLOY_SCRIPTS_DIR"/restart-bff.sh "$DEPLOY_SCRIPTS_DIR"/restart-bff-
   [[ -f "$f" ]] || { fail "$(basename "$f") missing -- cannot verify migration-skew guard"; c10_ok=0; continue; }
   label=$(basename "$f")
 
-  if ! grep -q "migration_version" "$f"; then
-    fail "$label: does not read migration_version from /healthz -- migration-skew guard missing (#1036)"
+  if ! grep -q "print-embedded-version" "$f"; then
+    fail "$label: does not read the staged binary's embedded version via --print-embedded-version -- migration-skew guard missing (#1036/#1151)"
     c10_ok=0
   fi
 
