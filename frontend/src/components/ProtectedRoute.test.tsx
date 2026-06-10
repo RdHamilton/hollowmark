@@ -15,6 +15,12 @@ vi.mock('@/services/analytics', () => ({
   trackEvent: (...args: unknown[]) => mockTrackEvent(...args),
 }));
 
+// Stub ConsentGate as a transparent pass-through for ProtectedRoute unit tests.
+// ConsentGate behaviour is independently covered in ConsentGate.test.tsx.
+vi.mock('./ConsentGate', () => ({
+  default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 // ─── Children (wrapper) usage ────────────────────────────────────────────────
 
 describe('ProtectedRoute — children (wrapper) usage', () => {
