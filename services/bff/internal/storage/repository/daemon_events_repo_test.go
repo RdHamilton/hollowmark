@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
 	"time"
@@ -9,14 +10,41 @@ import (
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
+// seedTestUser inserts a minimal users row and returns its auto-generated id.
+// The row is deleted via t.Cleanup so each test is fully self-contained.
+// uniqueSuffix must be unique across concurrent test runs; using a per-test
+// suffix (e.g. derived from t.Name()) avoids clerk_user_id UNIQUE conflicts
+// when tests run in parallel.
+func seedTestUser(t *testing.T, db *sql.DB, uniqueSuffix string) int64 {
+	t.Helper()
+
+	var userID int64
+	if err := db.QueryRowContext(
+		context.Background(),
+		`INSERT INTO users (email, clerk_user_id) VALUES ($1, $2) RETURNING id`,
+		"de-test-"+uniqueSuffix+"@test.local",
+		"de-clerk-"+uniqueSuffix,
+	).Scan(&userID); err != nil {
+		t.Fatalf("seedTestUser(%q): %v", uniqueSuffix, err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+	})
+
+	return userID
+}
+
 func TestDaemonEventsRepository_Insert_NoError(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewDaemonEventsRepository(db)
 
+	userID := seedTestUser(t, db, "insert-noerror")
+
 	payload := json.RawMessage(`{"key":"value"}`)
 	occurredAt := time.Now().UTC().Truncate(time.Second)
 
-	err := repo.Insert(context.Background(), 1, "test-account-1", "match.game_started", payload, occurredAt, "", 0)
+	err := repo.Insert(context.Background(), userID, "test-account-1", "match.game_started", payload, occurredAt, "", 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -25,7 +53,8 @@ func TestDaemonEventsRepository_Insert_NoError(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(
 			context.Background(),
-			`DELETE FROM daemon_events WHERE user_id = 1 AND account_id = 'test-account-1' AND event_type = 'match.game_started'`,
+			`DELETE FROM daemon_events WHERE user_id = $1 AND account_id = 'test-account-1' AND event_type = 'match.game_started'`,
+			userID,
 		)
 	})
 }
@@ -34,11 +63,13 @@ func TestDaemonEventsRepository_Insert_WithEventID(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewDaemonEventsRepository(db)
 
+	userID := seedTestUser(t, db, "insert-eventid")
+
 	payload := json.RawMessage(`{"key":"value"}`)
 	occurredAt := time.Now().UTC().Truncate(time.Second)
 	eventID := "evt_test_001"
 
-	err := repo.Insert(context.Background(), 1, "test-account-eventid", "match.completed", payload, occurredAt, eventID, 0)
+	err := repo.Insert(context.Background(), userID, "test-account-eventid", "match.completed", payload, occurredAt, eventID, 0)
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -51,12 +82,12 @@ func TestDaemonEventsRepository_Insert_WithEventID(t *testing.T) {
 	})
 
 	// Verify idempotency: second insert with same event_id must be a no-op.
-	err = repo.Insert(context.Background(), 1, "test-account-eventid", "match.completed", payload, occurredAt, eventID, 0)
+	err = repo.Insert(context.Background(), userID, "test-account-eventid", "match.completed", payload, occurredAt, eventID, 0)
 	if err != nil {
 		t.Fatalf("idempotent Insert: %v", err)
 	}
 
-	rows, err := repo.ListByUserID(context.Background(), 1, 100)
+	rows, err := repo.ListByUserID(context.Background(), userID, 100)
 	if err != nil {
 		t.Fatalf("ListByUserID: %v", err)
 	}
@@ -76,7 +107,7 @@ func TestDaemonEventsRepository_ListByUserID_OrderedNewestFirst(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewDaemonEventsRepository(db)
 
-	const userID int64 = 9991
+	userID := seedTestUser(t, db, "list-ordered")
 	const accountID = "test-account-ordered"
 
 	older := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
@@ -125,8 +156,8 @@ func TestDaemonEventsRepository_ListByUserID_ScopedToUser(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewDaemonEventsRepository(db)
 
-	const userA int64 = 9992
-	const userB int64 = 9993
+	userA := seedTestUser(t, db, "scope-usera")
+	userB := seedTestUser(t, db, "scope-userb")
 	const accountA = "test-account-a"
 	const accountB = "test-account-b"
 
@@ -176,7 +207,7 @@ func TestDaemonEventsRepository_HasRecentEvent_Connected(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewDaemonEventsRepository(db)
 
-	const userID int64 = 9994
+	userID := seedTestUser(t, db, "health-connected")
 	const accountID = "test-account-health-connected"
 
 	payload := json.RawMessage(`{}`)
@@ -209,6 +240,10 @@ func TestDaemonEventsRepository_HasRecentEvent_Disconnected_NoRows(t *testing.T)
 	repo := repository.NewDaemonEventsRepository(db)
 
 	// Use a user ID that has no rows in the test database.
+	// HasRecentEventByUserID is a read-only query — it does not INSERT into
+	// daemon_events, so the FK constraint does not apply here.  The constant
+	// 9995 is kept to preserve the intent of the original test (query for a
+	// user_id with zero rows and assert connected=false).
 	const userID int64 = 9995
 
 	connected, err := repo.HasRecentEventByUserID(context.Background(), userID, 60*time.Second)
@@ -225,7 +260,7 @@ func TestDaemonEventsRepository_HasRecentEvent_Disconnected_OldRow(t *testing.T)
 	db := openTestDB(t)
 	repo := repository.NewDaemonEventsRepository(db)
 
-	const userID int64 = 9996
+	userID := seedTestUser(t, db, "health-old")
 	const accountID = "test-account-health-old"
 
 	payload := json.RawMessage(`{}`)
@@ -266,8 +301,10 @@ func TestDaemonEventsRepository_HasRecentEvent_ScopedToUser(t *testing.T) {
 	repo := repository.NewDaemonEventsRepository(db)
 
 	// User A has a recent row; user B must not see it as connected.
-	const userA int64 = 9997
-	const userB int64 = 9998
+	// Both are seeded as real users rows so their IDs satisfy the FK on any
+	// future INSERT; userB's check is read-only here but seeding is consistent.
+	userA := seedTestUser(t, db, "health-scope-a")
+	userB := seedTestUser(t, db, "health-scope-b")
 	const accountA = "test-account-health-a"
 
 	payload := json.RawMessage(`{}`)
@@ -320,7 +357,7 @@ func TestDaemonEventsRepository_Insert_SequencePersisted(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewDaemonEventsRepository(db)
 
-	const userID int64 = 9999
+	userID := seedTestUser(t, db, "seq-persisted")
 	const accountID = "test-account-seq"
 	const wantSequence uint64 = 42
 
