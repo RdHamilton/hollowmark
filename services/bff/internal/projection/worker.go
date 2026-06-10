@@ -17,6 +17,7 @@ import (
 	"github.com/RdHamilton/hollowmark/services/contract"
 	"github.com/posthog/posthog-go"
 
+	"github.com/RdHamilton/hollowmark/services/bff/internal/identityhash"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
@@ -510,11 +511,10 @@ func (w *Worker) writeToDLQ(ctx context.Context, row *repository.DaemonEventRow,
 
 // hashAccountIDProjection returns a privacy-safe representation of accountID
 // for PostHog: SHA-256 hex, first 16 characters.  No raw PII is ever sent.
-// Mirrors handlers.hashAccountID — defined here to avoid a cross-package
-// import of the handlers package.
+//
+// Delegates to identityhash.HashAccountID per the FM-2 one-implementation rule.
 func hashAccountIDProjection(accountID string) string {
-	sum := sha256.Sum256([]byte(accountID))
-	return fmt.Sprintf("%x", sum)[:16]
+	return identityhash.HashAccountID(accountID)
 }
 
 // emitMissingField emits a projection.missing_field PostHog metric for an
