@@ -225,3 +225,216 @@ describe('DangerZoneSection', () => {
   // (tested implicitly — the DataRecoverySection test file asserts this)
   // ---------------------------------------------------------------------------
 });
+
+// ---------------------------------------------------------------------------
+// DangerZoneSection — account deletion (#887)
+// ---------------------------------------------------------------------------
+
+import { within, act } from '@testing-library/react';
+import type { AccountDeletionStatusResponse } from '../AccountDeletionModal';
+import type { DangerZoneSectionProps } from './DangerZoneSection';
+
+describe('DangerZoneSection — account deletion (#887)', () => {
+  const baseProps: DangerZoneSectionProps = {
+    isConnected: true,
+    onUninstallDaemon: vi.fn().mockResolvedValue(''),
+  };
+
+  it('renders "Delete my account" button when onDeleteAccount + onGetDeletionStatus are provided', () => {
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={vi.fn()}
+        onGetDeletionStatus={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('danger-zone-delete-account-button')).toBeInTheDocument();
+  });
+
+  it('does NOT render "Delete my account" button when props are omitted', () => {
+    render(<DangerZoneSection {...baseProps} />);
+    expect(screen.queryByTestId('danger-zone-delete-account-button')).not.toBeInTheDocument();
+  });
+
+  it('opens the confirmation modal when "Delete my account" is clicked', () => {
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={vi.fn()}
+        onGetDeletionStatus={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('cancel: modal closes and entry button is visible again', () => {
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={vi.fn()}
+        onGetDeletionStatus={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/i }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByTestId('danger-zone-delete-account-button')).toBeInTheDocument();
+  });
+
+  it('happy path: confirm calls onDeleteAccount + transitions to polling then terminal-success', async () => {
+    const mockStatus: AccountDeletionStatusResponse = {
+      job_id: 'job-1',
+      status: 'completed',
+      requested_at: '2026-06-10T00:00:00Z',
+    };
+    const onDeleteAccount = vi.fn().mockResolvedValue({ job_id: 'job-1' });
+    const onGetDeletionStatus = vi.fn().mockResolvedValue(mockStatus);
+
+    vi.useFakeTimers();
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={onDeleteAccount}
+        onGetDeletionStatus={onGetDeletionStatus}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: /Delete my account/i }));
+    });
+
+    // Advance one poll tick
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('account-deletion-success')).toBeInTheDocument();
+    });
+    expect(onDeleteAccount).toHaveBeenCalledTimes(1);
+    expect(onGetDeletionStatus).toHaveBeenCalledWith('job-1');
+  });
+
+  it('DELETE transport error: terminal-error is shown', async () => {
+    const onDeleteAccount = vi.fn().mockRejectedValue(new Error('network error'));
+    const onGetDeletionStatus = vi.fn();
+
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={onDeleteAccount}
+        onGetDeletionStatus={onGetDeletionStatus}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: /Delete my account/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('account-deletion-error')).toBeInTheDocument();
+    });
+    expect(onGetDeletionStatus).not.toHaveBeenCalled();
+  });
+
+  it('status GET transport error mid-poll: terminal-error is shown', async () => {
+    const onDeleteAccount = vi.fn().mockResolvedValue({ job_id: 'job-2' });
+    const onGetDeletionStatus = vi.fn().mockRejectedValue(new Error('503'));
+
+    vi.useFakeTimers();
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={onDeleteAccount}
+        onGetDeletionStatus={onGetDeletionStatus}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: /Delete my account/i }));
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('account-deletion-error')).toBeInTheDocument();
+    });
+  });
+
+  it('poll-cap-timeout: after 120 ticks without completion, terminal-error is shown', async () => {
+    const onDeleteAccount = vi.fn().mockResolvedValue({ job_id: 'job-cap' });
+    const pendingStatus: AccountDeletionStatusResponse = {
+      job_id: 'job-cap',
+      status: 'pending',
+      requested_at: '2026-06-10T00:00:00Z',
+    };
+    const onGetDeletionStatus = vi.fn().mockResolvedValue(pendingStatus);
+
+    vi.useFakeTimers();
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={onDeleteAccount}
+        onGetDeletionStatus={onGetDeletionStatus}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: /Delete my account/i }));
+    });
+
+    // Advance past the 120-tick cap (121 ticks x 5000ms = 605_000ms)
+    await act(async () => {
+      vi.advanceTimersByTime(605_000);
+    });
+
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('account-deletion-error')).toBeInTheDocument();
+    });
+  });
+
+  it('polling phase: shows polling indicator after DELETE 202', async () => {
+    const onDeleteAccount = vi.fn().mockResolvedValue({ job_id: 'job-poll' });
+    // onGetDeletionStatus never resolves — keeps polling indefinitely
+    const onGetDeletionStatus = vi.fn().mockReturnValue(new Promise(() => {}));
+
+    vi.useFakeTimers();
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={onDeleteAccount}
+        onGetDeletionStatus={onGetDeletionStatus}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: /Delete my account/i }));
+    });
+
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('account-deletion-polling')).toBeInTheDocument();
+    });
+  });
+});

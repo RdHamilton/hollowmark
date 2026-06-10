@@ -36,6 +36,7 @@ export * as bffDraftHistory from './bffDraftHistory';
 export * as bffDaemons from './bffDaemons';
 export * as bffHomeSummary from './bffHomeSummary';
 export * as bffWildcardAdvisor from './bffWildcardAdvisor';
+export * as account from './account';
 
 // Re-export commonly used types
 export type {
@@ -177,3 +178,9 @@ export type {
   WildcardAdvisorResponse,
   WildcardAdvisorResult,
 } from './bffWildcardAdvisor';
+
+export type {
+  AccountDeletionResponse,
+  AccountDeletionStatusResponse,
+  DeletionJobStatus,
+} from './account';
