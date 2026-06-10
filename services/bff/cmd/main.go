@@ -646,6 +646,15 @@ func main() {
 		log.Println("WARN: BFF_E2E_UNGUARDED_SSE=true — SSE endpoint is unauthenticated (E2E mode only)")
 	}
 
+	// RequireInternalSvcAuth is always constructed regardless of env — the
+	// middleware itself fails closed when the secret is empty so there is no
+	// unauthenticated exposure. In production/staging cfg.InternalSvcSecret is
+	// required by config.Load(); in development it may be empty.
+	internalSvcAuthMiddl := bffmiddleware.RequireInternalSvcAuth(cfg.InternalSvcSecret)
+	if cfg.InternalSvcSecret == "" {
+		log.Println("INTERNAL_SVC_SECRET not set — /internal/v1/* routes fail closed (development only).")
+	}
+
 	r := BuildRouter(cfg, RouterDeps{
 		Broker:                            broker,
 		IngestHandler:                     ingestHandler,
@@ -685,6 +694,7 @@ func main() {
 		AdminRestrictionHandler:           adminRestrictionHandler,
 		AccountProfileHandler:             accountProfileHandler,
 		HealthzHandler:                    healthzHandler,
+		InternalSvcAuthMiddl:              internalSvcAuthMiddl,
 		ClerkAuthMiddl:                    clerkAuthMiddl,
 		ClerkAuthSSEMiddl:                 clerkAuthSSEMiddl,
 		ClerkOAuthMiddl:                   clerkOAuthMiddl,
@@ -873,7 +883,13 @@ type RouterDeps struct {
 	AccountProfileHandler *handlers.AccountProfileHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
-	ClerkAuthMiddl func(http.Handler) http.Handler
+	// InternalSvcAuthMiddl protects the /internal/v1/* route group with
+	// HMAC-SHA256 service-to-service JWT verification (ADR-070).
+	// Constructed from cfg.InternalSvcSecret by main.go; when nil (empty
+	// secret or no DB) the middleware is RequireInternalSvcAuth("") which
+	// fails closed — no request reaches an internal handler unauthenticated.
+	InternalSvcAuthMiddl func(http.Handler) http.Handler
+	ClerkAuthMiddl       func(http.Handler) http.Handler
 	// ClerkAuthSSEMiddl is used exclusively for GET /api/v1/events.  It accepts
 	// the Clerk session cookie as a fallback token source in addition to the
 	// standard Authorization: Bearer header.  This is required because the
@@ -966,6 +982,32 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// monitors.  Returns env and migration status.  Intentionally unauthenticated.
 	if deps.HealthzHandler != nil {
 		r.Get("/healthz", deps.HealthzHandler.ServeHTTP)
+	}
+
+	// ── /internal/v1/* route group (ADR-070 — internal service-to-service auth) ─
+	// All routes under this prefix are protected by RequireInternalSvcAuth.
+	// nginx MUST deny /internal/ at the proxy layer (returns 403 before the
+	// request reaches the BFF). This group is the BFF-side enforcement layer.
+	//
+	// InternalSvcAuthMiddl is constructed from cfg.InternalSvcSecret; when the
+	// secret is empty (development) the middleware still runs but fails closed —
+	// no unauthenticated request reaches any internal handler.
+	{
+		internalAuthMiddl := deps.InternalSvcAuthMiddl
+		if internalAuthMiddl == nil {
+			// Fallback: use an empty-secret instance which fails closed.
+			internalAuthMiddl = bffmiddleware.RequireInternalSvcAuth("")
+		}
+		r.Route("/internal/v1", func(r chi.Router) {
+			r.Use(internalAuthMiddl)
+			// GET /internal/v1/health — service-to-service liveness probe.
+			// Used by Lambdas to confirm BFF reachability before dispatching work.
+			r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"status":"ok","service":"bff-internal"}`))
+			})
+		})
 	}
 
 	// GET /api/v1/daemon/version — latest daemon version (no auth required).

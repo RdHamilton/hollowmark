@@ -202,6 +202,23 @@ type Config struct {
 	//
 	// This value must NEVER be logged or included in any error response body.
 	AnalyticsPIISalt string
+
+	// InternalSvcSecret is the shared HMAC-SHA256 secret used to verify
+	// service-to-service JWTs on /internal/v1/* routes (ADR-070).
+	//
+	// Sourced from INTERNAL_SVC_SECRET (set by ec2-bootstrap.sh from SSM
+	// /vaultmtg/app/production/internal-svc-secret or
+	// /vaultmtg/app/staging/internal-svc-secret, SecureString).
+	//
+	// Required in production and staging — the RequireInternalSvcAuth
+	// middleware fails closed (rejects all requests) when empty, but Load
+	// returns an error so the BFF does not start silently misconfigured.
+	//
+	// Optional in development: internal routes are not accessible from the
+	// public internet so omitting the secret in local dev is safe.
+	//
+	// This value must NEVER be logged or included in any error response body.
+	InternalSvcSecret string
 }
 
 // Load reads configuration from environment variables, applies defaults, and
@@ -234,6 +251,12 @@ func Load() (*Config, error) {
 
 	if (env == "production" || env == "staging") && analyticsPIISalt == "" {
 		return nil, fmt.Errorf("ANALYTICS_PII_SALT must be set when MTGA_ENV=%s", env)
+	}
+
+	internalSvcSecret := strings.TrimSpace(os.Getenv("INTERNAL_SVC_SECRET"))
+
+	if (env == "production" || env == "staging") && internalSvcSecret == "" {
+		return nil, fmt.Errorf("INTERNAL_SVC_SECRET must be set when MTGA_ENV=%s", env)
 	}
 
 	allowedOrigins := defaultAllowedOrigins
@@ -281,6 +304,7 @@ func Load() (*Config, error) {
 		TOSVersion:                          tosVersion(os.Getenv("BFF_TOS_VERSION")),
 		PrivacyPolicyVersion:                tosVersion(os.Getenv("BFF_PRIVACY_POLICY_VERSION")),
 		AnalyticsPIISalt:                    analyticsPIISalt,
+		InternalSvcSecret:                   internalSvcSecret,
 	}
 
 	if raw := os.Getenv("DRAFT_RATINGS_STALENESS_THRESHOLD_HOURS"); raw != "" {
