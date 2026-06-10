@@ -179,11 +179,47 @@ jobs:
           TMP_SCRIPT="$(mktemp)"
 
           # Build stub dir (mirrors _make_stub_dir in postinstall_test.bats).
+          # NOTE: install(1) must be a real mkdir+touch stub, not a bare exit-0.
+          # postinstall calls `install -d -m 755 -o <user> <dir>` and
+          # `install -m 600 -o <user> /dev/null <file>` to create CONFIG_DIR and
+          # the config file before writing to them.  A bare exit-0 stub leaves
+          # CONFIG_DIR uncreated so `cat > daemon.json` fails immediately.
+          # The stub below matches _make_stub_dir in postinstall_test.bats exactly.
           STUB_DIR="$(mktemp -d)"
-          for cmd in xattr launchctl install curl sleep pkill security; do
+          for cmd in xattr launchctl curl sleep pkill security; do
             printf '#!/usr/bin/env bash\nexit 0\n' > "${STUB_DIR}/${cmd}"
             chmod +x "${STUB_DIR}/${cmd}"
           done
+          # install stub: strip -o <owner> (requires root) and perform the
+          # operation unprivileged.  Mirrors _make_stub_dir in postinstall_test.bats.
+          cat > "${STUB_DIR}/install" << 'INSTALL_STUB'
+          #!/usr/bin/env bash
+          positional=()
+          skip_next=0
+          is_dir=0
+          for arg in "$@"; do
+            if [[ "${skip_next}" == "1" ]]; then
+              skip_next=0
+              continue
+            fi
+            case "${arg}" in
+              -o) skip_next=1 ;;
+              -m) skip_next=1 ;;
+              -d) is_dir=1 ;;
+              *)  positional+=("${arg}") ;;
+            esac
+          done
+          count="${#positional[@]}"
+          last_idx=$(( count - 1 ))
+          target="${positional[${last_idx}]}"
+          if [[ "${is_dir}" == "1" ]]; then
+            mkdir -p "${target}"
+          else
+            mkdir -p "$(dirname "${target}")"
+            touch "${target}"
+          fi
+          INSTALL_STUB
+          chmod +x "${STUB_DIR}/install"
           # curl stub: return healthy JSON so liveness check passes.
           printf '#!/usr/bin/env bash\necho '"'"'{"status":"ok","auth_status":"setup_required"}'"'"'\n' \
             > "${STUB_DIR}/curl"
