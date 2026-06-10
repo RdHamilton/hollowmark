@@ -203,29 +203,52 @@ func (r *DeletionRepository) RecordJobComplete(ctx context.Context, jobID string
 
 // CreateAuditLogEntry inserts a new row in deletion_audit_log and returns the
 // assigned job_id.  Called by the handler before dispatching the goroutine.
-func (r *DeletionRepository) CreateAuditLogEntry(ctx context.Context, clerkUserID string, userID, accountID int64) (jobID string, err error) {
-	const q = `
+//
+// Idempotency: if a concurrent DELETE /api/v1/account has already created an
+// in-flight job for this account (completed_at IS NULL), the unique partial
+// index idx_deletion_audit_log_active_per_account prevents a second row.
+// The INSERT uses ON CONFLICT DO NOTHING; if no row is returned, the caller
+// looks up and returns the existing in-flight job_id.
+//
+// Returns (jobID, false, nil) when a new job is created.
+// Returns (existingJobID, true, nil) when a concurrent job is already active.
+func (r *DeletionRepository) CreateAuditLogEntry(ctx context.Context, clerkUserID string, userID, accountID int64) (jobID string, alreadyActive bool, err error) {
+	const insertQ = `
 		INSERT INTO deletion_audit_log (clerk_user_id, user_id, account_id, requested_at)
 		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (account_id) WHERE completed_at IS NULL DO NOTHING
 		RETURNING job_id`
 
-	row := r.db.QueryRowContext(ctx, q, clerkUserID, userID, accountID, time.Now().UTC())
+	row := r.db.QueryRowContext(ctx, insertQ, clerkUserID, userID, accountID, time.Now().UTC())
 	if err := row.Scan(&jobID); err != nil {
-		return "", fmt.Errorf("CreateAuditLogEntry: %w", err)
+		if err != sql.ErrNoRows {
+			return "", false, fmt.Errorf("CreateAuditLogEntry: insert: %w", err)
+		}
+		// Conflict — an in-flight job exists.  Look it up.
+		const lookupQ = `
+			SELECT job_id FROM deletion_audit_log
+			WHERE  account_id = $1 AND completed_at IS NULL
+			LIMIT  1`
+		if err2 := r.db.QueryRowContext(ctx, lookupQ, accountID).Scan(&jobID); err2 != nil {
+			return "", false, fmt.Errorf("CreateAuditLogEntry: lookup active job: %w", err2)
+		}
+		return jobID, true, nil
 	}
-	return jobID, nil
+	return jobID, false, nil
 }
 
-// GetJobStatus returns the status of an erasure job by job_id.
-// Returns (nil, nil) if the job_id is not found.
-// Satisfies the handlers.deletionJobReader interface.
-func (r *DeletionRepository) GetJobStatus(ctx context.Context, jobID string) (*DeletionJobStatus, error) {
+// GetJobStatus returns the status of an erasure job by job_id, scoped to the
+// caller's clerk_user_id.  Returns (nil, nil) if no row matches — either the
+// job does not exist OR it belongs to a different user.  This prevents IDOR:
+// a caller can only read their own jobs.
+func (r *DeletionRepository) GetJobStatus(ctx context.Context, jobID, clerkUserID string) (*DeletionJobStatus, error) {
 	const q = `
 		SELECT job_id, requested_at, completed_at
 		FROM   deletion_audit_log
-		WHERE  job_id = $1`
+		WHERE  job_id = $1
+		  AND  clerk_user_id = $2`
 
-	row := r.db.QueryRowContext(ctx, q, jobID)
+	row := r.db.QueryRowContext(ctx, q, jobID, clerkUserID)
 
 	var j DeletionJobStatus
 	var completedAt sql.NullTime

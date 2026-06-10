@@ -4,30 +4,28 @@ import (
 	"context"
 	"log"
 	"sync"
+	"sync/atomic"
 )
 
 // JobAuditLogger extends DBOps with the CreateAuditLogEntry method needed by
 // the service to register a new job before dispatching the goroutine.
+//
+// CreateAuditLogEntry returns (jobID, alreadyActive, err):
+//   - alreadyActive=false → new job created; caller MUST dispatch the goroutine.
+//   - alreadyActive=true  → a concurrent job exists; caller MUST NOT dispatch again.
 type JobAuditLogger interface {
 	DBOps
-	CreateAuditLogEntry(ctx context.Context, clerkUserID string, userID, accountID int64) (jobID string, err error)
-}
-
-// UserResolver resolves a Clerk user ID to internal DB ids.
-type UserResolver interface {
-	ResolveUserAndAccount(ctx context.Context, clerkUserID string) (userID, accountID int64, err error)
+	CreateAuditLogEntry(ctx context.Context, clerkUserID string, userID, accountID int64) (jobID string, alreadyActive bool, err error)
 }
 
 // Service orchestrates the erasure cascade: creates the audit log entry,
 // dispatches the goroutine from the root context, and exposes the
 // StartErasureJob method that satisfies the handlers.erasureJobStarter interface.
 type Service struct {
-	rootCtx     context.Context
-	db          JobAuditLogger
-	deps        Deps
-	wg          *sync.WaitGroup
-	resolver    UserResolver
-	clerkUserID string // set per-request; not goroutine-safe — pass by value to goroutine
+	rootCtx context.Context
+	db      JobAuditLogger
+	deps    Deps
+	wg      *sync.WaitGroup
 }
 
 // NewService constructs a Service.
@@ -68,9 +66,18 @@ func (s *Service) StartErasureJob(ctx context.Context, userID, accountID int64) 
 	// Create the audit log entry synchronously before dispatching the goroutine.
 	// This ensures the job_id exists in the DB before the 202 is returned, so the
 	// polling endpoint can answer immediately.
-	jobID, err = s.db.CreateAuditLogEntry(ctx, clerkUserID, userID, accountID)
+	//
+	// If alreadyActive=true a concurrent cascade is already running for this
+	// account.  We return the existing job_id (202) without spawning a second
+	// goroutine — the idempotency guard in the DB prevents duplicate cascades.
+	var alreadyActive bool
+	jobID, alreadyActive, err = s.db.CreateAuditLogEntry(ctx, clerkUserID, userID, accountID)
 	if err != nil {
 		return "", err
+	}
+	if alreadyActive {
+		// Concurrent request: return the in-flight job_id without dispatching again.
+		return jobID, nil
 	}
 
 	// Capture values for the goroutine closure — do NOT close over request-scoped
@@ -111,21 +118,27 @@ func (s *Service) StartErasureJob(ctx context.Context, userID, accountID int64) 
 	return jobID, nil
 }
 
-// clerkUserIDFromContext is a forward declaration so the service package can
-// read the Clerk user ID from the middleware context without importing middleware.
-// The actual implementation reads the context value set by ClerkAuthMiddleware.
-// It is wired via the WithClerkUserIDFn option at service construction time.
-var clerkUserIDFromContextFn func(ctx context.Context) (string, bool)
+// clerkUserIDFromContextFn holds the wired context-key extractor.
+// Stored via sync/atomic.Pointer so concurrent reads and a one-time write
+// from cmd/main.go are data-race free.
+//
+// The type alias avoids a direct instantiation of atomic.Pointer with a
+// function type, which requires an addressable value.
+type contextExtractorFn func(ctx context.Context) (string, bool)
+
+var clerkUserIDFromContextFn atomic.Pointer[contextExtractorFn]
 
 func clerkUserIDFromContext(ctx context.Context) (string, bool) {
-	if clerkUserIDFromContextFn != nil {
-		return clerkUserIDFromContextFn(ctx)
+	if fn := clerkUserIDFromContextFn.Load(); fn != nil {
+		return (*fn)(ctx)
 	}
 	return "", false
 }
 
 // SetClerkUserIDFromContextFn wires the context-key extractor.  Called from
-// cmd/main.go after both packages are imported.
+// cmd/main.go after both packages are imported.  Safe to call concurrently
+// (atomic store).
 func SetClerkUserIDFromContextFn(fn func(ctx context.Context) (string, bool)) {
-	clerkUserIDFromContextFn = fn
+	casted := contextExtractorFn(fn)
+	clerkUserIDFromContextFn.Store(&casted)
 }

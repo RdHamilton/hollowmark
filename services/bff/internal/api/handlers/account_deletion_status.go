@@ -13,9 +13,10 @@ import (
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
-// deletionJobReader reads the status of an erasure job.
+// deletionJobReader reads the status of an erasure job scoped to a caller.
+// The clerkUserID parameter prevents IDOR — callers can only read their own jobs.
 type deletionJobReader interface {
-	GetJobStatus(ctx context.Context, jobID string) (*repository.DeletionJobStatus, error)
+	GetJobStatus(ctx context.Context, jobID, clerkUserID string) (*repository.DeletionJobStatus, error)
 }
 
 // AccountDeletionStatusHandler handles GET /api/v1/account/deletion-status/{job_id}.
@@ -41,11 +42,11 @@ type deletionStatusResponse struct {
 // Returns the current state of an erasure job:
 //   - 200 with status="pending" if completed_at is NULL.
 //   - 200 with status="completed" if completed_at is set.
-//   - 404 if the job_id is not found.
+//   - 404 if the job_id is not found OR belongs to a different user (IDOR prevention).
 //   - 401 if the request is not authenticated.
 func (h *AccountDeletionStatusHandler) Status(w http.ResponseWriter, r *http.Request) {
-	_, ok := bffmiddleware.ClerkUserIDFromContext(r)
-	if !ok {
+	clerkUserID, ok := bffmiddleware.ClerkUserIDFromContext(r)
+	if !ok || clerkUserID == "" {
 		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -56,7 +57,8 @@ func (h *AccountDeletionStatusHandler) Status(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	job, err := h.reader.GetJobStatus(r.Context(), jobID)
+	// clerkUserID scopes the lookup — callers can only read their own jobs.
+	job, err := h.reader.GetJobStatus(r.Context(), jobID, clerkUserID)
 	if err != nil {
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return

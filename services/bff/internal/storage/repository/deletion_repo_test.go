@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -235,10 +237,11 @@ func TestDeletionRepository_DeleteTextKeyedRows(t *testing.T) {
 	clientID := "client_text_del_" + suffix
 
 	// Seed a daemon_api_keys row with the TEXT client_id.
+	// device_id is a UUID NOT NULL column — use a real UUID, not a string literal.
 	_, err := db.ExecContext(context.Background(),
 		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver)
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		clientID, "hash_"+suffix, "pref", "dev_"+suffix, "macOS", "0.4.1")
+		clientID, "hash_"+suffix, "pref", uuid.New().String(), "macOS", "0.4.1")
 	if err != nil {
 		t.Fatalf("seed daemon_api_keys: %v", err)
 	}
@@ -341,13 +344,15 @@ func TestDeletionRepository_RecordJobComplete(t *testing.T) {
 	repo := repository.NewDeletionRepository(db)
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	jobID := "job-" + suffix
 
-	// Insert a pending audit log row.
-	_, err := db.ExecContext(context.Background(),
-		`INSERT INTO deletion_audit_log (job_id, clerk_user_id, user_id, account_id)
-		 VALUES ($1, $2, $3, $4)`,
-		jobID, "clerk_test_"+suffix, int64(1), int64(1))
+	// Omit job_id — it is UUID NOT NULL DEFAULT gen_random_uuid().
+	// Scan back the generated UUID so we can look up the row later.
+	var jobID string
+	err := db.QueryRowContext(context.Background(),
+		`INSERT INTO deletion_audit_log (clerk_user_id, user_id, account_id)
+		 VALUES ($1, $2, $3)
+		 RETURNING job_id`,
+		"clerk_test_"+suffix, int64(1), int64(1)).Scan(&jobID)
 	if err != nil {
 		if strings.Contains(err.Error(), "does not exist") {
 			t.Skip("deletion_audit_log table not present — migration not applied yet")

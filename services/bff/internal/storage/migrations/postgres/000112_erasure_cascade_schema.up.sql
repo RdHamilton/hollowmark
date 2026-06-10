@@ -34,6 +34,14 @@ CREATE TABLE IF NOT EXISTS deletion_audit_log (
     completed_at  TIMESTAMPTZ
 );
 
+-- Idempotency guard: at most one in-flight erasure job per account.
+-- A concurrent DELETE /api/v1/account returns the existing job_id (202) rather
+-- than spawning a second cascade goroutine.  The constraint is released when
+-- completed_at is set (job done) or when the row is removed (job abandoned).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_deletion_audit_log_active_per_account
+    ON deletion_audit_log (account_id)
+    WHERE completed_at IS NULL;
+
 -- Index for AC7 runbook queries: find incomplete jobs.
 CREATE INDEX IF NOT EXISTS idx_deletion_audit_log_completed_at
     ON deletion_audit_log (completed_at)
