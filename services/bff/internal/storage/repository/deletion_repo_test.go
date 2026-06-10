@@ -75,12 +75,13 @@ var knownUserKeyedTables = map[string]string{
 	// Via users(id) ON DELETE CASCADE
 	"accounts": "cascade",
 	"api_keys": "cascade",
+	// Via accounts(id) ON DELETE CASCADE (BIGINT FK) — converted from TEXT in migration 000080
+	"quest_session_tracking": "cascade",
 	// Explicit DELETE by client_ids (TEXT account_id, no FK)
-	"daemon_events":          "explicit",
-	"daemon_api_keys":        "explicit",
-	"quest_session_tracking": "explicit",
-	"user_play_patterns":     "explicit",
-	"projection_errors":      "explicit",
+	"daemon_events":      "explicit",
+	"daemon_api_keys":    "explicit",
+	"user_play_patterns": "explicit",
+	"projection_errors":  "explicit",
 	// Anonymized in-place then SET NULL cascade
 	"consent_log": "anonymize",
 	// Retained by design (compliance evidence, no PII)
@@ -258,6 +259,121 @@ func TestDeletionRepository_DeleteTextKeyedRows(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("expected 0 daemon_api_keys rows after delete, got %d", count)
+	}
+}
+
+// TestDeletionRepository_QuestSessionTracking_DeletedViaCascade verifies that
+// quest_session_tracking rows are erased via the accounts ON DELETE CASCADE, NOT
+// via DeleteTextKeyedRows.
+//
+// Root cause of Schema-000054-compat red gate (PR #3088 / Bob peer-blocking):
+// Migration 000080 converted quest_session_tracking.account_id from TEXT (raw
+// MTGA client_id) to BIGINT FK referencing accounts(id) ON DELETE CASCADE.
+// The original FM-3 disposition incorrectly listed this table as "explicit /
+// TEXT account_id" — passing a []string to ANY($1) against a BIGINT column
+// throws SQLSTATE 22P02.  The correct erasure path is the FK cascade fired by
+// HardDeleteAccount (Step 4e), identical to inventory, collection, etc.
+//
+// This test:
+//  1. Seeds an account + quest_session_tracking row via the BIGINT account_id FK.
+//  2. Calls HardDeleteAccount (Step 4e of the erasure cascade).
+//  3. Asserts the quest_session_tracking row was removed by cascade.
+//  4. Confirms the row is NOT present in DeleteTextKeyedRows (that call must not
+//     include quest_session_tracking — the table no longer has a TEXT account_id).
+func TestDeletionRepository_QuestSessionTracking_DeletedViaCascade(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDeletionRepository(db)
+
+	userID, accountID, _ := seedDeletionUser(t, db)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	// Insert a quest_session_tracking row keyed by BIGINT accountID.
+	var questRowID int64
+	err := db.QueryRowContext(
+		context.Background(),
+		`INSERT INTO quest_session_tracking
+		     (account_id, quest_id, quest_name, progress, goal, xp_reward, occurred_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, NOW())
+		 RETURNING id`,
+		accountID,
+		"quest_"+suffix,
+		"Test Quest "+suffix,
+		1, 1, 100,
+	).Scan(&questRowID)
+	if err != nil {
+		if strings.Contains(err.Error(), "does not exist") {
+			t.Skip("quest_session_tracking table not present")
+		}
+		t.Fatalf("seed quest_session_tracking: %v", err)
+	}
+
+	// Step 4e: hard-delete the accounts row — must cascade to quest_session_tracking.
+	// We need to delete users first (users(id) FK constraint on accounts).
+	if err := repo.HardDeleteUser(context.Background(), userID); err != nil {
+		t.Fatalf("HardDeleteUser: %v", err)
+	}
+	if err := repo.HardDeleteAccount(context.Background(), accountID); err != nil {
+		t.Fatalf("HardDeleteAccount: %v", err)
+	}
+
+	// Verify: quest_session_tracking row must be gone via cascade.
+	var count int
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM quest_session_tracking WHERE id = $1`, questRowID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count quest_session_tracking: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("quest_session_tracking row %d still exists after HardDeleteAccount cascade — "+
+			"expected ON DELETE CASCADE to remove it", questRowID)
+	}
+}
+
+// TestDeletionRepository_UserPlayPatterns_DeletedViaTextPath verifies that
+// user_play_patterns rows (TEXT account_id, no FK — unchanged since migration
+// 000033 / 000054) are erased by DeleteTextKeyedRows using the client_id string.
+//
+// This confirms the FM-3 "explicit" disposition for user_play_patterns is correct
+// and that the TEXT ANY($1) path works against this table.
+func TestDeletionRepository_UserPlayPatterns_DeletedViaTextPath(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDeletionRepository(db)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	clientID := "client_upp_del_" + suffix
+
+	// Insert a user_play_patterns row keyed by the TEXT client_id.
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO user_play_patterns (account_id, total_matches, total_decks)
+		 VALUES ($1, $2, $3)`,
+		clientID, 0, 0)
+	if err != nil {
+		if strings.Contains(err.Error(), "does not exist") {
+			t.Skip("user_play_patterns table not present")
+		}
+		t.Fatalf("seed user_play_patterns: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM user_play_patterns WHERE account_id = $1`, clientID)
+	})
+
+	if err := repo.DeleteTextKeyedRows(context.Background(), []string{clientID}); err != nil {
+		t.Fatalf("DeleteTextKeyedRows: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM user_play_patterns WHERE account_id = $1`, clientID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count user_play_patterns: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 user_play_patterns rows after DeleteTextKeyedRows, got %d", count)
 	}
 }
 

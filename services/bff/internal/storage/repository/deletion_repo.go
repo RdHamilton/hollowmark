@@ -75,7 +75,7 @@ func (r *DeletionRepository) SoftDeleteUser(ctx context.Context, userID int64) e
 	return nil
 }
 
-// DeleteTextKeyedRows deletes all rows from the five no-FK TEXT-keyed tables
+// DeleteTextKeyedRows deletes all rows from the four no-FK TEXT-keyed tables
 // that use MTGA client_id strings as their account identifier.  These tables
 // cannot be reached by the FK cascade from accounts(id), so they must be
 // explicitly deleted.
@@ -83,9 +83,15 @@ func (r *DeletionRepository) SoftDeleteUser(ctx context.Context, userID int64) e
 // Tables addressed (FM-3 Step 4a):
 //   - daemon_events.account_id TEXT
 //   - daemon_api_keys.account_id TEXT
-//   - quest_session_tracking.account_id TEXT
 //   - user_play_patterns.account_id TEXT
 //   - projection_errors.account_id TEXT
+//
+// NOTE: quest_session_tracking is NOT in this list.  Migration 000080 converted
+// quest_session_tracking.account_id from TEXT (raw MTGA client_id) to BIGINT FK
+// referencing accounts(id) ON DELETE CASCADE.  It is now erased automatically
+// by HardDeleteAccount (Step 4e) — the same cascade path as inventory, collection,
+// decks, etc.  Attempting to delete it here with a text[] binding throws
+// SQLSTATE 22P02 (invalid input syntax for type bigint).
 //
 // The delete is idempotent — re-running on an already-empty set is a no-op.
 func (r *DeletionRepository) DeleteTextKeyedRows(ctx context.Context, clientIDs []string) error {
@@ -112,10 +118,9 @@ func (r *DeletionRepository) DeleteTextKeyedRows(ctx context.Context, clientIDs 
 		return fmt.Errorf("DeleteTextKeyedRows daemon_api_keys: %w", err)
 	}
 
-	const questSessionQ = `DELETE FROM quest_session_tracking WHERE account_id = ANY($1)`
-	if _, err := r.db.ExecContext(ctx, questSessionQ, clientIDs); err != nil {
-		return fmt.Errorf("DeleteTextKeyedRows quest_session_tracking: %w", err)
-	}
+	// quest_session_tracking is intentionally omitted — account_id is BIGINT FK
+	// (ON DELETE CASCADE from accounts.id, migration 000080).  It is deleted by
+	// HardDeleteAccount (Step 4e), not here.
 
 	const userPlayPatternsQ = `DELETE FROM user_play_patterns WHERE account_id = ANY($1)`
 	if _, err := r.db.ExecContext(ctx, userPlayPatternsQ, clientIDs); err != nil {
@@ -181,7 +186,10 @@ func (r *DeletionRepository) HardDeleteUser(ctx context.Context, userID int64) e
 //     user_settings, recommendation_feedback, card_inventory, draft_picks,
 //     draft_packs, draft_match_results, game_event_counters, life_change_tracking,
 //     matchup_statistics, deck_performance_history, currency_history, player_stats,
-//     match_game_results, and all their sub-cascades via decks/matches/games).
+//     match_game_results, quest_session_tracking, and all their sub-cascades via
+//     decks/matches/games).  Note: quest_session_tracking.account_id was TEXT
+//     at creation (migration 000071) but was converted to BIGINT FK in migration
+//     000080 — it is now reached by this cascade, not by DeleteTextKeyedRows.
 //  2. ON DELETE SET NULL on consent_log.account_id (migration #885).
 func (r *DeletionRepository) HardDeleteAccount(ctx context.Context, accountID int64) error {
 	const q = `DELETE FROM accounts WHERE id = $1`

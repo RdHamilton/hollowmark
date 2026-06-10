@@ -45,13 +45,16 @@ type UserSoftDeleter interface {
 	SoftDeleteUser(ctx context.Context, userID int64) error
 }
 
-// TextKeyedDeleter deletes all rows in the five no-FK TEXT-keyed tables that
+// TextKeyedDeleter deletes all rows in the four no-FK TEXT-keyed tables that
 // reference MTGA client_id strings:
 //   - daemon_events.account_id TEXT
 //   - daemon_api_keys.account_id TEXT
-//   - quest_session_tracking.account_id TEXT
 //   - user_play_patterns.account_id TEXT
 //   - projection_errors.account_id TEXT
+//
+// quest_session_tracking is NOT in this list — migration 000080 converted its
+// account_id column to BIGINT FK (ON DELETE CASCADE from accounts.id), so it is
+// erased by AccountHardDeleter (Step 4e), not here.
 type TextKeyedDeleter interface {
 	DeleteTextKeyedRows(ctx context.Context, clientIDs []string) error
 }
@@ -194,9 +197,10 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 
 	// 4a — TEXT-keyed tables: delete BEFORE accounts row (ordering mandatory).
 	//
-	// These five tables use MTGA client_id strings as account_id (no FK to
+	// These four tables use MTGA client_id strings as account_id (no FK to
 	// accounts), so they are unreachable by cascade.  They must be explicitly
 	// deleted using the client_ids captured in Step 0.
+	// (quest_session_tracking has a BIGINT FK and is handled by Step 4e cascade.)
 	if err := deps.DB.DeleteTextKeyedRows(ctx, clientIDs); err != nil {
 		return fmt.Errorf("erasure step4a (text-keyed delete): %w", err)
 	}
