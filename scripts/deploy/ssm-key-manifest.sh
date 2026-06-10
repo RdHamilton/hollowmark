@@ -39,7 +39,7 @@
 #
 # -----------------------------------------------------------------------
 
-MANIFEST_KEY_COUNT=18
+MANIFEST_KEY_COUNT=19
 
 # 0 -- ALLOWED_ORIGINS
 MANIFEST_KEY_0_NAME=ALLOWED_ORIGINS
@@ -158,3 +158,15 @@ MANIFEST_KEY_17_NAME=DATABASE_URL
 MANIFEST_KEY_17_SSM_VAR=SSM_STAGING_DB_SECRET_ARN
 MANIFEST_KEY_17_TYPE=secret
 MANIFEST_KEY_17_SCOPE=both
+
+# 18 -- ANALYTICS_PII_SALT (ticket #1597, PR #3094)
+#   High-entropy secret used to hash user-identifiable analytics values.
+#   Required at BFF startup -- missing value aborts config.Load().
+#   Path differs per env: prod uses SSM_PROD_ANALYTICS_PII_SALT;
+#   staging uses SSM_STAGING_ANALYTICS_PII_SALT.
+#   The SSM_VAR here names the PROD path; provision-staging-env.sh overrides
+#   this entry's SSM_VAR to SSM_STAGING_ANALYTICS_PII_SALT for the staging loop.
+MANIFEST_KEY_18_NAME=ANALYTICS_PII_SALT
+MANIFEST_KEY_18_SSM_VAR=SSM_PROD_ANALYTICS_PII_SALT
+MANIFEST_KEY_18_TYPE=secret
+MANIFEST_KEY_18_SCOPE=both
