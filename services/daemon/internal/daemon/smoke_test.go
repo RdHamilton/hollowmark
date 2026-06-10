@@ -186,13 +186,34 @@ func TestDaemonBinarySmoke(t *testing.T) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			var evt contract.DaemonEvent
-			if err := json.Unmarshal(body, &evt); err != nil {
+			// Mirror the real BFF's dual-shape detection (ADR-053 §5):
+			// a body starting with '[' is a JSON array of DaemonEvents (batch);
+			// anything else is treated as a single DaemonEvent object.
+			// The daemon routes all handleEntry events — including draft.pack —
+			// through BatchBuffer.Add → SendBatch since #788 (BatchBuffer L1-b),
+			// so the stub must accept both shapes to stay in contract parity with
+			// the real IngestEvent handler.
+			trimmed := bytes.TrimSpace(body)
+			if len(trimmed) == 0 {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			var evts []contract.DaemonEvent
+			if trimmed[0] == '[' {
+				if err := json.Unmarshal(body, &evts); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+			} else {
+				var evt contract.DaemonEvent
+				if err := json.Unmarshal(body, &evt); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				evts = []contract.DaemonEvent{evt}
+			}
 			bffMu.Lock()
-			received = append(received, evt)
+			received = append(received, evts...)
 			bffMu.Unlock()
 			w.WriteHeader(http.StatusAccepted)
 
