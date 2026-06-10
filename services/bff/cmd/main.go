@@ -564,11 +564,21 @@ func main() {
 		adminRestrictionHandler = handlers.NewAdminRestrictionHandler(restrictionRepo, accountRepo)
 
 		// AccountProfileHandler — PATCH /api/v1/account/profile (#888).
-		// GDPR Art.16 Right to Rectification: audit log (PII-hashed) + users.email sync.
+		// GDPR Art.16 Right to Rectification: atomic audit log (PII-hashed, salted) +
+		// users.email sync from Clerk-verified primary address (PR #3099 revision).
+		//
+		// piiSalt: reuses cfg.AnalyticsPIISalt (SSM /vaultmtg/{env}/analytics-pii-salt)
+		// — no new SSM parameter (Bianca V2 fix: HashPII with existing salt).
+		//
+		// clerkFetcher: same *ClerkProfileFetcher used above for DataExportHandler.
+		// When nil (local dev without CLERK_SECRET_KEY), email-change requests fail
+		// closed with 500 rather than trusting the client body (Sarah F2 fix).
 		accountProfileHandler = handlers.NewAccountProfileHandler(
 			repository.NewRectificationAuditRepository(sqlDB),
 			userRepo,
 			accountRepo,
+			cfg.AnalyticsPIISalt,
+			clerkFetcher,
 		)
 
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
