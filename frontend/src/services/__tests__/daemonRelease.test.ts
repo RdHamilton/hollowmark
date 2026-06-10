@@ -17,8 +17,8 @@
  * - Stops paginating when a page returns fewer than per_page results (last page).
  * - Returns null when all pages are exhausted with no match (respects MAX_PAGES cap).
  *
- * These tests run in the Node environment (matched by the vitest environmentMatchGlobs
- * for service test files) — fetch is mocked with vi.fn().
+ * These tests run in the Node environment (routed by the vitest test.projects
+ * "node" project config in vite.config.ts) — fetch is mocked with vi.fn().
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {

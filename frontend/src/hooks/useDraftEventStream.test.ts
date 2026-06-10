@@ -44,7 +44,10 @@ interface MockEventSourceInstance {
 
 let instances: MockEventSourceInstance[] = [];
 
-const MockEventSource = vi.fn((url: string, opts?: { withCredentials?: boolean }) => {
+// vitest 4.x (@vitest/mocker rearchitecture): vi.fn() implementations that are
+// called with 'new' must use a regular function, not an arrow function.
+// Arrow functions cannot be constructors; the hook calls new EventSource(...).
+const MockEventSource = vi.fn(function (url: string, opts?: { withCredentials?: boolean }) {
   const namedListeners = new Map<string, EventCallback[]>();
 
   const instance: MockEventSourceInstance = {
