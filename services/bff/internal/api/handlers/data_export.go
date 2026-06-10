@@ -40,9 +40,10 @@ type exportRateLimiter interface {
 	RecordExport(ctx context.Context, userID int64) (exportID string, err error)
 }
 
-// dataGatherer gathers all user-keyed personal data for the export.
+// dataGatherer gathers user-keyed personal data for the export.
+// portableOnly=false → Art.15 access export; portableOnly=true → Art.20 portable subset.
 type dataGatherer interface {
-	GatherForUser(ctx context.Context, userID, accountID int64) (*ExportPayload, error)
+	GatherForUser(ctx context.Context, userID, accountID int64, portableOnly bool) (*ExportPayload, error)
 }
 
 // exportAccountLookup resolves the authenticated user's account ID.
@@ -131,8 +132,10 @@ func (h *DataExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 4: Gather all user-keyed personal data.
-	payload, err := h.gatherer.GatherForUser(r.Context(), userID, accountID)
+	// Step 4: Gather user-keyed personal data.
+	// format=portable → Art.20 portability subset; any other value (or absent) → Art.15 access export.
+	portableOnly := r.URL.Query().Get("format") == "portable"
+	payload, err := h.gatherer.GatherForUser(r.Context(), userID, accountID, portableOnly)
 	if err != nil {
 		log.Printf("[DataExportHandler] GatherForUser userID=%d accountID=%d: %v", userID, accountID, err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)

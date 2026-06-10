@@ -1051,7 +1051,7 @@ func (s *stubExportDeps) RecordExport(_ context.Context, _ int64) (string, error
 	return "", nil
 }
 
-func (s *stubExportDeps) GatherForUser(_ context.Context, _, _ int64) (*handlers.ExportPayload, error) {
+func (s *stubExportDeps) GatherForUser(_ context.Context, _, _ int64, _ bool) (*handlers.ExportPayload, error) {
 	return &handlers.ExportPayload{}, nil
 }
 
@@ -1093,5 +1093,60 @@ func TestRouter_DataExport_RouteAbsent_WhenHandlerNil(t *testing.T) {
 
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("GET /api/v1/account/data-export with nil handler: want 404, got %d", rr.Code)
+	}
+}
+
+// ─── PATCH /api/v1/account/profile router tests (#888) ──────────────────────
+
+// stubProfileDeps satisfies the three interfaces AccountProfileHandler needs.
+type stubProfileDeps struct{}
+
+func (s *stubProfileDeps) InsertRectificationEvent(
+	_ context.Context, _ int64, _ string, _ *string, _ string,
+) error {
+	return nil
+}
+
+func (s *stubProfileDeps) UpdateEmail(_ context.Context, _ int64, _ string) error {
+	return nil
+}
+
+func (s *stubProfileDeps) GetAccountIDByUserID(_ context.Context, _ int64) (int64, bool, error) {
+	return 1, true, nil
+}
+
+// TestRouter_AccountProfile_Returns401_WithoutToken verifies that
+// PATCH /api/v1/account/profile requires a valid Clerk JWT — the middleware
+// returns 401 before the handler is invoked.
+func TestRouter_AccountProfile_Returns401_WithoutToken(t *testing.T) {
+	stub := &stubProfileDeps{}
+	deps := depsWithClerk(t)
+	deps.AccountProfileHandler = handlers.NewAccountProfileHandler(stub, stub, stub)
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/account/profile", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("PATCH /api/v1/account/profile without token: want 401, got %d", rr.Code)
+	}
+}
+
+// TestRouter_AccountProfile_RouteAbsent_WhenHandlerNil verifies that when
+// AccountProfileHandler is nil (DB not available) the route is not registered.
+func TestRouter_AccountProfile_RouteAbsent_WhenHandlerNil(t *testing.T) {
+	deps := depsWithClerk(t)
+	deps.AccountProfileHandler = nil // explicitly unset
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/account/profile", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("PATCH /api/v1/account/profile with nil handler: want 404, got %d", rr.Code)
 	}
 }
