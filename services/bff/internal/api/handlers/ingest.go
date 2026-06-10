@@ -10,14 +10,15 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/RdHamilton/hollowmark/services/bff/internal/analytics"
 	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/identityhash"
 	contract "github.com/RdHamilton/hollowmark/services/contract"
-	"github.com/posthog/posthog-go"
 )
 
 // dispatchDegradedThreshold is the minimum number of consecutive BFF dispatch
 // failures (counted by the daemon) that triggers a daemon.dispatch_degraded
-// PostHog event. Defined BFF-side so the threshold can be tuned without a
+// analytics event. Defined BFF-side so the threshold can be tuned without a
 // daemon redeploy (per Ray's PLAN_VERDICT §architectural notes point 6).
 const dispatchDegradedThreshold = uint32(3)
 
@@ -48,39 +49,28 @@ type DaemonEventInserter interface {
 	Insert(ctx context.Context, userID int64, accountID string, eventType string, payload json.RawMessage, occurredAt time.Time, eventID string, sequence uint64) error
 }
 
-// PostHogClient is a mockable interface for server-side PostHog event capture.
-// It is satisfied by the real posthog.Client and by test doubles.
-type PostHogClient interface {
-	Enqueue(msg posthog.Message) error
-}
-
-// noopPostHogClient is a no-op PostHogClient used when POSTHOG_API_KEY is empty.
-type noopPostHogClient struct{}
-
-func (noopPostHogClient) Enqueue(posthog.Message) error { return nil }
-
 // IngestHandler accepts daemon events posted by the daemon service and
 // broadcasts them to connected frontend clients via the broadcaster.
 // When a DaemonEventInserter is wired, each event is also persisted to the
 // database before broadcasting.
 type IngestHandler struct {
-	broadcaster   EventBroadcaster
-	repo          DaemonEventInserter
-	gapDetector   *GapDetector
-	postHogClient PostHogClient
+	broadcaster EventBroadcaster
+	repo        DaemonEventInserter
+	gapDetector *GapDetector
+	analytics   *analytics.Client
 }
 
 // NewIngestHandler creates an IngestHandler that broadcasts received events
 // through the provided broadcaster.  Pass nil for repo to run in
 // broadcast-only mode (no persistence).
 //
-// A GapDetector is always initialised.  PostHog defaults to the no-op client
-// until WithPostHogClient is called.
+// A GapDetector is always initialised.  The analytics client defaults to a
+// no-op until WithAnalyticsClient is called.
 func NewIngestHandler(broadcaster EventBroadcaster) *IngestHandler {
 	return &IngestHandler{
-		broadcaster:   broadcaster,
-		gapDetector:   &GapDetector{},
-		postHogClient: noopPostHogClient{},
+		broadcaster: broadcaster,
+		gapDetector: &GapDetector{},
+		analytics:   analytics.NewClient(analytics.NoopEnqueuer{}, analytics.NewNoopHaltChecker()),
 	}
 }
 
@@ -89,22 +79,25 @@ func NewIngestHandler(broadcaster EventBroadcaster) *IngestHandler {
 // NewIngestHandler call-sites.
 func (h *IngestHandler) WithRepository(repo DaemonEventInserter) *IngestHandler {
 	return &IngestHandler{
-		broadcaster:   h.broadcaster,
-		repo:          repo,
-		gapDetector:   h.gapDetector,
-		postHogClient: h.postHogClient,
+		broadcaster: h.broadcaster,
+		repo:        repo,
+		gapDetector: h.gapDetector,
+		analytics:   h.analytics,
 	}
 }
 
-// WithPostHogClient returns a copy of h with the given PostHog client wired.
-// When not called, the handler uses a no-op client so the code path is always
-// exercised without network calls.
-func (h *IngestHandler) WithPostHogClient(client PostHogClient) *IngestHandler {
+// WithPostHogClient is deprecated. Use WithAnalyticsClient instead.
+func (h *IngestHandler) WithPostHogClient(client analytics.PostHogEnqueuer) *IngestHandler {
+	return h.WithAnalyticsClient(analytics.NewClient(client, analytics.NewNoopHaltChecker()))
+}
+
+// WithAnalyticsClient wires an analytics.Client into the handler.
+func (h *IngestHandler) WithAnalyticsClient(c *analytics.Client) *IngestHandler {
 	return &IngestHandler{
-		broadcaster:   h.broadcaster,
-		repo:          h.repo,
-		gapDetector:   h.gapDetector,
-		postHogClient: client,
+		broadcaster: h.broadcaster,
+		repo:        h.repo,
+		gapDetector: h.gapDetector,
+		analytics:   c,
 	}
 }
 
@@ -191,11 +184,10 @@ func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// processEvent persists, gap-checks, emits PostHog observability signals, and
+// processEvent persists, gap-checks, emits analytics observability signals, and
 // broadcasts a single DaemonEvent. It is called by both the single-event and
 // batch paths of IngestEvent so behavior is identical regardless of the wire
-// shape. No behavioral change is made to the single-event path — this is a
-// pure extraction refactor to share the gap-detector + PostHog heartbeat logic.
+// shape.
 func (h *IngestHandler) processEvent(ctx context.Context, userID int64, event contract.DaemonEvent) {
 	// Persist the event before broadcasting. A persistence failure is logged
 	// but does not drop the live event — the broadcast still proceeds so the
@@ -224,26 +216,23 @@ func (h *IngestHandler) processEvent(ctx context.Context, userID int64, event co
 				"received_sequence", event.Sequence,
 			)
 
-			hashedAccountID := hashAccountID(event.AccountID)
-			_ = h.postHogClient.Enqueue(posthog.Capture{
-				DistinctId: hashedAccountID,
-				Event:      "daemon_event_gap_detected",
-				Properties: posthog.NewProperties().
-					Set("account_id_hash", hashedAccountID).
-					Set("session_id", event.SessionID).
-					Set("expected_sequence", expected).
-					Set("received_sequence", event.Sequence),
+			hashedAccountID := identityhash.HashAccountID(event.AccountID)
+			_ = h.analytics.Capture(ctx, hashedAccountID, analytics.EventDaemonEventGapDetected, map[string]any{
+				"account_id_hash":   hashedAccountID,
+				"session_id":        event.SessionID,
+				"expected_sequence": expected,
+				"received_sequence": event.Sequence,
 			})
 		}
 	}
 
-	// Heartbeat: inspect payload for observability signals and emit PostHog
-	// events when thresholds are exceeded. PostHog emission is BFF-only per
+	// Heartbeat: inspect payload for observability signals and emit analytics
+	// events when thresholds are exceeded. Analytics emission is BFF-only per
 	// ADR-027 §OQ-5. The daemon does not import posthog-go (ADR-027 FF#3).
 	if event.Type == "daemon.heartbeat" {
 		// heartbeatPayload mirrors the daemon-local struct (JSON wire contract
 		// agreed in Ray's PLAN_VERDICT for #2569 and #2139). Both sides use
-		// omitempty on the counter fields; zero values skip PostHog emission.
+		// omitempty on the counter fields; zero values skip emission.
 		var hb struct {
 			ParseFailureCount      uint32   `json:"parse_failure_count"`
 			SampleLineHash         string   `json:"sample_line_hash,omitempty"`
@@ -252,30 +241,26 @@ func (h *IngestHandler) processEvent(ctx context.Context, userID int64, event co
 			LastBFFStatusCode      int      `json:"last_bff_status_code,omitempty"`
 		}
 		if err := json.Unmarshal(event.Payload, &hb); err == nil {
-			hashedAccountID := hashAccountID(event.AccountID)
-			// daemon.log_format_drift (#2569): emit when parse failures occurred.
+			hashedAccountID := identityhash.HashAccountID(event.AccountID)
+			// log_format_drift (#2569): emit when parse failures occurred.
 			if hb.ParseFailureCount > 0 {
-				_ = h.postHogClient.Enqueue(posthog.Capture{
-					DistinctId: hashedAccountID,
-					Event:      "daemon.log_format_drift",
-					Properties: posthog.NewProperties().
-						Set("account_id_hash", hashedAccountID).
-						Set("parse_failure_count", hb.ParseFailureCount).
-						Set("sample_line_hash", hb.SampleLineHash).
-						Set("failed_event_types", hb.FailedEventTypes),
+				_ = h.analytics.Capture(ctx, hashedAccountID, analytics.EventDaemonDispatchDegraded, map[string]any{
+					"account_id_hash":     hashedAccountID,
+					"degraded_reason":     "log_format_drift",
+					"parse_failure_count": hb.ParseFailureCount,
+					"sample_line_hash":    hb.SampleLineHash,
+					"failed_event_types":  hb.FailedEventTypes,
 				})
 			}
 			// daemon.dispatch_degraded (#2139): emit when BFF failure count
 			// meets or exceeds the threshold. Threshold is BFF-side so it can
 			// be tuned without a daemon redeploy.
 			if hb.ConsecutiveBFFFailures >= dispatchDegradedThreshold {
-				_ = h.postHogClient.Enqueue(posthog.Capture{
-					DistinctId: hashedAccountID,
-					Event:      "daemon.dispatch_degraded",
-					Properties: posthog.NewProperties().
-						Set("account_id_hash", hashedAccountID).
-						Set("consecutive_failures", hb.ConsecutiveBFFFailures).
-						Set("status_code", hb.LastBFFStatusCode),
+				_ = h.analytics.Capture(ctx, hashedAccountID, analytics.EventDaemonDispatchDegraded, map[string]any{
+					"account_id_hash":      hashedAccountID,
+					"degraded_reason":      "dispatch_error",
+					"consecutive_failures": hb.ConsecutiveBFFFailures,
+					"status_code":          hb.LastBFFStatusCode,
 				})
 			}
 		}
@@ -294,20 +279,17 @@ func (h *IngestHandler) processEvent(ctx context.Context, userID int64, event co
 			DaemonVersion string `json:"daemon_version"`
 		}
 		if err := json.Unmarshal(event.Payload, &p); err == nil {
-			hashedAccountID := hashAccountID(event.AccountID)
-			props := posthog.NewProperties().
-				Set("account_id_hash", hashedAccountID).
-				Set("reason", p.Reason).
-				Set("platform", p.Platform).
-				Set("daemon_version", p.DaemonVersion)
-			if p.BFFStatusCode != 0 {
-				props = props.Set("bff_status_code", p.BFFStatusCode)
+			hashedAccountID := identityhash.HashAccountID(event.AccountID)
+			props := map[string]any{
+				"account_id_hash": hashedAccountID,
+				"reason":          p.Reason,
+				"platform":        p.Platform,
+				"daemon_version":  p.DaemonVersion,
 			}
-			_ = h.postHogClient.Enqueue(posthog.Capture{
-				DistinctId: hashedAccountID,
-				Event:      "daemon.auth_failed",
-				Properties: props,
-			})
+			if p.BFFStatusCode != 0 {
+				props["bff_status_code"] = p.BFFStatusCode
+			}
+			_ = h.analytics.Capture(ctx, hashedAccountID, analytics.EventDaemonAuthFailed, props)
 		}
 	}
 
@@ -322,15 +304,12 @@ func (h *IngestHandler) processEvent(ctx context.Context, userID int64, event co
 			DaemonVersion string `json:"daemon_version"`
 		}
 		if err := json.Unmarshal(event.Payload, &p); err == nil {
-			hashedAccountID := hashAccountID(event.AccountID)
-			_ = h.postHogClient.Enqueue(posthog.Capture{
-				DistinctId: hashedAccountID,
-				Event:      "daemon.keychain_error",
-				Properties: posthog.NewProperties().
-					Set("account_id_hash", hashedAccountID).
-					Set("error_type", p.ErrorType).
-					Set("platform", p.Platform).
-					Set("daemon_version", p.DaemonVersion),
+			hashedAccountID := identityhash.HashAccountID(event.AccountID)
+			_ = h.analytics.Capture(ctx, hashedAccountID, analytics.EventDaemonKeychainError, map[string]any{
+				"account_id_hash": hashedAccountID,
+				"error_type":      p.ErrorType,
+				"platform":        p.Platform,
+				"daemon_version":  p.DaemonVersion,
 			})
 		}
 	}

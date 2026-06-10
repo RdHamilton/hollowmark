@@ -186,6 +186,21 @@ type Config struct {
 	// Sourced from BFF_PRIVACY_POLICY_VERSION (set by ec2-bootstrap.sh from SSM
 	// /vaultmtg/{env}/privacy-policy-version). Defaults to "2026-06-10" when unset.
 	PrivacyPolicyVersion string
+
+	// AnalyticsPIISalt is the cryptographic salt used when hashing PII field
+	// values (e.g. email addresses) before sending them to PostHog.  It is
+	// combined with the raw value before SHA-256 hashing so that the hash
+	// cannot be reversed by an attacker with access to the PostHog project.
+	//
+	// Sourced from ANALYTICS_PII_SALT (set by ec2-bootstrap.sh from SSM
+	// /vaultmtg/{env}/analytics-pii-salt, SecureString).
+	//
+	// Required in production and staging.  Optional in development — when
+	// empty, PII hashes are computed with an empty salt (weaker, acceptable
+	// for local dev where no real PII is processed).
+	//
+	// This value must NEVER be logged or included in any error response body.
+	AnalyticsPIISalt string
 }
 
 // Load reads configuration from environment variables, applies defaults, and
@@ -212,6 +227,12 @@ func Load() (*Config, error) {
 
 	if (env == "production" || env == "staging") && clerkSecretKey == "" {
 		return nil, fmt.Errorf("CLERK_SECRET_KEY must be set when MTGA_ENV=%s", env)
+	}
+
+	analyticsPIISalt := strings.TrimSpace(os.Getenv("ANALYTICS_PII_SALT"))
+
+	if (env == "production" || env == "staging") && analyticsPIISalt == "" {
+		return nil, fmt.Errorf("ANALYTICS_PII_SALT must be set when MTGA_ENV=%s", env)
 	}
 
 	allowedOrigins := defaultAllowedOrigins
@@ -258,6 +279,7 @@ func Load() (*Config, error) {
 		MailchimpListID:                     strings.TrimSpace(os.Getenv("MAILCHIMP_LIST_ID")),
 		TOSVersion:                          tosVersion(os.Getenv("BFF_TOS_VERSION")),
 		PrivacyPolicyVersion:                tosVersion(os.Getenv("BFF_PRIVACY_POLICY_VERSION")),
+		AnalyticsPIISalt:                    analyticsPIISalt,
 	}
 
 	if raw := os.Getenv("DRAFT_RATINGS_STALENESS_THRESHOLD_HOURS"); raw != "" {

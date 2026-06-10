@@ -28,3 +28,17 @@ func HashAccountID(accountID string) string {
 	sum := sha256.Sum256([]byte(accountID))
 	return fmt.Sprintf("%x", sum)[:16]
 }
+
+// HashPII returns a privacy-safe representation of a human-identifiable value
+// (e.g. an email address) by mixing in a server-side salt before hashing:
+// SHA-256(salt+value) hex, first 16 characters.
+//
+// The salt increases resistance to pre-computation attacks on the truncated
+// digest. It must be kept secret (stored in SSM, never logged).
+//
+// Use HashAccountID for internal numeric account IDs — those are not human-
+// identifiable and do not require a salt.
+func HashPII(salt, value string) string {
+	sum := sha256.Sum256([]byte(salt + value))
+	return fmt.Sprintf("%x", sum)[:16]
+}

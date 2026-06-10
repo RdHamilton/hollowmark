@@ -34,11 +34,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RdHamilton/hollowmark/services/bff/internal/analytics"
 	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/identityhash"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 	"github.com/getsentry/sentry-go"
 	"github.com/go-chi/chi/v5"
-	"github.com/posthog/posthog-go"
 )
 
 // decksReader is the minimal repo surface the handler needs.
@@ -65,25 +66,27 @@ type decksReader interface {
 
 // DecksHandler serves the cloud-data Phase 2 decks API.
 type DecksHandler struct {
-	decks         decksReader
-	accounts      AccountLookup
-	postHogClient PostHogClient
+	decks     decksReader
+	accounts  AccountLookup
+	analytics *analytics.Client
 }
 
 // NewDecksHandler returns a DecksHandler wired with the given repo + lookup.
-// PostHog defaults to the no-op client until WithPostHogClient is called.
 func NewDecksHandler(d decksReader, accounts AccountLookup) *DecksHandler {
-	return &DecksHandler{decks: d, accounts: accounts, postHogClient: noopPostHogClient{}}
+	return &DecksHandler{decks: d, accounts: accounts, analytics: analytics.NewClient(analytics.NoopEnqueuer{}, analytics.NewNoopHaltChecker())}
 }
 
-// WithPostHogClient returns a copy of h with the given PostHog client wired.
-// When not called, the handler uses a no-op client so the code path is always
-// exercised without network calls.
-func (h *DecksHandler) WithPostHogClient(client PostHogClient) *DecksHandler {
+// WithPostHogClient is deprecated. Use WithAnalyticsClient instead.
+func (h *DecksHandler) WithPostHogClient(client analytics.PostHogEnqueuer) *DecksHandler {
+	return h.WithAnalyticsClient(analytics.NewClient(client, analytics.NewNoopHaltChecker()))
+}
+
+// WithAnalyticsClient wires an analytics.Client into the handler.
+func (h *DecksHandler) WithAnalyticsClient(c *analytics.Client) *DecksHandler {
 	return &DecksHandler{
-		decks:         h.decks,
-		accounts:      h.accounts,
-		postHogClient: client,
+		decks:     h.decks,
+		accounts:  h.accounts,
+		analytics: c,
 	}
 }
 
@@ -289,13 +292,10 @@ func (h *DecksHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "deck not found", http.StatusNotFound)
 		return
 	}
-	hashedID := hashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.postHogClient.Enqueue(posthog.Capture{
-		DistinctId: hashedID,
-		Event:      "get_deck",
-		Properties: posthog.NewProperties().
-			Set("deck_id", deckID).
-			Set("account_id_hash", hashedID),
+	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
+	_ = h.analytics.Capture(r.Context(), hashedID, "get_deck", map[string]any{
+		"deck_id":         deckID,
+		"account_id_hash": hashedID,
 	})
 	writeMatchesJSON(w, deckDetailToResponse(*d))
 }
@@ -336,14 +336,11 @@ func (h *DecksHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	hashedID := hashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.postHogClient.Enqueue(posthog.Capture{
-		DistinctId: hashedID,
-		Event:      "create_deck",
-		Properties: posthog.NewProperties().
-			Set("format", req.Format).
-			Set("source", req.Source).
-			Set("account_id_hash", hashedID),
+	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
+	_ = h.analytics.Capture(r.Context(), hashedID, "create_deck", map[string]any{
+		"format":          req.Format,
+		"source":          req.Source,
+		"account_id_hash": hashedID,
 	})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -383,13 +380,10 @@ func (h *DecksHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "deck not found", http.StatusNotFound)
 		return
 	}
-	hashedID := hashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.postHogClient.Enqueue(posthog.Capture{
-		DistinctId: hashedID,
-		Event:      "update_deck",
-		Properties: posthog.NewProperties().
-			Set("deck_id", deckID).
-			Set("account_id_hash", hashedID),
+	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
+	_ = h.analytics.Capture(r.Context(), hashedID, "update_deck", map[string]any{
+		"deck_id":         deckID,
+		"account_id_hash": hashedID,
 	})
 	writeMatchesJSON(w, deckDetailToResponse(*d))
 }
@@ -420,13 +414,10 @@ func (h *DecksHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "deck not found", http.StatusNotFound)
 		return
 	}
-	hashedID := hashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.postHogClient.Enqueue(posthog.Capture{
-		DistinctId: hashedID,
-		Event:      "delete_deck",
-		Properties: posthog.NewProperties().
-			Set("deck_id", deckID).
-			Set("account_id_hash", hashedID),
+	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
+	_ = h.analytics.Capture(r.Context(), hashedID, "delete_deck", map[string]any{
+		"deck_id":         deckID,
+		"account_id_hash": hashedID,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -466,14 +457,11 @@ func (h *DecksHandler) Clone(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "deck not found", http.StatusNotFound)
 		return
 	}
-	hashedID := hashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.postHogClient.Enqueue(posthog.Capture{
-		DistinctId: hashedID,
-		Event:      "clone_deck",
-		Properties: posthog.NewProperties().
-			Set("source_deck_id", deckID).
-			Set("new_deck_id", d.ID).
-			Set("account_id_hash", hashedID),
+	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
+	_ = h.analytics.Capture(r.Context(), hashedID, "clone_deck", map[string]any{
+		"source_deck_id":  deckID,
+		"new_deck_id":     d.ID,
+		"account_id_hash": hashedID,
 	})
 	writeMatchesJSON(w, deckDetailToResponse(*d))
 }
@@ -971,15 +959,12 @@ func (h *DecksHandler) Export(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "deck not found", http.StatusNotFound)
 		return
 	}
-	hashedID := hashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.postHogClient.Enqueue(posthog.Capture{
-		DistinctId: hashedID,
-		Event:      "export_deck",
-		Properties: posthog.NewProperties().
-			Set("deck_id", deckID).
-			Set("deck_name", d.Name).
-			Set("account_id_hash", hashedID).
-			Set("format", "arena"),
+	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
+	_ = h.analytics.Capture(r.Context(), hashedID, "export_deck", map[string]any{
+		"deck_id":         deckID,
+		"deck_name":       d.Name,
+		"account_id_hash": hashedID,
+		"format":          "arena",
 	})
 	writeMatchesJSON(w, map[string]any{
 		"content": formatArenaDeckList(d.Cards),
