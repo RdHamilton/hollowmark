@@ -167,6 +167,25 @@ type Config struct {
 	// When empty, the Mailchimp client is not constructed (same effect as an
 	// empty MailchimpAPIKey).
 	MailchimpListID string
+
+	// TOSVersion is the current Terms of Service version string recorded on
+	// every signup consent event. This is the SERVER-CANONICAL value — client-
+	// supplied version strings are ignored for compliance-evidence integrity.
+	//
+	// Sourced from BFF_TOS_VERSION (set by ec2-bootstrap.sh from SSM
+	// /vaultmtg/{env}/tos-version). Defaults to "2026-06-10" when unset so
+	// local development and tests always record a non-empty version.
+	//
+	// To update the ToS version in production: update the SSM parameter and
+	// redeploy — no code change required.
+	TOSVersion string
+
+	// PrivacyPolicyVersion is the current Privacy Policy version string recorded
+	// on every signup consent event. Server-canonical — client value ignored.
+	//
+	// Sourced from BFF_PRIVACY_POLICY_VERSION (set by ec2-bootstrap.sh from SSM
+	// /vaultmtg/{env}/privacy-policy-version). Defaults to "2026-06-10" when unset.
+	PrivacyPolicyVersion string
 }
 
 // Load reads configuration from environment variables, applies defaults, and
@@ -237,6 +256,8 @@ func Load() (*Config, error) {
 		BFFAdminToken:                       strings.TrimSpace(os.Getenv("BFF_ADMIN_TOKEN")),
 		MailchimpAPIKey:                     strings.TrimSpace(os.Getenv("MAILCHIMP_API_KEY")),
 		MailchimpListID:                     strings.TrimSpace(os.Getenv("MAILCHIMP_LIST_ID")),
+		TOSVersion:                          tosVersion(os.Getenv("BFF_TOS_VERSION")),
+		PrivacyPolicyVersion:                tosVersion(os.Getenv("BFF_PRIVACY_POLICY_VERSION")),
 	}
 
 	if raw := os.Getenv("DRAFT_RATINGS_STALENESS_THRESHOLD_HOURS"); raw != "" {
@@ -262,4 +283,14 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// tosVersion returns v if non-empty, otherwise the compiled-in default.
+// Used for TOSVersion and PrivacyPolicyVersion so that a missing SSM parameter
+// does not silently record an empty version string in the consent_log.
+func tosVersion(v string) string {
+	if v := strings.TrimSpace(v); v != "" {
+		return v
+	}
+	return "2026-06-10" // compiled-in fallback; override via SSM at deploy time
 }
