@@ -551,7 +551,14 @@ jobs:
     # Guard: tag-only — never burn Azure signing quota on snapshot/dispatch runs.
     # azure/trusted-signing-action requires a Windows runner; this job is separate
     # from goreleaser (ubuntu-latest) for exactly that reason. ADR-041 G1/P0-3.
-    if: startsWith(github.ref, 'refs/tags/daemon/v')
+    #
+    # Windows Authenticode signing is DEFERRED post-beta (ADR-073): Azure Trusted
+    # Signing is a confirmed dead-end (no AZURE_* secrets configured) and the OV/EV
+    # cloud-HSM path (#979) is post-beta. Gate the whole job off a repo variable that
+    # defaults OFF so a daemon release ships the UNSIGNED Windows .exe and does NOT
+    # fail. Re-enable: set repo variable WINDOWS_SIGNING_ENABLED=true once OV/EV
+    # signing is configured. TODO(#979): wire OV/EV cloud-HSM signing, then re-enable.
+    if: ${{ vars.WINDOWS_SIGNING_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/daemon/v') }}
 
     env:
       EXE_NAME: vaultmtg-daemon-windows-amd64.exe
@@ -1419,7 +1426,10 @@ jobs:
     name: 'DRY-RUN: Validate Windows signing wiring (runner + secrets)'
     runs-on: windows-latest
     # Only run on manual dispatch with dry_run=true.  Never runs on tag push.
-    if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
+    # Also gated behind WINDOWS_SIGNING_ENABLED so it does not noise while Azure
+    # signing is deferred post-beta (ADR-073 / #979). Both Windows-signing surfaces
+    # move together. TODO(#979): re-enable once OV/EV cloud-HSM signing is wired.
+    if: ${{ vars.WINDOWS_SIGNING_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
 
     steps:
       - name: Assert runner OS is Windows
