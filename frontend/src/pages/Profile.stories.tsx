@@ -33,7 +33,7 @@ const mockEmailAddressStub = {
   id: 'email_storybook_001',
   emailAddress: 'planeswalker@vaultmtg.test',
   prepareVerification: async () => {},
-  attemptVerification: async (_p: { code: string }) => ({
+  attemptVerification: async () => ({
     id: 'email_storybook_001',
     emailAddress: 'planeswalker@vaultmtg.test',
   }),
@@ -49,7 +49,7 @@ const mockUser = {
   update: async () => {},
   setProfileImage: async () => {},
   /** Clerk's createEmailAddress uses { email }, not { emailAddress }. */
-  createEmailAddress: async (_p: { email: string }) => mockEmailAddressStub,
+  createEmailAddress: async () => mockEmailAddressStub,
 };
 
 /**
@@ -119,7 +119,7 @@ function makeEnrichedHook(overrides: Partial<{
     id: 'email_enriched_001',
     emailAddress: 'alex@example.com',
     prepareVerification: async () => {},
-    attemptVerification: async (_p: { code: string }) => ({
+    attemptVerification: async () => ({
       id: 'email_enriched_001',
       emailAddress: 'alex@example.com',
     }),
@@ -136,7 +136,7 @@ function makeEnrichedHook(overrides: Partial<{
       imageUrl: overrides.imageUrl ?? 'https://img.clerk.com/default',
       update: async () => {},
       setProfileImage: async () => {},
-      createEmailAddress: async (_p: { email: string }) => enrichedEmailStub,
+      createEmailAddress: async () => enrichedEmailStub,
     },
   });
 }
