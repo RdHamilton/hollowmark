@@ -192,8 +192,9 @@ type Config struct {
 	// combined with the raw value before SHA-256 hashing so that the hash
 	// cannot be reversed by an attacker with access to the PostHog project.
 	//
-	// Sourced from ANALYTICS_PII_SALT (set by ec2-bootstrap.sh from SSM
-	// /vaultmtg/{env}/analytics-pii-salt, SecureString).
+	// Sourced from ANALYTICS_PII_SALT (provisioned from SSM
+	// /vaultmtg/app/production/analytics-pii-salt (prod) or
+	// /vaultmtg/app/staging/analytics-pii-salt (staging), SecureString).
 	//
 	// Required in production and staging.  Optional in development — when
 	// empty, PII hashes are computed with an empty salt (weaker, acceptable
