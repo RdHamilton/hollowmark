@@ -277,6 +277,7 @@ func main() {
 		wildcardRecommendationsHandler    *handlers.WildcardRecommendationsHandler
 		consentHandler                    *handlers.ConsentHandler
 		dataExportHandler                 *handlers.DataExportHandler
+		collectionImportHandler           *handlers.CollectionImportHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -323,6 +324,16 @@ func main() {
 		// .claude/plans/spa-route-migration.md.
 		collectionRepo := repository.NewCollectionRepository(sqlDB)
 		collectionHandler = handlers.NewCollectionHandler(collectionRepo, accountRepo)
+
+		// #895 — POST /api/v1/collection/import (manual collection import, D3).
+		// Resolves MTGA Arena export lines to arena_ids via set_cards, then
+		// upserts into card_inventory using the existing UpsertDelta path.
+		// Clerk-auth-guarded; session-derived account, no client id.
+		cardSetResolver := repository.NewCardSetResolver(sqlDB)
+		cardInventoryWriterForImport := repository.NewCardInventoryRepository(sqlDB)
+		collectionImportHandler = handlers.NewCollectionImportHandler(
+			cardSetResolver, cardInventoryWriterForImport, accountRepo,
+		)
 
 		// Phase 2 PR #3 — /api/v1/quests surface (active/history/wins/stats).
 		// QuestRepository was previously write-only (projection worker writes);
@@ -615,6 +626,7 @@ func main() {
 		WildcardRecommendationsHandler:    wildcardRecommendationsHandler,
 		ConsentHandler:                    consentHandler,
 		DataExportHandler:                 dataExportHandler,
+		CollectionImportHandler:           collectionImportHandler,
 		HealthzHandler:                    healthzHandler,
 		ClerkAuthMiddl:                    clerkAuthMiddl,
 		ClerkAuthSSEMiddl:                 clerkAuthSSEMiddl,
@@ -780,6 +792,12 @@ type RouterDeps struct {
 	// Synchronous GDPR Art.15 Right of Access export; rate-limited 1/24h/user.
 	// Protected by composeClerkAuth.
 	DataExportHandler *handlers.DataExportHandler
+	// CollectionImportHandler serves POST /api/v1/collection/import (#895).
+	// Accepts a multipart/form-data file in the MTGA Arena export format,
+	// resolves each row to an arena_id via set_cards, and upserts into
+	// card_inventory via UpsertDelta. Clerk-auth-guarded (session-derived
+	// account, no client id). S-07 §1A applies (lives in bff/cmd).
+	CollectionImportHandler *handlers.CollectionImportHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -1040,6 +1058,19 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 			r.With(auth).Get("/api/v1/collection/value", c.Value)
 		} else {
 			log.Println("WARN: /api/v1/collection/* disabled — Clerk auth middleware not configured")
+		}
+	}
+
+	// #895 — POST /api/v1/collection/import — manual collection import (D3).
+	// Mounted inside the same Clerk-auth group as the read surface above.
+	// Literal sub-path /import must be registered after the bare /collection
+	// POST so chi's router resolves it before the catch-all.
+	if deps.CollectionImportHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Post("/api/v1/collection/import", deps.CollectionImportHandler.Import)
+		} else {
+			log.Println("WARN: POST /api/v1/collection/import disabled — Clerk auth middleware not configured")
 		}
 	}
 
