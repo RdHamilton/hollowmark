@@ -180,6 +180,87 @@ describe('Collection API Integration Tests', () => {
   });
 });
 
+describe('importCollection', () => {
+  beforeAll(() => {
+    server.listen({ onUnhandledRequest: 'error' });
+  });
+
+  afterEach(() => {
+    server.resetHandlers();
+  });
+
+  afterAll(() => {
+    server.close();
+  });
+
+  it('sends multipart/form-data POST to /collection/import and returns accepted/rejected counts', async () => {
+    let capturedFormData: FormData | null = null;
+
+    server.use(
+      http.post(`${API_BASE}/collection/import`, async ({ request }) => {
+        // MSW provides the raw Request; capture to inspect file field
+        const fd = await request.formData();
+        capturedFormData = fd;
+        return HttpResponse.json({ data: { accepted: 10, rejected: 2 } });
+      })
+    );
+
+    const file = new File(['4 Lightning Bolt (ONS) 197\n'], 'collection.csv', {
+      type: 'text/csv',
+    });
+    const result = await collection.importCollection(file);
+
+    expect(result.accepted).toBe(10);
+    expect(result.rejected).toBe(2);
+    expect(capturedFormData).not.toBeNull();
+    expect(capturedFormData!.get('file')).toBeInstanceOf(File);
+  });
+
+  it('returns accepted 0 and rejected 0 on server 200 with zero counts', async () => {
+    server.use(
+      http.post(`${API_BASE}/collection/import`, () => {
+        return HttpResponse.json({ data: { accepted: 0, rejected: 0 } });
+      })
+    );
+
+    const file = new File([''], 'empty.csv', { type: 'text/csv' });
+    const result = await collection.importCollection(file);
+
+    expect(result.accepted).toBe(0);
+    expect(result.rejected).toBe(0);
+  });
+
+  it('throws ApiRequestError on 400 response', async () => {
+    server.use(
+      http.post(`${API_BASE}/collection/import`, () => {
+        return HttpResponse.json(
+          { error: 'invalid file format' },
+          { status: 400 }
+        );
+      })
+    );
+
+    const file = new File(['bad data'], 'bad.txt', { type: 'text/plain' });
+    await expect(collection.importCollection(file)).rejects.toThrow();
+  });
+
+  it('throws ApiRequestError on 500 response', async () => {
+    server.use(
+      http.post(`${API_BASE}/collection/import`, () => {
+        return HttpResponse.json(
+          { error: 'internal server error' },
+          { status: 500 }
+        );
+      })
+    );
+
+    const file = new File(['4 Lightning Bolt (ONS) 197\n'], 'collection.csv', {
+      type: 'text/csv',
+    });
+    await expect(collection.importCollection(file)).rejects.toThrow();
+  });
+});
+
 describe('API Response Structure Validation', () => {
   beforeAll(() => {
     server.listen({ onUnhandledRequest: 'error' });
