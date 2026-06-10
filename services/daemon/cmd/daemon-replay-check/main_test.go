@@ -426,3 +426,135 @@ func TestFormatDiffs_Empty(t *testing.T) {
 	out := formatDiffs(nil)
 	assert.NotEmpty(t, out)
 }
+
+// ---------------------------------------------------------------------------
+// Flag validation — -golden required (#803 portability fix)
+// ---------------------------------------------------------------------------
+
+// TestValidateFlags_MissingGolden verifies that validateFlags returns a
+// non-nil error when the -golden flag is empty.  The CWD-relative
+// defaultGoldenPath() was removed in #803: -golden is now required, and the
+// binary must produce a clear usage error rather than a silent file-not-found
+// from the wrong working directory.
+func TestValidateFlags_MissingGolden(t *testing.T) {
+	err := validateFlags("http://staging-api.vaultmtg.app/api/v1", "sk_test_key", "acc_001", "")
+	require.Error(t, err, "validateFlags must return an error when -golden is empty")
+	assert.Contains(t, err.Error(), "golden", "error must mention the -golden flag so the user knows what to fix")
+}
+
+// TestValidateFlags_AllPresent verifies that validateFlags returns nil when
+// all required flags are provided.
+func TestValidateFlags_AllPresent(t *testing.T) {
+	err := validateFlags("http://staging-api.vaultmtg.app/api/v1", "sk_test_key", "acc_001", "/tmp/staging-outcome.json")
+	require.NoError(t, err, "validateFlags must not error when all required flags are provided")
+}
+
+// TestValidateFlags_MissingBff verifies that validateFlags still catches a
+// missing -bff flag (regression: the portability change must not weaken
+// existing required-flag enforcement).
+func TestValidateFlags_MissingBff(t *testing.T) {
+	err := validateFlags("", "sk_test_key", "acc_001", "/tmp/staging-outcome.json")
+	require.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// Corpus-parse regression guard (#803)
+// ---------------------------------------------------------------------------
+
+// TestLoadGoldenOutcome_CommittedCorpusRoundTrip loads the real checked-in
+// staging-outcome.json from the corpus testdata directory and verifies it
+// unmarshals into a structurally valid goldenOutcome.  This is a regression
+// guard: if the JSON schema drifts from the goldenOutcome struct, this test
+// will catch it in CI without needing a live BFF.
+//
+// The path is derived relative to this test file's package directory — it is
+// stable under `go test` regardless of the caller's CWD (_shared.md §9).
+func TestLoadGoldenOutcome_CommittedCorpusRoundTrip(t *testing.T) {
+	// Derive path relative to the package source directory.  Under `go test`
+	// the working directory is the package directory
+	// (services/daemon/cmd/daemon-replay-check), so the relative hop to the
+	// corpus testdata is stable.
+	corpusGoldenPath := filepath.Join("..", "..", "testdata", "corpus", "replay-expected", "staging-outcome.json")
+
+	got, err := loadGoldenOutcome(corpusGoldenPath)
+	require.NoError(t, err, "committed staging-outcome.json must parse without error")
+
+	// Structural invariants that must hold for any valid committed artifact.
+	require.NotEmpty(t, got.Matches, "committed staging-outcome.json must contain at least one match row")
+	for i, m := range got.Matches {
+		assert.NotEmpty(t, m.Format, "match[%d].format must not be empty in the committed artifact", i)
+		assert.NotEmpty(t, m.Result, "match[%d].result must not be empty in the committed artifact", i)
+	}
+	// projection_error_count must be zero in the committed golden artifact —
+	// a committed non-zero value would mean the corpus has known projection
+	// errors that were intentionally promoted, which is never valid.
+	assert.Zero(t, got.ProjectionErrorCount,
+		"committed staging-outcome.json must have projection_error_count=0")
+}
+
+// ---------------------------------------------------------------------------
+// Min-match-count assertion regression guard (#803)
+// ---------------------------------------------------------------------------
+
+// TestDiffOutcome_MinMatchCountGuard is a named regression guard verifying
+// that diffOutcome never silently passes when actual returns zero matches
+// against a non-empty golden manifest.  This pins the Count-comparison branch
+// in diffOutcome so that future refactors cannot accidentally suppress it.
+func TestDiffOutcome_MinMatchCountGuard(t *testing.T) {
+	golden := goldenOutcome{
+		Matches: []goldenMatch{
+			{Format: "QuickDraft_SOS_20260526", Result: "win", PlayerWins: 1, OpponentWins: 0},
+		},
+	}
+	// Actual returns no matches — the harness must never silently PASS in this state.
+	actual := goldenOutcome{Matches: []goldenMatch{}}
+
+	diffs := diffOutcome(golden, actual)
+	require.NotEmpty(t, diffs, "diffOutcome must emit at least one diff when actual has 0 matches and golden expects 1+")
+	found := false
+	for _, d := range diffs {
+		if d.EventClass == "matches" && d.Field == "Count" {
+			found = true
+			assert.Equal(t, "1", d.Expected)
+			assert.Equal(t, "0", d.Actual)
+		}
+	}
+	assert.True(t, found, "a Count diff on the 'matches' EventClass must be present")
+}
+
+// ---------------------------------------------------------------------------
+// Projection-errors 404 graceful-degrade (#803)
+// ---------------------------------------------------------------------------
+
+// TestFetchStagingOutcome_ProjectionErrors404_GraceDegrade verifies that when
+// the /admin/projection-errors/count endpoint returns HTTP 404 (the endpoint
+// may not yet exist on a staging build), fetchStagingOutcome still succeeds
+// and returns ProjectionErrorCount=0.  The other endpoints (/matches, /quests,
+// /decks) respond normally — this test isolates the 404 to the admin endpoint.
+func TestFetchStagingOutcome_ProjectionErrors404_GraceDegrade(t *testing.T) {
+	bffSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/matches"):
+			_, _ = fmt.Fprintln(w, `{"Matches":[{"Format":"QuickDraft_SOS_20260526","Result":"win","PlayerWins":1,"OpponentWins":0}],"HasMore":false}`)
+		case strings.HasSuffix(r.URL.Path, "/quests"):
+			_, _ = fmt.Fprintln(w, `{"quests":[],"has_quest_data":false}`)
+		case strings.HasSuffix(r.URL.Path, "/decks"):
+			_, _ = fmt.Fprintln(w, `[]`)
+		case strings.Contains(r.URL.Path, "projection-errors"):
+			// Simulate endpoint not yet deployed on staging.
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprintln(w, `{"error":"not found"}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer bffSrv.Close()
+
+	out, err := fetchStagingOutcome(bffSrv.URL, "sk_test_key", "acc_001")
+	require.NoError(t, err, "fetchStagingOutcome must not return an error when projection-errors returns 404")
+	assert.Equal(t, 0, out.ProjectionErrorCount,
+		"ProjectionErrorCount must default to 0 when the admin endpoint returns 404 (graceful degrade)")
+	// The match data from the other endpoints must still be populated.
+	require.Len(t, out.Matches, 1, "matches must still be populated despite the projection-errors 404")
+}

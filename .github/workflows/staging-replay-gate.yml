@@ -91,7 +91,7 @@
 # TEARDOWN SAFETY
 #   The always() teardown scopes all deletes strictly to the synthetic
 #   account_id from SSM. Real staging user data is never touched.
-#   Tables swept: daemon_devices, daemon_api_keys, matches, quests,
+#   Tables swept: daemon_api_keys, matches, quests,
 #   decks, deck_cards, projection_errors (any table with account_id FK).
 #   Teardown uses SSM-authenticated psql via the EC2 staging host --
 #   same access pattern as Tim's staging-verify sessions (ADR-019).
@@ -599,15 +599,24 @@ jobs:
           TEARDOWN_COMMAND="source /etc/mtga-companion-staging/env && psql \"\$DATABASE_URL\" <<'ENDSQL'
           DO \$body\$
           DECLARE
-            v_acct TEXT := '${ACCOUNT_ID}';
+            v_clerk_id TEXT := '${ACCOUNT_ID}';
+            v_acct_id  BIGINT;
           BEGIN
-            DELETE FROM projection_errors WHERE account_id = v_acct;
-            DELETE FROM deck_cards WHERE deck_id IN (SELECT id FROM decks WHERE account_id = v_acct);
-            DELETE FROM decks WHERE account_id = v_acct;
-            DELETE FROM quests WHERE account_id = v_acct;
-            DELETE FROM matches WHERE account_id = v_acct;
-            DELETE FROM daemon_api_keys WHERE account_id = v_acct;
-            DELETE FROM daemon_devices WHERE account_id = v_acct;
+            -- Resolve the internal BIGINT accounts.id from the Clerk user ID.
+            -- daemon_api_keys and projection_errors store the Clerk TEXT id directly;
+            -- matches, quests, decks, and deck_cards use the BIGINT FK to accounts.id.
+            SELECT id INTO v_acct_id FROM accounts WHERE clerk_user_id = v_clerk_id;
+            IF v_acct_id IS NULL THEN
+              RAISE NOTICE 'No accounts row found for clerk_user_id %; skipping BIGINT-scoped deletes', v_clerk_id;
+            ELSE
+              DELETE FROM deck_cards WHERE deck_id IN (SELECT id FROM decks WHERE account_id = v_acct_id);
+              DELETE FROM decks   WHERE account_id = v_acct_id;
+              DELETE FROM quests  WHERE account_id = v_acct_id;
+              DELETE FROM matches WHERE account_id = v_acct_id;
+            END IF;
+            -- daemon_api_keys and projection_errors use the Clerk TEXT id directly.
+            DELETE FROM daemon_api_keys    WHERE account_id = v_clerk_id;
+            DELETE FROM projection_errors  WHERE account_id = v_clerk_id;
             RAISE NOTICE 'Teardown complete for synthetic account';
           END \$body\$;
           ENDSQL"

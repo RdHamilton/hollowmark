@@ -271,116 +271,28 @@ jobs:
   # Not run for production: authenticated coverage lives in the separate prod canary
   # (collection-canary.yml / scheduled-prod-canary.yml family), not the deploy workflow.
   # AC8: preserves the full authed Playwright + BFF API smoke from deploy-spa-staging.yml.
+  #
+  # Fix (tickets#1179): replaced the former inline job (bare ubuntu-latest runner +
+  # npx playwright install chromium --with-deps) with a reusable-workflow call to
+  # e2e-staging-auth-smoke.yml, which uses the pre-baked Playwright container
+  # (mcr.microsoft.com/playwright:v1.56.1-jammy). The inline job hung at the
+  # browser-install step on every run because ubuntu-24.04's needrestart apt hook
+  # blocks indefinitely -- DEBIAN_FRONTEND=noninteractive did not suppress it.
+  # The container has Chromium pre-installed; no browser download occurs at all.
+  #
+  # OIDC + container credential note: the former inline job read CLERK_SECRET_KEY
+  # and STAGING_SMOKE_TOKEN from SSM at runtime using OIDC credentials. OIDC env
+  # vars do NOT propagate into container steps (GHA security model), so those SSM
+  # reads could not run inside the container. e2e-staging-auth-smoke.yml sidesteps
+  # this by using pre-provisioned GitHub Actions secrets (CLERK_STAGING_SECRET_KEY,
+  # STAGING_SMOKE_TOKEN) instead of runtime SSM reads; GHA secrets DO propagate into
+  # container steps via env:. secrets: inherit passes the caller's secrets through.
   staging-smoke:
     name: Staging Authenticated Smoke
     needs: deploy
     if: ${{ (inputs.environment || 'production') == 'staging' }}
-    runs-on: ubuntu-latest
-    environment: staging
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.ref }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-
-      # Cache Playwright browser binaries keyed on package-lock.json so the
-      # 173 MB Chromium zip is only re-downloaded when playwright version changes.
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-staging-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            playwright-staging-${{ runner.os }}-
-            playwright-${{ runner.os }}-
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: us-east-1
-
-      # Re-read staging SSM secrets for the smoke suites.
-      # Sensitive outputs are not passed across jobs (GHA security model) -- re-read here.
-      # D1 / Erratum E-1: CLERK_SECRET_KEY from /vaultmtg/app/staging/ (canonical post-R-13 path).
-      - name: Read staging smoke SSM parameters
-        id: smoke-ssm
-        run: |
-          STAGING_SMOKE_TOKEN=$(aws ssm get-parameter \
-            --name /vaultmtg/staging/ci-smoke-token \
-            --with-decryption \
-            --region us-east-1 \
-            --query Parameter.Value \
-            --output text)
-          echo "::add-mask::${STAGING_SMOKE_TOKEN}"
-          CLERK_SECRET_KEY=$(aws ssm get-parameter \
-            --name /vaultmtg/app/staging/CLERK_SECRET_KEY \
-            --with-decryption \
-            --region us-east-1 \
-            --query Parameter.Value \
-            --output text)
-          echo "::add-mask::${CLERK_SECRET_KEY}"
-          {
-            echo "staging_smoke_token=${STAGING_SMOKE_TOKEN}"
-            echo "clerk_secret_key=${CLERK_SECRET_KEY}"
-          } >> "$GITHUB_OUTPUT"
-
-      # On ubuntu-latest 24.04 (>=20260525.161) the apt-get needrestart post-install hook
-      # hangs indefinitely in CI without DEBIAN_FRONTEND=noninteractive.
-      - name: Install Playwright browsers (cache miss -- full install)
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        working-directory: frontend
-        run: npx playwright install chromium --with-deps
-        env:
-          DEBIAN_FRONTEND: noninteractive
-
-      - name: Install Playwright system dependencies (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        working-directory: frontend
-        run: npx playwright install-deps chromium
-        env:
-          DEBIAN_FRONTEND: noninteractive
-
-      # SPA authenticated smoke (#678): exercises every protected SPA route via Clerk
-      # testing token injection. CLERK_SECRET_KEY from SSM (ADR-075 D1 + Erratum E-1 -- #1071).
-      # If absent the suite FAILS with INCONCLUSIVE -- does NOT skip.
-      - name: Run SPA browser smoke suite
-        working-directory: frontend
-        run: npm run test:e2e:staging-spa
-        env:
-          STAGING_SPA_URL: ${{ vars.STAGING_SPA_URL }}
-          CLERK_SECRET_KEY: ${{ steps.smoke-ssm.outputs.clerk_secret_key }}
-
-      # BFF API authenticated smoke (#678): exercises auth-gated BFF endpoints (matches, SSE)
-      # with a pre-issued staging Clerk JWT from SSM /vaultmtg/staging/ci-smoke-token.
-      # If STAGING_SMOKE_TOKEN is absent the suite FAILS with INCONCLUSIVE.
-      - name: Run BFF API authenticated smoke suite
-        working-directory: frontend
-        run: npm run test:staging
-        env:
-          STAGING_API_URL: ${{ vars.STAGING_API_URL || 'https://staging-api.hollowmark.app' }}
-          STAGING_SMOKE_TOKEN: ${{ steps.smoke-ssm.outputs.staging_smoke_token }}
-
-      - name: Upload Playwright SPA smoke report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-staging-spa-report
-          path: |
-            frontend/playwright-report-staging-spa/
-            frontend/playwright-report-staging/
-          retention-days: 7
+    uses: ./.github/workflows/e2e-staging-auth-smoke.yml
+    secrets: inherit
+    with:
+      staging_spa_url: ${{ vars.STAGING_SPA_URL || 'https://stg-app.hollowmark.app' }}
+      staging_api_url: ${{ vars.STAGING_API_URL || 'https://staging-api.hollowmark.app' }}
