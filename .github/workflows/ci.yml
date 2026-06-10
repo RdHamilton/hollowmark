@@ -802,3 +802,262 @@ jobs:
             echo "- Promote to hard-fail after a clean release cycle."
             echo "- Ref: ADR-075 FF-3, Ray PLAN_VERDICT #1129#issuecomment-4664207551"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # --------------------------------------------------------------------------
+  # portability-lint: Fail PRs that introduce author/machine-specific paths
+  #
+  # Scans ADDED lines only in the PR diff for paths that are specific to an
+  # author's machine or a transient CI agent worktree. This is the write-time
+  # wall from the 2026-06-10 agent-quality retro.
+  #
+  # Origin: PR #3085 committed build.Dir = "/tmp/claude-worktrees/agent-.../
+  # services/bff/cmd" into a Go test. It passed local verification (ran in
+  # that exact worktree) and failed BFF Unit Tests in CI. This lint catches
+  # the entire class on every PR, for every author.
+  #
+  # Scoped to source/test/script/config files only:
+  #   *.go  *.ts  *.tsx  *.sh  *.yml  *.yaml  *.json
+  # Excluded:
+  #   *.md docs          (illustrative paths in documentation are expected)
+  #   testdata/          (fixture data directories may contain example paths)
+  #   /home/runner/      (GitHub Actions runner path -- always legitimate)
+  #   /home/user/        (generic illustrative placeholder -- not machine-specific)
+  #
+  # Two steps:
+  #   Step 1: home-dir / worktree paths  (hard-fail class once baseline clean)
+  #   Step 2: hardcoded localhost ports  (warn class -- legit in test fixtures)
+  #
+  # RULE-INFRA-01 staged enablement: continue-on-error: true on the job.
+  # Known baseline violations to resolve before promoting to hard-fail:
+  #   - scripts/corpus-lint.sh: AGENTS_DIR default hardcodes /Users/<author>/
+  #     (fix: use $HOME-relative default or relative path)
+  #   - frontend CopyDiagnosticsSection.test.tsx + .stories.tsx + e2e spec:
+  #     /Users/test/ and /Users/planeswalker/ (illustrative macOS log paths --
+  #     replace with $HOME-relative or a const, or move to testdata/)
+  # Promote both steps to hard-fail by removing continue-on-error from this
+  # job after the baseline is clean. Coordinate with #1154 (fix-then-flip).
+  # --------------------------------------------------------------------------
+  portability-lint:
+    name: Portability lint -- no author/machine-specific paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # RULE-INFRA-01: warn-only during staged enablement.
+    # Known baseline violations documented above. Remove continue-on-error
+    # after the baseline is clean (coordinate with #1154).
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          # Fetch enough history to diff against the PR base branch.
+          fetch-depth: 0
+
+      - name: Portability lint -- home-dir and worktree paths (hard-fail class)
+        # Catches author home directories and transient agent worktree IDs
+        # in added diff lines across source, test, script, and config files.
+        #
+        # Patterns (hard-fail class):
+        #   /Users/             macOS home directory root
+        #   /home/<user>/       Linux home (username 4+ chars, not 'runner'/'user')
+        #   /tmp/claude-worktrees/   agent scratch root
+        #   /private/tmp/claude      macOS agent scratch (same class)
+        #   /var/folders/            macOS temp (machine-specific inode path)
+        #   agent-[0-9a-f]{16,}      agent worktree hex ID suffix
+        #
+        # File scope: *.go *.ts *.tsx *.sh *.yml *.yaml *.json
+        # Excluded: *.md, testdata/ paths, /home/runner/, /home/user/
+        run: |
+          set +e
+
+          BASE="${{ github.base_ref }}"
+          if [[ -z "$BASE" ]]; then
+            # push to main -- diff against HEAD~1
+            DIFF=$(git diff HEAD~1...HEAD -- \
+              '*.go' '*.ts' '*.tsx' '*.sh' '*.yml' '*.yaml' '*.json' \
+              2>/dev/null || true)
+          else
+            git fetch origin "$BASE" --depth=1 2>/dev/null || true
+            DIFF=$(git diff "origin/${BASE}...HEAD" -- \
+              '*.go' '*.ts' '*.tsx' '*.sh' '*.yml' '*.yaml' '*.json' \
+              2>/dev/null || true)
+          fi
+
+          # Extract added lines only from non-testdata files.
+          # Process hunk-by-hunk: track the current file; skip if it is under
+          # testdata/ or fixtures/; emit the content of '+' lines (not '+++').
+          ADDED_FILTERED=$(echo "$DIFF" | awk '
+            /^\+\+\+ b\// {
+              filepath = substr($0, 7)
+              in_excluded = (filepath ~ /testdata\/|\/fixtures\//)
+              next
+            }
+            /^--- / { next }
+            /^diff / { in_excluded = 0; next }
+            /^index / { next }
+            /^@@/ { next }
+            /^\+/ && !in_excluded && !/^\+\+\+/ {
+              print substr($0, 2)
+            }
+          ' || true)
+
+          VIOLATIONS=0
+
+          echo "======================================================="
+          echo "Portability lint: home-dir / worktree paths (hard-fail class)"
+          echo "Scanning added lines in PR diff for machine-specific paths"
+          echo "======================================================="
+
+          # P1: macOS home directories (/Users/<anything>/)
+          matches_p1=$(echo "$ADDED_FILTERED" | \
+            grep -E '/Users/[^[:space:]]+' \
+            || true)
+          if [[ -n "$matches_p1" ]]; then
+            echo ""
+            echo "VIOLATION [P1]: macOS /Users/<author>/ path in source/test/script/config:"
+            while IFS= read -r line; do echo "  ${line}"; done <<< "$matches_p1"
+            VIOLATIONS=$((VIOLATIONS + 1))
+          fi
+
+          # P2: Linux home directories -- /home/<username>/ where username is
+          # 4+ chars and NOT 'runner' (GHA runner) or 'user' (generic placeholder).
+          matches_p2=$(echo "$ADDED_FILTERED" | \
+            grep -E '/home/[a-zA-Z][a-zA-Z0-9._-]{3,}/' | \
+            grep -v '/home/runner/' | \
+            grep -v '/home/user/' \
+            || true)
+          if [[ -n "$matches_p2" ]]; then
+            echo ""
+            echo "VIOLATION [P2]: Linux /home/<author>/ path in source/test/script/config:"
+            while IFS= read -r line; do echo "  ${line}"; done <<< "$matches_p2"
+            VIOLATIONS=$((VIOLATIONS + 1))
+          fi
+
+          # P3: Agent/CI worktree scratch paths (all are machine-specific)
+          matches_p3=$(echo "$ADDED_FILTERED" | \
+            grep -E '/tmp/claude-worktrees/|/private/tmp/claude|/var/folders/' \
+            || true)
+          if [[ -n "$matches_p3" ]]; then
+            echo ""
+            echo "VIOLATION [P3]: Agent worktree / macOS scratch path:"
+            while IFS= read -r line; do echo "  ${line}"; done <<< "$matches_p3"
+            VIOLATIONS=$((VIOLATIONS + 1))
+          fi
+
+          # P4: Agent worktree hex ID embedded in any string
+          # (e.g. Dir = "/tmp/.../agent-3f8a2b1c9d4e7f0a12b3/...")
+          matches_p4=$(echo "$ADDED_FILTERED" | \
+            grep -E 'agent-[0-9a-f]{16,}' \
+            || true)
+          if [[ -n "$matches_p4" ]]; then
+            echo ""
+            echo "VIOLATION [P4]: Agent worktree hex ID (agent-<16+hex>):"
+            while IFS= read -r line; do echo "  ${line}"; done <<< "$matches_p4"
+            VIOLATIONS=$((VIOLATIONS + 1))
+          fi
+
+          echo ""
+          echo "======================================================="
+          echo "Portability lint (home-dir/worktree): ${VIOLATIONS} violation class(es)"
+
+          if [[ "$VIOLATIONS" -eq 0 ]]; then
+            echo "PASS"
+          else
+            echo "WARN (WARN_ONLY -- non-blocking per RULE-INFRA-01 staged enablement)"
+            echo ""
+            echo "Fix guidance:"
+            echo "  - Replace /Users/<you>/... with a relative path, \$HOME, or"
+            echo "    os.UserHomeDir() / os.TempDir() in Go code."
+            echo "  - Replace /tmp/claude-worktrees/... with t.TempDir() in tests."
+            echo "  - Never embed a worktree ID -- derive the working directory"
+            echo "    from the test package dir or an env var at runtime."
+            echo ""
+            echo "Promote to hard-fail after baseline cleanup (see #1154, #1155)."
+          fi
+          # Always exit 0 in staged-enablement. continue-on-error: true is the belt;
+          # this exit 0 is the suspenders. The job must conclude 'success' while
+          # violations are still visible in the log and step summary.
+          # FLIP PATH (#1154): remove continue-on-error on the job AND change exit 0
+          # below to exit 1 (or remove the override) to promote to hard-fail.
+          exit 0
+
+      - name: Portability lint -- hardcoded localhost/loopback ports (warn class)
+        # Catches localhost:<port> and 127.0.0.1:<port> literals in added lines.
+        # These may indicate services that only exist on the author's machine.
+        #
+        # Warn-only: many legitimate test fixtures use localhost ports (e.g.
+        # httptest.NewServer, net.Listen(":0") tests). An allowlist / case-by-case
+        # review is needed before hard-failing. Coordinate with #1154.
+        run: |
+          set +e
+
+          BASE="${{ github.base_ref }}"
+          if [[ -z "$BASE" ]]; then
+            DIFF=$(git diff HEAD~1...HEAD -- \
+              '*.go' '*.ts' '*.tsx' '*.sh' '*.yml' '*.yaml' '*.json' \
+              2>/dev/null || true)
+          else
+            git fetch origin "$BASE" --depth=1 2>/dev/null || true
+            DIFF=$(git diff "origin/${BASE}...HEAD" -- \
+              '*.go' '*.ts' '*.tsx' '*.sh' '*.yml' '*.yaml' '*.json' \
+              2>/dev/null || true)
+          fi
+
+          ADDED_FILTERED=$(echo "$DIFF" | awk '
+            /^\+\+\+ b\// {
+              filepath = substr($0, 7)
+              in_excluded = (filepath ~ /testdata\/|\/fixtures\//)
+              next
+            }
+            /^--- / { next }
+            /^diff / { in_excluded = 0; next }
+            /^index / { next }
+            /^@@/ { next }
+            /^\+/ && !in_excluded && !/^\+\+\+/ {
+              print substr($0, 2)
+            }
+          ' || true)
+
+          echo "======================================================="
+          echo "Portability lint: hardcoded localhost/loopback ports (warn class)"
+          echo "======================================================="
+
+          matches=$(echo "$ADDED_FILTERED" | \
+            grep -E 'localhost:[0-9]{2,5}|127\.0\.0\.1:[0-9]{2,5}' \
+            || true)
+
+          if [[ -n "$matches" ]]; then
+            echo ""
+            echo "WARN [localhost-port]: hardcoded localhost:<port> or 127.0.0.1:<port>:"
+            while IFS= read -r line; do echo "  ${line}"; done <<< "$matches"
+            echo ""
+            echo "These may be legitimate test fixtures. Review and either:"
+            echo "  - Keep if the fixture clearly uses a dynamic port (net.Listen(':0'),"
+            echo "    httptest.NewServer) and this is just the resolved address"
+            echo "  - Replace with a dynamic port binding if it is a hardcoded constant"
+            echo "WARN (non-blocking) -- coordinate with #1154 for hard-fail promotion"
+          else
+            echo "PASS -- no hardcoded localhost ports found in added lines"
+          fi
+          # Always exit 0 in staged-enablement. continue-on-error: true is the belt;
+          # this exit 0 is the suspenders. Violations surface in log/summary but the
+          # job concludes 'success' -- no masked-red check on every PR.
+          # FLIP PATH (#1154): remove continue-on-error on the job AND change exit 0
+          # below to exit 1 (or remove the override) to promote to hard-fail.
+          exit 0
+
+      - name: Write step summary
+        if: always()
+        run: |
+          {
+            echo "### Portability Lint -- author/machine-specific paths"
+            echo ""
+            echo "Scans added PR diff lines for machine-specific paths in source/test/script/config."
+            echo ""
+            echo "- **WARN_ONLY** (RULE-INFRA-01 staged enablement)"
+            echo "- Known baseline violations: scripts/corpus-lint.sh AGENTS_DIR,"
+            echo "  frontend CopyDiagnosticsSection test/story fixtures."
+            echo "- See job log for VIOLATION/WARN lines, if any."
+            echo "- Promote to hard-fail after baseline cleanup (coordinate with #1154)."
+            echo "- Ref: RdHamilton/hollowmark-tickets#1155, 2026-06 agent-quality retro"
+          } >> "$GITHUB_STEP_SUMMARY"
