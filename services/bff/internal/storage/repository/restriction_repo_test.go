@@ -11,6 +11,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/RdHamilton/hollowmark/services/bff/internal/identityhash"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
@@ -343,5 +344,68 @@ func TestRestrictionAuditLog_AdminActor(t *testing.T) {
 	}
 	if gotActor != "admin" {
 		t.Errorf("actor: want %q, got %q", "admin", gotActor)
+	}
+}
+
+// TestDBHaltChecker_IsHalted_HashMatchesClerkID is the critical regression test
+// for the hash-mismatch defect (Ben's Blocker 1 on PR #3102).
+//
+// It proves that DBHaltChecker.IsHalted returns (true, nil) when queried with
+// identityhash.HashAccountID(clerkUserID) — the EXACT value the analytics seam
+// passes at runtime.  It relies on migration 000116 backfilling account_id_hash
+// as SHA-256(users.clerk_user_id)[:16] via the users join, NOT SHA-256(accounts.id::text)[:16].
+//
+// If the backfill formula or the account INSERT path ever reverts to hashing the
+// numeric BIGSERIAL, this test will catch it: the account_id_hash stored in the
+// DB will differ from what the runtime passes, and IsHalted will return false.
+func TestDBHaltChecker_IsHalted_HashMatchesClerkID(t *testing.T) {
+	db := openTestDB(t)
+	userRepo := repository.NewUserRepository(db)
+	repo := repository.NewRestrictionRepository(db)
+	checker := repository.NewDBHaltChecker(db)
+
+	// Use a realistic Clerk-format user ID.
+	clerkID := "user_test_halt_hash_" + t.Name()
+
+	u, err := userRepo.UpsertByClerkUserID(context.Background(), clerkID)
+	if err != nil {
+		t.Fatalf("UpsertByClerkUserID: %v", err)
+	}
+
+	// Insert an account row WITHOUT manually specifying account_id_hash —
+	// we rely on the INSERT path (GetOrCreateByClientID / account repo) to
+	// populate it from users.clerk_user_id.  Use the repo method so we exercise
+	// the production INSERT code path, not a hand-crafted SQL fixture.
+	accountRepo := repository.NewAccountRepository(db)
+	clientID := "MTGA_hash_test_" + t.Name()
+	accountID, err := accountRepo.GetOrCreateByClientID(context.Background(), clientID, u.ID)
+	if err != nil {
+		t.Fatalf("GetOrCreateByClientID: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM restriction_audit_log WHERE user_id = $1`, u.ID)
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM accounts WHERE id = $1`, accountID)
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM users WHERE clerk_user_id = $1`, clerkID)
+	})
+
+	// Restrict the user.
+	if err := repo.SetProcessingRestriction(context.Background(), u.ID); err != nil {
+		t.Fatalf("SetProcessingRestriction: %v", err)
+	}
+
+	// The key assertion: query using the SAME hash the analytics seam produces
+	// at runtime — identityhash.HashAccountID(clerkUserID).  If the DB column
+	// holds a hash of the numeric account ID instead, this will return false.
+	runtimeHash := identityhash.HashAccountID(clerkID)
+	halted, err := checker.IsHalted(context.Background(), runtimeHash)
+	if err != nil {
+		t.Fatalf("IsHalted: %v", err)
+	}
+	if !halted {
+		t.Errorf("IsHalted(%q): want true (account restricted + hash matches), got false — hash mismatch between DB column and runtime value", runtimeHash)
 	}
 }

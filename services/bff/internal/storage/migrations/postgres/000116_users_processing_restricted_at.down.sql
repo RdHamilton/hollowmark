@@ -1,4 +1,4 @@
--- Down migration for 000115: GDPR Art.18 Right to Restriction flag
+-- Down migration for 000116: GDPR Art.18 Right to Restriction flag
 -- Reverses the .up.sql additions in reverse order.
 
 -- Section C

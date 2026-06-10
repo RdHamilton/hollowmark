@@ -95,7 +95,7 @@ func NewDBHaltChecker(db DB) *DBHaltChecker {
 // account_id_hash. It returns (false, err) on any DB error — the caller
 // is responsible for treating errors as halted (fail-closed contract).
 //
-// The lookup joins accounts.account_id_hash (indexed, added by migration 000115)
+// The lookup joins accounts.account_id_hash (indexed, added by migration 000116)
 // to users.processing_restricted_at.  No reverse-hash computation is needed.
 func (c *DBHaltChecker) IsHalted(ctx context.Context, accountIDHash string) (bool, error) {
 	const q = `
