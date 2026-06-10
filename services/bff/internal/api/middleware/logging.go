@@ -2,7 +2,6 @@
 package middleware
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,16 +9,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RdHamilton/hollowmark/services/bff/internal/identityhash"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 )
 
-// hashAccountID returns a privacy-safe representation of accountID for
+// hashAccountIDForLog returns a privacy-safe representation of accountID for
 // log output: SHA-256 hex, first 16 characters.  No raw PII is ever emitted.
 // The input must already be the string form of the account ID.
+//
+// Delegates to identityhash.HashAccountID per the FM-2 one-implementation rule.
 func hashAccountIDForLog(accountID string) string {
-	sum := sha256.Sum256([]byte(accountID))
-	return fmt.Sprintf("%x", sum)[:16]
+	return identityhash.HashAccountID(accountID)
 }
 
 // responseCapture wraps ResponseWriter to capture the status code written by
