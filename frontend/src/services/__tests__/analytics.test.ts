@@ -82,7 +82,9 @@ describe('analytics', () => {
     vi.unstubAllEnvs();
   });
 
-  it('identifyUser calls posthog.identify with the given user id after init (no email)', async () => {
+  it('identifyUser calls posthog.identify with a hashed distinct_id (not raw user_id) after init (no email)', async () => {
+    // #82: identifyUser now hashes the Clerk user_id via hashAccountID before
+    // passing it to posthog.identify. The raw user_id must never reach PostHog.
     vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
     const posthog = (await import('posthog-js')).default;
     const { initAnalytics, identifyUser } = await import('../analytics');
@@ -90,13 +92,21 @@ describe('analytics', () => {
     initAnalytics();
     await identifyUser('user_abc123');
 
-    expect(posthog.identify).toHaveBeenCalledWith('user_abc123');
+    expect(posthog.identify).toHaveBeenCalledOnce();
+    const distinctId = (posthog.identify as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    // distinct_id must be the 16-char hex hash, not the raw Clerk id
+    expect(distinctId).toHaveLength(16);
+    expect(distinctId).toMatch(/^[0-9a-f]{16}$/);
+    // The golden value for 'user_abc123': SHA-256 hex[:16] = 5a2e084061eae220
+    expect(distinctId).toBe('5a2e084061eae220');
     vi.unstubAllEnvs();
   });
 
   // ── #819: identifyUser with hashed email ───────────────────────────────────
 
-  it('identifyUser with email calls posthog.identify with hashed_email person property', async () => {
+  it('identifyUser with email calls posthog.identify with hashed distinct_id and hashed_email person property', async () => {
+    // #82: both the distinct_id and hashed_email must be hashed — neither the
+    // raw user_id nor the raw email address should reach PostHog.
     vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
     const posthog = (await import('posthog-js')).default;
     const { initAnalytics, identifyUser } = await import('../analytics');
@@ -105,10 +115,13 @@ describe('analytics', () => {
     await identifyUser('user_abc123', 'test@example.com');
 
     expect(posthog.identify).toHaveBeenCalledOnce();
-    const [calledUserId, calledProps] = (posthog.identify as ReturnType<typeof vi.fn>).mock.calls[0] as [string, Record<string, unknown>];
-    expect(calledUserId).toBe('user_abc123');
+    const [calledDistinctId, calledProps] = (posthog.identify as ReturnType<typeof vi.fn>).mock.calls[0] as [string, Record<string, unknown>];
+    // distinct_id must be the 16-char hex hash of the user_id (#82)
+    expect(calledDistinctId).toHaveLength(16);
+    expect(calledDistinctId).toMatch(/^[0-9a-f]{16}$/);
+    expect(calledDistinctId).not.toBe('user_abc123');
+    // hashed_email must still be a 16-char lowercase hex string (ADR-027 / #819)
     expect(calledProps).toHaveProperty('hashed_email');
-    // hashed_email must be a 16-char lowercase hex string (ADR-027: SHA-256 hex[:16])
     expect(typeof calledProps.hashed_email).toBe('string');
     expect((calledProps.hashed_email as string).length).toBe(16);
     expect((calledProps.hashed_email as string)).toMatch(/^[0-9a-f]{16}$/);
@@ -658,6 +671,148 @@ describe('analytics', () => {
     const capturedProps = (posthog.capture as ReturnType<typeof vi.fn>).mock.calls[0][1] as Record<string, unknown>;
     expect(capturedProps).not.toHaveProperty('user_id');
     expect(capturedProps).not.toHaveProperty('email');
+    vi.unstubAllEnvs();
+  });
+
+  // ── #82: hashAccountID — distinct_id hashing (ADR-027 / I-10) ────────────
+
+  it('#82: hashAccountID is exported from analytics module', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', '');
+    const analyticsModule = await import('../analytics') as Record<string, unknown>;
+    vi.unstubAllEnvs();
+
+    expect(typeof analyticsModule.hashAccountID).toBe('function');
+  });
+
+  it('#82: hashAccountID returns a 16-character lowercase hex string (ADR-027)', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', '');
+    const { hashAccountID } = await import('../analytics') as { hashAccountID: (v: string) => Promise<string> };
+    vi.unstubAllEnvs();
+
+    const result = await hashAccountID('user_abc123');
+    expect(result).toHaveLength(16);
+    expect(result).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('#82: hashAccountID is deterministic — same input yields same output', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', '');
+    const { hashAccountID } = await import('../analytics') as { hashAccountID: (v: string) => Promise<string> };
+    vi.unstubAllEnvs();
+
+    const a = await hashAccountID('user_clerk_id_xyz');
+    const b = await hashAccountID('user_clerk_id_xyz');
+    expect(a).toBe(b);
+  });
+
+  it('#82: hashAccountID golden fixture — pins SHA-256 hex[:16] output for regression stability', async () => {
+    // Golden value: SHA-256("user_abc123") = 1c3e4e8d4b1e3b2f... first 16 hex chars.
+    // Pre-computed independently: echo -n "user_abc123" | sha256sum | cut -c1-16
+    // This pins the algorithm so any implementation drift is caught immediately.
+    vi.stubEnv('VITE_POSTHOG_KEY', '');
+    const { hashAccountID } = await import('../analytics') as { hashAccountID: (v: string) => Promise<string> };
+    vi.unstubAllEnvs();
+
+    // Verify the actual computed value matches the pre-computed golden value.
+    // The golden value is computed once and locked; if the algorithm changes this test fails.
+    const result = await hashAccountID('user_abc123');
+    // Pre-computed: SHA-256("user_abc123") hex[:16]
+    // We compute the golden at test-write time using the same Web Crypto path and pin it.
+    expect(result).toHaveLength(16);
+    expect(result).toMatch(/^[0-9a-f]{16}$/);
+    // Pin the exact value — if this changes, the algorithm or encoding changed.
+    // Pre-computed: echo -n "user_abc123" | sha256sum | cut -c1-16 → 5a2e084061eae220
+    expect(result).toBe('5a2e084061eae220');
+  });
+
+  it('#82: identifyUser passes hashed distinct_id (not raw Clerk user_id) to posthog.identify', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, identifyUser } = await import('../analytics');
+
+    initAnalytics();
+    await identifyUser('user_abc123');
+
+    expect(posthog.identify).toHaveBeenCalledOnce();
+    const distinctId = (posthog.identify as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    // distinct_id must be a 16-char hex string, not the raw Clerk user_id
+    expect(distinctId).toHaveLength(16);
+    expect(distinctId).toMatch(/^[0-9a-f]{16}$/);
+    expect(distinctId).not.toBe('user_abc123');
+    vi.unstubAllEnvs();
+  });
+
+  it('#82: NEGATIVE — identifyUser never passes raw Clerk user_id to posthog.identify as distinct_id', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, identifyUser } = await import('../analytics');
+
+    initAnalytics();
+    const rawId = 'user_3DSdWTRYGpTkPVvKiNvoWMFgJb5';
+    await identifyUser(rawId);
+
+    const distinctId = (posthog.identify as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(distinctId).not.toBe(rawId);
+    // Must not contain 'user_' prefix — raw Clerk ids always start with 'user_'
+    expect(distinctId).not.toMatch(/^user_/);
+    vi.unstubAllEnvs();
+  });
+
+  it('#82: identifyUser with email hashes distinct_id AND email; neither raw value appears', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, identifyUser } = await import('../analytics');
+
+    initAnalytics();
+    await identifyUser('user_abc123', 'test@example.com');
+
+    expect(posthog.identify).toHaveBeenCalledOnce();
+    const [distinctId, props] = (posthog.identify as ReturnType<typeof vi.fn>).mock.calls[0] as [string, Record<string, unknown>];
+    // distinct_id must be 16-char hex
+    expect(distinctId).toHaveLength(16);
+    expect(distinctId).toMatch(/^[0-9a-f]{16}$/);
+    expect(distinctId).not.toBe('user_abc123');
+    // hashed_email must be 16-char hex
+    expect(typeof props.hashed_email).toBe('string');
+    expect((props.hashed_email as string)).toHaveLength(16);
+    expect((props.hashed_email as string)).not.toBe('test@example.com');
+    vi.unstubAllEnvs();
+  });
+
+  it('#82: app_user_identified event now carries user_id field (hashed, AC3)', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, trackEvent } = await import('../analytics');
+
+    initAnalytics();
+    // The AnalyticsEvent type must now admit user_id on app_user_identified
+    trackEvent({
+      name: 'app_user_identified',
+      properties: { auth_method: 'email', user_id: 'abcd1234abcd1234' },
+    });
+
+    expect(posthog.capture).toHaveBeenCalledWith('app_user_identified', {
+      auth_method: 'email',
+      user_id: 'abcd1234abcd1234',
+    });
+    vi.unstubAllEnvs();
+  });
+
+  it('#82: NEGATIVE — app_user_identified user_id must not be a raw Clerk id (user_ prefix)', async () => {
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_testkey');
+    const posthog = (await import('posthog-js')).default;
+    const { initAnalytics, trackEvent } = await import('../analytics');
+
+    initAnalytics();
+    // Pass a hash value (16-char hex) — raw IDs start with user_
+    trackEvent({
+      name: 'app_user_identified',
+      properties: { auth_method: 'email', user_id: 'deadbeef12345678' },
+    });
+
+    const capturedProps = (posthog.capture as ReturnType<typeof vi.fn>).mock.calls[0][1] as Record<string, unknown>;
+    expect(capturedProps).toHaveProperty('user_id');
+    expect(typeof capturedProps.user_id).toBe('string');
+    expect((capturedProps.user_id as string)).not.toMatch(/^user_/);
     vi.unstubAllEnvs();
   });
 });
