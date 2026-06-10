@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/RdHamilton/hollowmark/services/bff/internal/analytics"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
@@ -550,7 +551,7 @@ func TestIngestEvent_EventIDPropagatedToRepo(t *testing.T) {
 
 // buildHandlerWithPostHog constructs an IngestHandler with the given PostHog
 // client and APIKey middleware wired — helper shared across gap detection tests.
-func buildHandlerWithPostHog(broadcaster handlers.EventBroadcaster, keyRepo *mockKeyLister, phClient handlers.PostHogClient) http.Handler {
+func buildHandlerWithPostHog(broadcaster handlers.EventBroadcaster, keyRepo *mockKeyLister, phClient analytics.PostHogEnqueuer) http.Handler {
 	ih := handlers.NewIngestHandler(broadcaster).WithPostHogClient(phClient)
 	return middleware.APIKeyAuth(keyRepo)(http.HandlerFunc(ih.IngestEvent))
 }
@@ -865,8 +866,14 @@ func TestIngestHandler_HeartbeatWithDriftEmitsPostHog(t *testing.T) {
 		t.Fatal("PostHog message is not a posthog.Capture")
 	}
 
-	if capture.Event != "daemon.log_format_drift" {
-		t.Errorf("expected PostHog event=%q, got %q", "daemon.log_format_drift", capture.Event)
+	if capture.Event != "daemon_dispatch_degraded" {
+		t.Errorf("expected PostHog event=%q, got %q", "daemon_dispatch_degraded", capture.Event)
+	}
+	// degraded_reason must be log_format_drift.
+	if v, ok := capture.Properties["degraded_reason"]; !ok {
+		t.Error("degraded_reason property missing")
+	} else if v != "log_format_drift" {
+		t.Errorf("degraded_reason=%v, want log_format_drift", v)
 	}
 
 	// distinct_id must be the hash of the account ID, not the raw value.
@@ -993,8 +1000,14 @@ func TestIngestHandler_HeartbeatWith3ConsecutiveFailures_EmitsDispatchDegraded(t
 		t.Fatal("PostHog message is not a posthog.Capture")
 	}
 
-	if capture.Event != "daemon.dispatch_degraded" {
-		t.Errorf("expected event=%q, got %q", "daemon.dispatch_degraded", capture.Event)
+	if capture.Event != "daemon_dispatch_degraded" {
+		t.Errorf("expected event=%q, got %q", "daemon_dispatch_degraded", capture.Event)
+	}
+	// degraded_reason must be dispatch_error.
+	if v, ok := capture.Properties["degraded_reason"]; !ok {
+		t.Error("degraded_reason property missing")
+	} else if v != "dispatch_error" {
+		t.Errorf("degraded_reason=%v, want dispatch_error", v)
 	}
 	if capture.DistinctId == "acct_degraded" {
 		t.Error("distinct_id must be hashed, got raw account_id")
@@ -1097,8 +1110,8 @@ func TestIngestHandler_AuthFailedEmitsPostHog(t *testing.T) {
 		t.Fatal("PostHog message is not a posthog.Capture")
 	}
 
-	if capture.Event != "daemon.auth_failed" {
-		t.Errorf("expected event=%q, got %q", "daemon.auth_failed", capture.Event)
+	if capture.Event != "daemon_auth_failed" {
+		t.Errorf("expected event=%q, got %q", "daemon_auth_failed", capture.Event)
 	}
 	if capture.DistinctId == "acct_auth_fail" {
 		t.Error("distinct_id must be hashed, got raw account_id")
@@ -1172,8 +1185,8 @@ func TestIngestHandler_KeychainErrorEmitsPostHog(t *testing.T) {
 		t.Fatal("PostHog message is not a posthog.Capture")
 	}
 
-	if capture.Event != "daemon.keychain_error" {
-		t.Errorf("expected event=%q, got %q", "daemon.keychain_error", capture.Event)
+	if capture.Event != "daemon_keychain_error" {
+		t.Errorf("expected event=%q, got %q", "daemon_keychain_error", capture.Event)
 	}
 	if capture.DistinctId == "acct_keychain_err" {
 		t.Error("distinct_id must be hashed, got raw account_id")
@@ -1412,8 +1425,8 @@ func TestIngestHandler_AuthFailed_PKCETimeout_EmitsPostHog(t *testing.T) {
 		t.Fatal("PostHog message is not a posthog.Capture")
 	}
 
-	if capture.Event != "daemon.auth_failed" {
-		t.Errorf("expected event=%q, got %q", "daemon.auth_failed", capture.Event)
+	if capture.Event != "daemon_auth_failed" {
+		t.Errorf("expected event=%q, got %q", "daemon_auth_failed", capture.Event)
 	}
 	// PII guard: distinct_id must be hashed, never the raw account_id.
 	if capture.DistinctId == rawAccountID {
@@ -1489,8 +1502,8 @@ func TestIngestHandler_AuthFailed_PKCECancelled_EmitsPostHog(t *testing.T) {
 		t.Fatal("PostHog message is not a posthog.Capture")
 	}
 
-	if capture.Event != "daemon.auth_failed" {
-		t.Errorf("expected event=%q, got %q", "daemon.auth_failed", capture.Event)
+	if capture.Event != "daemon_auth_failed" {
+		t.Errorf("expected event=%q, got %q", "daemon_auth_failed", capture.Event)
 	}
 	// PII guard: distinct_id must be hashed, never the raw account_id.
 	if capture.DistinctId == rawAccountID {

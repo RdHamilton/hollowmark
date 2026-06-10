@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/RdHamilton/hollowmark/services/bff/internal/analytics"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
 	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/api/sse"
@@ -186,7 +187,7 @@ func main() {
 	// POSTHOG_API_KEY (sourced from SSM /vaultmtg/app/production/posthog-api-key
 	// at deploy time).  When empty, PostHog is disabled — a no-op client is used
 	// so all handler code paths are always exercised.  The key is never logged.
-	var postHogClient handlers.PostHogClient
+	var analyticsClient *analytics.Client
 	if cfg.PostHogAPIKey != "" {
 		phClient, err := posthoglib.NewWithConfig(cfg.PostHogAPIKey, posthoglib.Config{
 			Endpoint: cfg.PostHogHost,
@@ -199,19 +200,17 @@ func main() {
 				log.Printf("posthog close: %v", err)
 			}
 		}()
-		postHogClient = phClient
+		analyticsClient = analytics.NewClient(phClient, analytics.NewNoopHaltChecker())
 		log.Println("PostHog initialised.")
 	} else {
+		analyticsClient = analytics.NewClient(analytics.NoopEnqueuer{}, analytics.NewNoopHaltChecker())
 		log.Println("POSTHOG_API_KEY not set — PostHog disabled (development mode only).")
 	}
 
 	broker := sse.New()
 
 	sseBroadcaster := &sseBroadcast{broker: broker}
-	ingestHandler := handlers.NewIngestHandler(sseBroadcaster)
-	if postHogClient != nil {
-		ingestHandler = ingestHandler.WithPostHogClient(postHogClient)
-	}
+	ingestHandler := handlers.NewIngestHandler(sseBroadcaster).WithAnalyticsClient(analyticsClient)
 
 	// Wire Clerk auth middleware when CLERK_SECRET_KEY is configured.
 	// This middleware protects browser-facing routes by verifying Clerk session
@@ -365,10 +364,7 @@ func main() {
 		// Phase 2 PR #9 — /api/v1/decks/* surface (CRUD, cards, tags,
 		// permutations, import/export, library + STUBs for the deck-builder
 		// + recommendation pipeline).
-		decksHandler = handlers.NewDecksHandler(repository.NewDecksRepository(sqlDB), accountRepo)
-		if postHogClient != nil {
-			decksHandler = decksHandler.WithPostHogClient(postHogClient)
-		}
+		decksHandler = handlers.NewDecksHandler(repository.NewDecksRepository(sqlDB), accountRepo).WithAnalyticsClient(analyticsClient)
 
 		// Phase 2 PR #10 — /api/v1/drafts/* surface (sessions, picks,
 		// stats, 17lands export, community comparison, temporal trends,
@@ -417,10 +413,7 @@ func main() {
 		// browser flow.  See ADR-020 §POST /api/v1/daemon/register Wire Format.
 		daemonAPIKeyRepo := repository.NewDaemonAPIKeyRepository(sqlDB)
 		userRepo := repository.NewUserRepository(sqlDB)
-		daemonRegisterHandler = handlers.NewDaemonRegisterHandler(daemonAPIKeyRepo, userRepo)
-		if postHogClient != nil {
-			daemonRegisterHandler = daemonRegisterHandler.WithPostHogClient(postHogClient)
-		}
+		daemonRegisterHandler = handlers.NewDaemonRegisterHandler(daemonAPIKeyRepo, userRepo).WithAnalyticsClient(analyticsClient)
 
 		// daemonAPIKeyAuthMiddl protects daemon-facing routes (currently only
 		// POST /api/v1/ingest/events).  It validates the api_key minted by
@@ -478,10 +471,7 @@ func main() {
 		} else {
 			log.Println("MAILCHIMP_API_KEY or MAILCHIMP_LIST_ID not set — Mailchimp disabled for waitlist.")
 		}
-		waitlistHandler = handlers.NewWaitlistHandler(waitlistRepo, mailchimpClient)
-		if postHogClient != nil {
-			waitlistHandler = waitlistHandler.WithPostHogClient(postHogClient)
-		}
+		waitlistHandler = handlers.NewWaitlistHandler(waitlistRepo, mailchimpClient).WithAnalyticsClient(analyticsClient)
 
 		// WildcardRecommendationsHandler — ADR-045 full implementation (ticket #420).
 		// Joins inventory + card_inventory + set_cards + draft_card_ratings +
@@ -565,9 +555,7 @@ func main() {
 			decksRepo := repository.NewDecksRepository(sqlDB)
 			worker.WithDraftDeckCreator(decksRepo)
 			worker.WithDraftPickReader(draftSessionsRepo)
-			if postHogClient != nil {
-				worker.WithPostHogClient(postHogClient)
-			}
+			worker.WithAnalyticsClient(analyticsClient)
 			go worker.Run(projCtx)
 		} else {
 			log.Println("BFF_PROJECTION_DISABLED=true — projection worker not started.")

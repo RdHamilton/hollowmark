@@ -1,0 +1,332 @@
+# PostHog Event Taxonomy — VaultMTG / Hollowmark
+#
+# Single source of truth for the locked event taxonomy.  Drives codegen
+# for both the BFF (Go constants) and the SPA (TypeScript const + consent map).
+#
+# Rules:
+#   - event names: snake_case, stable forever once locked (PostHog queries break on rename)
+#   - pii_class values: none | pseudonymous | pii_hashed | pii_raw_FORBIDDEN
+#   - pii_raw_FORBIDDEN is a compile-time guard: codegen rejects any property with this class
+#   - cmp_storage_key: the localStorage key written by the SPA's own PostHog-consent
+#     surface (NOT the cookie consent banner #877 — that is a separate independent flow).
+#     Name stays vaultmtg_* per INVARIANTS I-57 until the v0.4.x infra cutover.
+#
+# Codegen targets (run: make gen-taxonomy):
+#   - services/bff/internal/analytics/taxonomy.gen.go  (Go constants)
+#   - frontend/src/services/analytics-taxonomy.gen.ts  (TS const + consent map + CMPStorageKey)
+#
+# Staleness CI gate: make check-taxonomy-stale (fails if generated files differ from this YAML).
+#
+# To add a new event: edit this file, run make gen-taxonomy, update AnalyticsEvent union
+# in analytics.ts, add the handler call site, commit all together.
+
+version: "1"
+cmp_storage_key: "vaultmtg_consent_v1"
+
+events:
+  - name: page_viewed
+    category: nav
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: page
+        type: string
+        pii_class: none
+      - name: previous_page
+        type: "string | null"
+        pii_class: none
+
+  - name: app_session_started
+    category: nav
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: services_init_ms
+        type: number
+        pii_class: none
+
+  - name: app_user_identified
+    category: auth
+    trigger_surface: spa
+    consent_category: necessary
+    properties:
+      - name: auth_method
+        type: string
+        pii_class: none
+
+  - name: app_user_signed_out
+    category: auth
+    trigger_surface: spa
+    consent_category: necessary
+    properties: []
+
+  - name: funnel_sign_up_started
+    category: auth
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: entry_point
+        type: string
+        pii_class: none
+
+  - name: funnel_sign_up_completed
+    category: auth
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: auth_method
+        type: string
+        pii_class: none
+
+  - name: funnel_daemon_download_started
+    category: feature_use
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: os
+        type: string
+        pii_class: none
+      - name: download_source
+        type: string
+        pii_class: none
+
+  - name: funnel_daemon_connected
+    category: feature_use
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: time_since_signup_seconds
+        type: "number | null"
+        pii_class: none
+
+  - name: funnel_daemon_paired
+    category: feature_use
+    trigger_surface: bff
+    consent_category: analytics
+    properties:
+      - name: device_id
+        type: string
+        pii_class: none
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+      - name: platform
+        type: string
+        pii_class: none
+      - name: daemon_ver
+        type: string
+        pii_class: none
+      - name: time_since_signup_seconds
+        type: number
+        pii_class: none
+
+  - name: funnel_first_game_played
+    category: feature_use
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: format
+        type: "string | null"
+        pii_class: none
+
+  - name: funnel_first_data_loaded
+    category: feature_use
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: match_count
+        type: number
+        pii_class: none
+
+  - name: funnel_first_feature_used
+    category: feature_use
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: feature
+        type: string
+        pii_class: none
+
+  - name: feature_draft_advisor_pick_viewed
+    category: feature_use
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: set_code
+        type: string
+        pii_class: none
+      - name: pack_number
+        type: number
+        pii_class: none
+      - name: pick_number
+        type: number
+        pii_class: none
+
+  - name: feature_draft_analytics_viewed
+    category: feature_use
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: draft_count
+        type: number
+        pii_class: none
+
+  - name: feature_match_history_filtered
+    category: match
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: filter_type
+        type: string
+        pii_class: none
+      - name: filter_value
+        type: string
+        pii_class: none
+
+  - name: feature_collection_viewed
+    category: collection
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: card_count
+        type: number
+        pii_class: none
+
+  - name: feature_settings_changed
+    category: feature_use
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: setting_section
+        type: string
+        pii_class: none
+      - name: setting_key
+        type: string
+        pii_class: none
+
+  - name: wildcard_recommendation_clicked
+    category: wildcard
+    trigger_surface: spa
+    consent_category: analytics
+    properties:
+      - name: suggestion_count
+        type: number
+        pii_class: none
+
+  - name: error_daemon_connection_failed
+    category: error
+    trigger_surface: spa
+    consent_category: necessary
+    properties:
+      - name: previous_status
+        type: string
+        pii_class: none
+      - name: duration_connected_seconds
+        type: number
+        pii_class: none
+
+  - name: error_data_load_failed
+    category: error
+    trigger_surface: spa
+    consent_category: necessary
+    properties:
+      - name: page
+        type: string
+        pii_class: none
+      - name: endpoint
+        type: string
+        pii_class: none
+      - name: status_code
+        type: number
+        pii_class: none
+
+  - name: error_auth_failed
+    category: error
+    trigger_surface: spa
+    consent_category: necessary
+    properties:
+      - name: reason_class
+        type: string
+        pii_class: none
+
+  - name: daemon_event_gap_detected
+    category: system
+    trigger_surface: bff
+    consent_category: necessary
+    properties:
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+      - name: session_id
+        type: string
+        pii_class: none
+      - name: expected_sequence
+        type: number
+        pii_class: none
+      - name: received_sequence
+        type: number
+        pii_class: none
+
+  - name: daemon_dispatch_degraded
+    category: system
+    trigger_surface: bff
+    consent_category: necessary
+    properties:
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+      - name: degraded_reason
+        type: string
+        pii_class: none
+        description: "dispatch_error | log_format_drift"
+      - name: consecutive_failures
+        type: "number | null"
+        pii_class: none
+      - name: status_code
+        type: "number | null"
+        pii_class: none
+      - name: parse_failure_count
+        type: "number | null"
+        pii_class: none
+      - name: sample_line_hash
+        type: "string | null"
+        pii_class: none
+      - name: failed_event_types
+        type: "string[] | null"
+        pii_class: none
+
+  - name: daemon_auth_failed
+    category: system
+    trigger_surface: bff
+    consent_category: necessary
+    properties:
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+      - name: reason
+        type: string
+        pii_class: none
+      - name: platform
+        type: string
+        pii_class: none
+      - name: daemon_version
+        type: string
+        pii_class: none
+
+  - name: daemon_keychain_error
+    category: system
+    trigger_surface: bff
+    consent_category: necessary
+    properties:
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+      - name: error_type
+        type: string
+        pii_class: none
+      - name: platform
+        type: string
+        pii_class: none
+      - name: daemon_version
+        type: string
+        pii_class: none

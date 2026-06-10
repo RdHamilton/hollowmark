@@ -322,6 +322,42 @@ jobs:
         fi
         echo "gofumpt clean."
 
+    # RULE-INFRA-01: continue-on-error: true against existing files first.
+    # Flip to hard-fail once violations are cleared in-PR (#1597 follow-up).
+    - name: Taxonomy staleness check (continue-on-error)
+      continue-on-error: true
+      env:
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+      run: |
+        echo "=== Checking Go taxonomy ==="
+        go run scripts/gen-analytics-taxonomy.go --stdout | diff - services/bff/internal/analytics/taxonomy.gen.go \
+          || (echo "taxonomy.gen.go is stale — run: make gen-taxonomy" && exit 1)
+        echo "=== Checking TypeScript taxonomy ==="
+        if command -v npx >/dev/null 2>&1; then
+          npx tsx scripts/gen-analytics-taxonomy.ts --stdout | diff - frontend/src/services/analytics-taxonomy.gen.ts \
+            || (echo "analytics-taxonomy.gen.ts is stale — run: make gen-taxonomy" && exit 1)
+        else
+          echo "npx not available, skipping TypeScript taxonomy check"
+        fi
+        echo "Taxonomy files are up-to-date."
+
+    # Zero-direct-posthog-calls guard: enforces the analytics seam contract by
+    # failing if any Go file in services/bff calls posthog.Enqueue directly
+    # (bypassing analytics.Client). RULE-INFRA-01: continue-on-error until
+    # all violations cleared (#1597).
+    - name: Zero direct posthog.Enqueue calls in BFF (continue-on-error)
+      continue-on-error: true
+      run: |
+        VIOLATIONS=$(grep -rn 'posthog\.Enqueue\|\.Enqueue(posthog\.' services/bff --include='*.go' \
+          | grep -v '_test\.go' \
+          | grep -v 'internal/analytics/') || true
+        if [ -n "$VIOLATIONS" ]; then
+          echo "Direct posthog.Enqueue calls found — route through analytics.Client:"
+          echo "$VIOLATIONS"
+          exit 1
+        fi
+        echo "Zero direct posthog.Enqueue calls — analytics seam intact."
+
   # -------------------------------------------------------------------------
   # Go vulnerability scan (govulncheck) — covers BFF and Sync.
   # The Daemon module is covered by a parallel step in daemon.yml.

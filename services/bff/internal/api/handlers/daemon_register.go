@@ -13,10 +13,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/posthog/posthog-go"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/RdHamilton/hollowmark/services/bff/internal/analytics"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/identityhash"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
@@ -96,7 +97,7 @@ func (e *rateEntry) allow() bool {
 type DaemonRegisterHandler struct {
 	repo       daemonAPIKeyUpsertRepo
 	userRepo   userUpserter
-	postHog    PostHogClient
+	analytics  *analytics.Client
 	rateMu     sync.Mutex
 	rateByAcct map[string]*rateEntry
 }
@@ -108,14 +109,19 @@ func NewDaemonRegisterHandler(repo daemonAPIKeyUpsertRepo, userRepo userUpserter
 	return &DaemonRegisterHandler{
 		repo:       repo,
 		userRepo:   userRepo,
-		postHog:    noopPostHogClient{},
+		analytics:  analytics.NewClient(analytics.NoopEnqueuer{}, analytics.NewNoopHaltChecker()),
 		rateByAcct: make(map[string]*rateEntry),
 	}
 }
 
-// WithPostHogClient wires a PostHog client for analytics events.
-func (h *DaemonRegisterHandler) WithPostHogClient(ph PostHogClient) *DaemonRegisterHandler {
-	h.postHog = ph
+// WithPostHogClient is deprecated. Use WithAnalyticsClient instead.
+func (h *DaemonRegisterHandler) WithPostHogClient(ph analytics.PostHogEnqueuer) *DaemonRegisterHandler {
+	return h.WithAnalyticsClient(analytics.NewClient(ph, analytics.NewNoopHaltChecker()))
+}
+
+// WithAnalyticsClient wires an analytics.Client into the handler.
+func (h *DaemonRegisterHandler) WithAnalyticsClient(c *analytics.Client) *DaemonRegisterHandler {
+	h.analytics = c
 	return h
 }
 
@@ -300,24 +306,23 @@ func (h *DaemonRegisterHandler) Register(w http.ResponseWriter, r *http.Request)
 		statusCode = http.StatusCreated
 	}
 
-	// Emit PostHog daemon_paired event on first pairing (ADR-027 §3).
+	// Emit funnel_daemon_paired event on first pairing (ADR-027 §3).
 	if created {
+		ac := h.analytics
 		go func(acct, deviceID, platform, daemonVer string, signupTime time.Time) {
 			var timeSinceSignup float64
 			if !signupTime.IsZero() {
 				timeSinceSignup = time.Since(signupTime).Seconds()
 			}
-			if err := h.postHog.Enqueue(posthog.Capture{
-				DistinctId: hashAccountID(acct),
-				Event:      "daemon_paired",
-				Properties: posthog.NewProperties().
-					Set("device_id", deviceID).
-					Set("account_id_hash", hashAccountID(acct)).
-					Set("platform", platform).
-					Set("daemon_ver", daemonVer).
-					Set("time_since_signup_seconds", timeSinceSignup),
+			hashedAcct := identityhash.HashAccountID(acct)
+			if err := ac.Capture(context.Background(), hashedAcct, analytics.EventFunnelDaemonPaired, map[string]any{
+				"device_id":                 deviceID,
+				"account_id_hash":           hashedAcct,
+				"platform":                  platform,
+				"daemon_ver":                daemonVer,
+				"time_since_signup_seconds": timeSinceSignup,
 			}); err != nil {
-				log.Printf("[daemon_register] posthog enqueue: %v", err)
+				log.Printf("[daemon_register] analytics capture: %v", err)
 			}
 		}(accountID, rec.DeviceID, reqBody.Platform, reqBody.DaemonVer, userCreatedAt)
 	}

@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/RdHamilton/hollowmark/services/contract"
-	"github.com/posthog/posthog-go"
 
+	"github.com/RdHamilton/hollowmark/services/bff/internal/analytics"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/identityhash"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
@@ -137,17 +137,6 @@ type dlqStore interface {
 	Insert(ctx context.Context, ins repository.ProjectionErrorInsert) error
 }
 
-// postHogClient is a mockable interface for server-side PostHog event capture.
-// It is satisfied by the real posthog.Client and by test doubles.
-type postHogClient interface {
-	Enqueue(msg posthog.Message) error
-}
-
-// noopPostHogClient is a no-op postHogClient used when PostHog is not wired.
-type noopPostHogClient struct{}
-
-func (noopPostHogClient) Enqueue(posthog.Message) error { return nil }
-
 // permanentErr wraps an error to signal that the failure is not transient —
 // it will not be resolved by retrying.  Projection rows whose projector returns
 // a permanent error are written to the projection_errors DLQ.
@@ -191,7 +180,7 @@ type Worker struct {
 	gameRows   gameRowWriter
 	counters   counterStore
 	dlq        dlqStore
-	postHog    postHogClient
+	analytics  *analytics.Client
 }
 
 // NewWorker returns a Worker wired with the provided stores.
@@ -220,7 +209,7 @@ func NewWorker(
 		gameIDs:    nil, // optional; wired via WithGameIDResolver
 		counters:   nil, // optional; wired via WithCounterStore
 		dlq:        nil, // optional; wired via WithDLQ
-		postHog:    noopPostHogClient{},
+		analytics:  analytics.NewClient(analytics.NoopEnqueuer{}, analytics.NewNoopHaltChecker()),
 	}
 }
 
@@ -272,9 +261,15 @@ func (w *Worker) WithDraftPickReader(reader draftPickReader) *Worker {
 	return w
 }
 
-// WithPostHogClient wires the PostHog client into w and returns w.
-func (w *Worker) WithPostHogClient(client postHogClient) *Worker {
-	w.postHog = client
+// WithPostHogClient is deprecated. Use WithAnalyticsClient instead.
+func (w *Worker) WithPostHogClient(client analytics.PostHogEnqueuer) *Worker {
+	w.analytics = analytics.NewClient(client, analytics.NewNoopHaltChecker())
+	return w
+}
+
+// WithAnalyticsClient wires an analytics.Client into the worker.
+func (w *Worker) WithAnalyticsClient(c *analytics.Client) *Worker {
+	w.analytics = c
 	return w
 }
 
@@ -494,17 +489,15 @@ func (w *Worker) writeToDLQ(ctx context.Context, row *repository.DaemonEventRow,
 
 	log.Printf("[projection] dead-lettered id=%d event_type=%s: %v", row.ID, row.EventType, projErr)
 
-	// Emit projection.dead_letter PostHog metric.
+	// Emit projection.dead_letter analytics metric.
 	// account_id_hash uses SHA-256 (first 16 hex chars) per I-10 — never raw account_id.
+	// Operational:true — system health telemetry, GDPR §6(1)(f) carve-out.
 	acctHash := hashAccountIDProjection(row.AccountID)
-	_ = w.postHog.Enqueue(posthog.Capture{
-		DistinctId: acctHash,
-		Event:      "projection.dead_letter",
-		Properties: posthog.NewProperties().
-			Set("account_id_hash", acctHash).
-			Set("event_type", row.EventType).
-			Set("error_message", projErr.Error()),
-	})
+	_ = w.analytics.Capture(ctx, acctHash, "projection.dead_letter", map[string]any{
+		"account_id_hash": acctHash,
+		"event_type":      row.EventType,
+		"error_message":   projErr.Error(),
+	}, analytics.CaptureOptions{Operational: true})
 
 	return outcomeDeadLettered
 }
@@ -517,19 +510,17 @@ func hashAccountIDProjection(accountID string) string {
 	return identityhash.HashAccountID(accountID)
 }
 
-// emitMissingField emits a projection.missing_field PostHog metric for an
+// emitMissingField emits a projection.missing_field analytics metric for an
 // enrichment field that was absent from the event payload.  The account_id is
 // hashed per I-10 — no raw PII is sent.
-func emitMissingField(ph postHogClient, accountID, field, eventType string) {
+// Operational:true — system health telemetry, GDPR §6(1)(f) carve-out.
+func emitMissingField(c *analytics.Client, accountID, field, eventType string) {
 	acctHash := hashAccountIDProjection(accountID)
-	_ = ph.Enqueue(posthog.Capture{
-		DistinctId: acctHash,
-		Event:      "projection.missing_field",
-		Properties: posthog.NewProperties().
-			Set("account_id_hash", acctHash).
-			Set("field", field).
-			Set("type", eventType),
-	})
+	_ = c.Capture(context.Background(), acctHash, "projection.missing_field", map[string]any{
+		"account_id_hash": acctHash,
+		"field":           field,
+		"type":            eventType,
+	}, analytics.CaptureOptions{Operational: true})
 }
 
 // --- payload shapes ---
@@ -588,7 +579,7 @@ func (w *Worker) projectMatch(ctx context.Context, row *repository.DaemonEventRo
 		// observable without dropping the record.
 		p.Format = "Unknown"
 		log.Printf("[projection] projectMatch id=%d: format empty, defaulting to %q", row.ID, p.Format)
-		emitMissingField(w.postHog, row.AccountID, "format", "match")
+		emitMissingField(w.analytics, row.AccountID, "format", "match")
 	}
 
 	result := normaliseResult(p.Result)
@@ -611,7 +602,7 @@ func (w *Worker) projectMatch(ctx context.Context, row *repository.DaemonEventRo
 		result = "unknown"
 		log.Printf("[projection] projectMatch id=%d: result indeterminate (result=%q winning_team_id=%d player_team_id=%d), defaulting to %q",
 			row.ID, p.Result, p.WinningTeamID, p.PlayerTeamID, result)
-		emitMissingField(w.postHog, row.AccountID, "result", "match")
+		emitMissingField(w.analytics, row.AccountID, "result", "match")
 	}
 
 	accountID, err := w.accounts.GetOrCreateByClientID(ctx, row.AccountID, row.UserID)
