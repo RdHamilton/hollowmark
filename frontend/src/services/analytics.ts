@@ -348,11 +348,12 @@ export type AnalyticsEvent =
     }
   | {
       name: 'app_user_identified';
-      // NOTE: user_id intentionally omitted — frontend Clerk user_id hashing is
-      // pending a follow-up ticket. Do NOT add user_id here until that lands.
-      // See: vault-mtg-tickets#1836 Ray adj. Q3.
+      // user_id is the hashed Clerk user_id (hashAccountID — SHA-256 hex[:16]).
+      // ADR-027 / I-10 / ticket #82: raw Clerk user_ids must never reach PostHog.
+      // Previously omitted pending this ticket; added per AC3 (2026-06-10).
       properties: {
         auth_method: 'email' | 'google' | 'apple' | 'facebook';
+        user_id: string;
       };
     }
   | { name: 'app_user_signed_out'; properties?: Record<string, never> };
@@ -390,11 +391,12 @@ export function captureEvent(
 // ── PII hashing (ADR-027) ─────────────────────────────────────────────────────
 
 /**
- * Hash a PII value using SHA-256 and return the first 16 hex characters.
- * Matches the BFF's hashAccountID() scheme — SHA-256 hex[:16].
- * Uses the Web Crypto API (available in all modern browsers and Vite/JSDOM).
+ * Core SHA-256 hex[:16] primitive. Uses the Web Crypto API (available in all
+ * modern browsers and Vite/JSDOM). Unsalted — a secret salt cannot be held
+ * in a browser bundle; a bundled "salt" is obfuscation, not a secret (Ray Q2,
+ * ticket #82).
  */
-export async function hashPII(value: string): Promise<string> {
+async function sha256Hex16(value: string): Promise<string> {
   const buf = await crypto.subtle.digest(
     'SHA-256',
     new TextEncoder().encode(value),
@@ -406,9 +408,44 @@ export async function hashPII(value: string): Promise<string> {
 }
 
 /**
+ * Hash a generic PII value (e.g. email) using SHA-256 hex[:16] (ADR-027).
+ * Use this for human-readable PII fields such as email addresses.
+ * Do NOT use for Clerk user_id analytics distinct_id — use hashAccountID().
+ */
+export async function hashPII(value: string): Promise<string> {
+  return sha256Hex16(value);
+}
+
+/**
+ * Hash a Clerk user_id for use as the PostHog analytics distinct_id
+ * (ADR-027 / I-10 / ticket #82). Unsalted SHA-256 hex[:16] via Web Crypto API.
+ *
+ * Design rationale: the BFF's HashAccountID uses the same algorithm on the
+ * internal numeric account_id; the SPA uses this on the Clerk user_id string.
+ * These two inputs are structurally different so the resulting distinct_ids are
+ * always different — the cross-surface identity-join gap is accepted for beta
+ * (Ray Q1 ruling, #82 plan comment 4674550690). The clean break is intentional:
+ * posthog.alias() would re-transmit the raw Clerk id, violating I-10.
+ */
+export async function hashAccountID(userId: string): Promise<string> {
+  return sha256Hex16(userId);
+}
+
+/**
  * Identify the current user by their opaque Clerk user ID.
+ *
+ * The Clerk user_id is hashed via hashAccountID() (unsalted SHA-256 hex[:16],
+ * ADR-027 / I-10 / ticket #82) before being passed to posthog.identify() as
+ * the distinct_id. The raw Clerk user_id NEVER reaches PostHog.
+ *
  * Optionally accepts the user's email — it is SHA-256 hashed (hex[:16]) before
- * being sent to PostHog as the `hashed_email` person property (ADR-027).
+ * being sent to PostHog as the `hashed_email` person property.
+ *
+ * Clean-break migration note: users who had PostHog person profiles under their
+ * raw Clerk user_id will now appear as a new person under the hashed distinct_id.
+ * posthog.alias() is intentionally omitted — it would re-transmit the raw id,
+ * violating I-10 (Ray Q3 ruling, #82 plan comment 4674550690).
+ *
  * Must only be called once per session after Clerk confirms isSignedIn.
  */
 export async function identifyUser(
@@ -416,11 +453,12 @@ export async function identifyUser(
   email?: string,
 ): Promise<void> {
   if (!initialized) return;
+  const hashedUserId = await hashAccountID(userId);
   if (email) {
     const hashedEmail = await hashPII(email);
-    posthog.identify(userId, { hashed_email: hashedEmail });
+    posthog.identify(hashedUserId, { hashed_email: hashedEmail });
   } else {
-    posthog.identify(userId);
+    posthog.identify(hashedUserId);
   }
 }
 
