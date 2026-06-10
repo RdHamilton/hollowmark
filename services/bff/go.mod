@@ -6,7 +6,7 @@ toolchain go1.25.11
 
 require (
 	github.com/RdHamilton/hollowmark/services/contract v0.1.6
-	github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260607111157-fedace9e5ede
+	github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260610005103-d9eac5eb008e
 	github.com/aws/aws-sdk-go-v2/config v1.32.22
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.7
 	github.com/clerk/clerk-sdk-go/v2 v2.6.0

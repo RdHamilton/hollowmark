@@ -6,8 +6,8 @@ github.com/RdHamilton/hollowmark/pkg/logparse v0.1.5 h1:B9YgygZ3ILUUElemVOUKoprk
 github.com/RdHamilton/hollowmark/pkg/logparse v0.1.5/go.mod h1:RpuPwYZcmZ6tgMwCb06OSedVpvef1iaKFAbu8/tX48Y=
 github.com/RdHamilton/hollowmark/services/contract v0.1.6 h1:glW5w865eC0krRvBkj/6V1uqptGM6CUNsurEjKinIIc=
 github.com/RdHamilton/hollowmark/services/contract v0.1.6/go.mod h1:igWu4d2NyV0XnN2TJAjOuCYho5A/A0icgl85c1B6zP0=
-github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260607111157-fedace9e5ede h1:Y6pMri0dZNKbvxYWsI5v+uXUDsOoLGdA+9r2cZokNGg=
-github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260607111157-fedace9e5ede/go.mod h1:aDXsVGB2PNPCVB2yCfTW/4Tec5A03N5G8yqogXsIhA8=
+github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260610005103-d9eac5eb008e h1:9xUgujfLvPZHr9Hxe6XO9ylN23yCZ7gZy3PZrXIXpS4=
+github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260610005103-d9eac5eb008e/go.mod h1:gB6tqzk/qjDkoqtSwMSOa1PoV8HUQsxvv83vJwJI2Mw=
 github.com/aws/aws-sdk-go-v2 v1.41.11 h1:9PRf7jyTMEUM6fuNRAJa2mO/skJfrF50rENJwf2LXqw=
 github.com/aws/aws-sdk-go-v2 v1.41.11/go.mod h1:iiUX27gOXRuYaoeUVXhUpPwjJHzISfPAjjcuhUbLSVs=
 github.com/aws/aws-sdk-go-v2/config v1.32.22 h1:Vfvp7+fYKsVCADcWOEllqEV47aIBXhNchvyDFu1B5fY=
