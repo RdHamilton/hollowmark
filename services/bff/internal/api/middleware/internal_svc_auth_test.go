@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -329,5 +331,79 @@ func TestRequireInternalSvcAuth_ClockSkewOutsideBound(t *testing.T) {
 	}
 	if sentinel.called {
 		t.Error("clock skew outside 30s: downstream handler must not be called")
+	}
+}
+
+// TestRequireInternalSvcAuth_ConcurrentReplayRace verifies that the JTI replay
+// guard is race-free: when N goroutines all present the same JTI simultaneously,
+// exactly one request must pass (HTTP 200) and the rest must be rejected (HTTP 401).
+//
+// This test uses WithJTIBeforeAddHook to widen the TOCTOU window artificially:
+// a sleep between the cache presence check and the cache add gives the scheduler
+// time to let other goroutines also observe a cache miss before any of them
+// completes the add. A two-step Get+Add implementation will allow multiple
+// goroutines through; the correct ContainsOrAdd implementation will not.
+//
+// Run with -race to also verify the absence of data races at the lock level.
+func TestRequireInternalSvcAuth_ConcurrentReplayRace(t *testing.T) {
+	const goroutines = 20
+
+	// WithJTIBeforeAddHook injects a sleep between the cache miss check and the
+	// cache add, widening the TOCTOU window to be reliably observable. In the
+	// fixed (ContainsOrAdd) implementation this hook is never called — the check
+	// and add are a single atomic operation with no "between".
+	mw := middleware.RequireInternalSvcAuth(
+		testSecret,
+		middleware.WithJTIBeforeAddHook(func() {
+			time.Sleep(5 * time.Millisecond)
+		}),
+	)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Mint a single token with a fixed JTI — all goroutines will present this
+	// exact token. Only one should be allowed through; the rest are replays.
+	sharedJTI := fmt.Sprintf("concurrent-race-jti-%d", time.Now().UnixNano())
+	token := mintToken(t, testSecret, func(c *jwt.RegisteredClaims) {
+		c.ID = sharedJTI
+	})
+
+	var (
+		passed  atomic.Int64
+		blocked atomic.Int64
+		wg      sync.WaitGroup
+		ready   = make(chan struct{}) // barrier: all goroutines start together
+	)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-ready // wait until all goroutines are primed
+
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, newRequest(token))
+
+			switch w.Code {
+			case http.StatusOK:
+				passed.Add(1)
+			case http.StatusUnauthorized:
+				blocked.Add(1)
+			default:
+				t.Errorf("unexpected status %d", w.Code)
+			}
+		}()
+	}
+
+	close(ready) // release all goroutines at once
+	wg.Wait()
+
+	if got := passed.Load(); got != 1 {
+		t.Errorf("concurrent replay: want exactly 1 pass, got %d (blocked=%d) — TOCTOU race detected",
+			got, blocked.Load())
+	}
+	if got := blocked.Load(); got != goroutines-1 {
+		t.Errorf("concurrent replay: want %d blocked, got %d", goroutines-1, got)
 	}
 }

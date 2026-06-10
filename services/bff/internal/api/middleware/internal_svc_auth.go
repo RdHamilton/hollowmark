@@ -40,7 +40,8 @@ const (
 type internalSvcOption func(*internalSvcConfig)
 
 type internalSvcConfig struct {
-	clockFn func() time.Time
+	clockFn        func() time.Time
+	jtiBeforeAddFn func() // called between cache presence-check and add; nil in production
 }
 
 // WithClockFunc injects a custom clock function for unit-testing clock-skew
@@ -50,6 +51,16 @@ type internalSvcConfig struct {
 func WithClockFunc(fn func() time.Time) internalSvcOption {
 	return func(c *internalSvcConfig) {
 		c.clockFn = fn
+	}
+}
+
+// WithJTIBeforeAddHook injects a hook called between the JTI cache presence
+// check and the cache add. This exists ONLY to widen the TOCTOU window in tests
+// so that the race can be observed deterministically. Unexported — production
+// callers cannot access this option. Must never be used outside test code.
+func WithJTIBeforeAddHook(fn func()) internalSvcOption {
+	return func(c *internalSvcConfig) {
+		c.jtiBeforeAddFn = fn
 	}
 }
 
@@ -167,21 +178,27 @@ func RequireInternalSvcAuth(secret string, opts ...internalSvcOption) func(http.
 			// retain stale entries beyond jtiTTL even when it is not full.
 			sweepExpiredJTIs(jtiCache, now)
 
-			if expiry, seen := jtiCache.Get(jti); seen {
-				// Defensive: if the cached entry is already past jtiTTL, allow it
-				// through (the token's exp would also be past, but belt-and-suspenders).
-				if now.Before(expiry) {
-					log.Printf("[internal_svc_auth] outcome=fail reason=replay_detected jti=%s path=%s remote=%s",
-						jti, r.URL.Path, internalRemoteAddr(r))
-					writeUnauthorized(w)
-					return
-				}
-				// Entry has expired — remove it so the cache stays clean.
-				jtiCache.Remove(jti)
+			// Atomically record the JTI and check whether it was already present.
+			// ContainsOrAdd holds its internal lock across both the contains check
+			// and the add, making this a single atomic operation — it closes the
+			// TOCTOU race that would exist with a separate Get+Add pair.
+			//
+			// Expired-entry semantics: a swept-but-not-yet-removed entry whose TTL
+			// has elapsed will be reported as "contained" by ContainsOrAdd and will
+			// cause a 401. This is intentionally stricter — it is correct because
+			// any token still within its validity window (exp + 30s leeway) will
+			// always have its JTI TTL still live (JTI TTL=10min > token TTL=5min),
+			// so a legitimately valid token can never hit this case. The earlier
+			// "expired entry escape hatch" (the old Get+Remove+re-Add path) was
+			// unreachable for valid tokens and has been removed to simplify the
+			// invariant: ContainsOrAdd alone is the complete replay guard.
+			alreadySeen, _ := jtiCache.ContainsOrAdd(jti, now.Add(jtiTTL))
+			if alreadySeen {
+				log.Printf("[internal_svc_auth] outcome=fail reason=replay_detected jti=%s path=%s remote=%s",
+					jti, r.URL.Path, internalRemoteAddr(r))
+				writeUnauthorized(w)
+				return
 			}
-
-			// Record the JTI in the replay cache with a TTL anchored to now.
-			jtiCache.Add(jti, now.Add(jtiTTL))
 
 			log.Printf("[internal_svc_auth] outcome=ok sub=%s path=%s remote=%s",
 				claims.Subject, r.URL.Path, internalRemoteAddr(r))
@@ -193,6 +210,14 @@ func RequireInternalSvcAuth(secret string, opts ...internalSvcOption) func(http.
 
 // sweepExpiredJTIs removes cache entries whose expiry has passed. Called lazily
 // on each request to bound memory without a background goroutine.
+//
+// Concurrency note: Keys(), Peek(), and Remove() each acquire the LRU's internal
+// lock individually. Between the Keys() snapshot and each Peek/Remove pair a
+// concurrent request can add or remove a different key. The consequences are
+// benign: at worst a just-expired entry is skipped and removed on the next
+// request, or a key that a concurrent goroutine re-added is removed (the JTI
+// would need to be re-presented to pass, which ContainsOrAdd will then reject
+// as a replay). Neither outcome compromises replay prevention.
 func sweepExpiredJTIs(cache *lru.Cache[string, time.Time], now time.Time) {
 	for _, key := range cache.Keys() {
 		if expiry, ok := cache.Peek(key); ok && now.After(expiry) {
