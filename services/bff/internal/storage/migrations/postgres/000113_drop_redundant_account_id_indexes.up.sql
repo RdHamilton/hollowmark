@@ -1,0 +1,39 @@
+-- Migration 000113: Drop redundant plain account_id indexes (ticket #850)
+--
+-- Background:
+--   Two plain btree indexes are superseded by more specific partial indexes
+--   that already exist and serve the hot-path queries.  Keeping them adds
+--   write overhead on every INSERT/UPDATE/DELETE with no query benefit.
+--
+-- Dropped indexes and their superseding replacements:
+--
+--   daemon_api_keys_account_id_idx    btree(account_id)
+--     Created: migration 000085.
+--     Superseded by: daemon_api_keys_account_active_idx
+--                    btree(account_id) WHERE revoked_at IS NULL
+--     and by UNIQUE(account_id, device_id) constraint (also 000085).
+--     Scan count on staging (2026-06-10): 0.
+--
+--   idx_accounts_is_default           btree(is_default)
+--     Created: migration 000054 / 000104.
+--     Superseded by: idx_accounts_default
+--                    unique btree(is_default) WHERE is_default = TRUE
+--     Scan count on staging (2026-06-10): 0.
+--
+-- RETAINED (not dropped):
+--
+--   idx_daemon_api_keys_account_id    btree(account_id)
+--     Created: migration 000112 (erasure cascade #891).
+--     This index is NOT redundant -- it serves the GDPR Art.17 erasure DELETE:
+--       DELETE FROM daemon_api_keys WHERE account_id = ANY($1)
+--     That query carries no revoked_at IS NULL predicate and therefore cannot
+--     use the partial daemon_api_keys_account_active_idx.  Dropping it would
+--     reintroduce the seq-scan that #891 deliberately fixed.
+--
+-- Note: DROP INDEX CONCURRENTLY cannot run inside a transaction block.
+-- golang-migrate wraps each migration in a transaction; CONCURRENTLY is
+-- therefore never used in migration files (migration SOP section 3).  At deploy
+-- time the BFF is stopped, so a brief AccessShareLock is acceptable.
+
+DROP INDEX IF EXISTS daemon_api_keys_account_id_idx;
+DROP INDEX IF EXISTS idx_accounts_is_default;

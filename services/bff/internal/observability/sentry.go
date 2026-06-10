@@ -96,3 +96,21 @@ func ReportError(ctx context.Context, err error, tags ...map[string]string) {
 		hub.CaptureException(err)
 	})
 }
+
+// Reporter is a zero-allocation adapter that satisfies any interface of the
+// form:
+//
+//	ReportError(ctx context.Context, err error, tags ...map[string]string)
+//
+// Use it to wire the package-level ReportError function into packages that
+// accept the ErrorReporter interface (e.g. erasure.Deps.Reporter):
+//
+//	deps.Reporter = observability.Reporter{}
+//
+// The zero value is ready to use.
+type Reporter struct{}
+
+// ReportError delegates to the package-level ReportError function.
+func (Reporter) ReportError(ctx context.Context, err error, tags ...map[string]string) {
+	ReportError(ctx, err, tags...)
+}
