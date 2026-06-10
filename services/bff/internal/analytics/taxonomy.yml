@@ -7,7 +7,8 @@
 #   - event names: snake_case, stable forever once locked (PostHog queries break on rename)
 #   - pii_class values: none | pseudonymous | pii_hashed | pii_raw_FORBIDDEN
 #   - pii_raw_FORBIDDEN is a compile-time guard: codegen rejects any property with this class
-#   - cmp_storage_key: the localStorage key written by the cookie consent banner (#877)
+#   - cmp_storage_key: the localStorage key written by the SPA's own PostHog-consent
+#     surface (NOT the cookie consent banner #877 — that is a separate independent flow).
 #     Name stays vaultmtg_* per INVARIANTS I-57 until the v0.4.x infra cutover.
 #
 # Codegen targets (run: make gen-taxonomy):

@@ -88,7 +88,7 @@ export type EventName = (typeof Events)[keyof typeof Events];
 
 /**
  * ConsentCategory maps each event name to its required consent tier.
- * Frank's #877 consent banner reads this map to decide which events to drop
+ * The SPA PostHog gate reads this map to decide which events to drop
  * when the user has not given analytics consent.
  *   - 'necessary'  — fires regardless of consent (auth events, error events)
  *   - 'analytics'  — requires analytics consent
@@ -101,8 +101,9 @@ ${consentMap}
 };
 
 /**
- * CMPStorageKey is the localStorage key written by the cookie consent banner
- * (#877).  It is the single authoritative source — never hard-code this string
+ * CMPStorageKey is the localStorage key written by the SPA's own PostHog-consent
+ * surface (NOT the cookie consent banner #877 — that is a separate independent
+ * flow).  It is the single authoritative source — never hard-code this string
  * elsewhere.  Stays vaultmtg_* per INVARIANTS I-57 until the v0.4.x cutover.
  */
 export const CMPStorageKey = '${tax.cmp_storage_key}';
