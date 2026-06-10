@@ -86,13 +86,27 @@ export const useAuth = () => {
 
 // useUser — returns user info based on test state.
 //
-// The user object exposes update() and setProfileImage() stubs that resolve
-// immediately so Profile.tsx's name-edit / avatar-edit save flows run through
-// their happy path in E2E tests without a real Clerk session (#2178).
+// The user object exposes update(), setProfileImage(), and createEmailAddress()
+// stubs that resolve immediately so Profile.tsx's name-edit / avatar-edit /
+// email-change flows run through their happy path in E2E tests without a real
+// Clerk session (#2178, #888).
+//
+// createEmailAddress() returns a minimal EmailAddressResource stub:
+//   - prepareVerification() resolves immediately (simulates code sent)
+//   - attemptVerification() resolves with the new email address resource
 export const useUser = () => {
   const state = getTestState();
   if (!state.isSignedIn) return { isLoaded: true, isSignedIn: false, user: null };
   const email = state.email ?? 'test@example.com';
+
+  const mockEmailAddressStub = {
+    id: 'email_e2e_stub_001',
+    emailAddress: 'newemail@e2e.test',
+    prepareVerification: (_params: { strategy: string }) => Promise.resolve(),
+    attemptVerification: (_params: { code: string }) =>
+      Promise.resolve({ id: 'email_e2e_stub_001', emailAddress: 'newemail@e2e.test' }),
+  };
+
   return {
     isLoaded: true,
     isSignedIn: true,
@@ -103,8 +117,12 @@ export const useUser = () => {
       fullName: `${state.firstName ?? 'Test'} ${state.lastName ?? 'User'}`,
       imageUrl: '',
       primaryEmailAddress: { emailAddress: email },
-      update: (_params: { firstName?: string; lastName?: string }) => Promise.resolve(),
+      update: (_params: { firstName?: string; lastName?: string; primaryEmailAddressId?: string }) =>
+        Promise.resolve(),
       setProfileImage: (_params: { file: File | null }) => Promise.resolve(),
+      // Clerk's createEmailAddress uses { email }, not { emailAddress }
+      createEmailAddress: (_params: { email: string }) =>
+        Promise.resolve(mockEmailAddressStub),
     },
   };
 };

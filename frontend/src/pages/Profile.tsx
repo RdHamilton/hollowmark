@@ -3,6 +3,7 @@ import { useUser, useAuth } from '@clerk/react';
 import { useNavigate } from 'react-router-dom';
 import { getHomeSummary } from '../services/api/bffHomeSummary';
 import type { HomeSummaryResponse } from '../services/api/bffHomeSummary';
+import { patchAccountProfile } from '../services/api/accountProfile';
 import { winRateColor } from './homeUtils';
 import './Profile.css';
 
@@ -13,7 +14,22 @@ import './Profile.css';
  * Auth state is sourced exclusively from useUser() per ADR-009 and CLAUDE.md.
  * Mutations use user.update() and user.setProfileImage() from the Clerk SDK.
  * No auth state is duplicated in Redux / Context / Zustand.
+ *
+ * Email-change flow (#888 — GDPR Art. 16 Rectification):
+ *   1. user.createEmailAddress({ emailAddress }) → EmailAddressResource
+ *   2. emailAddr.prepareVerification({ strategy: 'email_code' })
+ *   3. emailAddr.attemptVerification({ code })
+ *   4. user.update({ primaryEmailAddressId: emailAddr.id })
+ *   5. patchAccountProfile({ email }) — non-blocking BFF sync
  */
+
+/** Minimal shape of the Clerk EmailAddressResource needed by this component. */
+interface EmailAddressStub {
+  id: string;
+  emailAddress: string;
+  prepareVerification: (params: { strategy: 'email_code' }) => Promise<unknown>;
+  attemptVerification: (params: { code: string }) => Promise<{ id: string; emailAddress: string }>;
+}
 
 export interface ProfilePageProps {
   /** Dependency-injected hook for tests — defaults to useUser() from @clerk/react. */
@@ -27,11 +43,16 @@ export interface ProfilePageProps {
       lastName: string | null;
       primaryEmailAddress?: { emailAddress: string } | null;
       imageUrl: string;
-      update: (params: { firstName?: string; lastName?: string }) => Promise<unknown>;
+      update: (params: { firstName?: string; lastName?: string; primaryEmailAddressId?: string }) => Promise<unknown>;
       setProfileImage: (params: { file: File | null }) => Promise<unknown>;
+      /** Clerk's createEmailAddress uses { email }, not { emailAddress }. */
+      createEmailAddress: (params: { email: string }) => Promise<EmailAddressStub>;
     } | null;
   };
 }
+
+/** Email-change state machine states. */
+type EmailFlowState = 'idle' | 'pending' | 'verifying';
 
 
 /** Interface for format breakdown entry */
@@ -59,8 +80,25 @@ function useDefaultUser() {
   // Coerce undefined → null so the return type matches the useUserHook prop shape,
   // which only allows null (not undefined) for user. useUser() returns undefined
   // while loading but our prop interface uses null as the "no user" sentinel.
-  return { isLoaded, isSignedIn, user: user ?? null };
+  //
+  // The Clerk UserResource.createEmailAddress returns the full EmailAddressResource,
+  // which is a superset of our internal EmailAddressStub interface — the cast is safe
+  // because we only read the subset fields (id, emailAddress, prepareVerification,
+  // attemptVerification) on the returned value.
+  return {
+    isLoaded,
+    isSignedIn,
+    user: user
+      ? (user as unknown as NonNullable<ReturnType<NonNullable<ProfilePageProps['useUserHook']>>['user']>)
+      : null,
+  };
 }
+
+// PostHog analytics disclosure text (AC4 — #888 GDPR Rectification)
+// Always visible on the profile page per counsel requirement C-08.
+const POSTHOG_DISCLOSURE =
+  'Historical analytics events cannot be retroactively corrected, ' +
+  'but no new events will be recorded with the old value after rectification.';
 
 const Profile = ({ useUserHook = useDefaultUser }: ProfilePageProps) => {
   const navigate = useNavigate();
@@ -81,6 +119,16 @@ const Profile = ({ useUserHook = useDefaultUser }: ProfilePageProps) => {
   const [avatarSuccess, setAvatarSuccess] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
+  // Email-change state machine (#888 — GDPR Art. 16 Rectification)
+  const [emailFlowState, setEmailFlowState] = useState<EmailFlowState>('idle');
+  const [newEmail, setNewEmail] = useState('');
+  const [emailCode, setEmailCode] = useState('');
+  const [emailSubmitting, setEmailSubmitting] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [emailSuccess, setEmailSuccess] = useState(false);
+  // Hold the intermediate EmailAddressResource between steps 2 and 3
+  const pendingEmailAddressRef = useRef<EmailAddressStub | null>(null);
+
   // Enrichment data state
   const [summaryData, setSummaryData] = useState<HomeSummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -99,6 +147,12 @@ const Profile = ({ useUserHook = useDefaultUser }: ProfilePageProps) => {
     const timerId = setTimeout(() => setAvatarSuccess(false), 3000);
     return () => clearTimeout(timerId);
   }, [avatarSuccess]);
+
+  useEffect(() => {
+    if (!emailSuccess) return;
+    const timerId = setTimeout(() => setEmailSuccess(false), 3000);
+    return () => clearTimeout(timerId);
+  }, [emailSuccess]);
 
 
   // Load enrichment data — all-time stats for the stats chips
@@ -180,6 +234,70 @@ const Profile = ({ useUserHook = useDefaultUser }: ProfilePageProps) => {
       if (avatarInputRef.current) {
         avatarInputRef.current.value = '';
       }
+    }
+  };
+
+  // --- Email change handlers (step 1 → 2 → 3) ---
+
+  const handleEditEmailStart = () => {
+    setEmailFlowState('pending');
+    setNewEmail('');
+    setEmailCode('');
+    setEmailError(null);
+    setEmailSuccess(false);
+    pendingEmailAddressRef.current = null;
+  };
+
+  const handleEmailCancel = () => {
+    setEmailFlowState('idle');
+    setNewEmail('');
+    setEmailCode('');
+    setEmailError(null);
+    pendingEmailAddressRef.current = null;
+  };
+
+  /**
+   * Step 2 → 3: createEmailAddress + prepareVerification.
+   * On success, advances to the verifying step.
+   */
+  const handleEmailSubmit = async () => {
+    if (!user) return;
+    setEmailSubmitting(true);
+    setEmailError(null);
+    try {
+      const emailAddress = await user.createEmailAddress({ email: newEmail.trim() });
+      await emailAddress.prepareVerification({ strategy: 'email_code' });
+      pendingEmailAddressRef.current = emailAddress;
+      setEmailFlowState('verifying');
+    } catch (err) {
+      setEmailError(err instanceof Error ? err.message : 'Failed to start email verification.');
+    } finally {
+      setEmailSubmitting(false);
+    }
+  };
+
+  /**
+   * Step 3 → idle: attemptVerification + user.update(primaryEmailAddressId)
+   * + patchAccountProfile() (non-blocking BFF sync).
+   */
+  const handleEmailVerify = async () => {
+    if (!user || !pendingEmailAddressRef.current) return;
+    setEmailSubmitting(true);
+    setEmailError(null);
+    try {
+      const verified = await pendingEmailAddressRef.current.attemptVerification({
+        code: emailCode.trim(),
+      });
+      await user.update({ primaryEmailAddressId: verified.id });
+      // Non-blocking BFF sync — swallow any failure (Clerk is authoritative)
+      patchAccountProfile({ email: verified.emailAddress }).catch(() => undefined);
+      setEmailFlowState('idle');
+      setEmailSuccess(true);
+      pendingEmailAddressRef.current = null;
+    } catch (err) {
+      setEmailError(err instanceof Error ? err.message : 'Failed to verify email.');
+    } finally {
+      setEmailSubmitting(false);
     }
   };
 
@@ -383,14 +501,126 @@ const Profile = ({ useUserHook = useDefaultUser }: ProfilePageProps) => {
         {/* --- Email section --- */}
         <section className="profile-section" data-testid="profile-email-section">
           <h2 className="profile-section-title">Email</h2>
-          <div className="profile-email-display" data-testid="profile-email-display">
-            <span className="profile-email-value" data-testid="profile-email-value">
-              {user.primaryEmailAddress?.emailAddress ?? '—'}
-            </span>
-            <p className="profile-email-note">
-              Email is managed by your Clerk account and cannot be changed here.
-            </p>
-          </div>
+
+          {/* AC4 — PostHog analytics disclosure (counsel C-08) — always visible */}
+          <p
+            className="profile-email-note profile-posthog-disclosure"
+            data-testid="profile-posthog-disclosure"
+            style={{ marginBottom: 'var(--space-3)' }}
+          >
+            {POSTHOG_DISCLOSURE}
+          </p>
+
+          {emailFlowState === 'idle' && (
+            <div className="profile-email-display" data-testid="profile-email-display">
+              <div className="profile-name-display">
+                <span className="profile-email-value" data-testid="profile-email-value">
+                  {user.primaryEmailAddress?.emailAddress ?? '—'}
+                </span>
+                <button
+                  className="secondary-button profile-edit-button"
+                  data-testid="profile-edit-email-button"
+                  onClick={handleEditEmailStart}
+                  aria-label="Edit email address"
+                >
+                  Edit
+                </button>
+              </div>
+              {emailSuccess && (
+                <div className="profile-success" data-testid="profile-email-success" role="status">
+                  Email updated successfully!
+                </div>
+              )}
+            </div>
+          )}
+
+          {emailFlowState === 'pending' && (
+            <div className="profile-name-form" data-testid="profile-email-pending-form">
+              <label className="profile-field-label" htmlFor="profile-email-input">
+                New Email Address
+                <input
+                  id="profile-email-input"
+                  className="profile-field-input"
+                  data-testid="profile-email-input"
+                  type="email"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  placeholder="newaddress@example.com"
+                  autoFocus
+                  autoComplete="email"
+                />
+              </label>
+              <div className="profile-name-actions">
+                <button
+                  className="primary-button"
+                  data-testid="profile-email-submit-button"
+                  onClick={handleEmailSubmit}
+                  disabled={emailSubmitting}
+                >
+                  {emailSubmitting ? 'Sending code…' : 'Send verification code'}
+                </button>
+                <button
+                  className="secondary-button"
+                  data-testid="profile-email-cancel-button"
+                  onClick={handleEmailCancel}
+                  disabled={emailSubmitting}
+                >
+                  Cancel
+                </button>
+              </div>
+              {emailError && (
+                <div className="profile-error" data-testid="profile-email-error" role="alert">
+                  {emailError}
+                </div>
+              )}
+            </div>
+          )}
+
+          {emailFlowState === 'verifying' && (
+            <div className="profile-name-form" data-testid="profile-email-verifying-form">
+              <p className="profile-email-note" style={{ marginBottom: 'var(--space-2)' }}>
+                A verification code was sent to {newEmail}. Enter it below.
+              </p>
+              <label className="profile-field-label" htmlFor="profile-email-code-input">
+                Verification Code
+                <input
+                  id="profile-email-code-input"
+                  className="profile-field-input"
+                  data-testid="profile-email-code-input"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={emailCode}
+                  onChange={(e) => setEmailCode(e.target.value)}
+                  placeholder="6-digit code"
+                  autoFocus
+                />
+              </label>
+              <div className="profile-name-actions">
+                <button
+                  className="primary-button"
+                  data-testid="profile-email-verify-button"
+                  onClick={handleEmailVerify}
+                  disabled={emailSubmitting}
+                >
+                  {emailSubmitting ? 'Verifying…' : 'Verify'}
+                </button>
+                <button
+                  className="secondary-button"
+                  data-testid="profile-email-cancel-button"
+                  onClick={handleEmailCancel}
+                  disabled={emailSubmitting}
+                >
+                  Cancel
+                </button>
+              </div>
+              {emailError && (
+                <div className="profile-error" data-testid="profile-email-error" role="alert">
+                  {emailError}
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
 

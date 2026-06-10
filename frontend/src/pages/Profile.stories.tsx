@@ -28,6 +28,17 @@ const meta: Meta<typeof Profile> = {
 export default meta;
 type Story = StoryObj<typeof Profile>;
 
+/** Minimal EmailAddressResource stub for Storybook stories. */
+const mockEmailAddressStub = {
+  id: 'email_storybook_001',
+  emailAddress: 'planeswalker@vaultmtg.test',
+  prepareVerification: async () => {},
+  attemptVerification: async (_p: { code: string }) => ({
+    id: 'email_storybook_001',
+    emailAddress: 'planeswalker@vaultmtg.test',
+  }),
+};
+
 const mockUser = {
   id: 'user_storybook_mock',
   firstName: 'Planeswalker',
@@ -37,6 +48,8 @@ const mockUser = {
   imageUrl: '',
   update: async () => {},
   setProfileImage: async () => {},
+  /** Clerk's createEmailAddress uses { email }, not { emailAddress }. */
+  createEmailAddress: async (_p: { email: string }) => mockEmailAddressStub,
 };
 
 /**
@@ -102,6 +115,15 @@ function makeEnrichedHook(overrides: Partial<{
   imageUrl: string;
   firstName: string;
 }> = {}) {
+  const enrichedEmailStub = {
+    id: 'email_enriched_001',
+    emailAddress: 'alex@example.com',
+    prepareVerification: async () => {},
+    attemptVerification: async (_p: { code: string }) => ({
+      id: 'email_enriched_001',
+      emailAddress: 'alex@example.com',
+    }),
+  };
   return () => ({
     isLoaded: true,
     isSignedIn: true as const,
@@ -112,9 +134,9 @@ function makeEnrichedHook(overrides: Partial<{
       lastName: 'Stormwind',
       primaryEmailAddress: { emailAddress: 'alex@example.com' },
       imageUrl: overrides.imageUrl ?? 'https://img.clerk.com/default',
-      username: 'AlexS',
       update: async () => {},
       setProfileImage: async () => {},
+      createEmailAddress: async (_p: { email: string }) => enrichedEmailStub,
     },
   });
 }
