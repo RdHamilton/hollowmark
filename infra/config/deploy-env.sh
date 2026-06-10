@@ -174,6 +174,12 @@ SSM_PROD_BFF_DAEMON_RELEASED_AT="/vaultmtg/app/production/BFF_DAEMON_RELEASED_AT
 #   Documented here for FF-2 set-parity (#1075) and future migration.
 SSM_PROD_DAEMON_JWT_SECRET="/vaultmtg/app/production/daemon-jwt-secret"
 
+# Analytics PII salt -- high-entropy secret used to hash user-identifiable
+#   analytics values before they leave the BFF (ticket #1597, PR #3094).
+#   SecureString.  Required at BFF startup (AnalyticsPIISalt in config.go);
+#   missing value causes config.Load() to abort.
+SSM_PROD_ANALYTICS_PII_SALT="/vaultmtg/prod/analytics-pii-salt"
+
 # ───────────────────────────────────────────────────────────────────────────
 # SSM PARAMETER PATHS — STAGING
 #   All staging BFF-runtime params live under /vaultmtg/app/staging/*.
@@ -195,6 +201,10 @@ SSM_STAGING_PORT="/vaultmtg/app/staging/PORT"
 # SecureString. Created by ticket #1072; was previously absent from
 # /vaultmtg/app/staging/, causing staging daemon JWT auth to fail silently.
 SSM_STAGING_DAEMON_JWT_SECRET="/vaultmtg/app/staging/daemon-jwt-secret"
+
+# Analytics PII salt -- staging mirror of prod (ticket #1597).
+# SecureString. Provisioned alongside the prod param.
+SSM_STAGING_ANALYTICS_PII_SALT="/vaultmtg/staging/analytics-pii-salt"
 
 # Daemon version metadata — staging mirror (see production block above).
 SSM_STAGING_BFF_DAEMON_LATEST_VERSION="/vaultmtg/app/staging/BFF_DAEMON_LATEST_VERSION"
