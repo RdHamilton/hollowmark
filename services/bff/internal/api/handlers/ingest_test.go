@@ -1272,6 +1272,87 @@ func TestIngestHandler_AllEvents_DistinctIdIsHashed(t *testing.T) {
 	}
 }
 
+// errHaltChecker is a HaltChecker test double that always returns an error.
+// Used to exercise the fail-closed DB-error path in analytics.Client.Capture.
+type errHaltChecker struct{}
+
+func (errHaltChecker) IsHalted(_ context.Context, _ string) (bool, error) {
+	return false, fmt.Errorf("simulated DB error in IsHalted")
+}
+
+// TestIngest_CheckerDBError_NotForwardedButPersistedAndBroadcast verifies the
+// fail-closed contract: when DBHaltChecker returns an error, analytics.Capture
+// does NOT forward to PostHog, but persist (repo.Insert) and SSE broadcast
+// still proceed unconditionally.
+//
+// This is Ray's AC7 DB-error test from the #890 approval comment.
+func TestIngest_CheckerDBError_NotForwardedButPersistedAndBroadcast(t *testing.T) {
+	const token = "checker-error-token"
+	const wantUserID int64 = 888
+
+	keyRepo := &mockKeyLister{keys: []repository.APIKey{
+		{ID: 99, KeyHash: mustHash(t, token), UserID: wantUserID},
+	}}
+
+	phClient := &mockPostHogClient{}
+	eventsRepo := &mockDaemonEventsRepo{}
+	broadcaster := &mockBroadcaster{}
+
+	// Wire an analytics.Client with an error-returning HaltChecker.
+	// analytics.Client.Capture will return the error and NOT call Enqueue.
+	analyticsClient := analytics.NewClient(phClient, errHaltChecker{})
+
+	ih := handlers.NewIngestHandler(broadcaster).
+		WithRepository(eventsRepo).
+		WithAnalyticsClient(analyticsClient)
+	handler := middleware.APIKeyAuth(keyRepo)(http.HandlerFunc(ih.IngestEvent))
+
+	// Use a daemon.auth_failed event because it unconditionally calls
+	// analytics.Capture (no threshold gating), making the test deterministic.
+	type authFailedPayload struct {
+		Reason        string `json:"reason"`
+		Platform      string `json:"platform"`
+		DaemonVersion string `json:"daemon_version"`
+	}
+	raw, _ := json.Marshal(authFailedPayload{
+		Reason:        "bff_rejected",
+		Platform:      "darwin",
+		DaemonVersion: "0.4.1",
+	})
+
+	event := contract.DaemonEvent{
+		Type:       "daemon.auth_failed",
+		AccountID:  "acct_checker_error",
+		SessionID:  "sess_checker_error",
+		Sequence:   1,
+		OccurredAt: time.Now().UTC(),
+		Payload:    json.RawMessage(raw),
+	}
+
+	req, rr := ingestRequest(t, token, event)
+	handler.ServeHTTP(rr, req)
+
+	// Handler must still return 202 — checker errors do not surface to the client.
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// FAIL-CLOSED: PostHog Enqueue must NOT have been called.
+	if len(phClient.calls) != 0 {
+		t.Errorf("PostHog Enqueue called %d times; want 0 (fail-closed on checker error)", len(phClient.calls))
+	}
+
+	// Persist MUST still have happened — restriction halts forwarding, not capture.
+	if len(eventsRepo.calls) != 1 {
+		t.Fatalf("expected 1 Insert call (persist unconditional), got %d", len(eventsRepo.calls))
+	}
+
+	// SSE broadcast MUST still have happened — first-party live delivery is unconditional.
+	if len(broadcaster.calls) != 1 {
+		t.Fatalf("expected 1 SSE broadcast (broadcast unconditional), got %d", len(broadcaster.calls))
+	}
+}
+
 // mustMarshal is a test helper that marshals v to JSON and fatals on error.
 func mustMarshal(t *testing.T, v interface{}) json.RawMessage {
 	t.Helper()

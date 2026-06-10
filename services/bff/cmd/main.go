@@ -187,7 +187,11 @@ func main() {
 	// POSTHOG_API_KEY (sourced from SSM /vaultmtg/app/production/posthog-api-key
 	// at deploy time).  When empty, PostHog is disabled — a no-op client is used
 	// so all handler code paths are always exercised.  The key is never logged.
-	var analyticsClient *analytics.Client
+	//
+	// The PostHog enqueuer is resolved here; the analytics.Client is built
+	// after the DB pool is open so DBHaltChecker (#890) can be wired into both
+	// branches.  When no DB is available (development), NoopHaltChecker is used.
+	var phEnqueuer analytics.PostHogEnqueuer
 	if cfg.PostHogAPIKey != "" {
 		phClient, err := posthoglib.NewWithConfig(cfg.PostHogAPIKey, posthoglib.Config{
 			Endpoint: cfg.PostHogHost,
@@ -200,12 +204,15 @@ func main() {
 				log.Printf("posthog close: %v", err)
 			}
 		}()
-		analyticsClient = analytics.NewClient(phClient, analytics.NewNoopHaltChecker())
+		phEnqueuer = phClient
 		log.Println("PostHog initialised.")
 	} else {
-		analyticsClient = analytics.NewClient(analytics.NoopEnqueuer{}, analytics.NewNoopHaltChecker())
+		phEnqueuer = analytics.NoopEnqueuer{}
 		log.Println("POSTHOG_API_KEY not set — PostHog disabled (development mode only).")
 	}
+	// analyticsClient is finalised after the DB pool opens so DBHaltChecker
+	// can be wired. Until then it uses NoopHaltChecker as a safe default.
+	analyticsClient := analytics.NewClient(phEnqueuer, analytics.NewNoopHaltChecker())
 
 	broker := sse.New()
 
@@ -278,6 +285,8 @@ func main() {
 		consentHandler                    *handlers.ConsentHandler
 		dataExportHandler                 *handlers.DataExportHandler
 		collectionImportHandler           *handlers.CollectionImportHandler
+		restrictionHandler                *handlers.RestrictionHandler
+		adminRestrictionHandler           *handlers.AdminRestrictionHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -295,6 +304,18 @@ func main() {
 		if err := sqlDB.PingContext(pingCtx); err != nil {
 			log.Fatalf("db ping: %v", err)
 		}
+
+		// Wire the real DBHaltChecker now that the DB pool is open (#890).
+		// This replaces the NoopHaltChecker wired at analytics.Client construction
+		// time (before sqlDB was available).  Both the real-PostHog branch and the
+		// NoopEnqueuer branch get the same DBHaltChecker so neither branch is a
+		// restriction bypass (Ray's correction: replace BOTH NewNoopHaltChecker calls).
+		analyticsClient = analytics.NewClient(phEnqueuer, repository.NewDBHaltChecker(sqlDB))
+		// Re-wire the ingestHandler with the updated analyticsClient so it also
+		// benefits from real halt checking (ingest is already constructed above with
+		// the noop; .WithAnalyticsClient returns a new value, not a mutation).
+		ingestHandler = ingestHandler.WithAnalyticsClient(analyticsClient)
+		log.Println("Analytics DBHaltChecker (#890) wired.")
 
 		apiKeyRepo := repository.NewAPIKeyRepository(sqlDB)
 		apiKeysHandler = handlers.NewAPIKeysHandler(apiKeyRepo)
@@ -533,6 +554,14 @@ func main() {
 			accountRepo,
 		)
 
+		// RestrictionHandler + AdminRestrictionHandler — GDPR Art.18 Right to
+		// Restriction (#890). User-facing: POST/DELETE /api/v1/account/restrict-processing.
+		// Admin-facing: POST/DELETE /admin/account/{userID}/restrict-processing.
+		// Both write restriction_audit_log rows (actor='user'|'admin').
+		restrictionRepo := repository.NewRestrictionRepository(sqlDB)
+		restrictionHandler = handlers.NewRestrictionHandler(restrictionRepo, accountRepo)
+		adminRestrictionHandler = handlers.NewAdminRestrictionHandler(restrictionRepo, accountRepo)
+
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
 		// userRepo was created above for daemonRegisterHandler/daemonAPIKeyAuthMiddl.
 		clerkUserResolver = bffmiddleware.ClerkUserResolver(userRepo)
@@ -627,6 +656,8 @@ func main() {
 		ConsentHandler:                    consentHandler,
 		DataExportHandler:                 dataExportHandler,
 		CollectionImportHandler:           collectionImportHandler,
+		RestrictionHandler:                restrictionHandler,
+		AdminRestrictionHandler:           adminRestrictionHandler,
 		HealthzHandler:                    healthzHandler,
 		ClerkAuthMiddl:                    clerkAuthMiddl,
 		ClerkAuthSSEMiddl:                 clerkAuthSSEMiddl,
@@ -798,6 +829,16 @@ type RouterDeps struct {
 	// card_inventory via UpsertDelta. Clerk-auth-guarded (session-derived
 	// account, no client id). S-07 §1A applies (lives in bff/cmd).
 	CollectionImportHandler *handlers.CollectionImportHandler
+	// RestrictionHandler serves GDPR Art.18 Right to Restriction endpoints (#890):
+	//   POST   /api/v1/account/restrict-processing   — set restriction for caller.
+	//   DELETE /api/v1/account/restrict-processing   — clear restriction for caller.
+	// Protected by composeClerkAuth. Writes restriction_audit_log (actor='user').
+	RestrictionHandler *handlers.RestrictionHandler
+	// AdminRestrictionHandler serves GDPR Art.18 admin-token-gated endpoints (#890):
+	//   POST   /admin/account/{userID}/restrict-processing
+	//   DELETE /admin/account/{userID}/restrict-processing
+	// Protected by AdminTokenMiddl. Writes restriction_audit_log (actor='admin').
+	AdminRestrictionHandler *handlers.AdminRestrictionHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -1283,6 +1324,32 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 		} else {
 			log.Println("WARN: GET /api/v1/account/data-export disabled — Clerk auth middleware not configured")
 		}
+	}
+
+	// GDPR Art.18 Right to Restriction — user-facing endpoints (#890).
+	//   POST   /api/v1/account/restrict-processing  — sets processing_restricted_at = NOW()
+	//   DELETE /api/v1/account/restrict-processing  — clears processing_restricted_at = NULL
+	// Both write a restriction_audit_log row with actor='user'.
+	// Protected by composeClerkAuth (Clerk session JWT required).
+	if deps.RestrictionHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Post("/api/v1/account/restrict-processing", deps.RestrictionHandler.SetRestriction)
+			r.With(auth).Delete("/api/v1/account/restrict-processing", deps.RestrictionHandler.ClearRestriction)
+		} else {
+			log.Println("WARN: /api/v1/account/restrict-processing disabled — Clerk auth middleware not configured")
+		}
+	}
+
+	// GDPR Art.18 Right to Restriction — admin-token-gated endpoints (#890).
+	//   POST   /admin/account/{userID}/restrict-processing
+	//   DELETE /admin/account/{userID}/restrict-processing
+	// {userID} is the internal users.id (int64). Both write restriction_audit_log
+	// with actor='admin'. Protected by AdminTokenMiddl (same static Bearer token
+	// used by fleet-health and projection-errors admin endpoints).
+	if deps.AdminRestrictionHandler != nil {
+		r.With(adminMiddl).Post("/admin/account/{userID}/restrict-processing", deps.AdminRestrictionHandler.AdminSetRestriction)
+		r.With(adminMiddl).Delete("/admin/account/{userID}/restrict-processing", deps.AdminRestrictionHandler.AdminClearRestriction)
 	}
 
 	// ADR-045 §6 — wildcard recommendations scaffold (ticket #416, v0.3.7).
