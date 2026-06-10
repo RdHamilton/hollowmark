@@ -973,8 +973,13 @@ jobs:
             echo "    from the test package dir or an env var at runtime."
             echo ""
             echo "Promote to hard-fail after baseline cleanup (see #1154, #1155)."
-            exit 1
           fi
+          # Always exit 0 in staged-enablement. continue-on-error: true is the belt;
+          # this exit 0 is the suspenders. The job must conclude 'success' while
+          # violations are still visible in the log and step summary.
+          # FLIP PATH (#1154): remove continue-on-error on the job AND change exit 0
+          # below to exit 1 (or remove the override) to promote to hard-fail.
+          exit 0
 
       - name: Portability lint -- hardcoded localhost/loopback ports (warn class)
         # Catches localhost:<port> and 127.0.0.1:<port> literals in added lines.
@@ -1031,10 +1036,15 @@ jobs:
             echo "    httptest.NewServer) and this is just the resolved address"
             echo "  - Replace with a dynamic port binding if it is a hardcoded constant"
             echo "WARN (non-blocking) -- coordinate with #1154 for hard-fail promotion"
-            exit 1
           else
             echo "PASS -- no hardcoded localhost ports found in added lines"
           fi
+          # Always exit 0 in staged-enablement. continue-on-error: true is the belt;
+          # this exit 0 is the suspenders. Violations surface in log/summary but the
+          # job concludes 'success' -- no masked-red check on every PR.
+          # FLIP PATH (#1154): remove continue-on-error on the job AND change exit 0
+          # below to exit 1 (or remove the override) to promote to hard-fail.
+          exit 0
 
       - name: Write step summary
         if: always()
