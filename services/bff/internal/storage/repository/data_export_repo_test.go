@@ -90,7 +90,7 @@ var exportScopeTables = map[string]bool{
 // set is a superset of exportScopeTables (FM-3 cascade+explicit+anonymize minus
 // retain and waitlist_entries).
 func TestExportCoverage_MirrorsFM3(t *testing.T) {
-	repo := repository.NewDataExportRepository(nil) // no DB needed for TableNames()
+	repo := repository.NewDataExportRepository(nil, nil) // no DB needed for TableNames()
 	names := repo.TableNames()
 
 	nameSet := make(map[string]bool, len(names))
@@ -253,7 +253,7 @@ func TestDSRAccessLog_RecordExport_UsesUTC(t *testing.T) {
 // GatherForUser returns a structurally valid export for a seeded user.
 func TestDataExportRepository_GatherForUser_ReturnsExportWithManifest(t *testing.T) {
 	db := openTestDB(t)
-	exportRepo := repository.NewDataExportRepository(db)
+	exportRepo := repository.NewDataExportRepository(db, nil)
 
 	userID, accountID, _ := seedDeletionUser(t, db)
 	ctx := context.Background()
@@ -295,7 +295,7 @@ func TestDataExportRepository_GatherForUser_ReturnsExportWithManifest(t *testing
 // cannot see user B's data (mandatory IDOR isolation test per approved plan).
 func TestDataExportRepository_GatherForUser_IsolatesCrossUser(t *testing.T) {
 	db := openTestDB(t)
-	exportRepo := repository.NewDataExportRepository(db)
+	exportRepo := repository.NewDataExportRepository(db, nil)
 
 	_, accountAID, _ := seedDeletionUser(t, db)
 	userBID, accountBID, _ := seedDeletionUser(t, db)
@@ -331,3 +331,79 @@ func testHashAccountID(id string) string {
 
 // Compile-time assertion: *sql.DB is referenced in openTestDB; keep the import.
 var _ *sql.DB
+
+// ---------------------------------------------------------------------------
+// Clerk profile gather test
+// ---------------------------------------------------------------------------
+
+// stubClerkFetcher is a test stub satisfying clerkProfileFetcher.
+type stubClerkFetcher struct {
+	profile *repository.ClerkProfile
+	err     error
+}
+
+func (s *stubClerkFetcher) FetchClerkProfile(_ context.Context, _ string) (*repository.ClerkProfile, error) {
+	return s.profile, s.err
+}
+
+// TestDataExportRepository_GatherForUser_IncludesClerkProfile verifies that
+// GatherForUser populates ClerkProfile.Email in the export when a clerkFetcher
+// is provided and the users row has a clerk_user_id (Art.15 Q2 requirement).
+func TestDataExportRepository_GatherForUser_IncludesClerkProfile(t *testing.T) {
+	db := openTestDB(t)
+
+	userID, accountID, _ := seedDeletionUser(t, db)
+	ctx := context.Background()
+
+	wantEmail := "art15.test@example.com"
+	wantFirst := "Test"
+	wantLast := "User"
+
+	fetcher := &stubClerkFetcher{
+		profile: &repository.ClerkProfile{
+			Email:     wantEmail,
+			FirstName: wantFirst,
+			LastName:  wantLast,
+			CreatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	exportRepo := repository.NewDataExportRepository(db, fetcher)
+	export, err := exportRepo.GatherForUser(ctx, userID, accountID)
+	if err != nil {
+		t.Fatalf("GatherForUser: %v", err)
+	}
+
+	if export.ClerkProfile == nil {
+		t.Fatal("expected clerk_profile in export, got nil")
+	}
+	if export.ClerkProfile.Email != wantEmail {
+		t.Errorf("clerk_profile.email: got %q, want %q", export.ClerkProfile.Email, wantEmail)
+	}
+	if export.ClerkProfile.FirstName != wantFirst {
+		t.Errorf("clerk_profile.first_name: got %q, want %q", export.ClerkProfile.FirstName, wantFirst)
+	}
+	if export.ClerkProfile.LastName != wantLast {
+		t.Errorf("clerk_profile.last_name: got %q, want %q", export.ClerkProfile.LastName, wantLast)
+	}
+}
+
+// TestDataExportRepository_GatherForUser_NilFetcher_OmitsClerkProfile verifies
+// that GatherForUser with a nil clerkFetcher produces a valid export without
+// clerk_profile (used in local dev without Clerk).
+func TestDataExportRepository_GatherForUser_NilFetcher_OmitsClerkProfile(t *testing.T) {
+	db := openTestDB(t)
+
+	userID, accountID, _ := seedDeletionUser(t, db)
+	ctx := context.Background()
+
+	exportRepo := repository.NewDataExportRepository(db, nil)
+	export, err := exportRepo.GatherForUser(ctx, userID, accountID)
+	if err != nil {
+		t.Fatalf("GatherForUser: %v", err)
+	}
+
+	if export.ClerkProfile != nil {
+		t.Errorf("expected nil clerk_profile when fetcher is nil, got %+v", export.ClerkProfile)
+	}
+}

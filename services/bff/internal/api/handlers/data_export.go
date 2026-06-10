@@ -23,6 +23,9 @@ type ExportPayload = repository.UserExport
 // ManifestEntry is the per-table entry in the export manifest.
 type ManifestEntry = repository.ExportManifestEntry
 
+// ClerkProfile is a re-export of repository.ClerkProfile for use by the handler layer.
+type ClerkProfile = repository.ClerkProfile
+
 // ---------------------------------------------------------------------------
 // Handler interfaces (dependency injection for testability)
 // ---------------------------------------------------------------------------

@@ -27,6 +27,9 @@ import (
 	"github.com/go-chi/cors"
 	posthoglib "github.com/posthog/posthog-go"
 
+	"github.com/clerk/clerk-sdk-go/v2"
+	clerkuser "github.com/clerk/clerk-sdk-go/v2/user"
+
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -513,9 +516,19 @@ func main() {
 		// DataExportHandler — GET /api/v1/account/data-export (#886).
 		// Synchronous GDPR Art.15 data export; rate-limited to 1 export/24h/user
 		// via dsr_access_log table. Protected by composeClerkAuth.
+		//
+		// clerkFetcher is non-nil when CLERK_SECRET_KEY is set (production and
+		// staging). When nil (local dev without Clerk), clerk_profile is omitted
+		// from the export -- the Art.15 DB tables are still included.
+		var clerkFetcher *repository.ClerkProfileFetcher
+		if cfg.ClerkSecretKey != "" {
+			clerkFetcher = repository.NewClerkProfileFetcher(
+				clerkuser.NewClient(&clerk.ClientConfig{}),
+			)
+		}
 		dataExportHandler = handlers.NewDataExportHandler(
 			repository.NewDSRAccessLogRepository(sqlDB),
-			repository.NewDataExportRepository(sqlDB),
+			repository.NewDataExportRepository(sqlDB, clerkFetcher),
 			accountRepo,
 		)
 

@@ -239,3 +239,46 @@ func TestDataExportHandler_ContentDispositionHeader(t *testing.T) {
 		t.Error("expected Content-Disposition header, got empty string")
 	}
 }
+
+// TestDataExportHandler_ClerkProfilePresentInResponse verifies that when the
+// gatherer returns a ClerkProfile, it appears in the JSON response body
+// (Art.15 Q2 -- raw email included in export, Ray-approved).
+func TestDataExportHandler_ClerkProfilePresentInResponse(t *testing.T) {
+	limiter := &stubExportRateLimiter{limited: false}
+	gatherer := &stubDataGatherer{result: func() *handlers.ExportPayload {
+		p := validExportPayload()
+		p.ClerkProfile = &handlers.ClerkProfile{
+			Email:     "art15test@example.com",
+			FirstName: "Art",
+			LastName:  "Fifteen",
+		}
+		return p
+	}()}
+	resolver := &stubExportAccountResolver{accountID: 42, found: true}
+
+	h := handlers.NewDataExportHandler(limiter, gatherer, resolver)
+
+	req := newExportRequest(1)
+	w := httptest.NewRecorder()
+	h.Export(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("parse response body: %v", err)
+	}
+	cp, ok := body["clerk_profile"]
+	if !ok {
+		t.Fatal("response body missing clerk_profile")
+	}
+	cpMap, ok := cp.(map[string]any)
+	if !ok {
+		t.Fatalf("clerk_profile is not an object: %T", cp)
+	}
+	if email, _ := cpMap["email"].(string); email != "art15test@example.com" {
+		t.Errorf("clerk_profile.email: got %q, want %q", email, "art15test@example.com")
+	}
+}
