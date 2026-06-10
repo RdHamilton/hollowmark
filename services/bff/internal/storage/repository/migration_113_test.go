@@ -196,7 +196,8 @@ func TestMigration113_ErasureCascadeIndexSurvives(t *testing.T) {
 	// Verify the erasure DELETE pattern executes without error.
 	// No rows match this synthetic account_id; we are testing query execution,
 	// not data presence.
-	_, err = db.ExecContext(ctx, `
+	_, err = db.ExecContext(
+		ctx, `
 		DELETE FROM daemon_api_keys
 		WHERE account_id = ANY($1)`,
 		[]string{"mig113-erasure-probe-nonexistent"},
