@@ -11,8 +11,9 @@ name: E2E Staging Auth Smoke (vmt-t#678)
 #   - If CLERK_STAGING_SECRET_KEY is absent the suite FAILs with INCONCLUSIVE —
 #     it does NOT skip and report PASS. A smoke that skips all authenticated
 #     surfaces is worse than no test (2026-06-02 false-PASS incident).
-#   - STAGING_SMOKE_TOKEN is a pre-issued static BFF JWT for the BFF API smoke.
-#     Also sourced from the STAGING_SMOKE_TOKEN GitHub Actions secret.
+#   - CLERK_SECRET_KEY is also used by the BFF API smoke step (tickets#759): the
+#     Backend-API sign-in-token chain replaces the former STAGING_SMOKE_TOKEN approach,
+#     which was blocked on prod-type Clerk instances. No static token is needed.
 #
 # Container note: Uses mcr.microsoft.com/playwright:v1.56.1-jammy (same container
 # as ci.yml frontend-e2e). Chromium is pre-baked — no browser download needed.
@@ -110,15 +111,25 @@ jobs:
           CLERK_FAPI_URL: https://clerk.stg-app.hollowmark.app
 
       # ── BFF API authenticated smoke ───────────────────────────────────────
-      # Exercises auth-gated BFF endpoints (matches, SSE) with a pre-issued token.
-      # If STAGING_SMOKE_TOKEN is absent, this step FAILS — not skips.
+      # Exercises auth-gated BFF endpoints (matches, SSE) using the Backend-API
+      # sign-in-token chain (tickets#759 — replaces the STAGING_SMOKE_TOKEN approach
+      # which was blocked on prod-type Clerk instances).
+      #
+      # CLERK_SECRET_KEY (sk_live_* for staging) is the same GHA secret already
+      # injected into the SPA smoke step above. The suite mints a fresh session JWT
+      # at runtime — no pre-issued static token required.
+      #
+      # If CLERK_SECRET_KEY is absent the suite FAILS with INCONCLUSIVE — not skips.
       - name: Run BFF API authenticated smoke (staging-smoke.spec.ts)
         working-directory: frontend
         run: npx playwright test --config=playwright.staging.config.ts
         env:
           CI: true
           STAGING_API_URL: ${{ inputs.staging_api_url }}
-          STAGING_SMOKE_TOKEN: ${{ secrets.STAGING_SMOKE_TOKEN }}
+          # tickets#759: Backend-API sign-in-token chain — CLERK_SECRET_KEY replaces
+          # the former STAGING_SMOKE_TOKEN (blocked on prod-type Clerk instances).
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_STAGING_SECRET_KEY }}
+          CI_SMOKE_USER_ID: user_3EmtmrSgZrtd0yRRdisTIIFYnnF
 
       # ── WildcardAdvisorPanel visual screenshot capture ───────────────────
       # Captures authenticated screenshots of the WildcardAdvisorPanel for
