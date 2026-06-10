@@ -1398,7 +1398,6 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 		}
 	}
 
-
 	// ADR-045 §6 — wildcard recommendations scaffold (ticket #416, v0.3.7).
 	// GET /api/v1/recommendations/wildcards — returns 501 stub with the complete
 	// ADR-045 response shape. Full implementation in v0.3.8 ticket #420.
