@@ -81,7 +81,7 @@ jobs:
       run: go test -v -tags integration -run TestSyncIntegration -coverprofile=coverage-integration-sync.out -covermode=atomic ./...
 
     - name: Upload integration coverage to Codecov
-      uses: codecov/codecov-action@v6
+      uses: codecov/codecov-action@v7
       with:
         files: ./services/bff/coverage-integration.out
         flags: bff-integration
