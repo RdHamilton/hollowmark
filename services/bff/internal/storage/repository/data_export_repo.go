@@ -123,6 +123,23 @@ type tableSpec struct {
 	// that are personal-data-adjacent but should not be disclosed
 	// (e.g. api_keys.key_hash -- a credential, not the user's data per se).
 	redact []string
+
+	// portable indicates whether this table is included in the GDPR Art.20
+	// portability export (GET /api/v1/account/data-export?format=portable).
+	//
+	// Art.20 scope: data the subject PROVIDED (Art.20(1)(a)) or that was
+	// OBSERVED from their activity (Art.20(1)(b)), processed under consent
+	// (6(1)(a)) or contract (6(1)(b)).
+	//
+	// portable=false tables are included in the Art.15 access export but
+	// excluded from the Art.20 portable subset.  Reasons: derived/inferred
+	// data, 6(1)(f)-only data (gameplay analytics), operational logs,
+	// credential tables, or empty-at-beta system-computed tables.
+	//
+	// Ray ruling (#889 comment 4670110499 — conditions 1–2):
+	//   card_inventory        → false (derived projection of collection)
+	//   recommendation_feedback → false (empty-at-beta / system-computed)
+	portable bool
 }
 
 // exportTableSpecs is the ordered list of tables included in the export.
@@ -134,146 +151,174 @@ type tableSpec struct {
 var exportTableSpecs = []tableSpec{
 	// -- Via users(id) --------------------------------------------------------
 	{
-		name:  "accounts",
-		query: `SELECT * FROM accounts WHERE user_id = $1`,
-		args:  byUserID,
+		name:     "accounts",
+		query:    `SELECT * FROM accounts WHERE user_id = $1`,
+		args:     byUserID,
+		portable: true, // contract-basis account fields (name, preferences)
 	},
 	{
-		name:   "api_keys",
-		query:  `SELECT id, user_id, created_at, last_used_at, revoked FROM api_keys WHERE user_id = $1`,
-		args:   byUserID,
-		redact: []string{"key_hash"}, // key_hash excluded -- credential, not subject data
+		name:     "api_keys",
+		query:    `SELECT id, user_id, created_at, last_used_at, revoked FROM api_keys WHERE user_id = $1`,
+		args:     byUserID,
+		redact:   []string{"key_hash"}, // key_hash excluded -- credential, not subject data
+		portable: false,                // internal credential -- not data the user provided in the portability sense
 	},
 	// -- Via accounts(id) -----------------------------------------------------
 	{
-		name:  "collection",
-		query: `SELECT * FROM collection WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "collection",
+		query:    `SELECT * FROM collection WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed MTGA card collection
 	},
 	{
-		name:  "collection_new",
-		query: `SELECT * FROM collection_new WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "collection_new",
+		query:    `SELECT * FROM collection_new WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // current collection snapshot -- user-activity-observed
 	},
 	{
-		name:  "collection_history",
-		query: `SELECT * FROM collection_history WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "collection_history",
+		query:    `SELECT * FROM collection_history WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed collection history
 	},
 	{
-		name:  "matches",
-		query: `SELECT * FROM matches WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "matches",
+		query:    `SELECT * FROM matches WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed game records
 	},
 	{
-		name:  "match_game_results",
-		query: `SELECT * FROM match_game_results WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "match_game_results",
+		query:    `SELECT * FROM match_game_results WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed results
 	},
 	{
-		name:  "player_stats",
-		query: `SELECT * FROM player_stats WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "player_stats",
+		query:    `SELECT * FROM player_stats WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: false, // derived aggregate -- computed by our system (6(1)(f))
 	},
 	{
-		name:  "decks",
-		query: `SELECT * FROM decks WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "decks",
+		query:    `SELECT * FROM decks WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-provided deck lists
 	},
 	{
-		name:  "rank_history",
-		query: `SELECT * FROM rank_history WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "rank_history",
+		query:    `SELECT * FROM rank_history WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed rank progression
 	},
 	{
-		name:  "draft_events",
-		query: `SELECT * FROM draft_events WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "draft_events",
+		query:    `SELECT * FROM draft_events WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed draft event records
 	},
 	{
-		name:  "draft_sessions",
-		query: `SELECT * FROM draft_sessions WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "draft_sessions",
+		query:    `SELECT * FROM draft_sessions WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed draft sessions
 	},
 	{
-		name:  "inventory",
-		query: `SELECT * FROM inventory WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "inventory",
+		query:    `SELECT * FROM inventory WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed MTGA resource state
 	},
 	{
-		name:  "inventory_history",
-		query: `SELECT * FROM inventory_history WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "inventory_history",
+		query:    `SELECT * FROM inventory_history WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed inventory changes
 	},
 	{
-		name:  "quests",
-		query: `SELECT * FROM quests WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "quests",
+		query:    `SELECT * FROM quests WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: false, // internal game-state tracking; not portable to another MTGA-adjacent service
 	},
 	{
-		name:  "user_settings",
-		query: `SELECT * FROM user_settings WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "user_settings",
+		query:    `SELECT * FROM user_settings WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-provided preferences
 	},
 	{
-		name:  "recommendation_feedback",
-		query: `SELECT * FROM recommendation_feedback WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "recommendation_feedback",
+		query:    `SELECT * FROM recommendation_feedback WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: false, // Ray ruling Q1: empty-at-beta / system-computed columns dominate; no INSERT path in production
 	},
 	{
-		name:  "card_inventory",
-		query: `SELECT * FROM card_inventory WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "card_inventory",
+		query:    `SELECT * FROM card_inventory WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: false, // Ray ruling Q2: derived projection of collection (migration 000070 verbatim: "projected from collection.updated daemon events")
 	},
 	{
-		name:  "game_plays",
-		query: `SELECT * FROM game_plays WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "game_plays",
+		query:    `SELECT * FROM game_plays WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: false, // low-level telemetry; inferred game-state reconstruction (6(1)(f))
 	},
 	{
-		name:  "draft_picks",
-		query: `SELECT * FROM draft_picks WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "draft_picks",
+		query:    `SELECT * FROM draft_picks WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed card picks
 	},
 	{
-		name:  "draft_packs",
-		query: `SELECT * FROM draft_packs WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "draft_packs",
+		query:    `SELECT * FROM draft_packs WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed pack contents
 	},
 	{
-		name:  "draft_match_results",
-		query: `SELECT * FROM draft_match_results WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "draft_match_results",
+		query:    `SELECT * FROM draft_match_results WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed draft results
 	},
 	{
-		name:  "game_event_counters",
-		query: `SELECT * FROM game_event_counters WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "game_event_counters",
+		query:    `SELECT * FROM game_event_counters WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: false, // derived analytics counters (6(1)(f))
 	},
 	{
-		name:  "life_change_tracking",
-		query: `SELECT * FROM life_change_tracking WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "life_change_tracking",
+		query:    `SELECT * FROM life_change_tracking WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: false, // inferred game-state reconstruction (6(1)(f))
 	},
 	{
-		name:  "matchup_statistics",
-		query: `SELECT * FROM matchup_statistics WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "matchup_statistics",
+		query:    `SELECT * FROM matchup_statistics WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: false, // derived aggregate (6(1)(f))
 	},
 	{
-		name:  "deck_performance_history",
-		query: `SELECT * FROM deck_performance_history WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "deck_performance_history",
+		query:    `SELECT * FROM deck_performance_history WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: false, // derived performance aggregate computed by our system (6(1)(f))
 	},
 	{
-		name:  "currency_history",
-		query: `SELECT * FROM currency_history WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "currency_history",
+		query:    `SELECT * FROM currency_history WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: true, // user-activity-observed currency changes
 	},
 	{
-		name:  "quest_session_tracking",
-		query: `SELECT * FROM quest_session_tracking WHERE account_id = $1`,
-		args:  byAccountID,
+		name:     "quest_session_tracking",
+		query:    `SELECT * FROM quest_session_tracking WHERE account_id = $1`,
+		args:     byAccountID,
+		portable: false, // internal operational tracking
 	},
 	// -- Via matches(id) ON DELETE CASCADE ------------------------------------
 	// Join through matches to scope by account_id -- never expose cross-tenant rows.
@@ -282,7 +327,8 @@ var exportTableSpecs = []tableSpec{
 		query: `SELECT g.* FROM games g
 				JOIN matches m ON m.id = g.match_id
 				WHERE m.account_id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: true, // user-activity-observed game-level records
 	},
 	{
 		name: "game_state_snapshots",
@@ -290,21 +336,24 @@ var exportTableSpecs = []tableSpec{
 				JOIN games g ON g.id = gs.game_id
 				JOIN matches m ON m.id = g.match_id
 				WHERE m.account_id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: false, // internal telemetry snapshots (6(1)(f)) -- not data the user provided
 	},
 	{
 		name: "opponent_cards_observed",
 		query: `SELECT oc.* FROM opponent_cards_observed oc
 				JOIN matches m ON m.id = oc.match_id
 				WHERE m.account_id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: false, // derived inference about opponent -- not about the user
 	},
 	{
 		name: "opponent_deck_profiles",
 		query: `SELECT od.* FROM opponent_deck_profiles od
 				JOIN matches m ON m.id = od.match_id
 				WHERE m.account_id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: false, // derived inference about opponent
 	},
 	// -- Via decks(id) ON DELETE CASCADE --------------------------------------
 	{
@@ -312,35 +361,40 @@ var exportTableSpecs = []tableSpec{
 		query: `SELECT dc.* FROM deck_cards dc
 				JOIN decks d ON d.id = dc.deck_id
 				WHERE d.account_id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: true, // user-provided deck contents
 	},
 	{
 		name: "deck_notes",
 		query: `SELECT dn.* FROM deck_notes dn
 				JOIN decks d ON d.id = dn.deck_id
 				WHERE d.account_id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: true, // user-provided free-text notes
 	},
 	{
 		name: "deck_tags",
 		query: `SELECT dt.* FROM deck_tags dt
 				JOIN decks d ON d.id = dt.deck_id
 				WHERE d.account_id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: true, // user-provided tags
 	},
 	{
 		name: "ml_suggestions",
 		query: `SELECT ml.* FROM ml_suggestions ml
 				JOIN decks d ON d.id = ml.deck_id
 				WHERE d.account_id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: false, // derived ML output -- not data the user provided
 	},
 	{
 		name: "deck_permutations",
 		query: `SELECT dp.* FROM deck_permutations dp
 				JOIN decks d ON d.id = dp.deck_id
 				WHERE d.account_id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: true, // user-provided deck variants
 	},
 	// -- Explicit TEXT-keyed (client_id / account_id TEXT, no FK) -------------
 	// These tables use the MTGA client_id string (TEXT) stored in accounts.client_id.
@@ -350,7 +404,8 @@ var exportTableSpecs = []tableSpec{
 		query: `SELECT de.* FROM daemon_events de
 				JOIN accounts a ON a.client_id = de.account_id
 				WHERE a.id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: false, // internal daemon operational log
 	},
 	{
 		name: "daemon_api_keys",
@@ -359,7 +414,8 @@ var exportTableSpecs = []tableSpec{
 				FROM daemon_api_keys dak
 				JOIN accounts a ON a.client_id = dak.account_id
 				WHERE a.id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: false, // internal credential
 		// key_hash excluded by not selecting it in the query above.
 	},
 	{
@@ -367,14 +423,16 @@ var exportTableSpecs = []tableSpec{
 		query: `SELECT upp.* FROM user_play_patterns upp
 				JOIN accounts a ON a.client_id = upp.account_id
 				WHERE a.id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: false, // derived analytics -- play-pattern inference (6(1)(f))
 	},
 	{
 		name: "projection_errors",
 		query: `SELECT pe.* FROM projection_errors pe
 				JOIN accounts a ON a.client_id = pe.account_id
 				WHERE a.id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: false, // internal operational log
 	},
 	// -- Anonymize in-place (consent_log) -------------------------------------
 	// Include event_type, tos_version, privacy_policy_version, occurred_at.
@@ -385,7 +443,8 @@ var exportTableSpecs = []tableSpec{
 				       occurred_at
 				FROM consent_log
 				WHERE account_id = $1`,
-		args: byAccountID,
+		args:     byAccountID,
+		portable: true, // user-provided consent acts (limited redacted cols, same as Art.15)
 	},
 }
 
@@ -400,8 +459,8 @@ func byAccountID(_, accountID int64) []any {
 	return []any{accountID}
 }
 
-// TableNames returns the canonical list of table names included in the export.
-// This is the only method safe to call with a nil db.
+// TableNames returns the canonical list of table names included in the Art.15
+// access export.  This is the only method safe to call with a nil db.
 func (r *DataExportRepository) TableNames() []string {
 	names := make([]string, len(exportTableSpecs))
 	for i, spec := range exportTableSpecs {
@@ -411,19 +470,41 @@ func (r *DataExportRepository) TableNames() []string {
 	return names
 }
 
-// GatherForUser collects all user-keyed personal data for the given userID and
+// PortableTableNames returns the subset of table names included in the Art.20
+// portability export (portable==true entries only).
+// Safe to call with a nil db.
+func (r *DataExportRepository) PortableTableNames() []string {
+	var names []string
+	for _, spec := range exportTableSpecs {
+		if spec.portable {
+			names = append(names, spec.name)
+		}
+	}
+
+	return names
+}
+
+// GatherForUser collects user-keyed personal data for the given userID and
 // accountID and returns a UserExport ready for JSON serialisation.
+//
+// portableOnly=false → Art.15 access export (all 42 tables).
+// portableOnly=true  → Art.20 portability export (portable==true subset only).
 //
 // IDOR posture: userID and accountID are the authenticated principal's IDs
 // resolved from the Clerk JWT by the middleware chain -- never from the request
 // body or query string.  Every gather query filters by these values.
-func (r *DataExportRepository) GatherForUser(ctx context.Context, userID, accountID int64) (*UserExport, error) {
+func (r *DataExportRepository) GatherForUser(ctx context.Context, userID, accountID int64, portableOnly bool) (*UserExport, error) {
+	format := "access"
+	if portableOnly {
+		format = "portable"
+	}
+
 	export := &UserExport{
 		ExportID:      uuid.New().String(),
 		ExportedAt:    time.Now().UTC(),
 		AccountIDHash: hashForExport(accountID),
 		SchemaVersion: "1.0",
-		Format:        "access",
+		Format:        format,
 		Manifest:      make([]ExportManifestEntry, 0, len(exportTableSpecs)),
 		Data:          make(map[string]any, len(exportTableSpecs)),
 	}
@@ -445,6 +526,11 @@ func (r *DataExportRepository) GatherForUser(ctx context.Context, userID, accoun
 	}
 
 	for _, spec := range exportTableSpecs {
+		// Skip non-portable tables when gathering the Art.20 portability subset.
+		if portableOnly && !spec.portable {
+			continue
+		}
+
 		// All spec queries use $1 as the single positional arg.
 		// byUserID returns []any{userID}; byAccountID returns []any{accountID}.
 		queryArgs := spec.args(userID, accountID)
