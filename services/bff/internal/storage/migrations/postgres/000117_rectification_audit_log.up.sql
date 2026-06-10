@@ -1,4 +1,4 @@
--- Migration 000115: rectification audit log for GDPR Art.16 Right to Rectification (#888)
+-- Migration 000117: rectification audit log for GDPR Art.16 Right to Rectification (#888)
 --
 -- Adds:
 --   rectification_audit_log — one row per profile-field change initiated by a user.

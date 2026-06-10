@@ -8,7 +8,7 @@ import (
 )
 
 // ─── RectifyProfileTx atomicity integration test ─────────────────────────────
-// Requires DATABASE_URL + migration 000115 applied.
+// Requires DATABASE_URL + migration 000117 applied.
 // Skipped (not failed) when DATABASE_URL is not set.
 
 // TestRectifyProfileTx_RollbackOnEmailUpdateFailure proves that when the second
@@ -82,7 +82,7 @@ func TestRectifyProfileTx_RollbackOnEmailUpdateFailure(t *testing.T) {
 }
 
 // ─── RectificationRepository integration tests ──────────────────────────────
-// These tests require DATABASE_URL + migration 000115 applied.
+// These tests require DATABASE_URL + migration 000117 applied.
 // They are skipped (not failed) when DATABASE_URL is not set (same pattern as
 // all other repository integration tests in this package).
 
