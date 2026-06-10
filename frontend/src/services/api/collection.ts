@@ -10,7 +10,7 @@
  * Plan tracker: .claude/plans/spa-route-migration.md
  */
 
-import { get, post } from '../apiClient';
+import { get, post, postFormData } from '../apiClient';
 import { gui, models } from '@/types/models';
 
 // Re-export types for convenience
@@ -112,4 +112,33 @@ export interface CollectionValue {
  */
 export async function getCollectionValue(): Promise<CollectionValue> {
   return get<CollectionValue>('/collection/value');
+}
+
+/**
+ * Result from the collection import endpoint.
+ *
+ * - accepted: number of rows successfully upserted into card_inventory
+ * - rejected: number of rows that failed to parse or couldn't be resolved to an arena_id
+ */
+export interface ImportCollectionResult {
+  accepted: number;
+  rejected: number;
+}
+
+/**
+ * Import a collection from an MTGA-format CSV file.
+ *
+ * File format (one card per line):
+ *   <quantity> <CardName> (<SetCode>) <collectorNumber>
+ * Example:
+ *   4 Lightning Bolt (ONS) 197
+ *
+ * Posts as multipart/form-data with a single "file" field.
+ * The BFF resolves each row to an arena_id via set_cards, upserts into
+ * card_inventory, and returns accepted/rejected counts.
+ */
+export async function importCollection(file: File): Promise<ImportCollectionResult> {
+  const fd = new FormData();
+  fd.append('file', file);
+  return postFormData<ImportCollectionResult>('/collection/import', fd);
 }

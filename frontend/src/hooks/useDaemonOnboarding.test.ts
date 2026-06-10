@@ -2,6 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useDaemonOnboarding, type AccountDataState } from './useDaemonOnboarding';
 
+// NOTE: useDaemonOnboarding now accepts an optional collectionMode parameter.
+// When collectionMode is 'manual' (default), the auto-show gate is blocked
+// so the daemon onboarding modal does NOT fire for manual-mode users
+// (they see ManualImportModal instead, controlled by useCollectionMode).
+// When collectionMode is 'enhanced' (or undefined for backward compat),
+// the original 5-gate auto-show logic applies unchanged.
+
 const STORAGE_KEY = 'vaultmtg_onboarding_dismissed';
 const STORAGE_COMPLETED_KEY = 'vaultmtg_onboarding_completed';
 
@@ -23,63 +30,60 @@ describe('useDaemonOnboarding', () => {
 
   // ── AccountDataState tri-state tests ────────────────────────────────────────
 
-  describe('AccountDataState tri-state — auto-show gating', () => {
-    it("'empty' + disconnected + signed-in = modal shows (genuine new user)", () => {
+  // NOTE: All AccountDataState tri-state tests pass collectionMode='enhanced'
+  // because the daemon onboarding modal is only for enhanced-mode users (#895 D3).
+
+  describe('AccountDataState tri-state — auto-show gating (enhanced mode)', () => {
+    it("'empty' + disconnected + signed-in + enhanced = modal shows (genuine new user)", () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'empty')
+        useDaemonOnboarding('disconnected', true, 'empty', 'enhanced')
       );
       expect(result.current.isOpen).toBe(true);
     });
 
-    it("'pending' + disconnected + signed-in = modal BLOCKED (fetch in flight)", () => {
+    it("'pending' + disconnected + signed-in + enhanced = modal BLOCKED (fetch in flight)", () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'pending')
+        useDaemonOnboarding('disconnected', true, 'pending', 'enhanced')
       );
       expect(result.current.isOpen).toBe(false);
     });
 
-    it("'has-data' + disconnected + signed-in = modal BLOCKED (returning user)", () => {
+    it("'has-data' + disconnected + signed-in + enhanced = modal BLOCKED (returning user)", () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'has-data')
+        useDaemonOnboarding('disconnected', true, 'has-data', 'enhanced')
       );
       expect(result.current.isOpen).toBe(false);
     });
 
     it("'pending' blocks modal even when daemon is disconnected — slow-fetch safety", () => {
-      // Simulate: user loads the app, fetch is in flight ('pending'), daemon already
-      // reports disconnected.  Modal must NOT pop while the fetch is unresolved.
       const { result, rerender } = renderHook(
         ({ state }: { state: AccountDataState }) =>
-          useDaemonOnboarding('disconnected', true, state),
+          useDaemonOnboarding('disconnected', true, state, 'enhanced'),
         { initialProps: { state: 'pending' as AccountDataState } }
       );
 
-      // While 'pending' — no modal
       expect(result.current.isOpen).toBe(false);
 
-      // After fetch resolves as 'empty' — modal should fire
       rerender({ state: 'empty' });
       expect(result.current.isOpen).toBe(true);
     });
 
     it("'pending' stays closed if fetch errors (fail-closed behavior)", () => {
-      // Caller keeps state at 'pending' on error — modal never shows.
       const { result, rerender } = renderHook(
         ({ state }: { state: AccountDataState }) =>
-          useDaemonOnboarding('disconnected', true, state),
+          useDaemonOnboarding('disconnected', true, state, 'enhanced'),
         { initialProps: { state: 'pending' as AccountDataState } }
       );
 
       expect(result.current.isOpen).toBe(false);
 
-      // Fetch errors → caller leaves state at 'pending'
       rerender({ state: 'pending' });
       expect(result.current.isOpen).toBe(false);
     });
 
     it("manual open() works regardless of accountDataState (user explicitly clicks status indicator)", () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'has-data')
+        useDaemonOnboarding('disconnected', true, 'has-data', 'enhanced')
       );
       expect(result.current.isOpen).toBe(false);
 
@@ -91,7 +95,49 @@ describe('useDaemonOnboarding', () => {
 
     it("manual open() works when state is 'pending' too", () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'pending')
+        useDaemonOnboarding('disconnected', true, 'pending', 'enhanced')
+      );
+      expect(result.current.isOpen).toBe(false);
+
+      act(() => {
+        result.current.open();
+      });
+      expect(result.current.isOpen).toBe(true);
+    });
+  });
+
+  // ── collectionMode gate (#895 D3) ──────────────────────────────────────────
+  // The daemon onboarding modal only fires in enhanced mode.
+  // Manual-mode users are routed to ManualImportModal via useCollectionMode.
+
+  describe('collectionMode gate', () => {
+    it('does NOT auto-show when collectionMode is manual (default)', () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', true, 'empty', 'manual')
+      );
+      expect(result.current.isOpen).toBe(false);
+    });
+
+    it('auto-shows when collectionMode is enhanced (all other gates pass)', () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', true, 'empty', 'enhanced')
+      );
+      expect(result.current.isOpen).toBe(true);
+    });
+
+    it('defaults to blocking when collectionMode is not passed (backward compat: treats as manual)', () => {
+      // Without a collectionMode arg, the hook treats it as 'manual' and blocks
+      // the daemon modal — safer default now that manual is the D3 default.
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', true, 'empty')
+      );
+      // Explicit: isOpen should be false because no mode = manual default
+      expect(result.current.isOpen).toBe(false);
+    });
+
+    it('manual open() still works regardless of collectionMode', () => {
+      const { result } = renderHook(() =>
+        useDaemonOnboarding('disconnected', true, 'empty', 'manual')
       );
       expect(result.current.isOpen).toBe(false);
 
@@ -195,7 +241,7 @@ describe('useDaemonOnboarding', () => {
 
     it('can re-open after dismiss', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'empty')
+        useDaemonOnboarding('disconnected', true, 'empty', 'enhanced')
       );
 
       act(() => {
@@ -215,7 +261,7 @@ describe('useDaemonOnboarding', () => {
   describe('dismiss()', () => {
     it('closes the modal', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'empty')
+        useDaemonOnboarding('disconnected', true, 'empty', 'enhanced')
       );
       expect(result.current.isOpen).toBe(true);
 
@@ -228,7 +274,7 @@ describe('useDaemonOnboarding', () => {
 
     it('sets hasSeenOnboarding to true', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'empty')
+        useDaemonOnboarding('disconnected', true, 'empty', 'enhanced')
       );
 
       act(() => {
@@ -240,7 +286,7 @@ describe('useDaemonOnboarding', () => {
 
     it('persists dismissed state to localStorage', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'empty')
+        useDaemonOnboarding('disconnected', true, 'empty', 'enhanced')
       );
 
       act(() => {
@@ -253,7 +299,7 @@ describe('useDaemonOnboarding', () => {
     it('prevents modal from re-appearing when daemon is still disconnected', () => {
       const { result, rerender } = renderHook(
         ({ status, state }: { status: 'disconnected' | 'connected'; state: AccountDataState }) =>
-          useDaemonOnboarding(status, true, state),
+          useDaemonOnboarding(status, true, state, 'enhanced'),
         { initialProps: { status: 'disconnected' as const, state: 'empty' as AccountDataState } }
       );
 
@@ -261,7 +307,6 @@ describe('useDaemonOnboarding', () => {
         result.current.dismiss();
       });
 
-      // Re-render with same disconnected status — modal should stay closed
       rerender({ status: 'disconnected', state: 'empty' });
       expect(result.current.isOpen).toBe(false);
     });
@@ -272,7 +317,7 @@ describe('useDaemonOnboarding', () => {
   describe('complete()', () => {
     it('closes the modal', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'empty')
+        useDaemonOnboarding('disconnected', true, 'empty', 'enhanced')
       );
 
       act(() => {
@@ -284,7 +329,7 @@ describe('useDaemonOnboarding', () => {
 
     it('sets hasSeenOnboarding to true', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'empty')
+        useDaemonOnboarding('disconnected', true, 'empty', 'enhanced')
       );
 
       act(() => {
@@ -296,7 +341,7 @@ describe('useDaemonOnboarding', () => {
 
     it('persists completed state to localStorage', () => {
       const { result } = renderHook(() =>
-        useDaemonOnboarding('disconnected', true, 'empty')
+        useDaemonOnboarding('disconnected', true, 'empty', 'enhanced')
       );
 
       act(() => {

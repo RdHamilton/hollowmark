@@ -5,8 +5,10 @@ import StatusStrip from './StatusStrip';
 import AuthBar from './AuthBar';
 import DaemonHealthIndicator, { type DaemonHealthState } from './DaemonHealthIndicator';
 import { OnboardingModal } from './OnboardingModal';
+import { ManualImportModal } from './ManualImportModal';
 import { usePostHogIdentity } from '@/hooks/usePostHogIdentity';
 import { useDaemonOnboarding, type AccountDataState, SESSION_HAS_ACCOUNT_DATA_KEY } from '@/hooks/useDaemonOnboarding';
+import { useCollectionMode } from '@/hooks/useCollectionMode';
 import ReportBugButton from './ReportBugButton';
 import vaultMark from '@/assets/logo-vaultmtg-mark.svg';
 import { getHomeSummary } from '@/services/api/bffHomeSummary';
@@ -119,10 +121,20 @@ const Layout = ({ children }: LayoutProps) => {
     }
   }, [isSignedIn]);
 
-  // Onboarding modal logic: autoShow fires ONLY when accountDataState === 'empty'
-  // AND daemonStatus === 'disconnected'.  Both 'pending' and 'has-data' block it.
+  // Collection mode: 'manual' (default, D3) or 'enhanced' (daemon opt-in).
+  // useCollectionMode owns the import-modal auto-show for manual-mode new users.
+  const {
+    collectionMode,
+    setCollectionMode,
+    isImportModalOpen,
+    markImportCompleted,
+    dismissImportModal,
+  } = useCollectionMode({ isSignedIn: isSignedIn ?? false, accountDataState });
+
+  // Daemon onboarding modal: only fires in enhanced mode (#895 D3).
+  // collectionMode is passed so the hook blocks auto-show when mode === 'manual'.
   const { isOpen: onboardingOpen, open: openOnboarding, dismiss: dismissOnboarding, complete: completeOnboarding } =
-    useDaemonOnboarding(daemonStatus, isSignedIn ?? false, accountDataState);
+    useDaemonOnboarding(daemonStatus, isSignedIn ?? false, accountDataState, collectionMode);
 
   const handleDaemonStatusChange = useCallback((status: DaemonHealthState) => {
     setDaemonStatus(status);
@@ -336,9 +348,19 @@ const Layout = ({ children }: LayoutProps) => {
         <StatusStrip daemonStatus={daemonStatus} />
       )}
 
-      {/* Daemon onboarding modal — shown on first login if daemon not connected
-          and account has no existing data (accountDataState === 'empty').
-          'pending' and 'has-data' both suppress the modal. */}
+      {/* Manual-import modal — default first-run path for new users in manual mode
+          (D3: manual is the default; daemon-download is the enhanced opt-in).
+          Suppressed when: accountDataState !== 'empty', import_completed flag set,
+          or collectionMode === 'enhanced'. */}
+      <ManualImportModal
+        isOpen={isImportModalOpen}
+        onDismiss={dismissImportModal}
+        onImportComplete={markImportCompleted}
+        onEnableEnhancedMode={() => setCollectionMode('enhanced')}
+      />
+
+      {/* Daemon onboarding modal — shown for enhanced-mode users who haven't
+          connected the daemon yet. 'pending' and 'has-data' both suppress it. */}
       <OnboardingModal
         isOpen={onboardingOpen}
         onDismiss={dismissOnboarding}
