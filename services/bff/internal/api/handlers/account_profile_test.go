@@ -3,8 +3,10 @@ package handlers_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -63,14 +65,44 @@ func (s *stubEmailUpdater) UpdateEmail(_ context.Context, userID int64, email st
 	return s.err
 }
 
+// stubClerkEmailFetcher returns a preset email (the verified primary address).
+type stubClerkEmailFetcher struct {
+	email string
+	err   error
+}
+
+func (s *stubClerkEmailFetcher) FetchPrimaryEmail(_ context.Context, _ string) (string, error) {
+	return s.email, s.err
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
+
+const testPIISalt = "test-salt-value"
+
+// unsaltedHash computes SHA-256(value)[:16] — the same formula as
+// identityhash.HashAccountID.  Used in tests to confirm the handler is NOT
+// using the unsalted function for PII fields.
+func unsaltedHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%x", sum)[:16]
+}
 
 func newProfileHandler(
 	auditWriter *stubRectificationWriter,
 	emailUpdater *stubEmailUpdater,
 	accounts *profileAccountLookup,
 ) *handlers.AccountProfileHandler {
-	return handlers.NewAccountProfileHandler(auditWriter, emailUpdater, accounts)
+	return handlers.NewAccountProfileHandler(auditWriter, emailUpdater, accounts, testPIISalt, nil)
+}
+
+// newProfileHandlerWithClerk builds a handler with a real Clerk email fetcher stub.
+func newProfileHandlerWithClerk(
+	auditWriter *stubRectificationWriter,
+	emailUpdater *stubEmailUpdater,
+	accounts *profileAccountLookup,
+	clerkFetcher *stubClerkEmailFetcher,
+) *handlers.AccountProfileHandler {
+	return handlers.NewAccountProfileHandler(auditWriter, emailUpdater, accounts, testPIISalt, clerkFetcher)
 }
 
 func authedProfileRequest(t *testing.T, body any, userID int64) *http.Request {
@@ -81,24 +113,289 @@ func authedProfileRequest(t *testing.T, body any, userID int64) *http.Request {
 	}
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/account/profile", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
-	return req.WithContext(bffmiddleware.WithUserID(req.Context(), userID))
+	req = req.WithContext(bffmiddleware.WithUserID(req.Context(), userID))
+	// Inject a synthetic Clerk user ID (needed for the Clerk re-fetch path — Fix 4).
+	req = bffmiddleware.WithClerkUserID(req, "user_test_clerk_id")
+	return req
 }
 
-// ─── handler tests ───────────────────────────────────────────────────────────
+// ─── Fix 2: Salted PII hash tests ────────────────────────────────────────────
 
-// TestAccountProfileHandler_EmailOnly_OK verifies a valid email-change body:
-//   - returns 200 with updated_at
-//   - writes one rectification audit row for the "email" field
-//   - calls UpdateEmail with the correct arguments
-//   - old_value_hash is set (we have a current email from the account lookup)
-func TestAccountProfileHandler_EmailOnly_OK(t *testing.T) {
+// TestAccountProfileHandler_HashUsesSalt verifies that the new_value_hash for a
+// changed email is computed using HashPII(salt, value) and NOT HashAccountID(value)
+// (i.e. NOT an unsalted SHA-256 of the raw email alone).
+func TestAccountProfileHandler_HashUsesSalt(t *testing.T) {
+	const rawEmail = "salted@example.com"
+
+	auditWriter := &stubRectificationWriter{}
+	emailUpdater := &stubEmailUpdater{}
+	accounts := &profileAccountLookup{accountID: 7, found: true}
+	// Provide a Clerk fetcher stub that returns the same email so we isolate
+	// the hash test from any Clerk-fetch side-effects.
+	clerkFetcher := &stubClerkEmailFetcher{email: rawEmail}
+
+	h := newProfileHandlerWithClerk(auditWriter, emailUpdater, accounts, clerkFetcher)
+
+	body := map[string]string{"email": rawEmail}
+	req := authedProfileRequest(t, body, 1)
+	rec := httptest.NewRecorder()
+	h.Patch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// The hash produced by HashPII(salt, rawEmail) must differ from
+	// HashAccountID(rawEmail) (which is the unsalted SHA-256 of the email).
+	// If they are equal, the salt is not being applied.
+	want := unsaltedHash(rawEmail)
+	if auditWriter.lastNewHash == want {
+		t.Errorf(
+			"new_value_hash appears to be the unsalted digest of the email "+
+				"(HashAccountID behavior) — want HashPII(salt, email) which differs; "+
+				"got unsalted hash %q",
+			want,
+		)
+	}
+
+	// Must not be raw PII.
+	if auditWriter.lastNewHash == rawEmail {
+		t.Error("new_value_hash must not be the raw email address")
+	}
+	// Must be exactly 16 hex chars.
+	if len(auditWriter.lastNewHash) != 16 {
+		t.Errorf("new_value_hash length: want 16, got %d", len(auditWriter.lastNewHash))
+	}
+}
+
+// TestAccountProfileHandler_DisplayName_HashUsesSalt mirrors the email test
+// for display_name.
+func TestAccountProfileHandler_DisplayName_HashUsesSalt(t *testing.T) {
+	const displayName = "SaltedDisplayName"
+
+	auditWriter := &stubRectificationWriter{}
+	emailUpdater := &stubEmailUpdater{}
+	accounts := &profileAccountLookup{accountID: 7, found: true}
+
+	h := newProfileHandler(auditWriter, emailUpdater, accounts)
+
+	body := map[string]string{"display_name": displayName}
+	req := authedProfileRequest(t, body, 1)
+	rec := httptest.NewRecorder()
+	h.Patch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// Must differ from the unsalted hash.
+	want := unsaltedHash(displayName)
+	if auditWriter.lastNewHash == want {
+		t.Errorf(
+			"new_value_hash for display_name appears to be unsalted; "+
+				"want HashPII(salt, displayName), got unsalted hash %q",
+			want,
+		)
+	}
+
+	// Must not be raw PII.
+	if auditWriter.lastNewHash == displayName {
+		t.Error("new_value_hash must not be the raw display_name")
+	}
+	if len(auditWriter.lastNewHash) != 16 {
+		t.Errorf("new_value_hash length: want 16, got %d", len(auditWriter.lastNewHash))
+	}
+}
+
+// ─── Fix 4: Trusted email source (Clerk re-fetch) ────────────────────────────
+
+// TestAccountProfileHandler_UsesTrustedEmailFromClerk verifies that when the
+// client sends email="client@example.com" but Clerk's verified primary email is
+// "verified@example.com", the handler writes "verified@example.com" to users.email
+// (not the client-supplied value).
+func TestAccountProfileHandler_UsesTrustedEmailFromClerk(t *testing.T) {
+	auditWriter := &stubRectificationWriter{}
+	emailUpdater := &stubEmailUpdater{}
+	accounts := &profileAccountLookup{accountID: 42, found: true}
+	clerkFetcher := &stubClerkEmailFetcher{email: "verified@example.com"}
+
+	h := newProfileHandlerWithClerk(auditWriter, emailUpdater, accounts, clerkFetcher)
+
+	// Client sends a different email than what Clerk has.
+	body := map[string]string{"email": "client@example.com"}
+	req := authedProfileRequest(t, body, 1)
+	rec := httptest.NewRecorder()
+	h.Patch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status: want 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// The email written to users.email must be the Clerk-verified value.
+	if emailUpdater.lastEmail != "verified@example.com" {
+		t.Errorf("UpdateEmail: want Clerk-verified %q, got %q",
+			"verified@example.com", emailUpdater.lastEmail)
+	}
+}
+
+// TestAccountProfileHandler_ClerkFetchError_Returns500 verifies that a failure
+// to contact the Clerk Backend API returns 500 (fail closed — do not fall back
+// to an untrusted client-supplied email).
+func TestAccountProfileHandler_ClerkFetchError_Returns500(t *testing.T) {
+	auditWriter := &stubRectificationWriter{}
+	emailUpdater := &stubEmailUpdater{}
+	accounts := &profileAccountLookup{accountID: 42, found: true}
+	clerkFetcher := &stubClerkEmailFetcher{err: errors.New("clerk API unreachable")}
+
+	h := newProfileHandlerWithClerk(auditWriter, emailUpdater, accounts, clerkFetcher)
+
+	body := map[string]string{"email": "client@example.com"}
+	req := authedProfileRequest(t, body, 1)
+	rec := httptest.NewRecorder()
+	h.Patch(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status: want 500 on Clerk fetch error, got %d", rec.Code)
+	}
+	// Must not have written to the DB.
+	if emailUpdater.callCount != 0 {
+		t.Error("UpdateEmail must not be called when Clerk fetch fails")
+	}
+}
+
+// TestAccountProfileHandler_ClerkFetchEmptyEmail_Returns500 verifies that an
+// empty email returned from Clerk (no primary email configured) returns 500.
+func TestAccountProfileHandler_ClerkFetchEmptyEmail_Returns500(t *testing.T) {
+	auditWriter := &stubRectificationWriter{}
+	emailUpdater := &stubEmailUpdater{}
+	accounts := &profileAccountLookup{accountID: 42, found: true}
+	clerkFetcher := &stubClerkEmailFetcher{email: ""} // empty = no primary address
+
+	h := newProfileHandlerWithClerk(auditWriter, emailUpdater, accounts, clerkFetcher)
+
+	body := map[string]string{"email": "client@example.com"}
+	req := authedProfileRequest(t, body, 1)
+	rec := httptest.NewRecorder()
+	h.Patch(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status: want 500 when Clerk returns empty email, got %d", rec.Code)
+	}
+}
+
+// TestAccountProfileHandler_EmailFormatValidation_Rejected verifies that a
+// malformed email in the request body is rejected 400 (defense-in-depth
+// validation before the Clerk re-fetch path).
+func TestAccountProfileHandler_EmailFormatValidation_Rejected(t *testing.T) {
+	auditWriter := &stubRectificationWriter{}
+	emailUpdater := &stubEmailUpdater{}
+	accounts := &profileAccountLookup{accountID: 42, found: true}
+
+	// No Clerk fetcher — tests the defense-in-depth validation path.
+	h := newProfileHandler(auditWriter, emailUpdater, accounts)
+
+	body := map[string]string{"email": "notanemail"}
+	req := authedProfileRequest(t, body, 1)
+	rec := httptest.NewRecorder()
+	h.Patch(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: want 400 for malformed email, got %d", rec.Code)
+	}
+}
+
+// TestAccountProfileHandler_EmailLengthCap_Rejected verifies that an email
+// longer than 254 chars is rejected with 400.
+func TestAccountProfileHandler_EmailLengthCap_Rejected(t *testing.T) {
 	auditWriter := &stubRectificationWriter{}
 	emailUpdater := &stubEmailUpdater{}
 	accounts := &profileAccountLookup{accountID: 42, found: true}
 
 	h := newProfileHandler(auditWriter, emailUpdater, accounts)
 
-	body := map[string]string{"email": "new@example.com"}
+	long := make([]byte, 250)
+	for i := range long {
+		long[i] = 'a'
+	}
+	// 250 'a' chars + "@x.com" = 256 chars > 254 cap
+	body := map[string]string{"email": string(long) + "@x.com"}
+	req := authedProfileRequest(t, body, 1)
+	rec := httptest.NewRecorder()
+	h.Patch(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: want 400 for email > 254 chars, got %d", rec.Code)
+	}
+}
+
+// ─── Fix 1: Atomicity — partial-failure rollback ─────────────────────────────
+
+// TestAccountProfileHandler_AtomicRollback_AuditFails verifies that when the
+// audit INSERT fails the email UPDATE is NOT executed (transaction rolled back).
+func TestAccountProfileHandler_AtomicRollback_AuditFails(t *testing.T) {
+	auditWriter := &stubRectificationWriter{err: errors.New("db down")}
+	emailUpdater := &stubEmailUpdater{}
+	accounts := &profileAccountLookup{accountID: 42, found: true}
+	clerkFetcher := &stubClerkEmailFetcher{email: "good@example.com"}
+
+	h := newProfileHandlerWithClerk(auditWriter, emailUpdater, accounts, clerkFetcher)
+
+	body := map[string]string{"email": "good@example.com"}
+	req := authedProfileRequest(t, body, 1)
+	rec := httptest.NewRecorder()
+	h.Patch(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status: want 500 on audit failure, got %d", rec.Code)
+	}
+	// Email must NOT have been updated — the transaction rolls back.
+	if emailUpdater.callCount != 0 {
+		t.Errorf(
+			"UpdateEmail must not be called when audit INSERT fails (atomicity), "+
+				"got %d calls",
+			emailUpdater.callCount,
+		)
+	}
+}
+
+// TestAccountProfileHandler_AtomicRollback_EmailUpdateFails verifies that when
+// UpdateEmail fails, the handler returns 500.
+func TestAccountProfileHandler_AtomicRollback_EmailUpdateFails(t *testing.T) {
+	auditWriter := &stubRectificationWriter{}
+	emailUpdater := &stubEmailUpdater{err: errors.New("unique constraint")}
+	accounts := &profileAccountLookup{accountID: 42, found: true}
+	clerkFetcher := &stubClerkEmailFetcher{email: "taken@example.com"}
+
+	h := newProfileHandlerWithClerk(auditWriter, emailUpdater, accounts, clerkFetcher)
+
+	body := map[string]string{"email": "taken@example.com"}
+	req := authedProfileRequest(t, body, 1)
+	rec := httptest.NewRecorder()
+	h.Patch(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status: want 500 on UpdateEmail failure, got %d", rec.Code)
+	}
+}
+
+// ─── Existing handler tests (retained, updated for new constructor signature) ─
+
+// TestAccountProfileHandler_EmailOnly_OK verifies a valid email-change body:
+//   - returns 200 with updated_at
+//   - writes one rectification audit row for the "email" field
+//   - calls UpdateEmail with the Clerk-verified email
+//   - new_value_hash is not raw PII
+func TestAccountProfileHandler_EmailOnly_OK(t *testing.T) {
+	const clerkEmail = "new@example.com"
+
+	auditWriter := &stubRectificationWriter{}
+	emailUpdater := &stubEmailUpdater{}
+	accounts := &profileAccountLookup{accountID: 42, found: true}
+	clerkFetcher := &stubClerkEmailFetcher{email: clerkEmail}
+
+	h := newProfileHandlerWithClerk(auditWriter, emailUpdater, accounts, clerkFetcher)
+
+	body := map[string]string{"email": clerkEmail}
 	req := authedProfileRequest(t, body, 1)
 	rec := httptest.NewRecorder()
 
@@ -125,7 +422,7 @@ func TestAccountProfileHandler_EmailOnly_OK(t *testing.T) {
 		t.Errorf("audit field: want %q, got %q", "email", auditWriter.lastField)
 	}
 	// new_value_hash must not be raw PII.
-	if auditWriter.lastNewHash == "new@example.com" {
+	if auditWriter.lastNewHash == clerkEmail {
 		t.Error("new_value_hash must not be the raw new email address")
 	}
 	// new_value_hash must be exactly 16 hex chars.
@@ -133,12 +430,12 @@ func TestAccountProfileHandler_EmailOnly_OK(t *testing.T) {
 		t.Errorf("new_value_hash length: want 16, got %d", len(auditWriter.lastNewHash))
 	}
 
-	// email sync called.
+	// email sync called with Clerk-verified address.
 	if emailUpdater.callCount != 1 {
 		t.Errorf("UpdateEmail call count: want 1, got %d", emailUpdater.callCount)
 	}
-	if emailUpdater.lastEmail != "new@example.com" {
-		t.Errorf("UpdateEmail email: want %q, got %q", "new@example.com", emailUpdater.lastEmail)
+	if emailUpdater.lastEmail != clerkEmail {
+		t.Errorf("UpdateEmail email: want %q, got %q", clerkEmail, emailUpdater.lastEmail)
 	}
 	if emailUpdater.lastUserID != 1 {
 		t.Errorf("UpdateEmail userID: want 1, got %d", emailUpdater.lastUserID)
@@ -185,8 +482,9 @@ func TestAccountProfileHandler_BothFields_OK(t *testing.T) {
 	auditWriter := &stubRectificationWriter{}
 	emailUpdater := &stubEmailUpdater{}
 	accounts := &profileAccountLookup{accountID: 42, found: true}
+	clerkFetcher := &stubClerkEmailFetcher{email: "both@example.com"}
 
-	h := newProfileHandler(auditWriter, emailUpdater, accounts)
+	h := newProfileHandlerWithClerk(auditWriter, emailUpdater, accounts, clerkFetcher)
 
 	body := map[string]string{
 		"email":        "both@example.com",
@@ -301,8 +599,9 @@ func TestAccountProfileHandler_AuditWriteError(t *testing.T) {
 	auditWriter := &stubRectificationWriter{err: errors.New("db down")}
 	emailUpdater := &stubEmailUpdater{}
 	accounts := &profileAccountLookup{accountID: 42, found: true}
+	clerkFetcher := &stubClerkEmailFetcher{email: "x@example.com"}
 
-	h := newProfileHandler(auditWriter, emailUpdater, accounts)
+	h := newProfileHandlerWithClerk(auditWriter, emailUpdater, accounts, clerkFetcher)
 
 	body := map[string]string{"email": "x@example.com"}
 	req := authedProfileRequest(t, body, 1)
@@ -320,8 +619,9 @@ func TestAccountProfileHandler_EmailSyncError(t *testing.T) {
 	auditWriter := &stubRectificationWriter{}
 	emailUpdater := &stubEmailUpdater{err: errors.New("db constraint")}
 	accounts := &profileAccountLookup{accountID: 42, found: true}
+	clerkFetcher := &stubClerkEmailFetcher{email: "x@example.com"}
 
-	h := newProfileHandler(auditWriter, emailUpdater, accounts)
+	h := newProfileHandlerWithClerk(auditWriter, emailUpdater, accounts, clerkFetcher)
 
 	body := map[string]string{"email": "x@example.com"}
 	req := authedProfileRequest(t, body, 1)
@@ -364,8 +664,9 @@ func TestAccountProfileHandler_HashIsNotRawPII(t *testing.T) {
 	auditWriter := &stubRectificationWriter{}
 	emailUpdater := &stubEmailUpdater{}
 	accounts := &profileAccountLookup{accountID: 7, found: true}
+	clerkFetcher := &stubClerkEmailFetcher{email: rawEmail}
 
-	h := newProfileHandler(auditWriter, emailUpdater, accounts)
+	h := newProfileHandlerWithClerk(auditWriter, emailUpdater, accounts, clerkFetcher)
 
 	body := map[string]string{"email": rawEmail}
 	req := authedProfileRequest(t, body, 1)
