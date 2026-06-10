@@ -327,3 +327,61 @@ test.describe('Staging smoke: SSE endpoint reachability (AC3)', () => {
     ).not.toBe(401);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 5. /internal/ deny wall — unauthenticated external callers must get 403
+//
+// ADR-070 requires that the /internal/ path space is blocked at the nginx layer
+// before any request reaches the BFF. These tests confirm the deployed deny rule
+// is in effect on staging.
+//
+// No Authorization header is sent in any of these tests — that is intentional
+// and is the whole point. If any test here gets anything other than 403, the
+// nginx deny rule is missing or misconfigured and the BFF /internal/ surface is
+// exposed to the public internet.
+//
+// The response body must NOT be JSON. nginx returns a plain HTML error page for
+// `return 403;` directives — the BFF JSON envelope is never reached.
+//
+// tickets#953 / ADR-070
+// ---------------------------------------------------------------------------
+
+test.describe('Staging smoke: /internal/ deny wall returns 403 (tickets#953)', () => {
+  test('GET /internal/health returns 403 without Authorization header @smoke', async ({ request }) => {
+    const res = await request.get(`${STAGING_API}/internal/health`, {
+      // Deliberately no Authorization header — this is an unauthenticated probe.
+      headers: {},
+    });
+    expect(
+      res.status(),
+      `GET /internal/health returned ${res.status()} — nginx deny rule missing or misconfigured (ADR-070)`,
+    ).toBe(403);
+  });
+
+  test('GET /internal/v1/anything returns 403 without Authorization header @smoke', async ({ request }) => {
+    const res = await request.get(`${STAGING_API}/internal/v1/anything`, {
+      headers: {},
+    });
+    expect(
+      res.status(),
+      `GET /internal/v1/anything returned ${res.status()} — nginx deny rule not covering /internal/v1/* (ADR-070)`,
+    ).toBe(403);
+  });
+
+  test('/internal/health response body is not JSON (nginx deny page, not BFF envelope) @smoke', async ({ request }) => {
+    const res = await request.get(`${STAGING_API}/internal/health`, {
+      headers: {},
+    });
+    // Status must be 403 — nginx deny rule active.
+    expect(
+      res.status(),
+      `GET /internal/health returned ${res.status()} — expected 403 from nginx deny rule (ADR-070)`,
+    ).toBe(403);
+    const text = await res.text();
+    // nginx `return 403` emits a plain HTML error page — assert it is NOT a JSON object.
+    expect(
+      text,
+      '/internal/health response body looks like JSON — nginx deny rule bypassed, BFF handler reached',
+    ).not.toMatch(/^\s*\{/);
+  });
+});
