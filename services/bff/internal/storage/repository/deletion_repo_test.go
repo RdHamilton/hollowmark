@@ -86,6 +86,10 @@ var knownUserKeyedTables = map[string]string{
 	"consent_log": "anonymize",
 	// Retained by design (compliance evidence, no PII)
 	"deletion_audit_log": "retain",
+	// Retained by design (compliance evidence; user_id stored as audit record,
+	// no FK to users, survives Art.17 erasure -- same rationale as deletion_audit_log).
+	// NOT returned to the subject (Art.15 export excludes it).
+	"dsr_access_log": "retain",
 	// Email-keyed explicit DELETE
 	"waitlist_entries": "explicit",
 }
