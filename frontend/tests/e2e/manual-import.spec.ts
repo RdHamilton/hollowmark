@@ -310,32 +310,37 @@ test.describe('Manual-Import: settings import-export section gate', () => {
 // Do NOT convert these to test.skip — test.fixme keeps them visible.
 // ---------------------------------------------------------------------------
 
-test.describe('Manual-Import: upload happy path (#895 pending)', () => {
+test.describe('Manual-Import: upload happy path', () => {
   test.beforeEach(async ({ page }) => {
     await setClerkSignedIn(page);
     await mockCollectionEndpointsWithData(page);
     await mockImportEndpoint(page);
+    // Mock settings endpoint so the Settings page doesn't call a real BFF.
+    await page.route('**/api/v1/settings', (route) => {
+      if (route.request().method() === 'GET') {
+        void route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ data: {} }),
+        });
+        return;
+      }
+      void route.continue();
+    });
   });
 
   test('user uploads golden-fixture CSV and collection becomes browsable @smoke',
     async ({ page }) => {
-      // AC1 of #901: user uploads → import succeeds → collection is browsable.
-      // FIXME: activate when Frank lands #895 (manual-import UI).
-      // Remove test.fixme() and wire up the real selectors from #895.
-      test.fixme(
-        true,
-        'Pending #895 (Frank) — manual-import UI not yet implemented',
-      );
+      // AC1 of #901/#895: user uploads → import succeeds → collection is browsable.
 
       // Navigate to the import entry point.
       await page.goto('/settings');
       await page.waitForURL('**/settings');
-      await page.click('[data-testid="settings-accordion-export"]');
+      // Open the export/import accordion section (button id: accordion-header-export).
+      await page.click('#accordion-header-export');
 
       // The import file input should be visible.
-      const fileInput = page.locator(
-        '[data-testid="manual-import-file-input"]',
-      );
+      const fileInput = page.locator('[data-testid="manual-import-file-input"]');
       await expect(fileInput).toBeVisible();
 
       // Upload the golden fixture.
@@ -363,15 +368,10 @@ test.describe('Manual-Import: upload happy path (#895 pending)', () => {
   test('import with invalid file shows validation error', async ({ page }) => {
     // AC1 failure mode: uploading a non-MTGA file must show a validation
     // error rather than silently producing a corrupt collection.
-    // FIXME: activate when Frank lands #895.
-    test.fixme(
-      true,
-      'Pending #895 (Frank) — manual-import UI not yet implemented',
-    );
 
     await page.goto('/settings');
     await page.waitForURL('**/settings');
-    await page.click('[data-testid="settings-accordion-export"]');
+    await page.click('#accordion-header-export');
 
     const fileInput = page.locator('[data-testid="manual-import-file-input"]');
     await expect(fileInput).toBeVisible();
@@ -397,11 +397,6 @@ test.describe('Manual-Import: upload happy path (#895 pending)', () => {
     // Regression guard: if the BFF import endpoint returns 500, the SPA must
     // surface a user-facing error rather than silently leaving the collection
     // unchanged.
-    // FIXME: activate when Frank lands #895.
-    test.fixme(
-      true,
-      'Pending #895 (Frank) — manual-import UI not yet implemented',
-    );
 
     await mockImportEndpoint(page, {
       status: 500,
@@ -410,7 +405,7 @@ test.describe('Manual-Import: upload happy path (#895 pending)', () => {
 
     await page.goto('/settings');
     await page.waitForURL('**/settings');
-    await page.click('[data-testid="settings-accordion-export"]');
+    await page.click('#accordion-header-export');
 
     const fileInput = page.locator('[data-testid="manual-import-file-input"]');
     await fileInput.setInputFiles(FIXTURE_PATH);

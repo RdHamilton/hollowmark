@@ -187,7 +187,11 @@ func main() {
 	// POSTHOG_API_KEY (sourced from SSM /vaultmtg/app/production/posthog-api-key
 	// at deploy time).  When empty, PostHog is disabled — a no-op client is used
 	// so all handler code paths are always exercised.  The key is never logged.
-	var analyticsClient *analytics.Client
+	//
+	// The PostHog enqueuer is resolved here; the analytics.Client is built
+	// after the DB pool is open so DBHaltChecker (#890) can be wired into both
+	// branches.  When no DB is available (development), NoopHaltChecker is used.
+	var phEnqueuer analytics.PostHogEnqueuer
 	if cfg.PostHogAPIKey != "" {
 		phClient, err := posthoglib.NewWithConfig(cfg.PostHogAPIKey, posthoglib.Config{
 			Endpoint: cfg.PostHogHost,
@@ -200,12 +204,15 @@ func main() {
 				log.Printf("posthog close: %v", err)
 			}
 		}()
-		analyticsClient = analytics.NewClient(phClient, analytics.NewNoopHaltChecker())
+		phEnqueuer = phClient
 		log.Println("PostHog initialised.")
 	} else {
-		analyticsClient = analytics.NewClient(analytics.NoopEnqueuer{}, analytics.NewNoopHaltChecker())
+		phEnqueuer = analytics.NoopEnqueuer{}
 		log.Println("POSTHOG_API_KEY not set — PostHog disabled (development mode only).")
 	}
+	// analyticsClient is finalised after the DB pool opens so DBHaltChecker
+	// can be wired. Until then it uses NoopHaltChecker as a safe default.
+	analyticsClient := analytics.NewClient(phEnqueuer, analytics.NewNoopHaltChecker())
 
 	broker := sse.New()
 
@@ -277,6 +284,10 @@ func main() {
 		wildcardRecommendationsHandler    *handlers.WildcardRecommendationsHandler
 		consentHandler                    *handlers.ConsentHandler
 		dataExportHandler                 *handlers.DataExportHandler
+		collectionImportHandler           *handlers.CollectionImportHandler
+		restrictionHandler                *handlers.RestrictionHandler
+		adminRestrictionHandler           *handlers.AdminRestrictionHandler
+		accountProfileHandler             *handlers.AccountProfileHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -294,6 +305,18 @@ func main() {
 		if err := sqlDB.PingContext(pingCtx); err != nil {
 			log.Fatalf("db ping: %v", err)
 		}
+
+		// Wire the real DBHaltChecker now that the DB pool is open (#890).
+		// This replaces the NoopHaltChecker wired at analytics.Client construction
+		// time (before sqlDB was available).  Both the real-PostHog branch and the
+		// NoopEnqueuer branch get the same DBHaltChecker so neither branch is a
+		// restriction bypass (Ray's correction: replace BOTH NewNoopHaltChecker calls).
+		analyticsClient = analytics.NewClient(phEnqueuer, repository.NewDBHaltChecker(sqlDB))
+		// Re-wire the ingestHandler with the updated analyticsClient so it also
+		// benefits from real halt checking (ingest is already constructed above with
+		// the noop; .WithAnalyticsClient returns a new value, not a mutation).
+		ingestHandler = ingestHandler.WithAnalyticsClient(analyticsClient)
+		log.Println("Analytics DBHaltChecker (#890) wired.")
 
 		apiKeyRepo := repository.NewAPIKeyRepository(sqlDB)
 		apiKeysHandler = handlers.NewAPIKeysHandler(apiKeyRepo)
@@ -323,6 +346,16 @@ func main() {
 		// .claude/plans/spa-route-migration.md.
 		collectionRepo := repository.NewCollectionRepository(sqlDB)
 		collectionHandler = handlers.NewCollectionHandler(collectionRepo, accountRepo)
+
+		// #895 — POST /api/v1/collection/import (manual collection import, D3).
+		// Resolves MTGA Arena export lines to arena_ids via set_cards, then
+		// upserts into card_inventory using the existing UpsertDelta path.
+		// Clerk-auth-guarded; session-derived account, no client id.
+		cardSetResolver := repository.NewCardSetResolver(sqlDB)
+		cardInventoryWriterForImport := repository.NewCardInventoryRepository(sqlDB)
+		collectionImportHandler = handlers.NewCollectionImportHandler(
+			cardSetResolver, cardInventoryWriterForImport, accountRepo,
+		)
 
 		// Phase 2 PR #3 — /api/v1/quests surface (active/history/wins/stats).
 		// QuestRepository was previously write-only (projection worker writes);
@@ -522,6 +555,38 @@ func main() {
 			accountRepo,
 		)
 
+		// RestrictionHandler + AdminRestrictionHandler — GDPR Art.18 Right to
+		// Restriction (#890). User-facing: POST/DELETE /api/v1/account/restrict-processing.
+		// Admin-facing: POST/DELETE /admin/account/{userID}/restrict-processing.
+		// Both write restriction_audit_log rows (actor='user'|'admin').
+		restrictionRepo := repository.NewRestrictionRepository(sqlDB)
+		restrictionHandler = handlers.NewRestrictionHandler(restrictionRepo, accountRepo)
+		adminRestrictionHandler = handlers.NewAdminRestrictionHandler(restrictionRepo, accountRepo)
+
+		// AccountProfileHandler — PATCH /api/v1/account/profile (#888).
+		// GDPR Art.16 Right to Rectification: atomic audit log (PII-hashed, salted) +
+		// users.email sync from Clerk-verified primary address (PR #3099 revision).
+		//
+		// rectifySvc: RectificationService wraps both writes in a single *sql.Tx so
+		// that the audit INSERT and the users.email UPDATE are committed or rolled
+		// back together (Bianca V1 BLOCK fix — a real shared transaction).
+		// It also satisfies rectificationAuditWriter for the display_name path.
+		//
+		// piiSalt: reuses cfg.AnalyticsPIISalt (SSM /vaultmtg/{env}/analytics-pii-salt)
+		// — no new SSM parameter (Bianca V2 fix: HashPII with existing salt).
+		//
+		// clerkFetcher: same *ClerkProfileFetcher used above for DataExportHandler.
+		// When nil (local dev without CLERK_SECRET_KEY), email-change requests fail
+		// closed with 500 rather than trusting the client body (Sarah F2 fix).
+		rectifySvc := repository.NewRectificationService(sqlDB)
+		accountProfileHandler = handlers.NewAccountProfileHandler(
+			rectifySvc,
+			rectifySvc,
+			accountRepo,
+			cfg.AnalyticsPIISalt,
+			clerkFetcher,
+		)
+
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
 		// userRepo was created above for daemonRegisterHandler/daemonAPIKeyAuthMiddl.
 		clerkUserResolver = bffmiddleware.ClerkUserResolver(userRepo)
@@ -615,6 +680,10 @@ func main() {
 		WildcardRecommendationsHandler:    wildcardRecommendationsHandler,
 		ConsentHandler:                    consentHandler,
 		DataExportHandler:                 dataExportHandler,
+		CollectionImportHandler:           collectionImportHandler,
+		RestrictionHandler:                restrictionHandler,
+		AdminRestrictionHandler:           adminRestrictionHandler,
+		AccountProfileHandler:             accountProfileHandler,
 		HealthzHandler:                    healthzHandler,
 		ClerkAuthMiddl:                    clerkAuthMiddl,
 		ClerkAuthSSEMiddl:                 clerkAuthSSEMiddl,
@@ -780,6 +849,28 @@ type RouterDeps struct {
 	// Synchronous GDPR Art.15 Right of Access export; rate-limited 1/24h/user.
 	// Protected by composeClerkAuth.
 	DataExportHandler *handlers.DataExportHandler
+	// CollectionImportHandler serves POST /api/v1/collection/import (#895).
+	// Accepts a multipart/form-data file in the MTGA Arena export format,
+	// resolves each row to an arena_id via set_cards, and upserts into
+	// card_inventory via UpsertDelta. Clerk-auth-guarded (session-derived
+	// account, no client id). S-07 §1A applies (lives in bff/cmd).
+	CollectionImportHandler *handlers.CollectionImportHandler
+	// RestrictionHandler serves GDPR Art.18 Right to Restriction endpoints (#890):
+	//   POST   /api/v1/account/restrict-processing   — set restriction for caller.
+	//   DELETE /api/v1/account/restrict-processing   — clear restriction for caller.
+	// Protected by composeClerkAuth. Writes restriction_audit_log (actor='user').
+	RestrictionHandler *handlers.RestrictionHandler
+	// AdminRestrictionHandler serves GDPR Art.18 admin-token-gated endpoints (#890):
+	//   POST   /admin/account/{userID}/restrict-processing
+	//   DELETE /admin/account/{userID}/restrict-processing
+	// Protected by AdminTokenMiddl. Writes restriction_audit_log (actor='admin').
+	AdminRestrictionHandler *handlers.AdminRestrictionHandler
+	// AccountProfileHandler serves PATCH /api/v1/account/profile (#888).
+	// GDPR Art.16 Right to Rectification — writes a rectification audit-log row
+	// (PII-hashed) and syncs users.email so the Art.17 erasure cascade reads
+	// the correct address. date_of_birth_year is rejected with 400 (COPPA-gated).
+	// Protected by composeClerkAuth.
+	AccountProfileHandler *handlers.AccountProfileHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -857,7 +948,7 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// AllowCredentials is true — go-chi/cors enforces this at runtime.
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.AllowedOrigins,
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Request-ID"},
 		AllowCredentials: true,
 	}))
@@ -1040,6 +1131,19 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 			r.With(auth).Get("/api/v1/collection/value", c.Value)
 		} else {
 			log.Println("WARN: /api/v1/collection/* disabled — Clerk auth middleware not configured")
+		}
+	}
+
+	// #895 — POST /api/v1/collection/import — manual collection import (D3).
+	// Mounted inside the same Clerk-auth group as the read surface above.
+	// Literal sub-path /import must be registered after the bare /collection
+	// POST so chi's router resolves it before the catch-all.
+	if deps.CollectionImportHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Post("/api/v1/collection/import", deps.CollectionImportHandler.Import)
+		} else {
+			log.Println("WARN: POST /api/v1/collection/import disabled — Clerk auth middleware not configured")
 		}
 	}
 
@@ -1251,6 +1355,46 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 			r.With(auth).Get("/api/v1/account/data-export", deps.DataExportHandler.Export)
 		} else {
 			log.Println("WARN: GET /api/v1/account/data-export disabled — Clerk auth middleware not configured")
+		}
+	}
+
+	// GDPR Art.18 Right to Restriction — user-facing endpoints (#890).
+	//   POST   /api/v1/account/restrict-processing  — sets processing_restricted_at = NOW()
+	//   DELETE /api/v1/account/restrict-processing  — clears processing_restricted_at = NULL
+	// Both write a restriction_audit_log row with actor='user'.
+	// Protected by composeClerkAuth (Clerk session JWT required).
+	if deps.RestrictionHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Post("/api/v1/account/restrict-processing", deps.RestrictionHandler.SetRestriction)
+			r.With(auth).Delete("/api/v1/account/restrict-processing", deps.RestrictionHandler.ClearRestriction)
+		} else {
+			log.Println("WARN: /api/v1/account/restrict-processing disabled — Clerk auth middleware not configured")
+		}
+	}
+
+	// GDPR Art.18 Right to Restriction — admin-token-gated endpoints (#890).
+	//   POST   /admin/account/{userID}/restrict-processing
+	//   DELETE /admin/account/{userID}/restrict-processing
+	// {userID} is the internal users.id (int64). Both write restriction_audit_log
+	// with actor='admin'. Protected by AdminTokenMiddl (same static Bearer token
+	// used by fleet-health and projection-errors admin endpoints).
+	if deps.AdminRestrictionHandler != nil {
+		r.With(adminMiddl).Post("/admin/account/{userID}/restrict-processing", deps.AdminRestrictionHandler.AdminSetRestriction)
+		r.With(adminMiddl).Delete("/admin/account/{userID}/restrict-processing", deps.AdminRestrictionHandler.AdminClearRestriction)
+	}
+
+	// PATCH /api/v1/account/profile — GDPR Art.16 Right to Rectification (#888).
+	// Writes a PII-hashed rectification audit-log row and syncs users.email so
+	// the Art.17 erasure cascade reads the correct address (Ray Issue 1).
+	// date_of_birth_year is rejected with 400 (COPPA-gated, Ray Issue 2).
+	// Protected by composeClerkAuth (Clerk session JWT required).
+	if deps.AccountProfileHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Patch("/api/v1/account/profile", deps.AccountProfileHandler.Patch)
+		} else {
+			log.Println("WARN: PATCH /api/v1/account/profile disabled — Clerk auth middleware not configured")
 		}
 	}
 

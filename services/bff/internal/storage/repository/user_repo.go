@@ -67,6 +67,21 @@ func (r *UserRepository) UpdateCOPPAColumns(ctx context.Context, userID int64, d
 	return nil
 }
 
+// UpdateEmail updates the email column for the users row identified by userID.
+//
+// This is mandatory for GDPR Art.16 Right to Rectification (#888, Ray Issue 1):
+// JIT provisioning inserts a "@clerk.local" placeholder that is never auto-synced from
+// Clerk. The Art.17 erasure cascade reads users.email at deletion_repo.go:33 — a stale
+// value breaks the erasure. Callers must invoke this after InsertRectificationEvent so
+// the DB value is always consistent with Clerk's source-of-truth.
+func (r *UserRepository) UpdateEmail(ctx context.Context, userID int64, email string) error {
+	const q = `UPDATE users SET email = $2 WHERE id = $1`
+	if _, err := r.db.ExecContext(ctx, q, userID, email); err != nil {
+		return fmt.Errorf("UserRepository.UpdateEmail: %w", err)
+	}
+	return nil
+}
+
 // UpsertByClerkUserID inserts a new user row if clerk_user_id is not known, or returns the
 // existing one.  For JIT provisioning the email placeholder "<clerkUserID>@clerk.local" is
 // used on insert; it is overwritten when the user provides a real email later.

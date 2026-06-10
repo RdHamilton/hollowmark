@@ -90,6 +90,16 @@ var knownUserKeyedTables = map[string]string{
 	// no FK to users, survives Art.17 erasure -- same rationale as deletion_audit_log).
 	// NOT returned to the subject (Art.15 export excludes it).
 	"dsr_access_log": "retain",
+	// Retained by design (GDPR Art.18 restriction audit evidence; append-only,
+	// no FK to users, survives Art.17 erasure -- same rationale as deletion_audit_log
+	// and dsr_access_log).
+	"restriction_audit_log": "retain",
+	// Retained by design (GDPR Art.16 rectification evidence; append-only audit log.
+	// No FK to users so the record survives Art.17 erasure — intentional.
+	// Contains only PII-hashed field values (HashPII), never raw PII.
+	// NOT returned to the subject (Art.15 export excludes it).
+	// See migration 000117 and PR #3099).
+	"rectification_audit_log": "retain",
 	// Email-keyed explicit DELETE
 	"waitlist_entries": "explicit",
 }

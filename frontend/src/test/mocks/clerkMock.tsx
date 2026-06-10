@@ -16,6 +16,8 @@ type ClerkTestState = {
   firstName?: string;
   lastName?: string;
   email?: string;
+  /** When true, createdAt is set to 30 s ago (within the 60 s new-user window). */
+  isNewUser?: boolean;
 };
 
 function getTestState(): ClerkTestState {
@@ -107,15 +109,21 @@ export const useUser = () => {
       Promise.resolve({ id: 'email_e2e_stub_001', emailAddress: 'newemail@e2e.test' }),
   };
 
+  // createdAt: if isNewUser is set, place the creation 30 s in the past so the
+  // 60-second recency window in useSignupConsentRecorder fires correctly.
+  const createdAt = state.isNewUser
+    ? new Date(Date.now() - 30_000)
+    : new Date(Date.now() - 120_000); // returning user — outside recency window
   return {
     isLoaded: true,
     isSignedIn: true,
     user: {
-      id: 'user_test_123',
+      id: state.userId ?? 'user_test_123',
       firstName: state.firstName ?? 'Test',
       lastName: state.lastName ?? 'User',
       fullName: `${state.firstName ?? 'Test'} ${state.lastName ?? 'User'}`,
       imageUrl: '',
+      createdAt,
       primaryEmailAddress: { emailAddress: email },
       update: (_params: { firstName?: string; lastName?: string; primaryEmailAddressId?: string }) =>
         Promise.resolve(),

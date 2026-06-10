@@ -20,6 +20,43 @@ func NewClerkProfileFetcher(client *clerkuser.Client) *ClerkProfileFetcher {
 	return &ClerkProfileFetcher{client: client}
 }
 
+// FetchPrimaryEmail returns the primary verified email address for the Clerk
+// user identified by clerkUserID.  It resolves PrimaryEmailAddressID from the
+// EmailAddresses slice, falling back to the first address when primary
+// resolution fails.
+//
+// Returns ("", nil) when the user has no email addresses configured.
+// Returns ("", err) when the Clerk API call fails.
+//
+// Used by AccountProfileHandler (GDPR Art.16, PR #3099 revision — Sarah F2)
+// to obtain the authoritative email value for users.email after the SPA calls
+// Clerk's makePrimary.  The handler never trusts the client-supplied body value.
+func (f *ClerkProfileFetcher) FetchPrimaryEmail(ctx context.Context, clerkUserID string) (string, error) {
+	u, err := f.client.Get(ctx, clerkUserID)
+	if err != nil {
+		return "", fmt.Errorf("ClerkProfileFetcher.FetchPrimaryEmail: %w", err)
+	}
+	if u == nil {
+		return "", nil
+	}
+
+	// Resolve via PrimaryEmailAddressID.
+	if u.PrimaryEmailAddressID != nil {
+		for _, ea := range u.EmailAddresses {
+			if ea != nil && ea.ID == *u.PrimaryEmailAddressID {
+				return ea.EmailAddress, nil
+			}
+		}
+	}
+
+	// Fallback: first address when primary resolution failed.
+	if len(u.EmailAddresses) > 0 && u.EmailAddresses[0] != nil {
+		return u.EmailAddresses[0].EmailAddress, nil
+	}
+
+	return "", nil
+}
+
 // FetchClerkProfile fetches the user's Clerk profile and extracts the fields
 // required for the Art.15 export: primary email, first name, last name, and
 // account creation timestamp.
