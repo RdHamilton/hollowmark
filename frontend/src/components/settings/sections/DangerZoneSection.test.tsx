@@ -437,4 +437,153 @@ describe('DangerZoneSection — account deletion (#887)', () => {
       expect(screen.getByTestId('account-deletion-polling')).toBeInTheDocument();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Copy-correctness tests (#887 follow-up) — assert no email promises remain
+  // ---------------------------------------------------------------------------
+
+  it('terminal-success copy: no email promise, says scheduled and within 30 days', async () => {
+    const mockStatus: AccountDeletionStatusResponse = {
+      job_id: 'job-copy',
+      status: 'completed',
+      requested_at: '2026-06-10T00:00:00Z',
+    };
+    const onDeleteAccount = vi.fn().mockResolvedValue({ job_id: 'job-copy' });
+    const onGetDeletionStatus = vi.fn().mockResolvedValue(mockStatus);
+
+    vi.useFakeTimers();
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={onDeleteAccount}
+        onGetDeletionStatus={onGetDeletionStatus}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: /Delete my account/i }));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+    vi.useRealTimers();
+
+    const successEl = await waitFor(() => screen.getByTestId('account-deletion-success'));
+    expect(successEl).toHaveTextContent(/scheduled/i);
+    expect(successEl).toHaveTextContent(/30 days/i);
+    expect(successEl).not.toHaveTextContent(/email/i);
+  });
+
+  it('polling phase copy: no email promise', async () => {
+    const onDeleteAccount = vi.fn().mockResolvedValue({ job_id: 'job-poll-copy' });
+    // onGetDeletionStatus never resolves — keeps the component in polling phase
+    const onGetDeletionStatus = vi.fn().mockReturnValue(new Promise(() => {}));
+
+    vi.useFakeTimers();
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={onDeleteAccount}
+        onGetDeletionStatus={onGetDeletionStatus}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: /Delete my account/i }));
+    });
+
+    vi.useRealTimers();
+
+    const pollingEl = await waitFor(() => screen.getByTestId('account-deletion-polling'));
+    expect(pollingEl).not.toHaveTextContent(/email/i);
+  });
+
+  it('DELETE transport error copy: no email promise, says contact support', async () => {
+    const onDeleteAccount = vi.fn().mockRejectedValue(new Error('network error'));
+    const onGetDeletionStatus = vi.fn();
+
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={onDeleteAccount}
+        onGetDeletionStatus={onGetDeletionStatus}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: /Delete my account/i }));
+    });
+
+    const errorEl = await waitFor(() => screen.getByTestId('account-deletion-error'));
+    expect(errorEl).toHaveTextContent(/contact support/i);
+    expect(errorEl).not.toHaveTextContent(/email/i);
+  });
+
+  it('status GET transport error copy: no email promise, says contact support', async () => {
+    const onDeleteAccount = vi.fn().mockResolvedValue({ job_id: 'job-2-copy' });
+    const onGetDeletionStatus = vi.fn().mockRejectedValue(new Error('503'));
+
+    vi.useFakeTimers();
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={onDeleteAccount}
+        onGetDeletionStatus={onGetDeletionStatus}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: /Delete my account/i }));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+    vi.useRealTimers();
+
+    const errorEl = await waitFor(() => screen.getByTestId('account-deletion-error'));
+    expect(errorEl).toHaveTextContent(/contact support/i);
+    expect(errorEl).not.toHaveTextContent(/email/i);
+  });
+
+  it('poll-cap-timeout copy: no email promise, says still processing and close this page', async () => {
+    const onDeleteAccount = vi.fn().mockResolvedValue({ job_id: 'job-cap-copy' });
+    const pendingStatus: AccountDeletionStatusResponse = {
+      job_id: 'job-cap-copy',
+      status: 'pending',
+      requested_at: '2026-06-10T00:00:00Z',
+    };
+    const onGetDeletionStatus = vi.fn().mockResolvedValue(pendingStatus);
+
+    vi.useFakeTimers();
+    render(
+      <DangerZoneSection
+        {...baseProps}
+        onDeleteAccount={onDeleteAccount}
+        onGetDeletionStatus={onGetDeletionStatus}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('danger-zone-delete-account-button'));
+    const dialog = screen.getByRole('dialog');
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: /Delete my account/i }));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(605_000);
+    });
+    vi.useRealTimers();
+
+    const errorEl = await waitFor(() => screen.getByTestId('account-deletion-error'));
+    expect(errorEl).toHaveTextContent(/still processing/i);
+    expect(errorEl).toHaveTextContent(/close this page/i);
+    expect(errorEl).not.toHaveTextContent(/email/i);
+  });
 });
