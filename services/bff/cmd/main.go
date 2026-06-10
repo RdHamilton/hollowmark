@@ -287,6 +287,7 @@ func main() {
 		collectionImportHandler           *handlers.CollectionImportHandler
 		restrictionHandler                *handlers.RestrictionHandler
 		adminRestrictionHandler           *handlers.AdminRestrictionHandler
+		accountProfileHandler             *handlers.AccountProfileHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -562,6 +563,14 @@ func main() {
 		restrictionHandler = handlers.NewRestrictionHandler(restrictionRepo, accountRepo)
 		adminRestrictionHandler = handlers.NewAdminRestrictionHandler(restrictionRepo, accountRepo)
 
+		// AccountProfileHandler — PATCH /api/v1/account/profile (#888).
+		// GDPR Art.16 Right to Rectification: audit log (PII-hashed) + users.email sync.
+		accountProfileHandler = handlers.NewAccountProfileHandler(
+			repository.NewRectificationAuditRepository(sqlDB),
+			userRepo,
+			accountRepo,
+		)
+
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
 		// userRepo was created above for daemonRegisterHandler/daemonAPIKeyAuthMiddl.
 		clerkUserResolver = bffmiddleware.ClerkUserResolver(userRepo)
@@ -658,6 +667,7 @@ func main() {
 		CollectionImportHandler:           collectionImportHandler,
 		RestrictionHandler:                restrictionHandler,
 		AdminRestrictionHandler:           adminRestrictionHandler,
+		AccountProfileHandler:             accountProfileHandler,
 		HealthzHandler:                    healthzHandler,
 		ClerkAuthMiddl:                    clerkAuthMiddl,
 		ClerkAuthSSEMiddl:                 clerkAuthSSEMiddl,
@@ -839,6 +849,12 @@ type RouterDeps struct {
 	//   DELETE /admin/account/{userID}/restrict-processing
 	// Protected by AdminTokenMiddl. Writes restriction_audit_log (actor='admin').
 	AdminRestrictionHandler *handlers.AdminRestrictionHandler
+	// AccountProfileHandler serves PATCH /api/v1/account/profile (#888).
+	// GDPR Art.16 Right to Rectification — writes a rectification audit-log row
+	// (PII-hashed) and syncs users.email so the Art.17 erasure cascade reads
+	// the correct address. date_of_birth_year is rejected with 400 (COPPA-gated).
+	// Protected by composeClerkAuth.
+	AccountProfileHandler *handlers.AccountProfileHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -916,7 +932,7 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// AllowCredentials is true — go-chi/cors enforces this at runtime.
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.AllowedOrigins,
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Request-ID"},
 		AllowCredentials: true,
 	}))
@@ -1351,6 +1367,21 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 		r.With(adminMiddl).Post("/admin/account/{userID}/restrict-processing", deps.AdminRestrictionHandler.AdminSetRestriction)
 		r.With(adminMiddl).Delete("/admin/account/{userID}/restrict-processing", deps.AdminRestrictionHandler.AdminClearRestriction)
 	}
+
+	// PATCH /api/v1/account/profile — GDPR Art.16 Right to Rectification (#888).
+	// Writes a PII-hashed rectification audit-log row and syncs users.email so
+	// the Art.17 erasure cascade reads the correct address (Ray Issue 1).
+	// date_of_birth_year is rejected with 400 (COPPA-gated, Ray Issue 2).
+	// Protected by composeClerkAuth (Clerk session JWT required).
+	if deps.AccountProfileHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Patch("/api/v1/account/profile", deps.AccountProfileHandler.Patch)
+		} else {
+			log.Println("WARN: PATCH /api/v1/account/profile disabled — Clerk auth middleware not configured")
+		}
+	}
+
 
 	// ADR-045 §6 — wildcard recommendations scaffold (ticket #416, v0.3.7).
 	// GET /api/v1/recommendations/wildcards — returns 501 stub with the complete
