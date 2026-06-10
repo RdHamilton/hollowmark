@@ -130,9 +130,20 @@ func (r *AccountRepository) GetOrCreateByClientID(ctx context.Context, clientID 
 	}
 
 	// Insert a minimal account row linked to the authenticated user.
+	// account_id_hash is populated at INSERT time from users.clerk_user_id via a
+	// subquery — this ensures DBHaltChecker.IsHalted can match the runtime value
+	// produced by identityhash.HashAccountID(clerkUserID) (same SHA-256 hex[:16]
+	// formula).  Rows whose user has a NULL clerk_user_id get a NULL hash; those
+	// are backfilled when the user authenticates and the daemon re-pairs.
 	const insertQ = `
-		INSERT INTO accounts (name, client_id, user_id)
-		VALUES ($1, $2, $3)
+		INSERT INTO accounts (name, client_id, user_id, account_id_hash)
+		SELECT $1, $2, $3,
+		       CASE WHEN u.clerk_user_id IS NOT NULL
+		            THEN substr(encode(digest(u.clerk_user_id, 'sha256'), 'hex'), 1, 16)
+		            ELSE NULL
+		       END
+		  FROM users u
+		 WHERE u.id = $3
 		ON CONFLICT DO NOTHING
 		RETURNING id`
 
