@@ -37,6 +37,7 @@ import {
   useSettings,
 } from '../hooks';
 import { uninstallDaemon } from '../services/api/system';
+import { deleteAccount, getAccountDeletionStatus } from '../services/api/account';
 import './Settings.css';
 
 const Settings = () => {
@@ -241,6 +242,8 @@ const Settings = () => {
               // can render it verbatim in the success panel.
               return response.message;
             }}
+            onDeleteAccount={deleteAccount}
+            onGetDeletionStatus={getAccountDeletionStatus}
           />
         ),
       },
