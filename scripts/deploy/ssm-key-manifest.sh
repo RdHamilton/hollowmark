@@ -39,7 +39,7 @@
 #
 # -----------------------------------------------------------------------
 
-MANIFEST_KEY_COUNT=19
+MANIFEST_KEY_COUNT=20
 
 # 0 -- ALLOWED_ORIGINS
 MANIFEST_KEY_0_NAME=ALLOWED_ORIGINS
@@ -170,3 +170,17 @@ MANIFEST_KEY_18_NAME=ANALYTICS_PII_SALT
 MANIFEST_KEY_18_SSM_VAR=SSM_PROD_ANALYTICS_PII_SALT
 MANIFEST_KEY_18_TYPE=secret
 MANIFEST_KEY_18_SCOPE=both
+
+# 19 -- INTERNAL_SVC_SECRET (ADR-070, tickets #951/#952, PR #3121)
+#   HMAC JWT signing secret for internal service-to-service auth.
+#   Required at BFF startup in production and staging -- missing value aborts config.Load().
+#   Path differs per env: prod uses SSM_PROD_INTERNAL_SVC_SECRET;
+#   staging uses SSM_STAGING_INTERNAL_SVC_SECRET.
+#   The SSM_VAR here names the PROD path; provision-staging-env.sh overrides
+#   this entry's SSM_VAR to SSM_STAGING_INTERNAL_SVC_SECRET for the staging loop.
+#   NOT bootstrap-carried (Option A): provisioned by the manifest-driven deploy loop
+#   on both prod and staging.
+MANIFEST_KEY_19_NAME=INTERNAL_SVC_SECRET
+MANIFEST_KEY_19_SSM_VAR=SSM_PROD_INTERNAL_SVC_SECRET
+MANIFEST_KEY_19_TYPE=secret
+MANIFEST_KEY_19_SCOPE=both

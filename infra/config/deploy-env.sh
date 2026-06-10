@@ -180,6 +180,12 @@ SSM_PROD_DAEMON_JWT_SECRET="/vaultmtg/app/production/daemon-jwt-secret"
 #   missing value causes config.Load() to abort.
 SSM_PROD_ANALYTICS_PII_SALT="/vaultmtg/app/production/analytics-pii-salt"
 
+# Internal service-to-service HMAC JWT secret (ADR-070, tickets #951/#952).
+#   SecureString.  Required at BFF startup in production and staging
+#   (InternalSvcSecret in config.go); missing value causes config.Load() to abort.
+#   Provisioned by infra#345 (Bianca); wired into deploy by PR #3121 (Ben).
+SSM_PROD_INTERNAL_SVC_SECRET="/vaultmtg/app/production/internal-svc-secret"
+
 # ───────────────────────────────────────────────────────────────────────────
 # SSM PARAMETER PATHS — STAGING
 #   All staging BFF-runtime params live under /vaultmtg/app/staging/*.
@@ -205,6 +211,10 @@ SSM_STAGING_DAEMON_JWT_SECRET="/vaultmtg/app/staging/daemon-jwt-secret"
 # Analytics PII salt -- staging mirror of prod (ticket #1597).
 # SecureString. Provisioned alongside the prod param.
 SSM_STAGING_ANALYTICS_PII_SALT="/vaultmtg/app/staging/analytics-pii-salt"
+
+# Internal service-to-service HMAC JWT secret -- staging mirror of prod (tickets #951/#952).
+# SecureString. Provisioned by infra#345 alongside the prod param.
+SSM_STAGING_INTERNAL_SVC_SECRET="/vaultmtg/app/staging/internal-svc-secret"
 
 # Daemon version metadata — staging mirror (see production block above).
 SSM_STAGING_BFF_DAEMON_LATEST_VERSION="/vaultmtg/app/staging/BFF_DAEMON_LATEST_VERSION"

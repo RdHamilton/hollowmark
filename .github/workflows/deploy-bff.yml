@@ -170,10 +170,11 @@ jobs:
     #   the full /vaultmtg/app/staging/* SSM hierarchy (matches ec2.yml IAM Statement 3).
     #   Consumers: deploy-bff.yml (this file, staging path) and staging-replay-gate.yml
     #   (called by staging-deploy.yml after a successful staging deploy).
-    # Production: provision-env.sh + provision-db-url.sh render 10 params in one
+    # Production: provision-env.sh + provision-db-url.sh render 11 params in one
     #   sequential shell command: ALLOWED_ORIGINS, DATABASE_URL (via provision-db-url.sh),
     #   CLERK_SECRET_KEY, CLERK_FRONTEND_API, SENTRY_DSN, POSTHOG_API_KEY, POSTHOG_HOST,
-    #   BFF_DAEMON_LATEST_VERSION, BFF_DAEMON_RELEASED_AT, ANALYTICS_PII_SALT (#1597).
+    #   BFF_DAEMON_LATEST_VERSION, BFF_DAEMON_RELEASED_AT, ANALYTICS_PII_SALT (#1597),
+    #   INTERNAL_SVC_SECRET (#952).
     # Credentials are read ON the EC2 instance under its IAM role — never on the runner.
     # deploy-env.sh (canonical SSM paths + service names) is downloaded first so
     # all EC2-side scripts can source it via `. /tmp/deploy-env.sh`.
@@ -192,7 +193,7 @@ jobs:
           # here.  Fixed by adding the two cp calls before the chmod+run sequence.
           PROVISION_CMD="${FETCH_CONFIG} && aws s3 cp s3://${RESOLVED_BUCKET}/scripts/provision-lib.sh /tmp/provision-lib.sh && aws s3 cp s3://${RESOLVED_BUCKET}/scripts/ssm-key-manifest.sh /tmp/ssm-key-manifest.sh && aws s3 cp s3://${RESOLVED_BUCKET}/scripts/provision-staging-env.sh /tmp/provision-staging-env.sh && chmod +x /tmp/provision-staging-env.sh && /tmp/provision-staging-env.sh"
         else
-          PROVISION_CMD="${FETCH_CONFIG} && aws s3 cp s3://${RESOLVED_BUCKET}/scripts/provision-env.sh /tmp/provision-env.sh && chmod +x /tmp/provision-env.sh && aws s3 cp s3://${RESOLVED_BUCKET}/scripts/provision-db-url.sh /tmp/provision-db-url.sh && chmod +x /tmp/provision-db-url.sh && /tmp/provision-env.sh ALLOWED_ORIGINS /vaultmtg/app/production/ALLOWED_ORIGINS && /tmp/provision-db-url.sh && /tmp/provision-env.sh CLERK_SECRET_KEY /vaultmtg/app/production/CLERK_SECRET_KEY --with-decryption && /tmp/provision-env.sh CLERK_FRONTEND_API /vaultmtg/app/production/CLERK_FRONTEND_API && /tmp/provision-env.sh SENTRY_DSN /vaultmtg/app/production/sentry-dsn-bff --with-decryption && /tmp/provision-env.sh POSTHOG_API_KEY /vaultmtg/app/production/posthog-api-key --with-decryption && /tmp/provision-env.sh POSTHOG_HOST /vaultmtg/app/production/posthog-host && /tmp/provision-env.sh BFF_DAEMON_LATEST_VERSION /vaultmtg/app/production/BFF_DAEMON_LATEST_VERSION && /tmp/provision-env.sh BFF_DAEMON_RELEASED_AT /vaultmtg/app/production/BFF_DAEMON_RELEASED_AT && /tmp/provision-env.sh ANALYTICS_PII_SALT /vaultmtg/app/production/analytics-pii-salt --with-decryption"
+          PROVISION_CMD="${FETCH_CONFIG} && aws s3 cp s3://${RESOLVED_BUCKET}/scripts/provision-env.sh /tmp/provision-env.sh && chmod +x /tmp/provision-env.sh && aws s3 cp s3://${RESOLVED_BUCKET}/scripts/provision-db-url.sh /tmp/provision-db-url.sh && chmod +x /tmp/provision-db-url.sh && /tmp/provision-env.sh ALLOWED_ORIGINS /vaultmtg/app/production/ALLOWED_ORIGINS && /tmp/provision-db-url.sh && /tmp/provision-env.sh CLERK_SECRET_KEY /vaultmtg/app/production/CLERK_SECRET_KEY --with-decryption && /tmp/provision-env.sh CLERK_FRONTEND_API /vaultmtg/app/production/CLERK_FRONTEND_API && /tmp/provision-env.sh SENTRY_DSN /vaultmtg/app/production/sentry-dsn-bff --with-decryption && /tmp/provision-env.sh POSTHOG_API_KEY /vaultmtg/app/production/posthog-api-key --with-decryption && /tmp/provision-env.sh POSTHOG_HOST /vaultmtg/app/production/posthog-host && /tmp/provision-env.sh BFF_DAEMON_LATEST_VERSION /vaultmtg/app/production/BFF_DAEMON_LATEST_VERSION && /tmp/provision-env.sh BFF_DAEMON_RELEASED_AT /vaultmtg/app/production/BFF_DAEMON_RELEASED_AT && /tmp/provision-env.sh ANALYTICS_PII_SALT /vaultmtg/app/production/analytics-pii-salt --with-decryption && /tmp/provision-env.sh INTERNAL_SVC_SECRET /vaultmtg/app/production/internal-svc-secret --with-decryption"
         fi
 
         COMMAND_ID=$(aws ssm send-command \

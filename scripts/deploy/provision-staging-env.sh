@@ -69,6 +69,7 @@
 #   BFF_DAEMON_LATEST_VERSION    String        BFF_DAEMON_LATEST_VERSION
 #   BFF_DAEMON_RELEASED_AT       String        BFF_DAEMON_RELEASED_AT
 #   analytics-pii-salt           SecureString  ANALYTICS_PII_SALT  (added by #1597)
+#   internal-svc-secret          SecureString  INTERNAL_SVC_SECRET (added by #952)
 #
 # /vaultmtg/app/staging/* LAMBDA M2M DB-PASSWORD PARAMS (seeded by this script, NOT
 # written to BFF env file -- consumed by Lambda execution roles at deploy time):
@@ -276,6 +277,9 @@ while [ "$i" -lt "$MANIFEST_KEY_COUNT" ]; do
       ;;
     ANALYTICS_PII_SALT)
       SSM_PATH="$SSM_STAGING_ANALYTICS_PII_SALT"
+      ;;
+    INTERNAL_SVC_SECRET)
+      SSM_PATH="$SSM_STAGING_INTERNAL_SVC_SECRET"
       ;;
     *)
       # staging-only entries: the manifest SSM_VAR already points to the staging path.
