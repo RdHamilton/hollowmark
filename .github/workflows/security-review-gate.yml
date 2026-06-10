@@ -101,8 +101,14 @@
 #
 # Fail-closed behaviour: if parent[1] SHA is unavailable (API error), the commit
 # falls through to the files[] scan (over-stale direction). If the compare call
-# fails, MERGE_CONTRIB is empty -> commit is skipped (may miss a stale; detectable
-# via logs). The single-parent authored path is unchanged and unaffected.
+# fails, MERGE_CONTRIB falls back to COMMIT_FILES (over-stale, not under-stale).
+# The single-parent authored path is unchanged and unaffected.
+#
+# Truncation bound: the compare API silently caps .files[] at 300 entries with no
+# truncated flag. A merge commit touching >300 files with a §1A file at position
+# 301+ would produce a false-clean MERGE_CONTRIB. This is a theoretical limitation;
+# the compare-error fallback to COMMIT_FILES does not address it. Flag to team if
+# any merge is expected to touch >300 files including §1A paths.
 #
 # This eliminates false-positive staleness on update-branch merge commits while
 # preserving gate integrity for real security changes (including evil merges).
@@ -533,16 +539,15 @@ jobs:
                   # Fail-closed guards:
                   #   - PARENT1_SHA empty (API error / no parent[1]) -> falls through to
                   #     the else branch: full files[] check -> over-stale, not under-stale.
-                  #   - compare API error -> MERGE_CONTRIB empty -> skip; fall-through to
-                  #     next commit. Worst case: missed stale on compare failure is possible,
-                  #     but compare failures are detectable in logs. The single-parent path
-                  #     (which has no compare) remains unchanged.
+                  #   - compare API error -> MERGE_CONTRIB falls back to COMMIT_FILES
+                  #     (over-stale, not under-stale). The single-parent path (which has
+                  #     no compare) remains unchanged.
                   # ------------------------------------------------------------------
                   if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
                     echo "  Merge commit: running A' compare/${PARENT1_SHA}...${COMMIT_SHA} scoped to §1A globs..."
 
                     MERGE_CONTRIB=$(gh api "repos/${REPO}/compare/${PARENT1_SHA}...${COMMIT_SHA}" \
-                      --jq '[.files[].filename] | join("\n")' 2>/dev/null || echo "")
+                      --jq '[.files[].filename] | join("\n")' 2>/dev/null || echo "${COMMIT_FILES}")
 
                     echo "  A' compare files: $(echo "${MERGE_CONTRIB}" | tr '\n' ' ')"
 
