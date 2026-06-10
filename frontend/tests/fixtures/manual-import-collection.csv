@@ -1,0 +1,15 @@
+// MTGA in-game collection export format
+// Format: <quantity> <CardName> (<SetCode>) <collectorNumber>
+// This is the golden fixture for manual-import E2E and BFF integration tests.
+// Update this file only when the MTGA export format changes.
+// Covers: commons, uncommons, rares, mythics across two sets (ONE, WOE).
+4 Lightning Bolt (ONS) 197
+4 Counterspell (ME2) 48
+2 Thoughtseize (THS) 107
+1 Teferi, Hero of Dominaria (DAR) 207
+4 Fatal Push (AER) 57
+2 Snapcaster Mage (ISD) 78
+1 Liliana of the Veil (EMN) 93
+4 Path to Exile (CON) 13
+4 Serum Visions (5DN) 125
+2 Cryptic Command (LRW) 56
