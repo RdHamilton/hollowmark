@@ -1051,7 +1051,7 @@ func (s *stubExportDeps) RecordExport(_ context.Context, _ int64) (string, error
 	return "", nil
 }
 
-func (s *stubExportDeps) GatherForUser(_ context.Context, _, _ int64) (*handlers.ExportPayload, error) {
+func (s *stubExportDeps) GatherForUser(_ context.Context, _, _ int64, _ bool) (*handlers.ExportPayload, error) {
 	return &handlers.ExportPayload{}, nil
 }
 

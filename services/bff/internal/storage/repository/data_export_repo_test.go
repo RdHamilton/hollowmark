@@ -133,6 +133,122 @@ func TestExportCoverage_MirrorsFM3(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Art.20 portability subset fitness tests (DB-free)
+//
+// These two tests form the machine-enforced invariants for the portable subset:
+//   1. TestPortableSubset_SubsetOfArt15  — every portable table is also in the
+//      full Art.15 set (portable ⊆ Art.15 — no "portable" table that we somehow
+//      excluded from the access export).
+//   2. TestPortableSubset_ExcludesDerivedTables — derived/inferred/operational
+//      tables are never portable, regardless of what other flags they carry.
+//
+// Both tests are DB-free: they operate on PortableTableNames() and TableNames(),
+// which build their results from the in-process exportTableSpecs slice.
+//
+// Ray approval: #889 comment 4670110499 ("PLAN_VERDICT: APPROVED — with 2 binding
+// boundary corrections"). Conditions 1–2 require card_inventory and
+// recommendation_feedback to appear in ExcludesDerivedTables.
+// ---------------------------------------------------------------------------
+
+// portableArt20Tables is the expected portable subset per Ray's G1 sweep ruling.
+// Used only for documentation; the tests derive ground truth from PortableTableNames().
+// Canonical source: #889 approved plan §2 + Ray ruling conditions 1–2.
+var portableArt20Tables = map[string]bool{
+	"accounts":            true,
+	"collection":          true,
+	"collection_new":      true,
+	"collection_history":  true,
+	"decks":               true,
+	"deck_cards":          true,
+	"deck_notes":          true,
+	"deck_tags":           true,
+	"deck_permutations":   true,
+	"matches":             true,
+	"games":               true,
+	"match_game_results":  true,
+	"draft_sessions":      true,
+	"draft_picks":         true,
+	"draft_packs":         true,
+	"draft_match_results": true,
+	"draft_events":        true,
+	"inventory":           true,
+	"inventory_history":   true,
+	"currency_history":    true,
+	"user_settings":       true,
+	"rank_history":        true,
+	"consent_log":         true,
+}
+
+// derivedNeverPortable is the exhaustive list of tables that must never be
+// portable: derived aggregates, ML outputs, operational logs, and credential
+// tables.  Ray's binding ruling (conditions 1–2) explicitly adds card_inventory
+// and recommendation_feedback.
+var derivedNeverPortable = []string{
+	"player_stats",
+	"matchup_statistics",
+	"game_event_counters",
+	"game_plays",
+	"game_state_snapshots",
+	"opponent_cards_observed",
+	"opponent_deck_profiles",
+	"life_change_tracking",
+	"ml_suggestions",
+	"deck_performance_history",
+	"user_play_patterns",
+	"card_inventory",          // Ray override Q2: derived projection of collection
+	"recommendation_feedback", // Ray override Q1: empty-at-beta / system-computed
+	"projection_errors",
+	"api_keys",
+	"daemon_api_keys",
+	"daemon_events",
+	"quests",
+	"quest_session_tracking",
+}
+
+// TestPortableSubset_SubsetOfArt15 asserts that every table returned by
+// PortableTableNames() is also present in TableNames() (the full Art.15 set).
+// Portable ⊆ Art.15.  A portable table that somehow fell out of the Art.15 set
+// is a data-coverage regression (we would be offering portability of data we no
+// longer include in the access export).
+func TestPortableSubset_SubsetOfArt15(t *testing.T) {
+	repo := repository.NewDataExportRepository(nil, nil) // no DB needed
+
+	art15 := make(map[string]bool)
+	for _, n := range repo.TableNames() {
+		art15[n] = true
+	}
+
+	for _, n := range repo.PortableTableNames() {
+		if !art15[n] {
+			t.Errorf("portable table %q is NOT in the Art.15 set — portable must be a strict subset of Art.15", n)
+		}
+	}
+
+	if t.Failed() {
+		t.Log("Art.15 set:", repo.TableNames())
+		t.Log("Portable set:", repo.PortableTableNames())
+	}
+}
+
+// TestPortableSubset_ExcludesDerivedTables asserts that none of the tables in
+// derivedNeverPortable appear in PortableTableNames().  This is the machine
+// enforcement of Ray's G1 sweep ruling (conditions 1–2).
+func TestPortableSubset_ExcludesDerivedTables(t *testing.T) {
+	repo := repository.NewDataExportRepository(nil, nil) // no DB needed
+
+	portableSet := make(map[string]bool)
+	for _, n := range repo.PortableTableNames() {
+		portableSet[n] = true
+	}
+
+	for _, tbl := range derivedNeverPortable {
+		if portableSet[tbl] {
+			t.Errorf("derived/operational table %q must NOT be portable, but it appears in PortableTableNames()", tbl)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // DSRAccessLogRepository integration tests
 // ---------------------------------------------------------------------------
 
@@ -258,7 +374,7 @@ func TestDataExportRepository_GatherForUser_ReturnsExportWithManifest(t *testing
 	userID, accountID, _ := seedDeletionUser(t, db)
 	ctx := context.Background()
 
-	export, err := exportRepo.GatherForUser(ctx, userID, accountID)
+	export, err := exportRepo.GatherForUser(ctx, userID, accountID, false)
 	if err != nil {
 		t.Fatalf("GatherForUser: %v", err)
 	}
@@ -302,7 +418,7 @@ func TestDataExportRepository_GatherForUser_IsolatesCrossUser(t *testing.T) {
 	ctx := context.Background()
 
 	// Export for user B must not reference user A's account_id_hash.
-	exportB, err := exportRepo.GatherForUser(ctx, userBID, accountBID)
+	exportB, err := exportRepo.GatherForUser(ctx, userBID, accountBID, false)
 	if err != nil {
 		t.Fatalf("GatherForUser userB: %v", err)
 	}
@@ -369,7 +485,7 @@ func TestDataExportRepository_GatherForUser_IncludesClerkProfile(t *testing.T) {
 	}
 
 	exportRepo := repository.NewDataExportRepository(db, fetcher)
-	export, err := exportRepo.GatherForUser(ctx, userID, accountID)
+	export, err := exportRepo.GatherForUser(ctx, userID, accountID, false)
 	if err != nil {
 		t.Fatalf("GatherForUser: %v", err)
 	}
@@ -398,7 +514,7 @@ func TestDataExportRepository_GatherForUser_NilFetcher_OmitsClerkProfile(t *test
 	ctx := context.Background()
 
 	exportRepo := repository.NewDataExportRepository(db, nil)
-	export, err := exportRepo.GatherForUser(ctx, userID, accountID)
+	export, err := exportRepo.GatherForUser(ctx, userID, accountID, false)
 	if err != nil {
 		t.Fatalf("GatherForUser: %v", err)
 	}

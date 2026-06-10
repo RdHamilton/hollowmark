@@ -36,11 +36,13 @@ func (s *stubExportRateLimiter) RecordExport(_ context.Context, userID int64) (s
 
 // stubDataGatherer stubs the data gather operation.
 type stubDataGatherer struct {
-	result *handlers.ExportPayload
-	err    error
+	result           *handlers.ExportPayload
+	err              error
+	capturedPortable bool // set to the portableOnly arg of the most-recent GatherForUser call
 }
 
-func (s *stubDataGatherer) GatherForUser(_ context.Context, _, _ int64) (*handlers.ExportPayload, error) {
+func (s *stubDataGatherer) GatherForUser(_ context.Context, _, _ int64, portableOnly bool) (*handlers.ExportPayload, error) {
+	s.capturedPortable = portableOnly
 	return s.result, s.err
 }
 
@@ -237,6 +239,78 @@ func TestDataExportHandler_ContentDispositionHeader(t *testing.T) {
 	cd := w.Header().Get("Content-Disposition")
 	if cd == "" {
 		t.Error("expected Content-Disposition header, got empty string")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Art.20 portability handler tests
+// ---------------------------------------------------------------------------
+
+// TestDataExportHandler_PortableFormat_SetsFormatField verifies that
+// GET /api/v1/account/data-export?format=portable returns 200 with
+// "format": "portable" in the JSON body, and calls GatherForUser with
+// portableOnly=true.
+func TestDataExportHandler_PortableFormat_SetsFormatField(t *testing.T) {
+	limiter := &stubExportRateLimiter{limited: false}
+	payload := validExportPayload()
+	payload.Format = "portable"
+	gatherer := &stubDataGatherer{result: payload}
+	resolver := &stubExportAccountResolver{accountID: 42, found: true}
+
+	h := handlers.NewDataExportHandler(limiter, gatherer, resolver)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/account/data-export?format=portable", nil)
+	req = req.WithContext(middleware.WithUserID(req.Context(), 1))
+	w := httptest.NewRecorder()
+	h.Export(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("parse response body: %v", err)
+	}
+	format, _ := body["format"].(string)
+	if format != "portable" {
+		t.Errorf("format field: got %q, want \"portable\"", format)
+	}
+	// The handler must call GatherForUser with portableOnly=true.
+	if !gatherer.capturedPortable {
+		t.Error("expected handler to call GatherForUser with portableOnly=true for ?format=portable")
+	}
+}
+
+// TestDataExportHandler_NoFormatParam_IsAccess verifies that
+// GET /api/v1/account/data-export (no param) returns "format": "access" and
+// calls GatherForUser with portableOnly=false.
+func TestDataExportHandler_NoFormatParam_IsAccess(t *testing.T) {
+	limiter := &stubExportRateLimiter{limited: false}
+	gatherer := &stubDataGatherer{result: validExportPayload()} // Format = "access"
+	resolver := &stubExportAccountResolver{accountID: 42, found: true}
+
+	h := handlers.NewDataExportHandler(limiter, gatherer, resolver)
+
+	req := newExportRequest(1)
+	w := httptest.NewRecorder()
+	h.Export(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("parse response body: %v", err)
+	}
+	format, _ := body["format"].(string)
+	if format != "access" {
+		t.Errorf("format field: got %q, want \"access\"", format)
+	}
+	// No format param → portableOnly must be false.
+	if gatherer.capturedPortable {
+		t.Error("expected handler to call GatherForUser with portableOnly=false when no ?format param")
 	}
 }
 
