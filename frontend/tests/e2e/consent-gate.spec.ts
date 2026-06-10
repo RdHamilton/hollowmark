@@ -69,7 +69,7 @@ async function getConsentPostCount(page: Page): Promise<number> {
 // ─── tests ────────────────────────────────────────────────────────────────────
 
 test.describe('Feature: COPPA Consent Gate', () => {
-  test('new user: app content renders after consent POST resolves @smoke', async ({ page }) => {
+  test('new user: app content renders after consent POST resolves', async ({ page }) => {
     await setClerkState(page, { isSignedIn: true, isNewUser: true });
     await page.goto('/draft');
 
