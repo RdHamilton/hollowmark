@@ -11,7 +11,8 @@ import (
 	"sync"
 	"time"
 
-	posthog "github.com/posthog/posthog-go"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/analytics"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/identityhash"
 )
 
 // RC4 note: hashAccountID (posthog.go) uses SHA-256 for PostHog PII hashing.
@@ -85,12 +86,12 @@ type MailchimpClient interface {
 // DB row retaining mailchimp_status='failed' and the handler still returning
 // 200. A future reconciler (separate ticket) picks up failed rows.
 //
-// PostHog: fires funnel_waitlist_signup_completed on the new-email path only.
-// Goroutine-dispatched so PostHog latency does not block the HTTP response.
+// Analytics: fires funnel_waitlist_signup_completed on the new-email path only.
+// Goroutine-dispatched so analytics latency does not block the HTTP response.
 type WaitlistHandler struct {
 	repo      waitlistRepo
 	mailchimp MailchimpClient
-	postHog   PostHogClient
+	analytics *analytics.Client
 	rateMu    sync.Mutex
 	rateByIP  map[string]*waitlistRateEntry
 }
@@ -101,14 +102,19 @@ func NewWaitlistHandler(repo waitlistRepo, mc MailchimpClient) *WaitlistHandler 
 	return &WaitlistHandler{
 		repo:      repo,
 		mailchimp: mc,
-		postHog:   noopPostHogClient{},
+		analytics: analytics.NewClient(analytics.NoopEnqueuer{}, analytics.NewNoopHaltChecker()),
 		rateByIP:  make(map[string]*waitlistRateEntry),
 	}
 }
 
-// WithPostHogClient wires a PostHog client for analytics events.
-func (h *WaitlistHandler) WithPostHogClient(ph PostHogClient) *WaitlistHandler {
-	h.postHog = ph
+// WithPostHogClient is deprecated. Use WithAnalyticsClient instead.
+func (h *WaitlistHandler) WithPostHogClient(ph analytics.PostHogEnqueuer) *WaitlistHandler {
+	return h.WithAnalyticsClient(analytics.NewClient(ph, analytics.NewNoopHaltChecker()))
+}
+
+// WithAnalyticsClient wires an analytics.Client into the handler.
+func (h *WaitlistHandler) WithAnalyticsClient(c *analytics.Client) *WaitlistHandler {
+	h.analytics = c
 	return h
 }
 
@@ -199,22 +205,20 @@ func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
 		}(id, email)
 	}
 
-	// Fire PostHog funnel_waitlist_signup_completed on the new-email path only.
-	// Goroutine-dispatched: PostHog latency must not block the HTTP response.
-	// distinct_id: SHA-256 hash of email — reuses hashAccountID for PII safety.
+	// Fire funnel_waitlist_signup_completed on the new-email path only.
+	// Goroutine-dispatched: analytics latency must not block the HTTP response.
+	// distinct_id: SHA-256 hash of email — uses identityhash for PII safety.
+	// Operational: true — waitlist signup is pre-auth; GDPR §6(1)(f) carve-out.
+	ac := h.analytics
 	go func(addr string, src, medium, campaign, ref *string) {
-		props := posthog.NewProperties().
-			Set("utm_source", strOrEmpty(src)).
-			Set("utm_medium", strOrEmpty(medium)).
-			Set("utm_campaign", strOrEmpty(campaign)).
-			Set("referrer", strOrEmpty(ref))
-
-		if err := h.postHog.Enqueue(posthog.Capture{
-			DistinctId: hashAccountID(addr),
-			Event:      "funnel_waitlist_signup_completed",
-			Properties: props,
-		}); err != nil {
-			log.Printf("[waitlist] posthog enqueue: %v", err)
+		hashedAddr := identityhash.HashAccountID(addr)
+		if err := ac.Capture(context.Background(), hashedAddr, "funnel_waitlist_signup_completed", map[string]any{
+			"utm_source":   strOrEmpty(src),
+			"utm_medium":   strOrEmpty(medium),
+			"utm_campaign": strOrEmpty(campaign),
+			"referrer":     strOrEmpty(ref),
+		}, analytics.CaptureOptions{Operational: true}); err != nil {
+			log.Printf("[waitlist] analytics capture: %v", err)
 		}
 	}(email, utmSource, utmMedium, utmCampaign, referrer)
 

@@ -11,6 +11,7 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("MTGA_ENV", "")
 	t.Setenv("DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CLERK_SECRET_KEY", "sk_test_dummy")
+	t.Setenv("ANALYTICS_PII_SALT", "testsalt")
 	t.Setenv("DRAFT_RATINGS_STALENESS_THRESHOLD_HOURS", "")
 	t.Setenv("DRAFT_RATINGS_BYPASS_FRESHNESS_CHECK", "")
 
@@ -72,6 +73,7 @@ func TestLoad_Env_Production_WithDatabaseURL_OK(t *testing.T) {
 	t.Setenv("MTGA_ENV", "production")
 	t.Setenv("DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CLERK_SECRET_KEY", "sk_test_dummy")
+	t.Setenv("ANALYTICS_PII_SALT", "testsalt")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -489,6 +491,7 @@ func TestLoad_Env_DefaultIsProduction(t *testing.T) {
 	t.Setenv("MTGA_ENV", "")
 	t.Setenv("DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CLERK_SECRET_KEY", "sk_test_dummy")
+	t.Setenv("ANALYTICS_PII_SALT", "testsalt")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -505,6 +508,7 @@ func TestLoad_Env_Staging(t *testing.T) {
 	t.Setenv("MTGA_ENV", "staging")
 	t.Setenv("DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CLERK_SECRET_KEY", "sk_test_dummy")
+	t.Setenv("ANALYTICS_PII_SALT", "testsalt")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -645,5 +649,68 @@ func TestLoad_GitCommit_FromEnv(t *testing.T) {
 
 	if cfg.GitCommit != "abc123def456" {
 		t.Errorf("expected trimmed GitCommit 'abc123def456', got %q", cfg.GitCommit)
+	}
+}
+
+// TestLoad_AnalyticsPIISalt_RequiredInProduction verifies that an unset
+// ANALYTICS_PII_SALT returns an error when MTGA_ENV=production.
+func TestLoad_AnalyticsPIISalt_RequiredInProduction(t *testing.T) {
+	t.Setenv("MTGA_ENV", "production")
+	t.Setenv("DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CLERK_SECRET_KEY", "sk_test_dummy")
+	t.Setenv("ANALYTICS_PII_SALT", "")
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("expected error when MTGA_ENV=production and ANALYTICS_PII_SALT is unset")
+	}
+}
+
+// TestLoad_AnalyticsPIISalt_RequiredInStaging verifies that an unset
+// ANALYTICS_PII_SALT returns an error when MTGA_ENV=staging.
+func TestLoad_AnalyticsPIISalt_RequiredInStaging(t *testing.T) {
+	t.Setenv("MTGA_ENV", "staging")
+	t.Setenv("DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CLERK_SECRET_KEY", "sk_test_dummy")
+	t.Setenv("ANALYTICS_PII_SALT", "")
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("expected error when MTGA_ENV=staging and ANALYTICS_PII_SALT is unset")
+	}
+}
+
+// TestLoad_AnalyticsPIISalt_OptionalInDevelopment verifies that an unset
+// ANALYTICS_PII_SALT is allowed in development mode.
+func TestLoad_AnalyticsPIISalt_OptionalInDevelopment(t *testing.T) {
+	t.Setenv("MTGA_ENV", "development")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("CLERK_SECRET_KEY", "")
+	t.Setenv("ANALYTICS_PII_SALT", "")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("development mode with empty ANALYTICS_PII_SALT should not error: %v", err)
+	}
+
+	if cfg.AnalyticsPIISalt != "" {
+		t.Errorf("expected empty AnalyticsPIISalt, got %q", cfg.AnalyticsPIISalt)
+	}
+}
+
+// TestLoad_AnalyticsPIISalt_FromEnv verifies that ANALYTICS_PII_SALT is
+// surfaced as Config.AnalyticsPIISalt with leading/trailing whitespace trimmed.
+func TestLoad_AnalyticsPIISalt_FromEnv(t *testing.T) {
+	t.Setenv("MTGA_ENV", "development")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("ANALYTICS_PII_SALT", "  supersecretSALT123  ")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.AnalyticsPIISalt != "supersecretSALT123" {
+		t.Errorf("expected trimmed AnalyticsPIISalt 'supersecretSALT123', got %q", cfg.AnalyticsPIISalt)
 	}
 }

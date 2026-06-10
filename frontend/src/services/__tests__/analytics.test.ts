@@ -18,6 +18,9 @@ describe('analytics', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    // Default: simulate a user who has accepted analytics consent.
+    // Tests that specifically verify no-consent behaviour override this.
+    localStorage.setItem('vaultmtg_consent_v1', 'accepted');
   });
 
   it('skips posthog.init when VITE_POSTHOG_KEY is absent', async () => {

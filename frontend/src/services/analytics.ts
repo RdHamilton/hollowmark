@@ -7,6 +7,7 @@
  * Event taxonomy: docs/analytics/event-taxonomy.md
  */
 import posthog from 'posthog-js';
+import { CMPStorageKey, EventConsentCategory } from './analytics-taxonomy.gen';
 
 // ── Initialization ────────────────────────────────────────────────────────────
 
@@ -21,6 +22,11 @@ export function initAnalytics(): void {
   if (!POSTHOG_KEY) return;
   posthog.init(POSTHOG_KEY, {
     api_host: POSTHOG_HOST,
+    // Privacy hardening (ADR-027 §5): disable IP collection, limit person
+    // profiles to identified users only, and honour DNT headers.
+    ip: false,
+    person_profiles: 'identified_only',
+    respect_dnt: true,
     // We fire page_viewed manually so we can attach properties.
     capture_pageview: false,
     // Disable autocapture to keep event taxonomy clean.
@@ -360,23 +366,25 @@ export type AnalyticsEvent =
  */
 export function trackEvent(event: AnalyticsEvent): void {
   if (!initialized) return;
+  // Consent gate (ADR-027 §4): drop analytics-tier events until the user
+  // has accepted analytics cookies. 'necessary' events always fire.
+  const consent = localStorage.getItem(CMPStorageKey);
+  const tier = EventConsentCategory[event.name as keyof typeof EventConsentCategory];
+  if (tier === 'analytics' && consent !== 'accepted') return;
   posthog.capture(event.name, event.properties);
 }
 
 // ── Core helpers ──────────────────────────────────────────────────────────────
 
 /**
- * Capture a PostHog event. No-op when PostHog is not initialized.
- * Never include PII — use opaque Clerk user_id only.
- *
- * @deprecated Prefer `trackEvent` which enforces typed property shapes.
+ * @deprecated Use `trackEvent` which enforces typed property shapes and the
+ * consent gate. This function will be removed in a future PR.
  */
 export function captureEvent(
   name: EventName,
   properties?: Record<string, unknown>,
 ): void {
-  if (!initialized) return;
-  posthog.capture(name, properties);
+  trackEvent({ name, properties } as AnalyticsEvent);
 }
 
 // ── PII hashing (ADR-027) ─────────────────────────────────────────────────────
