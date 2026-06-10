@@ -8,12 +8,15 @@
  *      consent POST is NOT re-sent.
  *   3. Error state: gate renders an error notice with a Retry button when the
  *      consent POST fails.
+ *   6. AC6 (hotfix #884): ClerkProvider receives the localization prop with the
+ *      required "I am 13 or older" age-gate text on the signup consent checkbox.
+ *      Verified via window.__CLERK_LOCALIZATION__ exposed by clerkMock.tsx.
  *
  * Approach (same pattern as auth.spec.ts):
  *   - VITE_CLERK_TEST_MODE=true aliases @clerk/react → clerkMock.tsx
  *   - window.__CLERK_TEST_STATE__ controls Clerk auth state
- *   - We inject window.__CONSENT_TEST_STATE__ to control the consent hook's
- *     behaviour via the test shim injected into clerkMock when the key is set
+ *   - window.__CLERK_LOCALIZATION__ is populated by clerkMock.ClerkProvider
+ *     from the `localization` prop passed by main.tsx (#884)
  *
  * window.__CLERK_TEST_STATE__ extended fields for consent:
  *   {
@@ -130,5 +133,87 @@ test.describe('Feature: COPPA Consent Gate', () => {
     await expect(page.locator('[data-testid="protected-route-prompt"]')).toBeVisible();
     await expect(page.locator('[data-testid="consent-gate-loading"]')).not.toBeVisible();
     await expect(page.locator('[data-testid="consent-gate-error"]')).not.toBeVisible();
+  });
+});
+
+// ─── AC6: 13+ age-gate localization wired to ClerkProvider (#884 hotfix) ─────
+//
+// Strategy: clerkMock.tsx exposes window.__CLERK_LOCALIZATION__ when
+// ClerkProvider receives a `localization` prop.  These tests assert the prop
+// is correctly wired from main.tsx so the real Clerk hosted modal will render
+// "I am 13 or older and I agree to the Terms of Service and Privacy Policy".
+//
+// Note: we cannot assert on the Clerk-hosted modal's DOM text in test mode
+// (the modal is rendered by Clerk CDN behind a real publishable key), so we
+// assert at the prop level via the window sentinel.  The staging re-verify
+// must use a fresh / un-consented account to observe the real Clerk modal.
+
+test.describe('AC6: Signup consent checkbox — 13+ age-gate label (hotfix #884)', () => {
+  test('ClerkProvider receives localization prop on app load', async ({ page }) => {
+    await setClerkState(page, { isSignedIn: false });
+    await page.goto('/');
+
+    // Wait for app to mount
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+
+    // clerkMock exposes the prop via window.__CLERK_LOCALIZATION__
+    const localization = await page.evaluate(() => {
+      return (window as unknown as Record<string, unknown>).__CLERK_LOCALIZATION__;
+    });
+
+    expect(localization).toBeTruthy();
+  });
+
+  test('localization contains signUp.legalConsent.checkbox override', async ({ page }) => {
+    await setClerkState(page, { isSignedIn: false });
+    await page.goto('/');
+
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+
+    const label = await page.evaluate(() => {
+      const loc = (window as unknown as Record<string, unknown>).__CLERK_LOCALIZATION__ as
+        | {
+            signUp?: {
+              legalConsent?: {
+                checkbox?: {
+                  label__termsOfServiceAndPrivacyPolicy?: string;
+                };
+              };
+            };
+          }
+        | undefined;
+      return loc?.signUp?.legalConsent?.checkbox?.label__termsOfServiceAndPrivacyPolicy;
+    });
+
+    expect(label).toBeDefined();
+    expect(label).toMatch(/I am 13 or older/i);
+    expect(label).toMatch(/Terms of Service/i);
+    expect(label).toMatch(/Privacy Policy/i);
+  });
+
+  test('consent label begins with "I am 13 or older and I agree to" (AC1 exact wording)', async ({
+    page,
+  }) => {
+    await setClerkState(page, { isSignedIn: false });
+    await page.goto('/');
+
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+
+    const label = await page.evaluate(() => {
+      const loc = (window as unknown as Record<string, unknown>).__CLERK_LOCALIZATION__ as
+        | {
+            signUp?: {
+              legalConsent?: {
+                checkbox?: {
+                  label__termsOfServiceAndPrivacyPolicy?: string;
+                };
+              };
+            };
+          }
+        | undefined;
+      return loc?.signUp?.legalConsent?.checkbox?.label__termsOfServiceAndPrivacyPolicy ?? '';
+    });
+
+    expect(label).toMatch(/^I am 13 or older and I agree to/i);
   });
 });

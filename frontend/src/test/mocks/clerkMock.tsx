@@ -27,8 +27,20 @@ function getTestState(): ClerkTestState {
   return { isSignedIn: false };
 }
 
-// ClerkProvider — just renders children; no real Clerk context needed
-export const ClerkProvider = ({ children }: { children: React.ReactNode }) => {
+// ClerkProvider — just renders children; no real Clerk context needed.
+// Exposes the received `localization` prop to window.__CLERK_LOCALIZATION__
+// so E2E tests can assert that the 13+ age-gate label override is wired (#884).
+export const ClerkProvider = ({
+  children,
+  localization,
+}: {
+  children: React.ReactNode;
+  localization?: unknown;
+  [key: string]: unknown;
+}) => {
+  if (typeof window !== 'undefined' && localization !== undefined) {
+    (window as unknown as Record<string, unknown>).__CLERK_LOCALIZATION__ = localization;
+  }
   return React.createElement(React.Fragment, null, children);
 };
 
