@@ -12,6 +12,7 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CLERK_SECRET_KEY", "sk_test_dummy")
 	t.Setenv("ANALYTICS_PII_SALT", "testsalt")
+	t.Setenv("INTERNAL_SVC_SECRET", "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd")
 	t.Setenv("DRAFT_RATINGS_STALENESS_THRESHOLD_HOURS", "")
 	t.Setenv("DRAFT_RATINGS_BYPASS_FRESHNESS_CHECK", "")
 
@@ -74,6 +75,7 @@ func TestLoad_Env_Production_WithDatabaseURL_OK(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CLERK_SECRET_KEY", "sk_test_dummy")
 	t.Setenv("ANALYTICS_PII_SALT", "testsalt")
+	t.Setenv("INTERNAL_SVC_SECRET", "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -492,6 +494,7 @@ func TestLoad_Env_DefaultIsProduction(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CLERK_SECRET_KEY", "sk_test_dummy")
 	t.Setenv("ANALYTICS_PII_SALT", "testsalt")
+	t.Setenv("INTERNAL_SVC_SECRET", "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -509,6 +512,7 @@ func TestLoad_Env_Staging(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CLERK_SECRET_KEY", "sk_test_dummy")
 	t.Setenv("ANALYTICS_PII_SALT", "testsalt")
+	t.Setenv("INTERNAL_SVC_SECRET", "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd")
 
 	cfg, err := config.Load()
 	if err != nil {
