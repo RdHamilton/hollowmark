@@ -73,18 +73,11 @@ export default defineConfig({
     ],
   },
   test: {
+    // Explicitly set pool to forks (the vitest 4.x default, made explicit to
+    // match CI intent and avoid silent behaviour changes on future upgrades).
+    pool: 'forks',
     globals: true,
-    environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
-    // API service tests that use msw/node run in Node environment to avoid the
-    // jsdom AbortSignal class mismatch with Node 24's undici fetch validation.
-    // These tests import and exercise the real apiClient (not a mock), so they
-    // do NOT need jsdom DOM APIs. setup.ts conditionally imports jest-dom only
-    // when document exists.
-    environmentMatchGlobs: [
-      ['**/*.integration.test.ts', 'node'],
-      ['**/src/services/api/*.test.ts', 'node'],
-    ],
     // Exclude E2E tests (Playwright) from Vitest
     exclude: [
       '**/node_modules/**',
@@ -104,5 +97,50 @@ export default defineConfig({
         'tests/e2e/', // Exclude E2E tests from coverage
       ],
     },
+    // vitest 4.x removed environmentMatchGlobs. Use test.projects to route
+    // tests to the correct environment.
+    //
+    // API service tests that use msw/node run in the Node environment to avoid
+    // the jsdom AbortSignal class mismatch with Node 24's undici fetch
+    // validation. These tests import and exercise the real apiClient (not a
+    // mock), so they do NOT need jsdom DOM APIs. setup.ts conditionally imports
+    // jest-dom only when document exists.
+    //
+    // Pattern equivalence to the old environmentMatchGlobs rules:
+    //   old: ['**/*.integration.test.ts', 'node']
+    //   old: ['**/src/services/api/*.test.ts', 'node']  (top-level only; __tests__/ not matched)
+    // Both are now covered by the "node" project below.
+    projects: [
+      {
+        // Node environment: integration tests + top-level API service tests.
+        // Matches the same files the old environmentMatchGlobs routed to node.
+        extends: true,
+        test: {
+          name: 'node',
+          environment: 'node',
+          include: [
+            'src/**/*.integration.test.ts',
+            'src/services/api/*.test.ts',
+          ],
+        },
+      },
+      {
+        // jsdom environment: all other component, hook, page, and utility tests.
+        // Explicitly excludes the node-environment files to prevent double-runs.
+        extends: true,
+        test: {
+          name: 'jsdom',
+          environment: 'jsdom',
+          include: [
+            'src/**/*.test.{ts,tsx}',
+            'src/**/*.spec.{ts,tsx}',
+          ],
+          exclude: [
+            'src/**/*.integration.test.ts',
+            'src/services/api/*.test.ts',
+          ],
+        },
+      },
+    ],
   },
 })
