@@ -7,6 +7,80 @@ import (
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
+// ─── RectifyProfileTx atomicity integration test ─────────────────────────────
+// Requires DATABASE_URL + migration 000115 applied.
+// Skipped (not failed) when DATABASE_URL is not set.
+
+// TestRectifyProfileTx_RollbackOnEmailUpdateFailure proves that when the second
+// write (users.email UPDATE) inside RectifyProfileTx fails, the whole transaction
+// is rolled back — the audit INSERT must not be visible after the failure.
+//
+// Failure is induced by supplying an email already owned by another user, which
+// triggers the UNIQUE constraint on users.email and aborts the transaction.
+func TestRectifyProfileTx_RollbackOnEmailUpdateFailure(t *testing.T) {
+	db := openTestDB(t)
+	userRepo := repository.NewUserRepository(db)
+	svc := repository.NewRectificationService(db)
+
+	// Create two users: actor (whose email we attempt to change) and blocker
+	// (who already holds the target email, causing a UNIQUE violation on UPDATE).
+	actorClerkID := "rectify_tx_rollback_actor_" + t.Name()
+	blockerClerkID := "rectify_tx_rollback_blocker_" + t.Name()
+
+	actor, err := userRepo.UpsertByClerkUserID(context.Background(), actorClerkID)
+	if err != nil {
+		t.Fatalf("UpsertByClerkUserID actor: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM rectification_audit_log WHERE user_id = $1`, actor.ID)
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM users WHERE clerk_user_id = $1`, actorClerkID)
+	})
+
+	blocker, err := userRepo.UpsertByClerkUserID(context.Background(), blockerClerkID)
+	if err != nil {
+		t.Fatalf("UpsertByClerkUserID blocker: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM users WHERE clerk_user_id = $1`, blockerClerkID)
+	})
+
+	// conflictEmail is already owned by blocker — the UPDATE on actor will hit
+	// the UNIQUE constraint, causing Postgres to abort the transaction.
+	conflictEmail := blocker.Email
+
+	txErr := svc.RectifyProfileTx(
+		context.Background(),
+		actor.ID,
+		"email",
+		nil,
+		"aabbccdd11223344",
+		conflictEmail,
+	)
+	if txErr == nil {
+		t.Fatal("RectifyProfileTx: expected error (UNIQUE constraint on users.email), got nil")
+	}
+
+	// The audit INSERT must have been rolled back — no row should remain.
+	var count int
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM rectification_audit_log WHERE user_id = $1`,
+		actor.ID,
+	).Scan(&count); err != nil {
+		t.Fatalf("COUNT audit rows: %v", err)
+	}
+	if count != 0 {
+		t.Errorf(
+			"atomicity violated: audit INSERT was NOT rolled back when email UPDATE failed "+
+				"(found %d row(s) in rectification_audit_log for actor.ID=%d)",
+			count, actor.ID,
+		)
+	}
+}
+
 // ─── RectificationRepository integration tests ──────────────────────────────
 // These tests require DATABASE_URL + migration 000115 applied.
 // They are skipped (not failed) when DATABASE_URL is not set (same pattern as

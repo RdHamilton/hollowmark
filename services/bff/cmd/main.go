@@ -567,15 +567,21 @@ func main() {
 		// GDPR Art.16 Right to Rectification: atomic audit log (PII-hashed, salted) +
 		// users.email sync from Clerk-verified primary address (PR #3099 revision).
 		//
+		// rectifySvc: RectificationService wraps both writes in a single *sql.Tx so
+		// that the audit INSERT and the users.email UPDATE are committed or rolled
+		// back together (Bianca V1 BLOCK fix — a real shared transaction).
+		// It also satisfies rectificationAuditWriter for the display_name path.
+		//
 		// piiSalt: reuses cfg.AnalyticsPIISalt (SSM /vaultmtg/{env}/analytics-pii-salt)
 		// — no new SSM parameter (Bianca V2 fix: HashPII with existing salt).
 		//
 		// clerkFetcher: same *ClerkProfileFetcher used above for DataExportHandler.
 		// When nil (local dev without CLERK_SECRET_KEY), email-change requests fail
 		// closed with 500 rather than trusting the client body (Sarah F2 fix).
+		rectifySvc := repository.NewRectificationService(sqlDB)
 		accountProfileHandler = handlers.NewAccountProfileHandler(
-			repository.NewRectificationAuditRepository(sqlDB),
-			userRepo,
+			rectifySvc,
+			rectifySvc,
 			accountRepo,
 			cfg.AnalyticsPIISalt,
 			clerkFetcher,
