@@ -48,6 +48,25 @@ func (r *UserRepository) GetByClerkUserID(ctx context.Context, clerkUserID strin
 	return &u, nil
 }
 
+// UpdateCOPPAColumns sets the date_of_birth_year and coppa_restricted columns
+// on the users row identified by userID. Added by migration 000111.
+//
+// dobYear may be nil when only the flag needs updating without recording a year.
+// In practice the COPPA gate handler (#884) always supplies a non-nil dobYear.
+func (r *UserRepository) UpdateCOPPAColumns(ctx context.Context, userID int64, dobYear *int16, coppaRestricted bool) error {
+	const q = `
+		UPDATE users
+		SET    date_of_birth_year = $2,
+		       coppa_restricted   = $3
+		WHERE  id = $1`
+
+	_, err := r.db.ExecContext(ctx, q, userID, dobYear, coppaRestricted)
+	if err != nil {
+		return fmt.Errorf("UserRepository.UpdateCOPPAColumns: %w", err)
+	}
+	return nil
+}
+
 // UpsertByClerkUserID inserts a new user row if clerk_user_id is not known, or returns the
 // existing one.  For JIT provisioning the email placeholder "<clerkUserID>@clerk.local" is
 // used on insert; it is overwritten when the user provides a real email later.

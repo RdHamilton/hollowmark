@@ -273,6 +273,7 @@ func main() {
 		waitlistHandler                   *handlers.WaitlistHandler
 		systemAccountHandler              *handlers.SystemAccountHandler
 		wildcardRecommendationsHandler    *handlers.WildcardRecommendationsHandler
+		consentHandler                    *handlers.ConsentHandler
 	)
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
@@ -493,6 +494,21 @@ func main() {
 			wildcardGapRepo,
 		)
 
+		// ConsentHandler — POST /api/v1/account/consent (#885).
+		// Records consent events (signup ToS/PP, COPPA gate, cookie opt-in/out,
+		// install dialog) as append-only rows in the consent_log table.
+		// Protected by composeClerkAuth — requires a valid Clerk session JWT.
+		// tos_version and privacy_policy_version are server-canonical (from cfg);
+		// client-supplied values are ignored (Ray Q2 ruling).
+		consentHandler = handlers.NewConsentHandler(
+			repository.NewConsentLogRepository(sqlDB),
+			accountRepo,
+			handlers.ConsentConfig{
+				TOSVersion:           cfg.TOSVersion,
+				PrivacyPolicyVersion: cfg.PrivacyPolicyVersion,
+			},
+		)
+
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
 		// userRepo was created above for daemonRegisterHandler/daemonAPIKeyAuthMiddl.
 		clerkUserResolver = bffmiddleware.ClerkUserResolver(userRepo)
@@ -586,6 +602,7 @@ func main() {
 		WaitlistHandler:                   waitlistHandler,
 		SystemAccountHandler:              systemAccountHandler,
 		WildcardRecommendationsHandler:    wildcardRecommendationsHandler,
+		ConsentHandler:                    consentHandler,
 		HealthzHandler:                    healthzHandler,
 		ClerkAuthMiddl:                    clerkAuthMiddl,
 		ClerkAuthSSEMiddl:                 clerkAuthSSEMiddl,
@@ -742,6 +759,11 @@ type RouterDeps struct {
 	// Full implementation in v0.3.8 ticket #420.
 	// Protected by composeClerkAuth — serves user-specific collection/inventory data.
 	WildcardRecommendationsHandler *handlers.WildcardRecommendationsHandler
+	// ConsentHandler serves POST /api/v1/account/consent (#885).
+	// Records consent events (signup ToS/PP, COPPA gate, cookie opt-in/out,
+	// install dialog) as append-only rows in consent_log.
+	// Protected by composeClerkAuth.
+	ConsentHandler *handlers.ConsentHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	ClerkAuthMiddl func(http.Handler) http.Handler
@@ -1186,6 +1208,20 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 			r.With(auth).Get("/api/v1/cards/{arenaId}", c.GetByArenaID)
 		} else {
 			log.Println("WARN: /api/v1/cards/* disabled — Clerk auth middleware not configured")
+		}
+	}
+
+	// POST /api/v1/account/consent — consent event recorder (#885).
+	// Records consent events (signup ToS/PP, COPPA gate, cookie opt-in/out,
+	// install dialog) as append-only rows in consent_log.
+	// Protected by composeClerkAuth (Clerk session JWT required).
+	// Returns 201 Created on success; SPA must block app entry until 201 returns.
+	if deps.ConsentHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Post("/api/v1/account/consent", deps.ConsentHandler.RecordConsent)
+		} else {
+			log.Println("WARN: POST /api/v1/account/consent disabled — Clerk auth middleware not configured")
 		}
 	}
 
