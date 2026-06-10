@@ -1,0 +1,141 @@
+/* AccountDeletionModal — #887 GDPR Right to Erasure */
+
+.account-deletion-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(2px);
+}
+
+.account-deletion-modal {
+  background-color: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+  min-width: 340px;
+  max-width: 520px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  animation: account-deletion-modal-appear 0.2s ease-out;
+}
+
+@keyframes account-deletion-modal-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.account-deletion-modal-title {
+  margin: 0 0 20px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* ---- Sections ---- */
+
+.account-deletion-modal-section {
+  margin-bottom: 16px;
+}
+
+.account-deletion-modal-section-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-secondary);
+  margin-bottom: 6px;
+}
+
+.account-deletion-modal-list {
+  list-style: disc;
+  padding-left: 20px;
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.account-deletion-modal-retained-text {
+  font-size: 13px;
+  color: var(--fg-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ---- Irreversibility warning ---- */
+
+.account-deletion-modal-warning {
+  background-color: var(--vault-danger-dim);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--danger);
+  line-height: 1.5;
+  margin-bottom: 24px;
+}
+
+/* ---- Actions ---- */
+
+.account-deletion-modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.account-deletion-modal-confirm {
+  background-color: var(--danger);
+  color: var(--fg);
+  border: none;
+  border-radius: 6px;
+  padding: 9px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.account-deletion-modal-confirm:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.account-deletion-modal-confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.account-deletion-modal-cancel {
+  background-color: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-secondary);
+  border-radius: 6px;
+  padding: 9px 18px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.account-deletion-modal-cancel:hover:not(:disabled) {
+  background-color: var(--bg-overlay);
+  color: var(--fg);
+}
+
+.account-deletion-modal-cancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
