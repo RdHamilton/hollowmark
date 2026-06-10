@@ -1095,3 +1095,57 @@ func TestRouter_DataExport_RouteAbsent_WhenHandlerNil(t *testing.T) {
 		t.Errorf("GET /api/v1/account/data-export with nil handler: want 404, got %d", rr.Code)
 	}
 }
+
+// ── #895 CollectionImport route tests ────────────────────────────────────────
+
+// stubImportDeps satisfies CardResolver, InventoryWriter, and AccountLookup
+// for router-level tests where we only care that the route is guarded, not
+// about handler logic.
+type stubImportDeps struct{}
+
+func (s *stubImportDeps) ResolveArenaID(_ context.Context, _, _ string) (int, bool, error) {
+	return 0, false, nil
+}
+
+func (s *stubImportDeps) UpsertDelta(_ context.Context, _ repository.CardInventoryUpsert) error {
+	return nil
+}
+
+func (s *stubImportDeps) GetAccountIDByUserID(_ context.Context, _ int64) (int64, bool, error) {
+	return 0, false, nil
+}
+
+// TestRouter_CollectionImport_Returns401_WithoutToken verifies that
+// POST /api/v1/collection/import requires a valid Clerk JWT.
+func TestRouter_CollectionImport_Returns401_WithoutToken(t *testing.T) {
+	stub := &stubImportDeps{}
+	deps := depsWithClerk(t)
+	deps.CollectionImportHandler = handlers.NewCollectionImportHandler(stub, stub, stub)
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/collection/import", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("POST /api/v1/collection/import without token: want 401, got %d", rr.Code)
+	}
+}
+
+// TestRouter_CollectionImport_RouteAbsent_WhenHandlerNil verifies that when
+// CollectionImportHandler is nil the route is not registered.
+func TestRouter_CollectionImport_RouteAbsent_WhenHandlerNil(t *testing.T) {
+	deps := depsWithClerk(t)
+	deps.CollectionImportHandler = nil
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/collection/import", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("POST /api/v1/collection/import with nil handler: want 404, got %d", rr.Code)
+	}
+}
