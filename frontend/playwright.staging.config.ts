@@ -21,10 +21,26 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e/staging',
 
-  // Exclude visual/screenshot specs and visual data verify specs — they require
-  // CLERK_SECRET_KEY + SCREENSHOT_DIR and run as separate steps in CI.
-  // wildcard-panel-visual-424 is a screenshot capture spec (not an API smoke test).
-  // visual-auth-smoke and visual-auth-data-verify are SPA browser specs, not BFF.
+  // Exclude specs that require CLERK_SECRET_KEY or SCREENSHOT_DIR — this step
+  // only injects STAGING_API_URL and STAGING_SMOKE_TOKEN.  Each excluded spec
+  // runs in its own dedicated workflow step or config where the required secrets
+  // are present:
+  //
+  //   visual-auth-smoke, visual-auth-data-verify — SPA browser specs (not BFF),
+  //     run via playwright.staging-spa.config.ts with CLERK_SECRET_KEY injected.
+  //   wildcard-panel-visual-424 — screenshot capture, needs SCREENSHOT_DIR,
+  //     runs as its own step in e2e-staging-auth-smoke.yml.
+  //   r17-smoke, projection-golden-smoke, draft-ratings-*-verify — require
+  //     additional fixtures/env vars not present in this step.
+  //   staging-spa-smoke — belongs to playwright.staging-spa.config.ts only.
+  //
+  //   multi-device-433 — authenticated BFF tests that require CLERK_SECRET_KEY
+  //     (Backend API sign-in-token flow).  This config does not inject that
+  //     secret; without it the requireAuthOrFail() guard throws immediately
+  //     (INCONCLUSIVE / 0ms fail) — not a staging API regression.
+  //   prof-visual-capture — screenshot capture driven by prof-visual-capture.yml;
+  //     requires CLERK_SECRET_KEY + SCREENSHOT_DIR.  Collected here by mistake
+  //     since the spec was added after the original exclusion list was written.
   testIgnore: [
     /visual-auth-smoke/,
     /visual-auth-data-verify/,
@@ -33,6 +49,10 @@ export default defineConfig({
     /projection-golden-smoke/,
     /staging-spa-smoke/,
     /draft-ratings-.*-verify/,
+    // Requires CLERK_SECRET_KEY — not injected by this step; runs in auth step.
+    /multi-device-433/,
+    // Requires CLERK_SECRET_KEY + SCREENSHOT_DIR — dedicated workflow step only.
+    /prof-visual-capture/,
   ],
 
   // Individual test timeout — keep the suite well under 60 s total.
