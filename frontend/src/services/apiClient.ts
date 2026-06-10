@@ -355,6 +355,84 @@ export function post<T>(path: string, body?: unknown, options?: ApiRequestOption
 }
 
 /**
+ * HTTP POST request with multipart/form-data body.
+ *
+ * Used for file uploads (e.g. POST /api/v1/collection/import).
+ * The caller constructs the FormData and passes it directly — we omit the
+ * Content-Type header so the browser sets it (including the boundary param).
+ * The Authorization header is added by authHeaders() as usual.
+ */
+export async function postFormData<T>(path: string, formData: FormData, options: ApiRequestOptions = {}): Promise<T> {
+  const { skipErrorAnalytics, ...fetchOptions } = options;
+  const url = `${config.baseUrl}${path}`;
+
+  const controller = new globalThis.AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), config.timeout);
+
+  try {
+    const auth = await authHeaders();
+    // Do NOT set Content-Type — the browser sets it with the multipart boundary.
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        ...auth,
+        ...fetchOptions.headers,
+      },
+      body: formData,
+      signal: controller.signal,
+      ...fetchOptions,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      let errorData: ApiError = { error: 'Unknown error' };
+      try {
+        errorData = await response.json();
+      } catch {
+        errorData = { error: response.statusText || 'Request failed' };
+      }
+      const errorMessage = errorData.message || errorData.error;
+
+      if (!skipErrorAnalytics && shouldEmitDataLoadError(path, response.status)) {
+        trackEvent({
+          name: 'error_data_load_failed',
+          properties: {
+            page: getCurrentPage(),
+            endpoint: path,
+            status_code: response.status,
+          },
+        });
+      }
+
+      throw new ApiRequestError(errorMessage, response.status, errorData.code, errorData.details);
+    }
+
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    const data = await response.json();
+    return data.data as T;
+  } catch (error) {
+    clearTimeout(timeoutId);
+
+    if (error instanceof ApiRequestError) {
+      throw error;
+    }
+
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        throw new ApiRequestError('Request timeout', 408);
+      }
+      throw new ApiRequestError(error.message, 0);
+    }
+
+    throw new ApiRequestError('Unknown error', 0);
+  }
+}
+
+/**
  * HTTP PUT request.
  */
 export function put<T>(path: string, body?: unknown, options?: ApiRequestOptions): Promise<T> {
@@ -481,6 +559,7 @@ export async function healthCheck(): Promise<boolean> {
 export const cloudClient = {
   get,
   post,
+  postFormData,
   put,
   patch,
   del,

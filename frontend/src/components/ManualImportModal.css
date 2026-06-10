@@ -1,0 +1,109 @@
+/* ManualImportModal — mirrors OnboardingModal.css structure */
+
+.manual-import-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  backdrop-filter: blur(3px);
+  padding: 16px;
+}
+
+.manual-import-modal {
+  background-color: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 480px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  animation: manual-import-appear 0.2s ease-out;
+}
+
+@keyframes manual-import-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Header */
+.manual-import-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.manual-import-modal-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.manual-import-modal-close {
+  background: none;
+  border: none;
+  color: var(--fg-secondary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.manual-import-modal-close:hover {
+  color: var(--fg);
+  background-color: var(--bg-overlay);
+}
+
+/* Body */
+.manual-import-modal-body {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.manual-import-modal-description {
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg-secondary);
+  line-height: 1.5;
+}
+
+/* Footer — enhanced-mode secondary link */
+.manual-import-modal-footer {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.manual-import-enhanced-link {
+  background: none;
+  border: none;
+  color: var(--vault-indigo);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+  line-height: 1.4;
+}
+
+.manual-import-enhanced-link:hover {
+  color: var(--vault-indigo-dark);
+}
