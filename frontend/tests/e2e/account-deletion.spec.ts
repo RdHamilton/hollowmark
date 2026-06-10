@@ -191,8 +191,8 @@ test.describe('Account Deletion — Danger Zone', () => {
     await expect(dialog).toContainText(/account and login credentials/i);
     await expect(dialog).toContainText(/gameplay history/i);
     await expect(dialog).toContainText(/analytics data/i);
-    await expect(dialog).toContainText(/de-identified gameplay data/i);
-    await expect(dialog).toContainText(/no information that could identify you/i);
+    await expect(dialog).toContainText(/match outcomes, draft picks, play patterns/i);
+    await expect(dialog).toContainText(/cannot be linked back to you/i);
     await expect(dialog).toContainText(/permanent and cannot be undone/i);
 
     // Confirm inside the modal
@@ -285,7 +285,7 @@ test.describe('Account Deletion — Danger Zone', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
 
-    await expect(dialog.getByText(/de-identified gameplay data/i)).toBeVisible();
-    await expect(dialog.getByText(/no information that could identify you/i)).toBeVisible();
+    await expect(dialog.getByText(/match outcomes, draft picks, play patterns/i)).toBeVisible();
+    await expect(dialog.getByText(/cannot be linked back to you/i)).toBeVisible();
   });
 });

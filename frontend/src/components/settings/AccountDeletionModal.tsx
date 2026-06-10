@@ -81,23 +81,23 @@ export function AccountDeletionModal({
           </ul>
         </div>
 
-        {/* What will be retained — ADR-058 Option A / ANONYMOUS (D7a) */}
+        {/* About anonymized data — ADR-058 Option A / ANONYMOUS (D7a) */}
         <div className="account-deletion-modal-section">
-          <div className="account-deletion-modal-section-label">What will be retained</div>
+          <div className="account-deletion-modal-section-label">About anonymized data</div>
           <p className="account-deletion-modal-retained-text">
-            De-identified gameplay data for ML model training. Before deletion, any gameplay records
-            associated with your account are stripped of all identifying information — your account
-            ID, email address, and all personal identifiers are removed. The retained data contains
-            no information that could identify you and is used solely to improve draft and match
-            analysis for all players. This retention is disclosed in our Privacy Policy.
+            Some gameplay data (match outcomes, draft picks, play patterns) is kept in an anonymized
+            form to improve draft recommendations and match analysis for all players. Before your
+            account is deleted, all information that could identify you — your account ID, email
+            address, and any personal identifiers — is permanently removed from this data. What
+            remains cannot be linked back to you.
           </p>
         </div>
 
         {/* Irreversibility warning */}
         <div className="account-deletion-modal-warning">
           This action is permanent and cannot be undone. Once confirmed, your account and all
-          personal data will be scheduled for deletion. Your data will be deleted — check your email
-          for confirmation when the process is complete.
+          personal data will be scheduled for deletion. Your account deletion is confirmed. Your
+          data will be permanently removed within 30 days.
         </div>
 
         {/* Actions */}

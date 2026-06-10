@@ -93,7 +93,7 @@ describe('AccountDeletionModal', () => {
       expect(screen.getByText(/analytics data/i)).toBeInTheDocument();
     });
 
-    it('renders the ANONYMOUS retained-data paragraph — de-identified gameplay data', () => {
+    it('renders the anonymized-data section label', () => {
       render(
         <AccountDeletionModal
           isOpen={true}
@@ -102,10 +102,10 @@ describe('AccountDeletionModal', () => {
           onCancel={vi.fn()}
         />,
       );
-      expect(screen.getByText(/de-identified gameplay data/i)).toBeInTheDocument();
+      expect(screen.getByText(/about anonymized data/i)).toBeInTheDocument();
     });
 
-    it('renders the ANONYMOUS retained-data paragraph — no information that could identify you', () => {
+    it('renders the ANONYMOUS retained-data paragraph — match outcomes, draft picks, play patterns', () => {
       render(
         <AccountDeletionModal
           isOpen={true}
@@ -114,7 +114,31 @@ describe('AccountDeletionModal', () => {
           onCancel={vi.fn()}
         />,
       );
-      expect(screen.getByText(/no information that could identify you/i)).toBeInTheDocument();
+      expect(screen.getByText(/match outcomes, draft picks, play patterns/i)).toBeInTheDocument();
+    });
+
+    it('renders the ANONYMOUS retained-data paragraph — cannot be linked back to you', () => {
+      render(
+        <AccountDeletionModal
+          isOpen={true}
+          isSubmitting={false}
+          onConfirm={vi.fn()}
+          onCancel={vi.fn()}
+        />,
+      );
+      expect(screen.getByText(/cannot be linked back to you/i)).toBeInTheDocument();
+    });
+
+    it('renders the warning paragraph without a false email promise — 30 days', () => {
+      render(
+        <AccountDeletionModal
+          isOpen={true}
+          isSubmitting={false}
+          onConfirm={vi.fn()}
+          onCancel={vi.fn()}
+        />,
+      );
+      expect(screen.getByText(/permanently removed within 30 days/i)).toBeInTheDocument();
     });
 
     it('renders the irreversibility warning', () => {
