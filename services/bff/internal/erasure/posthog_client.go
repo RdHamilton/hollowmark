@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // PostHogHTTPClient implements PostHogDeleter using the PostHog bulk-delete API.
@@ -32,7 +33,7 @@ func NewPostHogHTTPClient(personalAPIKey, projectID, host string) *PostHogHTTPCl
 		personalAPIKey: personalAPIKey,
 		projectID:      projectID,
 		host:           host,
-		httpClient:     &http.Client{},
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
