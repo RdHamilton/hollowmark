@@ -76,6 +76,7 @@
      (sapphire owns CTAs). Per design advisory: --vault-gilt = aged brass.   */
   --hollowmark-gilt:        #B87D32;   /* aged brass — primary gilt (public alias) */
   --hollowmark-gilt-light:  #C8913A;   /* lifted gilt — hover / highlight          */
+  --vault-gilt:             var(--hollowmark-gilt);       /* legacy alias — hollowmark-tickets#1047 */
 
   --vault-rarity-common:    #4B5563;
   --vault-rarity-uncommon:  #C0C0C0;
