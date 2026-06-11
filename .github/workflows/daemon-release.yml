@@ -55,6 +55,11 @@ on:
         description: 'Validate signing job wiring (runner OS + secret presence) without producing a release'
         required: false
         default: 'false'
+        # type: boolean ensures correct coercion in `inputs.dry_run == true`
+        # comparisons.  String literals 'true'/'false' also evaluate correctly
+        # at runtime, but the declared type is what guarantees it — future
+        # contributors copying this if: pattern must keep the declared type
+        # consistent with the expression.  (hollowmark-tickets#259, S-07 F-2)
         type: boolean
 
 permissions:
@@ -1527,12 +1532,21 @@ jobs:
     # signing is deferred post-beta (ADR-073 / #979). Both Windows-signing surfaces
     # move together. TODO(#979): re-enable once OV/EV cloud-HSM signing is wired.
     if: ${{ vars.WINDOWS_SIGNING_ENABLED == 'true' && github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+    # Narrow to read-only — this job performs no write operations and does not
+    # need the workflow-level contents/actions/id-token write grants.
+    # (hollowmark-tickets#259, S-07 F-1)
+    permissions: {}
 
     steps:
       - name: Assert runner OS is Windows
         # Confirms that runs-on: windows-latest resolved to a Windows runner.
         # If GitHub ever changes the label mapping this step will fail fast
         # rather than silently running the Azure action on the wrong OS.
+        # Safety note: Write-Host fires before the OS check below.  RUNNER_OS
+        # is not a secret so this ordering is harmless here.  Do NOT copy this
+        # pattern to steps where secret env vars are in scope — always perform
+        # the null-check guard before any output that references those values.
+        # (hollowmark-tickets#259, S-07 F-3)
         shell: pwsh
         run: |
           Write-Host "Runner OS: $env:RUNNER_OS"
@@ -1609,6 +1623,10 @@ jobs:
     runs-on: macos-latest
     # Only run on manual dispatch with dry_run=true.  Never runs on tag push.
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
+    # Narrow to read-only — this job performs no write operations and does not
+    # need the workflow-level contents/actions/id-token write grants.
+    # (hollowmark-tickets#259, S-07 F-1)
+    permissions: {}
 
     steps:
       - name: Assert runner OS is macOS
