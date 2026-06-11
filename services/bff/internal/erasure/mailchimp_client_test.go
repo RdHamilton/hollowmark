@@ -10,10 +10,6 @@ import (
 	"github.com/RdHamilton/hollowmark/services/bff/internal/erasure"
 )
 
-// TestMailchimpErasureClient_DeletePermanent_UsesCorrectPath verifies the
-// HTTP call hits the delete-permanent action path (not the unsubscribe path).
-// Ray's implementation note: the spy must assert the action path, not just
-// that a call was made.
 func TestMailchimpErasureClient_DeletePermanent_UsesCorrectPath(t *testing.T) {
 	var capturedPath string
 
@@ -23,8 +19,6 @@ func TestMailchimpErasureClient_DeletePermanent_UsesCorrectPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Build a client that targets the test server.
-	// We override the HTTP client via a transport that rewrites the host.
 	client := &erasure.MailchimpErasureClientForTest{
 		APIURL:     srv.URL,
 		ListID:     "list123",
@@ -36,21 +30,16 @@ func TestMailchimpErasureClient_DeletePermanent_UsesCorrectPath(t *testing.T) {
 		t.Fatalf("DeletePermanent: %v", err)
 	}
 
-	// The path must include "actions/delete-permanent" — not "unsubscribe" or PUT.
 	if !strings.Contains(capturedPath, "actions/delete-permanent") {
 		t.Errorf("path %q does not contain 'actions/delete-permanent' — Q2 ruling: must use delete-permanent action", capturedPath)
 	}
 
-	// Verify the subscriber hash is present in the path.
 	// MD5(lower("User@Example.COM")) = MD5("user@example.com") = b58996c504c5638798eb6b511e6f49af
 	if !strings.Contains(capturedPath, "b58996c504c5638798eb6b511e6f49af") {
 		t.Errorf("path %q does not contain expected subscriber hash for 'user@example.com'", capturedPath)
 	}
 }
 
-// TestMailchimpErasureClient_DeletePermanent_404IsIdempotent verifies that a
-// 404 from Mailchimp (member not found) is treated as a success — the contact
-// may have already been deleted.
 func TestMailchimpErasureClient_DeletePermanent_404IsIdempotent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -68,8 +57,6 @@ func TestMailchimpErasureClient_DeletePermanent_404IsIdempotent(t *testing.T) {
 	}
 }
 
-// TestMailchimpErasureClient_DeletePermanent_5xxReturnsError verifies that a
-// 5xx response from Mailchimp is returned as an error to the caller.
 func TestMailchimpErasureClient_DeletePermanent_5xxReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -84,5 +71,39 @@ func TestMailchimpErasureClient_DeletePermanent_5xxReturnsError(t *testing.T) {
 
 	if err := client.DeletePermanent(context.Background(), "error@example.com"); err == nil {
 		t.Error("expected error on 5xx response, got nil")
+	}
+}
+
+// TestMailchimpErasureClient_DeletePermanent_ErrorDoesNotLeakSubscriberHash
+// verifies that the error returned on a non-success HTTP response does NOT
+// contain the MD5 subscriber hash of the email address.
+//
+// MD5(email) is PII-linkable (GDPR Recital 26: reversible via rainbow tables /
+// known-email enumeration) and must not appear in server error logs.
+// Uses NewMailchimpErasureClientAtURL (export_test.go) to exercise the REAL
+// MailchimpErasureClient code path, not the MailchimpErasureClientForTest double.
+func TestMailchimpErasureClient_DeletePermanent_ErrorDoesNotLeakSubscriberHash(t *testing.T) {
+	const email = "user@example.com"
+	// MD5("user@example.com") is the Mailchimp subscriber hash.
+	// Its presence in an error string is a GDPR Recital 26 PII leak.
+	const subscriberHash = "b58996c504c5638798eb6b511e6f49af"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	client := erasure.NewMailchimpErasureClientAtURL(srv.URL, "list123", srv.Client())
+
+	err := client.DeletePermanent(context.Background(), email)
+	if err == nil {
+		t.Fatal("expected error on 500 response, got nil")
+	}
+
+	if strings.Contains(err.Error(), subscriberHash) {
+		t.Errorf("error must not contain MD5 subscriber hash (GDPR Recital 26 PII leak): %q", err.Error())
+	}
+	if strings.Contains(err.Error(), email) {
+		t.Errorf("error must not contain raw email address (PII leak): %q", err.Error())
 	}
 }
