@@ -274,7 +274,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.bff == 'true' || needs.detect-changes.outputs.logparse == 'true' || needs.detect-changes.outputs.meta_scrape == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
@@ -290,6 +290,19 @@ jobs:
           services/meta-scrape/go.sum
           services/contract/go.sum
           pkg/logparse/go.sum
+
+    # Node + frontend deps are required for the TypeScript taxonomy staleness
+    # check below (gen-analytics-taxonomy.ts requires js-yaml from
+    # frontend/node_modules). Mirror the setup from frontend-component-tests.
+    - name: Set up Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install frontend dependencies
+      run: npm ci --prefix frontend
 
     - name: go vet — all modules
       env:
@@ -322,19 +335,25 @@ jobs:
         fi
         echo "gofumpt clean."
 
-    # RULE-INFRA-01: continue-on-error: true against existing files first.
-    # Flip to hard-fail once violations are cleared in-PR (#1597 follow-up).
-    - name: Taxonomy staleness check (continue-on-error)
-      continue-on-error: true
+    # RULE-INFRA-01: promoted to hard-fail (#1176 — #1597 stable on main).
+    # The diff strips the "// Generated: YYYY-MM-DD" comment header (line 3 in
+    # both generated files) so a date-only difference does not trigger a false
+    # stale detection.  Only content changes (new/removed events or properties)
+    # will fail this check.
+    - name: Taxonomy staleness check
       env:
         GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: |
         echo "=== Checking Go taxonomy ==="
-        go run scripts/gen-analytics-taxonomy.go --stdout | diff - services/bff/internal/analytics/taxonomy.gen.go \
+        go run scripts/gen-analytics-taxonomy.go --stdout \
+          | grep -v "^// Generated:" \
+          | diff - <(grep -v "^// Generated:" services/bff/internal/analytics/taxonomy.gen.go) \
           || (echo "taxonomy.gen.go is stale — run: make gen-taxonomy" && exit 1)
         echo "=== Checking TypeScript taxonomy ==="
         if command -v npx >/dev/null 2>&1; then
-          npx tsx scripts/gen-analytics-taxonomy.ts --stdout | diff - frontend/src/services/analytics-taxonomy.gen.ts \
+          npx tsx scripts/gen-analytics-taxonomy.ts --stdout \
+            | grep -v "^// Generated:" \
+            | diff - <(grep -v "^// Generated:" frontend/src/services/analytics-taxonomy.gen.ts) \
             || (echo "analytics-taxonomy.gen.ts is stale — run: make gen-taxonomy" && exit 1)
         else
           echo "npx not available, skipping TypeScript taxonomy check"
@@ -343,10 +362,9 @@ jobs:
 
     # Zero-direct-posthog-calls guard: enforces the analytics seam contract by
     # failing if any Go file in services/bff calls posthog.Enqueue directly
-    # (bypassing analytics.Client). RULE-INFRA-01: continue-on-error until
-    # all violations cleared (#1597).
-    - name: Zero direct posthog.Enqueue calls in BFF (continue-on-error)
-      continue-on-error: true
+    # (bypassing analytics.Client). RULE-INFRA-01: promoted to hard-fail (#1176
+    # — zero violations confirmed on main before flip).
+    - name: Zero direct posthog.Enqueue calls in BFF
       run: |
         VIOLATIONS=$(grep -rn 'posthog\.Enqueue\|\.Enqueue(posthog\.' services/bff --include='*.go' \
           | grep -v '_test\.go' \
