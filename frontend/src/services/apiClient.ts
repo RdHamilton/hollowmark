@@ -22,11 +22,16 @@ export interface ApiError {
   details?: string;
 }
 
-// Default configuration - can be overridden.
-// VITE_BFF_URL is set per-environment in the Vercel dashboard (see ADR-006).
-// Falls back to localhost for local development when the variable is absent.
+// Default configuration — overridden at boot by configureApi() after loadConfig().
+// ADR-077: VITE_BFF_URL is no longer the runtime URL source. The BFF URL is now
+// read from config.json via runtimeConfig at boot time, then injected here via
+// configureApi({ baseUrl: getRuntimeConfig().bffUrl }) in main.tsx's boot sequence.
+//
+// DEV fallback: in local dev (`vite dev`), config.json may not be available.
+// The fallback below is statically dead-code-eliminated in production builds
+// (Vite replaces import.meta.env.DEV with false).
 let config: ApiConfig = {
-  baseUrl: import.meta.env.VITE_BFF_URL ?? 'http://localhost:8080/api/v1',
+  baseUrl: import.meta.env.DEV ? (import.meta.env.VITE_BFF_URL ?? 'http://localhost:8080/api/v1') : 'http://localhost:8080/api/v1',
   timeout: 30000,
 };
 

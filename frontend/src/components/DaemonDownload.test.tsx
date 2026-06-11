@@ -4,6 +4,17 @@ import DaemonDownload from './DaemonDownload';
 import { useFeatureFlag } from '@/hooks/useFeatureFlag';
 import { useDaemonRelease } from '@/hooks/useDaemonRelease';
 import type { DaemonReleaseState } from '@/hooks/useDaemonRelease';
+import { setRuntimeConfig, _resetRuntimeConfig } from '@/config/runtimeConfig';
+
+// ADR-077: testDefaults used for runtimeConfig-based channel derivation.
+const testDefaults = {
+  clerkPublishableKey: 'pk_test_dGVzdA',
+  bffUrl: 'http://localhost:8080/api/v1',
+  sentryEnv: 'production',
+  envLabel: 'test',
+  daemonUrl: 'http://localhost:9001/api/v1',
+  posthogHost: 'https://app.posthog.com',
+};
 
 const FALLBACK_RELEASES_BASE =
   'https://github.com/RdHamilton/hollowmark/releases/latest/download';
@@ -31,6 +42,16 @@ function setDownloadBase(overrides: Partial<DaemonReleaseState> = {}) {
 }
 
 describe('DaemonDownload', () => {
+  // ADR-077: DaemonDownload calls daemonChannel() → getRuntimeConfig().sentryEnv.
+  // All tests must have runtimeConfig set before rendering.
+  beforeEach(() => {
+    setRuntimeConfig(testDefaults);
+  });
+
+  afterEach(() => {
+    _resetRuntimeConfig();
+  });
+
   describe('Feature flag — enabled (download buttons visible)', () => {
     beforeEach(() => {
       mockUseFeatureFlag.mockReturnValue({ enabled: true });
@@ -496,14 +517,16 @@ describe('DaemonDownload', () => {
     beforeEach(() => {
       mockUseFeatureFlag.mockReturnValue({ enabled: true });
       setDownloadBase({ downloadBase: RUNTIME_RELEASES_BASE });
+      // ADR-077: default to production channel for channel tests.
+      setRuntimeConfig(testDefaults);
     });
 
     afterEach(() => {
-      vi.unstubAllEnvs();
+      _resetRuntimeConfig();
     });
 
     it('staging: macOS link uses the -staging-suffixed .pkg asset name', () => {
-      vi.stubEnv('VITE_SENTRY_ENV', 'staging');
+      setRuntimeConfig({ ...testDefaults, sentryEnv: 'staging' });
       render(<DaemonDownload />);
       const macLink = screen.getByTestId('download-link-vaultmtg-daemon-darwin-universal');
       expect(macLink).toHaveAttribute(
@@ -513,7 +536,7 @@ describe('DaemonDownload', () => {
     });
 
     it('staging: Windows link stays unsuffixed (binary name is fixed across channels)', () => {
-      vi.stubEnv('VITE_SENTRY_ENV', 'staging');
+      setRuntimeConfig({ ...testDefaults, sentryEnv: 'staging' });
       render(<DaemonDownload />);
       const winLink = screen.getByTestId('download-link-vaultmtg-daemon-windows-amd64');
       expect(winLink).toHaveAttribute(
@@ -523,7 +546,7 @@ describe('DaemonDownload', () => {
     });
 
     it('production: macOS link uses the unsuffixed .pkg asset name', () => {
-      vi.stubEnv('VITE_SENTRY_ENV', 'production');
+      setRuntimeConfig({ ...testDefaults, sentryEnv: 'production' });
       render(<DaemonDownload />);
       const macLink = screen.getByTestId('download-link-vaultmtg-daemon-darwin-universal');
       expect(macLink).toHaveAttribute(
@@ -533,7 +556,7 @@ describe('DaemonDownload', () => {
     });
 
     it('unknown env (fail-safe): macOS link defaults to the stable unsuffixed asset', () => {
-      vi.stubEnv('VITE_SENTRY_ENV', 'preview-xyz');
+      setRuntimeConfig({ ...testDefaults, sentryEnv: 'preview-xyz' });
       render(<DaemonDownload />);
       const macLink = screen.getByTestId('download-link-vaultmtg-daemon-darwin-universal');
       expect(macLink).toHaveAttribute(
@@ -543,7 +566,7 @@ describe('DaemonDownload', () => {
     });
 
     it('test selector and analytics os stay channel-stable on staging', () => {
-      vi.stubEnv('VITE_SENTRY_ENV', 'staging');
+      setRuntimeConfig({ ...testDefaults, sentryEnv: 'staging' });
       render(<DaemonDownload />);
       // The DOM testid is the unsuffixed stable identity even though the href
       // resolves to the -staging asset — selectors must not vary by channel.

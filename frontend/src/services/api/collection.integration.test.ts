@@ -5,15 +5,27 @@
  * testing the actual API transformation logic that unit tests miss
  * when mocking at the module level.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { server } from '@/test/msw/server';
 import {
+  createHandlers,
   nullCollectionHandler,
   emptyCollectionHandler,
   errorCollectionHandler,
   createMockCollectionCard,
 } from '@/test/msw/handlers';
+import { setRuntimeConfig } from '@/config/runtimeConfig';
 import { http, HttpResponse } from 'msw';
+
+// ADR-077 C1: test defaults for runtimeConfig — must be set before createHandlers()
+const testDefaults = {
+  clerkPublishableKey: 'pk_test_dGVzdA',
+  bffUrl: 'http://localhost:8080/api/v1',
+  sentryEnv: 'test',
+  envLabel: 'test',
+  daemonUrl: 'http://localhost:9001/api/v1',
+  posthogHost: 'https://app.posthog.com',
+};
 
 // Unmock the API module so we test the real implementation
 vi.unmock('@/services/api');
@@ -30,6 +42,14 @@ describe('Collection API Integration Tests', () => {
   // Start MSW server before all tests
   beforeAll(() => {
     server.listen({ onUnhandledRequest: 'error' });
+  });
+
+  // ADR-077 C1: set runtimeConfig before each test, then wire factory handlers.
+  // setRuntimeConfig must run before createHandlers() so getDaemonApiBaseUrl()
+  // inside the factory returns the test daemon URL instead of throwing.
+  beforeEach(() => {
+    setRuntimeConfig(testDefaults);
+    server.use(...createHandlers());
   });
 
   // Reset handlers after each test
