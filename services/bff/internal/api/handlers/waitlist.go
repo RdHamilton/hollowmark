@@ -249,22 +249,33 @@ func (h *WaitlistHandler) rateAllow(ip string) bool {
 	return entry.allow()
 }
 
-// realIP extracts the client IP from X-Forwarded-For or RemoteAddr.
-// Uses the first value in X-Forwarded-For when set (nginx-proxied path).
+// realIP extracts the client IP for rate-limiting.
+//
+// Trust policy: nginx sets X-Real-IP from $remote_addr (kernel-level TCP peer
+// — not client-controllable) on every proxy_pass location. X-Forwarded-For is
+// NOT used: nginx appends $remote_addr to any existing XFF header, so a client
+// can prepend spoofed IPs to the list. X-Real-IP is single-valued and cannot
+// be influenced by the client when nginx is in the path.
+// See hollowmark-infra/nginx/mtga-companion-ssl.conf proxy_set_header directives
+// (verified by Ray on all 4 nginx confs: prod SSL, prod plain, staging-api
+// hollowmark.app, staging-api vaultmtg.app — ticket #1222).
+// If X-Real-IP is absent (local dev, tests without a proxy), fall back to
+// RemoteAddr with port stripped.
 func realIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if idx := strings.Index(xff, ","); idx != -1 {
-			return strings.TrimSpace(xff[:idx])
-		}
-		return strings.TrimSpace(xff)
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return strings.TrimSpace(xri)
 	}
-	// Strip port from RemoteAddr (host:port format).
+	// Strip port from RemoteAddr (host:port format, including IPv6 [::1]:port).
 	addr := r.RemoteAddr
 	if idx := strings.LastIndex(addr, ":"); idx != -1 {
 		return addr[:idx]
 	}
 	return addr
 }
+
+// RealIPForTest exposes realIP for package-external test use only.
+// Must not be called from production code.
+func RealIPForTest(r *http.Request) string { return realIP(r) }
 
 // mailchimpSubscriberHash returns the MD5 hash of the lower-cased email address
 // as required by the Mailchimp Marketing API for subscriber lookups and adds.

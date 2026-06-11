@@ -238,10 +238,11 @@ func TestBootSignal_OverRateLimit_Returns204(t *testing.T) {
 
 	// Send 21 valid requests from the same IP — 20 allowed, 21st is over-limit.
 	// All 21 must return 204 (the 21st because over-limit is a silent drop, not a 429).
+	// X-Real-IP is the nginx-set header realIP() reads (PR B / ticket #1222).
 	for i := range 21 {
 		body := bootSignalBody("network", "production", "v0.4.3", time.Now().UTC().Format(time.RFC3339))
 		req := bootSignalReq(body)
-		req.Header.Set("X-Forwarded-For", "203.0.113.1") // same IP for all calls
+		req.Header.Set("X-Real-IP", "203.0.113.1") // same IP for all calls
 		rr := httptest.NewRecorder()
 
 		h.Handle(rr, req)
@@ -259,17 +260,18 @@ func TestBootSignal_OverRateLimit_OverSizedBody_Returns204(t *testing.T) {
 	h := handlers.NewBootSignalHandler("test-salt-value")
 
 	// Exhaust the rate limit for this IP.
+	// X-Real-IP is the nginx-set header realIP() reads (PR B / ticket #1222).
 	for range 20 {
 		body := bootSignalBody("network", "production", "v0.4.3", time.Now().UTC().Format(time.RFC3339))
 		req := bootSignalReq(body)
-		req.Header.Set("X-Forwarded-For", "203.0.113.2")
+		req.Header.Set("X-Real-IP", "203.0.113.2")
 		rr := httptest.NewRecorder()
 		h.Handle(rr, req)
 	}
 
 	// Now send an oversized body — rate-limit silent drop must win.
 	req := bootSignalReq(bytes.NewBufferString(strings.Repeat("x", 2048)))
-	req.Header.Set("X-Forwarded-For", "203.0.113.2")
+	req.Header.Set("X-Real-IP", "203.0.113.2")
 	rr := httptest.NewRecorder()
 
 	h.Handle(rr, req)
@@ -287,10 +289,11 @@ func TestBootSignal_RateLimitWindow_Resets(t *testing.T) {
 
 	ip := "203.0.113.3"
 	// Exhaust the 20-req/min limit for this IP.
+	// X-Real-IP is the nginx-set header realIP() reads (PR B / ticket #1222).
 	for range 20 {
 		body := bootSignalBody("network", "production", "v0.4.3", time.Now().UTC().Format(time.RFC3339))
 		req := bootSignalReq(body)
-		req.Header.Set("X-Forwarded-For", ip)
+		req.Header.Set("X-Real-IP", ip)
 		rr := httptest.NewRecorder()
 		h.Handle(rr, req)
 	}
@@ -302,7 +305,7 @@ func TestBootSignal_RateLimitWindow_Resets(t *testing.T) {
 	// Now a fresh request should be allowed (204).
 	body := bootSignalBody("network", "production", "v0.4.3", time.Now().UTC().Format(time.RFC3339))
 	req := bootSignalReq(body)
-	req.Header.Set("X-Forwarded-For", ip)
+	req.Header.Set("X-Real-IP", ip)
 	rr := httptest.NewRecorder()
 
 	h.Handle(rr, req)
@@ -345,7 +348,8 @@ func TestBootSignal_LogsStructuredLine(t *testing.T) {
 
 	body := bootSignalBody("network", "production", "v0.4.3", time.Now().UTC().Format(time.RFC3339))
 	req := bootSignalReq(body)
-	req.Header.Set("X-Forwarded-For", rawIP)
+	// X-Real-IP is the nginx-set header realIP() reads (PR B / ticket #1222).
+	req.Header.Set("X-Real-IP", rawIP)
 	rr := httptest.NewRecorder()
 
 	h.Handle(rr, req)
@@ -529,11 +533,12 @@ func TestBootSignal_RateMap_BoundedUnderFlood(t *testing.T) {
 
 	// Flood with unique IPs well beyond the cap.
 	// Use 10.A.B.C notation spread across the /8 block (16M unique addresses).
+	// X-Real-IP is the nginx-set header realIP() reads (PR B / ticket #1222).
 	flood := handlers.BootSignalRateMapCap + 1000
 	for i := range flood {
 		body := bootSignalBody("network", "production", "v0.4.3", time.Now().UTC().Format(time.RFC3339))
 		req := bootSignalReq(body)
-		req.Header.Set("X-Forwarded-For", fmt.Sprintf("10.%d.%d.%d", (i/65536)%256, (i/256)%256, i%256))
+		req.Header.Set("X-Real-IP", fmt.Sprintf("10.%d.%d.%d", (i/65536)%256, (i/256)%256, i%256))
 		rr := httptest.NewRecorder()
 		h.Handle(rr, req)
 	}
@@ -546,7 +551,7 @@ func TestBootSignal_RateMap_BoundedUnderFlood(t *testing.T) {
 	// Limiter must still accept a new legitimate request after cap eviction.
 	body := bootSignalBody("network", "production", "v0.4.3", time.Now().UTC().Format(time.RFC3339))
 	req := bootSignalReq(body)
-	req.Header.Set("X-Forwarded-For", "192.0.2.1") // TEST-NET, not in flood range
+	req.Header.Set("X-Real-IP", "192.0.2.1") // TEST-NET, not in flood range
 	rr := httptest.NewRecorder()
 	h.Handle(rr, req)
 	if rr.Code != http.StatusNoContent {
