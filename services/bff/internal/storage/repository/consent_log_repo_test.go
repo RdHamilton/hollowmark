@@ -156,6 +156,12 @@ func TestConsentLogRepo_InsertCOPPAEvent(t *testing.T) {
 //
 // This test FAILS if FK is ON DELETE RESTRICT (step 4 would error).
 // This test PASSES only with ON DELETE SET NULL.
+//
+// Isolation fix (#668): row IDs are captured immediately after insert (while
+// account_id is still set) and all subsequent assertions and cleanup are scoped
+// to those IDs. This replaces the prior time-windowed global predicate
+// (account_id IS NULL + consented_at > NOW()-interval) which was swept by
+// concurrent or -count=2 test runs.
 func TestConsentLogRepo_AccountDeleteCascadeSETNULL(t *testing.T) {
 	db := openTestDB(t)
 	_, accountID := seedUserAndAccount(t, db, t.Name())
@@ -188,97 +194,99 @@ func TestConsentLogRepo_AccountDeleteCascadeSETNULL(t *testing.T) {
 		t.Fatalf("InsertConsentEvent e2: %v", err)
 	}
 
-	// Assert rows have non-null account_id.
-	var count int
-	if err := db.QueryRowContext(
+	// Step 2: Capture the row IDs while account_id is still set.
+	// All subsequent assertions and cleanup use these IDs — never a global predicate.
+	// This is the isolation fix: concurrent runs cannot sweep each other's rows.
+	rows, err := db.QueryContext(
 		context.Background(),
-		`SELECT COUNT(*) FROM consent_log WHERE account_id = $1`,
-		accountID,
-	).Scan(&count); err != nil {
-		t.Fatalf("count rows: %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("expected 2 consent_log rows, got %d", count)
-	}
-
-	// Step 3: Simulate #891 Step 4a anonymize-in-place.
-	_, err := db.ExecContext(
-		context.Background(),
-		`UPDATE consent_log SET ip_address_hash = NULL, metadata = NULL WHERE account_id = $1`,
+		`SELECT id FROM consent_log WHERE account_id = $1 ORDER BY id`,
 		accountID,
 	)
 	if err != nil {
-		t.Fatalf("#891 anonymize UPDATE: %v", err)
+		t.Fatalf("query consent_log IDs: %v", err)
+	}
+	var rowIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan consent_log id: %v", err)
+		}
+		rowIDs = append(rowIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err: %v", err)
+	}
+	if len(rowIDs) != 2 {
+		t.Fatalf("expected 2 consent_log rows, got %d", len(rowIDs))
 	}
 
-	// Step 4: Delete the account (triggers ON DELETE SET NULL cascade on consent_log.account_id).
-	// If FK is RESTRICT this will fail with a foreign key violation.
-	_, err = db.ExecContext(
-		context.Background(),
-		`DELETE FROM accounts WHERE id = $1`,
-		accountID,
-	)
-	if err != nil {
-		t.Fatalf("DELETE accounts (FK SET NULL should allow this): %v", err)
-	}
-
-	// Step 5: Assert the two consent_log rows still exist (not deleted).
-	if err := db.QueryRowContext(
-		context.Background(),
-		`SELECT COUNT(*) FROM consent_log WHERE id IN (
-			SELECT id FROM consent_log WHERE account_id IS NULL
-			ORDER BY consented_at DESC LIMIT 2
-		)`,
-	).Scan(&count); err != nil {
-		t.Fatalf("count surviving rows: %v", err)
-	}
-	// Rows should survive — evidence retained.
-	// Note: after account deletion, account_id IS NULL so we can't filter by it.
-	// Count all rows with null account_id inserted in this test run (by consented_at).
-	// Use a different approach: check via the event insert timestamps being recent.
-	var survivingCount int
-	if err := db.QueryRowContext(
-		context.Background(),
-		`SELECT COUNT(*) FROM consent_log WHERE account_id IS NULL AND event_type IN ('signup', 'cookie_accept') AND consented_at > NOW() - INTERVAL '1 minute'`,
-	).Scan(&survivingCount); err != nil {
-		t.Fatalf("count surviving rows: %v", err)
-	}
-	if survivingCount < 2 {
-		t.Errorf("consent_log rows should survive account deletion: want >=2, got %d", survivingCount)
-	}
-
-	// Step 6: Assert account_id IS NULL on surviving rows.
-	var nullAccountIDCount int
-	if err := db.QueryRowContext(
-		context.Background(),
-		`SELECT COUNT(*) FROM consent_log WHERE account_id IS NULL AND event_type IN ('signup', 'cookie_accept') AND consented_at > NOW() - INTERVAL '1 minute'`,
-	).Scan(&nullAccountIDCount); err != nil {
-		t.Fatalf("count null account_id: %v", err)
-	}
-	if nullAccountIDCount < 2 {
-		t.Errorf("account_id should be NULL after cascade: want >=2 null rows, got %d", nullAccountIDCount)
-	}
-
-	// Step 7: Assert ip_address_hash IS NULL (anonymized in step 3).
-	var nullIPCount int
-	if err := db.QueryRowContext(
-		context.Background(),
-		`SELECT COUNT(*) FROM consent_log WHERE ip_address_hash IS NULL AND event_type IN ('signup', 'cookie_accept') AND consented_at > NOW() - INTERVAL '1 minute'`,
-	).Scan(&nullIPCount); err != nil {
-		t.Fatalf("count null ip_address_hash: %v", err)
-	}
-	if nullIPCount < 2 {
-		t.Errorf("ip_address_hash should be NULL after anonymization: want >=2, got %d", nullIPCount)
-	}
-
-	// Cleanup: the account row was deleted; users row cleanup is in seedUserAndAccount.
-	// Consent rows have null account_id now — clean them up.
+	// Cleanup: delete exactly the two rows we own.
+	// Registered before account-delete so it targets our rows before they lose their IDs.
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(
 			context.Background(),
-			`DELETE FROM consent_log WHERE account_id IS NULL AND event_type IN ('signup', 'cookie_accept') AND consented_at > NOW() - INTERVAL '1 hour'`,
+			`DELETE FROM consent_log WHERE id = $1 OR id = $2`,
+			rowIDs[0], rowIDs[1],
 		)
 	})
+
+	// Step 3: Simulate #891 Step 4a anonymize-in-place.
+	if _, err := db.ExecContext(
+		context.Background(),
+		`UPDATE consent_log SET ip_address_hash = NULL, metadata = NULL WHERE account_id = $1`,
+		accountID,
+	); err != nil {
+		t.Fatalf("#891 anonymize UPDATE: %v", err)
+	}
+
+	// Step 4: Delete the account (triggers ON DELETE SET NULL on consent_log.account_id).
+	// If FK is RESTRICT this will fail with a foreign key violation.
+	if _, err := db.ExecContext(
+		context.Background(),
+		`DELETE FROM accounts WHERE id = $1`,
+		accountID,
+	); err != nil {
+		t.Fatalf("DELETE accounts (FK SET NULL should allow this): %v", err)
+	}
+
+	// Step 5: Assert the two consent_log rows still exist (not deleted) — by ID.
+	var survivingCount int
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM consent_log WHERE id = $1 OR id = $2`,
+		rowIDs[0], rowIDs[1],
+	).Scan(&survivingCount); err != nil {
+		t.Fatalf("count surviving rows: %v", err)
+	}
+	if survivingCount != 2 {
+		t.Errorf("consent_log rows should survive account deletion: want 2, got %d", survivingCount)
+	}
+
+	// Step 6: Assert account_id IS NULL on both surviving rows.
+	var nullAccountIDCount int
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM consent_log WHERE (id = $1 OR id = $2) AND account_id IS NULL`,
+		rowIDs[0], rowIDs[1],
+	).Scan(&nullAccountIDCount); err != nil {
+		t.Fatalf("count null account_id: %v", err)
+	}
+	if nullAccountIDCount != 2 {
+		t.Errorf("account_id should be NULL after SET NULL cascade: want 2, got %d", nullAccountIDCount)
+	}
+
+	// Step 7: Assert ip_address_hash IS NULL on both rows (anonymized in step 3).
+	var nullIPCount int
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM consent_log WHERE (id = $1 OR id = $2) AND ip_address_hash IS NULL`,
+		rowIDs[0], rowIDs[1],
+	).Scan(&nullIPCount); err != nil {
+		t.Fatalf("count null ip_address_hash: %v", err)
+	}
+	if nullIPCount != 2 {
+		t.Errorf("ip_address_hash should be NULL after anonymization: want 2, got %d", nullIPCount)
+	}
 }
 
 // TestConsentLogRepo_RepoLayerPreventsUpdate verifies that the ConsentLogRepository
