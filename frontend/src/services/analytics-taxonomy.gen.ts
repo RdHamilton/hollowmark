@@ -58,6 +58,18 @@ export const Events = {
   DAEMON_AUTH_FAILED: 'daemon_auth_failed',
   /** Category: system | Surface: bff | Consent: necessary */
   DAEMON_KEYCHAIN_ERROR: 'daemon_keychain_error',
+  /** Category: feature_use | Surface: bff | Consent: analytics */
+  GET_DECK: 'get_deck',
+  /** Category: feature_use | Surface: bff | Consent: analytics */
+  CREATE_DECK: 'create_deck',
+  /** Category: feature_use | Surface: bff | Consent: analytics */
+  UPDATE_DECK: 'update_deck',
+  /** Category: feature_use | Surface: bff | Consent: analytics */
+  DELETE_DECK: 'delete_deck',
+  /** Category: feature_use | Surface: bff | Consent: analytics */
+  CLONE_DECK: 'clone_deck',
+  /** Category: feature_use | Surface: bff | Consent: analytics */
+  EXPORT_DECK: 'export_deck',
 } as const;
 
 export type EventName = (typeof Events)[keyof typeof Events];
@@ -98,6 +110,12 @@ export const EventConsentCategory: Record<EventName, ConsentCategory> = {
   'daemon_dispatch_degraded': 'necessary',
   'daemon_auth_failed': 'necessary',
   'daemon_keychain_error': 'necessary',
+  'get_deck': 'analytics',
+  'create_deck': 'analytics',
+  'update_deck': 'analytics',
+  'delete_deck': 'analytics',
+  'clone_deck': 'analytics',
+  'export_deck': 'analytics',
 };
 
 /**

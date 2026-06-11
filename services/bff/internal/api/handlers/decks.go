@@ -293,7 +293,7 @@ func (h *DecksHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.analytics.Capture(r.Context(), hashedID, "get_deck", map[string]any{
+	_ = h.analytics.Capture(r.Context(), hashedID, analytics.EventGetDeck, map[string]any{
 		"deck_id":         deckID,
 		"account_id_hash": hashedID,
 	})
@@ -337,7 +337,7 @@ func (h *DecksHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.analytics.Capture(r.Context(), hashedID, "create_deck", map[string]any{
+	_ = h.analytics.Capture(r.Context(), hashedID, analytics.EventCreateDeck, map[string]any{
 		"format":          req.Format,
 		"source":          req.Source,
 		"account_id_hash": hashedID,
@@ -381,7 +381,7 @@ func (h *DecksHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.analytics.Capture(r.Context(), hashedID, "update_deck", map[string]any{
+	_ = h.analytics.Capture(r.Context(), hashedID, analytics.EventUpdateDeck, map[string]any{
 		"deck_id":         deckID,
 		"account_id_hash": hashedID,
 	})
@@ -415,7 +415,7 @@ func (h *DecksHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.analytics.Capture(r.Context(), hashedID, "delete_deck", map[string]any{
+	_ = h.analytics.Capture(r.Context(), hashedID, analytics.EventDeleteDeck, map[string]any{
 		"deck_id":         deckID,
 		"account_id_hash": hashedID,
 	})
@@ -458,7 +458,7 @@ func (h *DecksHandler) Clone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.analytics.Capture(r.Context(), hashedID, "clone_deck", map[string]any{
+	_ = h.analytics.Capture(r.Context(), hashedID, analytics.EventCloneDeck, map[string]any{
 		"source_deck_id":  deckID,
 		"new_deck_id":     d.ID,
 		"account_id_hash": hashedID,
@@ -960,7 +960,7 @@ func (h *DecksHandler) Export(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hashedID := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
-	_ = h.analytics.Capture(r.Context(), hashedID, "export_deck", map[string]any{
+	_ = h.analytics.Capture(r.Context(), hashedID, analytics.EventExportDeck, map[string]any{
 		"deck_id":         deckID,
 		"deck_name":       d.Name,
 		"account_id_hash": hashedID,
