@@ -39,8 +39,10 @@ package erasure
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 
+	emailpkg "github.com/RdHamilton/hollowmark/services/bff/internal/email"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/identityhash"
 )
 
@@ -226,6 +228,12 @@ type Deps struct {
 	// Nil is safe — the alert is skipped when not wired (e.g. unit tests that
 	// do not assert Sentry behavior).  Production sets this to observability.Reporter{}.
 	Reporter ErrorReporter
+	// Email is the transactional-email sender (ADR-076 / hollowmark-tickets#1172).
+	// Nil is safe — the email send is skipped when not wired (pre-SES-provisioning
+	// builds and tests that do not assert email behavior).
+	// An error from Email.Send* is logged but does NOT block or re-trigger the
+	// cascade — the cascade is already complete when the email is attempted.
+	Email emailpkg.Sender
 }
 
 // RunErasureCascade executes the full GDPR Art.17 erasure cascade for a single
@@ -260,8 +268,29 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// emits throughout the BFF (FM-2 / I-10: single implementation).
 	accountIDHash := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
 
-	// reportStepErr fires a Sentry alert via deps.Reporter (when non-nil), then
-	// wraps and returns the error so the caller can halt the cascade.
+	// capturedEmail holds the Step-0 email address once CapturePreJobData
+	// succeeds.  It is written once (Step 0) and read by reportStepErr and the
+	// success path.  An empty string means Step 0 failed and no email can be
+	// sent.
+	var capturedEmail string
+	var err error
+
+	// sendEmailNonFatal calls fn(ctx, addr) when the email sender is wired and
+	// addr is non-empty.  Any error is logged but does NOT propagate — email
+	// sends are fire-and-forget from the cascade's perspective.
+	sendEmailNonFatal := func(fn func(context.Context, string) error, addr string) {
+		if deps.Email == nil || addr == "" {
+			return
+		}
+		if sendErr := fn(ctx, addr); sendErr != nil {
+			log.Printf("[erasure] email send failed job_id=%s: %v", jobID, sendErr)
+		}
+	}
+
+	// reportStepErr fires a Sentry alert via deps.Reporter (when non-nil), sends
+	// a failure notification email (when Email is wired and the address was
+	// captured), then wraps and returns the error so the caller can halt the
+	// cascade.
 	//
 	//   stepKey — short canonical identifier written to the "step" Sentry tag
 	//             (e.g. "step4a"); keep stable — runbooks key on these values.
@@ -274,6 +303,11 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 				"account_id_hash": accountIDHash,
 			})
 		}
+		// Send failure notification using the Step-0-captured address.
+		// capturedEmail is empty when Step 0 itself failed — skip in that case.
+		if deps.Email != nil {
+			sendEmailNonFatal(deps.Email.SendDeletionFailed, capturedEmail)
+		}
 		return fmt.Errorf("erasure %s (%s): %w", stepKey, desc, err)
 	}
 
@@ -284,8 +318,13 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// the MTGA client_id string, not by the internal accounts.id BIGINT.  Once
 	// the accounts row is deleted in Step 4e, these strings cannot be recovered
 	// from the DB.  We capture them here to use in Step 4a.
+	//
+	// The email address is also held in capturedEmail so the post-cascade email
+	// sends (success / failure paths) use the in-memory value — by terminal state
+	// the DB row is gone and a lookup would return nothing (ADR-076 §Consequences).
 	// -----------------------------------------------------------------------
-	email, clientIDs, err := deps.DB.CapturePreJobData(ctx, userID, accountID)
+	var clientIDs []string
+	capturedEmail, clientIDs, err = deps.DB.CapturePreJobData(ctx, userID, accountID)
 	if err != nil {
 		return reportStepErr("step0", "capture pre-job data", err)
 	}
@@ -342,7 +381,7 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	}
 
 	// 4c — waitlist_entries PII: DELETE WHERE email = <captured> (CITEXT match).
-	if err := deps.DB.DeleteWaitlistEntry(ctx, email); err != nil {
+	if err := deps.DB.DeleteWaitlistEntry(ctx, capturedEmail); err != nil {
 		return reportStepErr("step4c", "waitlist delete", err)
 	}
 
@@ -412,7 +451,7 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// GDPR-deletes the contact and adds a suppression hash.  This is NOT
 	// Unsubscribe — Unsubscribe retains the contact record (Q2 ruling).
 	// -----------------------------------------------------------------------
-	if err := deps.Mailchimp.DeletePermanent(ctx, email); err != nil {
+	if err := deps.Mailchimp.DeletePermanent(ctx, capturedEmail); err != nil {
 		return reportStepErr("step6", "mailchimp delete-permanent", err)
 	}
 
@@ -428,6 +467,20 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// -----------------------------------------------------------------------
 	if err := deps.DB.RecordJobComplete(ctx, jobID); err != nil {
 		return reportStepErr("step8", "record job complete", err)
+	}
+
+	// -----------------------------------------------------------------------
+	// Post-cascade: send deletion-completion email to the user (ADR-076 /
+	// hollowmark-tickets#1172).
+	//
+	// This fires AFTER completed_at is written (Step 8) — the cascade is done.
+	// An email-send failure is logged but does NOT return an error: the cascade
+	// is complete; a send failure must not leave completed_at NULL or re-trigger
+	// the cascade.  The Sentry alert (PR-A) remains the authoritative failure-
+	// visibility channel; the email is the user-facing notification.
+	// -----------------------------------------------------------------------
+	if deps.Email != nil {
+		sendEmailNonFatal(deps.Email.SendDeletionComplete, capturedEmail)
 	}
 
 	return nil

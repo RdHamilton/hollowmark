@@ -13,12 +13,16 @@ import (
 	"syscall"
 	"time"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+
 	"github.com/RdHamilton/hollowmark/services/bff/internal/analytics"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
 	bffmiddleware "github.com/RdHamilton/hollowmark/services/bff/internal/api/middleware"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/api/sse"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/config"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/dbpool"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/email"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/erasure"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/observability"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/projection"
@@ -669,6 +673,7 @@ func main() {
 			buildPostHogDeleter(cfg),
 			buildMailchimpErasureClient(cfg),
 			buildClerkAdminClient(cfg),
+			buildEmailSender(bffCtx),
 			bffCtx,
 			deletionRepo,
 			&erasureWG,
@@ -1996,11 +2001,29 @@ func buildClerkAdminClient(cfg *config.Config) erasure.ClerkDeleter {
 // the value form, not the pointer form, which is what all three constructors
 // return.  The mount_gate_test.go test suite verifies both directions:
 // gate fires when a client IS Noop; gate does NOT fire when clients are real.
+// buildEmailSender constructs an SESv2Sender using the EC2 instance role
+// (ADR-076).  No secret or API key is needed — SES uses the instance role
+// which gains ses:SendEmail / ses:SendRawEmail via the IAM stack (ticket #1171
+// AC5).  Returns nil when the AWS config cannot be loaded; the erasure cascade
+// treats a nil Email sender as a no-op (email skipped, Sentry alert fires
+// instead via deps.Reporter).
+func buildEmailSender(ctx context.Context) email.Sender {
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		log.Printf("WARN: SES email sender not available: LoadDefaultConfig: %v — account-deletion emails disabled", err)
+		return nil
+	}
+	client := sesv2.NewFromConfig(awsCfg)
+	log.Println("SES transactional email sender initialised.")
+	return email.NewSESv2Sender(client)
+}
+
 func buildAccountDeletionHandler(
 	cfg *config.Config,
 	ph erasure.PostHogDeleter,
 	mc erasure.MailchimpPermanentDeleter,
 	ck erasure.ClerkDeleter,
+	emailSender email.Sender,
 	rootCtx context.Context,
 	db *repository.DeletionRepository,
 	wg *sync.WaitGroup,
@@ -2036,6 +2059,7 @@ func buildAccountDeletionHandler(
 		Mailchimp: mc,
 		Clerk:     ck,
 		Reporter:  observability.Reporter{},
+		Email:     emailSender,
 	}
 
 	var erasureSvc *erasure.Service
