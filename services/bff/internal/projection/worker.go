@@ -113,11 +113,12 @@ type cardPlayStore interface {
 	InsertCardPlays(ctx context.Context, accountID int64, gameID int64, matchID string, entries []contract.CardPlayEntry, occurredAt time.Time) error
 }
 
-// gameIDResolver looks up games.id for a (match_id, game_number) pair.
+// gameIDResolver looks up games.id for a (account_id, match_id, game_number)
+// triple.  The account_id filter enforces cross-account isolation (ticket #669).
 // The match.game_ended projection uses this to resolve the FK before writing
 // per-turn card plays to game_plays.
 type gameIDResolver interface {
-	GameIDByMatchAndNumber(ctx context.Context, matchID string, gameNumber int) (int64, error)
+	GameIDByMatchAndNumber(ctx context.Context, accountID int64, matchID string, gameNumber int) (int64, error)
 }
 
 // gameRowWriter creates the games anchor row required by game_plays.game_id FK.
@@ -1200,7 +1201,7 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 			// Fallback: read-only resolver (backward-compat; wired instances
 			// should always prefer WithGameRowWriter).
 			var resolveErr error
-			gameID, resolveErr = w.gameIDs.GameIDByMatchAndNumber(ctx, p.MatchID, p.GameNumber)
+			gameID, resolveErr = w.gameIDs.GameIDByMatchAndNumber(ctx, accountID, p.MatchID, p.GameNumber)
 			if resolveErr != nil {
 				log.Printf("[projection] projectGamePlayEvent id=%d: could not resolve games.id for match_id=%q game_number=%d — skipping card play writes: %v",
 					row.ID, p.MatchID, p.GameNumber, resolveErr)
