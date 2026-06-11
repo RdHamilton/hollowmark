@@ -22,6 +22,7 @@ import (
 	"github.com/RdHamilton/hollowmark/services/bff/internal/erasure"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/observability"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/projection"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/reconciler"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 	contract "github.com/RdHamilton/hollowmark/services/contract"
@@ -561,6 +562,16 @@ func main() {
 		// Used to omit email from log lines (#135). Empty in local dev → log omission
 		// is always correct (email absent regardless of salt value — Ray Q4 ruling).
 		waitlistHandler = handlers.NewWaitlistHandler(waitlistRepo, mailchimpClient, cfg.AnalyticsPIISalt).WithAnalyticsClient(analyticsClient)
+
+		// Mailchimp waitlist reconciler (ticket #126) — retries failed
+		// subscriptions on a 15-minute cadence. Only started when a Mailchimp
+		// client is available (same guard as the handler). Uses projCtx so it
+		// exits cleanly on SIGTERM. No separate WaitGroup: a partially-drained
+		// batch retries on the next tick; Mailchimp PUT is idempotent.
+		if mailchimpClient != nil {
+			mcReconciler := reconciler.NewMailchimpReconciler(waitlistRepo, mailchimpClient)
+			go mcReconciler.Run(projCtx)
+		}
 
 		// WildcardRecommendationsHandler — ADR-045 full implementation (ticket #420).
 		// Joins inventory + card_inventory + set_cards + draft_card_ratings +
