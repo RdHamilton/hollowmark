@@ -1,5 +1,22 @@
 # VaultMTG Development Guide
 
+> **DEPRECATED — this document describes the pre-monorepo codebase and is no longer accurate.**
+>
+> The codebase has since migrated to a `go.work` workspace monorepo with a Vite-based React SPA. The project structure, module paths, build commands, and entry points documented below no longer reflect the current state of the repo.
+>
+> **Current authoritative guide: `CLAUDE.md` in the repo root.** It covers:
+> - One-time `GOPRIVATE` setup required for local Go builds
+> - `go.work` workspace layout (`services/bff`, `services/daemon`, `services/sync`, `pkg/draftalgo`, `pkg/logparse`, `services/contract`, `services/collection-agent-helper`, `services/meta-scrape`)
+> - How to build all workspace modules: `./scripts/dev.sh build`
+> - How to run checks: `./scripts/dev.sh check`
+> - Frontend scripts (`npm run dev`, `npm run test:run`, `npm run build`) — see `frontend/package.json`
+> - Authentication patterns (Clerk, `clerk-sdk-go v2`)
+> - Test coverage requirements
+>
+> The content below is retained as historical context. Do not follow its setup steps on the current codebase.
+
+---
+
 This guide covers setting up your development environment, understanding the codebase, and contributing to VaultMTG.
 
 ## Table of Contents
