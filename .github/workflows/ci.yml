@@ -730,9 +730,6 @@ jobs:
     name: FF-3 -- No GitHub Actions secret for deploy
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # RULE-INFRA-01: continue-on-error during staged-enablement warn phase.
-    # Remove this line when promoting to hard-fail after a clean release cycle.
-    continue-on-error: true
 
     steps:
       - name: Checkout code
@@ -840,13 +837,10 @@ jobs:
           if [[ "$VIOLATIONS" -eq 0 ]]; then
             echo "FF-3: PASS"
           else
-            echo "FF-3: WARN (WARN_ONLY -- non-blocking per ADR-075 RULE-INFRA-01)"
+            echo "FF-3: FAIL -- ADR-075 RULE-INFRA-01 hard-fail (promoted per #1141)"
             echo "Remediation: move flagged values to SSM; read via aws ssm get-parameter."
-            echo "Promote to hard-fail after a clean release cycle (flip continue-on-error)."
+            exit 1
           fi
-          # Always exit 0 in staged-enablement. continue-on-error: true is the belt;
-          # this exit 0 is the suspenders.
-          exit 0
 
       - name: Write step summary
         if: always()
@@ -856,9 +850,8 @@ jobs:
             echo ""
             echo "Scope: 8-file deploy/release/rollback array (Ray C1 condition)"
             echo ""
-            echo "- **WARN_ONLY** (ADR-075 RULE-INFRA-01 staged enablement)"
+            echo "- **HARD-FAIL** (ADR-075 RULE-INFRA-01 staged enablement complete, promoted per #1141)"
             echo "- See job log for VIOLATION lines, if any."
-            echo "- Promote to hard-fail after a clean release cycle."
             echo "- Ref: ADR-075 FF-3, Ray PLAN_VERDICT #1129#issuecomment-4664207551"
           } >> "$GITHUB_STEP_SUMMARY"
 
