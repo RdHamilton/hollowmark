@@ -423,7 +423,12 @@ jobs:
       env:
         GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
-      run: govulncheck ./...
+      # -scan symbol: call-graph analysis — only flags vulns whose vulnerable
+      # symbols are actually reachable from our code (reduces false-positive
+      # noise vs module-level scan). Symbol is the default in govulncheck
+      # >=v1.1.0, but we pin it explicitly so the intent is clear and a future
+      # govulncheck upgrade cannot silently downgrade the scan level.
+      run: govulncheck -scan symbol ./...
 
     - name: govulncheck — Sync
       if: needs.detect-changes.outputs.sync == 'true'
@@ -431,7 +436,7 @@ jobs:
       env:
         GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
-      run: govulncheck ./...
+      run: govulncheck -scan symbol ./...
 
   sync-unit-tests:
     name: Sync Unit Tests
