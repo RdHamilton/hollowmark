@@ -379,6 +379,54 @@ func TestRunErasureCascade_Step4aBeforeStep4e(t *testing.T) {
 	}
 }
 
+// TestRunErasureCascade_NilDBReturnsErrorNotPanic is the regression test for
+// the bug fixed in cmd/main.go (hollowmark-tickets#887): buildAccountDeletionHandler omitted
+// DB: db from the erasure.Deps literal, leaving deps.DB nil.  When
+// RunErasureCascade called deps.DB.CapturePreJobData, it nil-dereferenced and
+// the BFF process crashed via SIGSEGV.
+//
+// This test asserts the correct class-level contract: RunErasureCascade with
+// nil Deps.DB MUST return an error, not panic.  The defensive nil-guard at the
+// top of RunErasureCascade enforces this; the primary fix (DB: db wiring in
+// buildAccountDeletionHandler) ensures production never reaches this guard.
+func TestRunErasureCascade_NilDBReturnsErrorNotPanic(t *testing.T) {
+	deps := erasure.Deps{
+		DB:        nil, // intentionally nil — regression guard
+		PostHog:   &stubPostHog{},
+		Clerk:     &stubClerk{},
+		Mailchimp: &stubMailchimp{},
+	}
+
+	var (
+		returned bool
+		runErr   error
+	)
+	// Run in a goroutine with recover so a panic (the pre-fix behavior) becomes
+	// a test failure rather than a process crash.
+	done := make(chan struct{})
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// Pre-fix: panic("runtime error: invalid memory address or nil pointer dereference")
+				// This is the bug we are guarding against — fail the test.
+				t.Errorf("RunErasureCascade panicked with nil Deps.DB: %v — DB must be non-nil or the function must return an error, not crash", r)
+			}
+			close(done)
+		}()
+		runErr = erasure.RunErasureCascade(context.Background(), "job-nil-db", "clerk_uid_nil", 1, 1, deps)
+		returned = true
+	}()
+	<-done
+
+	// After fix: must have returned (not panicked) and the error must be non-nil.
+	if !returned {
+		t.Error("RunErasureCascade did not return — likely panicked (pre-fix behavior)")
+	}
+	if returned && runErr == nil {
+		t.Error("RunErasureCascade with nil Deps.DB returned nil error — expected a non-nil error")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Recording wrappers — route external stubs into the shared db.callOrder
 // ---------------------------------------------------------------------------

@@ -175,6 +175,13 @@ type Deps struct {
 // failure with structured tags: step (short key e.g. "step4a"), job_id, and
 // account_id_hash (SHA-256 prefix of the accountID string — no raw PII).
 func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, accountID int64, deps Deps) error {
+	// Defensive nil guard: deps.DB must always be wired by the caller
+	// (buildAccountDeletionHandler in cmd/main.go).  A nil DB indicates a
+	// construction bug — fail loud with a clear error rather than panicking.
+	if deps.DB == nil {
+		return fmt.Errorf("erasure: RunErasureCascade called with nil Deps.DB — cascade cannot proceed; this is a wiring bug in the caller")
+	}
+
 	// accountIDHash is the privacy-safe tag value used in Sentry alerts.
 	// It reuses the same identityhash.HashAccountID function used by PostHog
 	// emits throughout the BFF (FM-2 / I-10: single implementation).
