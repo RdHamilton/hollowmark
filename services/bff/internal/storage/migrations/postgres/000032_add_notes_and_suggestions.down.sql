@@ -10,5 +10,5 @@ DROP INDEX IF EXISTS idx_deck_notes_deck_id;
 DROP TABLE IF EXISTS deck_notes;
 
 -- Remove notes and rating columns from matches table
-ALTER TABLE matches DROP COLUMN IF EXISTS rating;
-ALTER TABLE matches DROP COLUMN IF EXISTS notes;
+ALTER TABLE IF EXISTS matches DROP COLUMN IF EXISTS rating;
+ALTER TABLE IF EXISTS matches DROP COLUMN IF EXISTS notes;

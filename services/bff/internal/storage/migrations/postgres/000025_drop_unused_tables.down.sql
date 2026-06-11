@@ -56,8 +56,7 @@ CREATE TABLE IF NOT EXISTS draft_events (
     deck_id TEXT,
     entry_fee TEXT,
     rewards TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    FOREIGN KEY (deck_id) REFERENCES decks(id)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_draft_events_start_time ON draft_events(start_time);
