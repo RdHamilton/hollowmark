@@ -82,6 +82,8 @@ runs:
                 sys.exit(0)
 
             for issue in issues:
+                if issue is None:
+                    continue
                 issue_num = issue.get("number", "?")
                 issue_repo = (
                     ((issue.get("repository") or {}).get("owner") or {}).get("login", "?")
