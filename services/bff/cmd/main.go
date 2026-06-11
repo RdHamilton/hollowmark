@@ -529,7 +529,10 @@ func main() {
 			log.Println("MAILCHIMP_API_KEY or MAILCHIMP_LIST_ID not set — Mailchimp disabled for waitlist.")
 		}
 		// Any future PII property on the waitlist funnel event (e.g. email) is subject to the PII HASHING RULE above.
-		waitlistHandler = handlers.NewWaitlistHandler(waitlistRepo, mailchimpClient).WithAnalyticsClient(analyticsClient)
+		// piiSalt: cfg.AnalyticsPIISalt (SSM /vaultmtg/{env}/analytics-pii-salt)
+		// Used to omit email from log lines (#135). Empty in local dev → log omission
+		// is always correct (email absent regardless of salt value — Ray Q4 ruling).
+		waitlistHandler = handlers.NewWaitlistHandler(waitlistRepo, mailchimpClient, cfg.AnalyticsPIISalt).WithAnalyticsClient(analyticsClient)
 
 		// WildcardRecommendationsHandler — ADR-045 full implementation (ticket #420).
 		// Joins inventory + card_inventory + set_cards + draft_card_ratings +

@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/RdHamilton/hollowmark/services/bff/internal/api/handlers"
 	posthog "github.com/posthog/posthog-go"
@@ -163,7 +166,7 @@ func newWaitlistRequestWithUTM(email, utmSource, utmMedium, utmCampaign, referre
 // returns 200 OK with {"position": N} — matching the shipped SPA contract (PR #32).
 func TestWaitlist_NewEmail_Returns200WithPosition(t *testing.T) {
 	repo := newStubWaitlistRepo("uuid-1", 3, true)
-	h := handlers.NewWaitlistHandler(repo, nil)
+	h := handlers.NewWaitlistHandler(repo, nil, "")
 
 	rr := httptest.NewRecorder()
 	h.Join(rr, newWaitlistRequest("alice@example.com", ""))
@@ -179,7 +182,7 @@ func TestWaitlist_NewEmail_Returns200WithPosition(t *testing.T) {
 // AC3: ON CONFLICT DO NOTHING returns no row → created=false → 409.
 func TestWaitlist_DuplicateEmail_Returns409(t *testing.T) {
 	repo := newStubWaitlistRepo("", 0, false)
-	h := handlers.NewWaitlistHandler(repo, nil)
+	h := handlers.NewWaitlistHandler(repo, nil, "")
 
 	rr := httptest.NewRecorder()
 	h.Join(rr, newWaitlistRequest("alice@example.com", ""))
@@ -193,7 +196,7 @@ func TestWaitlist_DuplicateEmail_Returns409(t *testing.T) {
 // TestWaitlist_MissingEmail_Returns400 verifies empty email is rejected.
 func TestWaitlist_MissingEmail_Returns400(t *testing.T) {
 	repo := newStubWaitlistRepo("", 0, false)
-	h := handlers.NewWaitlistHandler(repo, nil)
+	h := handlers.NewWaitlistHandler(repo, nil, "")
 
 	rr := httptest.NewRecorder()
 	h.Join(rr, newWaitlistRequest("", ""))
@@ -206,7 +209,7 @@ func TestWaitlist_MissingEmail_Returns400(t *testing.T) {
 // TestWaitlist_DBError_Returns500 verifies repository errors surface as 500.
 func TestWaitlist_DBError_Returns500(t *testing.T) {
 	repo := newStubWaitlistRepoErr(context.DeadlineExceeded)
-	h := handlers.NewWaitlistHandler(repo, nil)
+	h := handlers.NewWaitlistHandler(repo, nil, "")
 
 	rr := httptest.NewRecorder()
 	h.Join(rr, newWaitlistRequest("bob@example.com", ""))
@@ -222,7 +225,7 @@ func TestWaitlist_MailchimpError_NonFatal(t *testing.T) {
 	repo := newStubWaitlistRepo("uuid-fail", 1, true)
 	mc := newStubMailchimpClient(fmt.Errorf("mailchimp: unexpected status 500"))
 
-	h := handlers.NewWaitlistHandler(repo, mc)
+	h := handlers.NewWaitlistHandler(repo, mc, "")
 
 	rr := httptest.NewRecorder()
 	h.Join(rr, newWaitlistRequest("charlie@example.com", ""))
@@ -248,7 +251,7 @@ func TestWaitlist_MailchimpSuccess_SetsSubscribed(t *testing.T) {
 	repo := newStubWaitlistRepo("uuid-ok", 7, true)
 	mc := newStubMailchimpClient(nil) // success
 
-	h := handlers.NewWaitlistHandler(repo, mc)
+	h := handlers.NewWaitlistHandler(repo, mc, "")
 
 	rr := httptest.NewRecorder()
 	h.Join(rr, newWaitlistRequest("dana@example.com", ""))
@@ -277,7 +280,7 @@ func TestWaitlist_MailchimpSuccess_SetsSubscribed(t *testing.T) {
 // within one hour is rejected with 429 (RC5).
 func TestWaitlist_RateLimit_Returns429(t *testing.T) {
 	repo := newStubWaitlistRepo("uuid-rl", 1, true)
-	h := handlers.NewWaitlistHandler(repo, nil)
+	h := handlers.NewWaitlistHandler(repo, nil, "")
 
 	for i := 0; i < 5; i++ {
 		rr := httptest.NewRecorder()
@@ -297,7 +300,7 @@ func TestWaitlist_RateLimit_Returns429(t *testing.T) {
 // TestWaitlist_DifferentIPs_NotRateLimited verifies rate limiting is per-IP.
 func TestWaitlist_DifferentIPs_NotRateLimited(t *testing.T) {
 	repo := newStubWaitlistRepo("uuid-ip", 1, true)
-	h := handlers.NewWaitlistHandler(repo, nil)
+	h := handlers.NewWaitlistHandler(repo, nil, "")
 
 	// Exhaust IP 1.2.3.4 bucket.
 	for i := 0; i < 5; i++ {
@@ -320,7 +323,7 @@ func TestWaitlist_DifferentIPs_NotRateLimited(t *testing.T) {
 // the email is the first entry inserted (1-based count).
 func TestWaitlist_Position1_FirstSignup(t *testing.T) {
 	repo := newStubWaitlistRepo("uuid-first", 1, true)
-	h := handlers.NewWaitlistHandler(repo, nil)
+	h := handlers.NewWaitlistHandler(repo, nil, "")
 
 	rr := httptest.NewRecorder()
 	h.Join(rr, newWaitlistRequest("first@example.com", ""))
@@ -339,7 +342,7 @@ func TestWaitlist_Position1_FirstSignup(t *testing.T) {
 func TestWaitlist_PostHog_FiredOnNewEmail(t *testing.T) {
 	repo := newStubWaitlistRepo("uuid-ph-new", 5, true)
 	ph := newStubPostHogClient()
-	h := handlers.NewWaitlistHandler(repo, nil).WithPostHogClient(ph)
+	h := handlers.NewWaitlistHandler(repo, nil, "").WithPostHogClient(ph)
 
 	req := newWaitlistRequestWithUTM("ph@example.com", "twitter", "social", "beta-launch", "https://t.co/abc")
 	rr := httptest.NewRecorder()
@@ -389,7 +392,7 @@ func TestWaitlist_PostHog_FiredOnNewEmail(t *testing.T) {
 func TestWaitlist_PostHog_NotFiredOnConflict(t *testing.T) {
 	repo := newStubWaitlistRepo("", 0, false) // conflict: created=false
 	ph := newStubPostHogClient()
-	h := handlers.NewWaitlistHandler(repo, nil).WithPostHogClient(ph)
+	h := handlers.NewWaitlistHandler(repo, nil, "").WithPostHogClient(ph)
 
 	req := newWaitlistRequest("dup@example.com", "")
 	rr := httptest.NewRecorder()
@@ -411,6 +414,272 @@ func TestWaitlist_PostHog_NotFiredOnConflict(t *testing.T) {
 	if len(caps) != 0 {
 		t.Errorf("expected 0 PostHog captures on conflict path, got %d", len(caps))
 	}
+}
+
+// ─── PR A hardening tests (TDD — written RED first, tickets #132/#133/#134/#135) ─
+
+// TestWaitlist_LargeBody_Returns413 verifies that a body exceeding 4096 bytes
+// is rejected with 413 Request Entity Too Large (#132).
+func TestWaitlist_LargeBody_Returns413(t *testing.T) {
+	repo := newStubWaitlistRepo("uuid-1", 1, true)
+	h := handlers.NewWaitlistHandler(repo, nil, "test-pii-salt")
+
+	// 5 KB body — well over the 4096-byte cap.
+	body := bytes.NewBufferString(`{"email":"` + strings.Repeat("a", 5000) + `@example.com"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "1.2.3.4:12345"
+	rr := httptest.NewRecorder()
+
+	h.Join(rr, req)
+
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("large body: want 413, got %d — body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestWaitlist_ContentType_Missing_Returns415 verifies that a missing
+// Content-Type header is rejected with 415 (#134).
+func TestWaitlist_ContentType_Missing_Returns415(t *testing.T) {
+	repo := newStubWaitlistRepo("uuid-1", 1, true)
+	h := handlers.NewWaitlistHandler(repo, nil, "test-pii-salt")
+
+	body := bytes.NewBufferString(`{"email":"user@example.com"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", body)
+	// Deliberately no Content-Type header.
+	req.RemoteAddr = "1.2.3.4:12345"
+	rr := httptest.NewRecorder()
+
+	h.Join(rr, req)
+
+	if rr.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("missing Content-Type: want 415, got %d", rr.Code)
+	}
+}
+
+// TestWaitlist_ContentType_TextPlain_Returns415 verifies that text/plain
+// is rejected with 415 (#134). Waitlist is a standard JSON form, unlike
+// boot-signal which accepts text/plain (sendBeacon constraint).
+func TestWaitlist_ContentType_TextPlain_Returns415(t *testing.T) {
+	repo := newStubWaitlistRepo("uuid-1", 1, true)
+	h := handlers.NewWaitlistHandler(repo, nil, "test-pii-salt")
+
+	body := bytes.NewBufferString(`{"email":"user@example.com"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", body)
+	req.Header.Set("Content-Type", "text/plain")
+	req.RemoteAddr = "1.2.3.4:12345"
+	rr := httptest.NewRecorder()
+
+	h.Join(rr, req)
+
+	if rr.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("Content-Type: text/plain: want 415, got %d", rr.Code)
+	}
+}
+
+// TestWaitlist_ContentType_JsonCharset_Accepted verifies that
+// "application/json; charset=utf-8" passes the Content-Type prefix guard (#134).
+func TestWaitlist_ContentType_JsonCharset_Accepted(t *testing.T) {
+	repo := newStubWaitlistRepo("uuid-charset", 1, true)
+	h := handlers.NewWaitlistHandler(repo, nil, "test-pii-salt")
+
+	body, _ := json.Marshal(map[string]string{"email": "charset@example.com"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.RemoteAddr = "1.2.3.4:12345"
+	rr := httptest.NewRecorder()
+
+	h.Join(rr, req)
+
+	// Must pass the CT guard — outcome depends on repo stub (200 or other, but not 415).
+	if rr.Code == http.StatusUnsupportedMediaType {
+		t.Errorf("Content-Type: application/json; charset=utf-8: must not return 415")
+	}
+}
+
+// TestWaitlist_InvalidEmail_Returns400 verifies that a string that fails
+// net/mail.ParseAddress is rejected with 400 (#133).
+func TestWaitlist_InvalidEmail_Returns400(t *testing.T) {
+	repo := newStubWaitlistRepo("uuid-1", 1, true)
+	h := handlers.NewWaitlistHandler(repo, nil, "test-pii-salt")
+
+	rr := httptest.NewRecorder()
+	h.Join(rr, newWaitlistRequestWithSalt("not-an-email", "test-pii-salt"))
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("invalid email: want 400, got %d", rr.Code)
+	}
+}
+
+// TestWaitlist_ValidEmail_NormalizedBeforeStore verifies that the email stored
+// is strings.ToLower(strings.TrimSpace(addr.Address)) — i.e. display-name forms
+// are stripped and case is normalized before InsertIfNew is called (#133, Q2).
+func TestWaitlist_ValidEmail_NormalizedBeforeStore(t *testing.T) {
+	repo := newStubWaitlistRepoCapture()
+	h := handlers.NewWaitlistHandler(repo, nil, "test-pii-salt")
+
+	// Send a padded + display-name email; handler should store "user@example.com".
+	body, _ := json.Marshal(map[string]string{"email": "  User@Example.COM  "})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "1.2.3.4:12345"
+	rr := httptest.NewRecorder()
+
+	h.Join(rr, req)
+
+	if rr.Code == http.StatusBadRequest {
+		t.Fatalf("valid email with whitespace/case: unexpected 400 — body: %s", rr.Body.String())
+	}
+
+	got := repo.capturedEmail
+	if got != "user@example.com" {
+		t.Errorf("stored email: want %q, got %q (must be lower+trimmed addr.Address)", "user@example.com", got)
+	}
+}
+
+// TestWaitlist_PIILog_NoRawEmail verifies that raw email is absent from the
+// log on the DB error path (lines 176 and 198 must omit email entirely — Ray Q4
+// ruling: omit, not hash). (#135)
+func TestWaitlist_PIILog_NoRawEmail(t *testing.T) {
+	const testEmail = "piitest@example.com"
+
+	repo := newStubWaitlistRepoErr(fmt.Errorf("db: connection refused"))
+	h := handlers.NewWaitlistHandler(repo, nil, "test-pii-salt")
+
+	var logBuf strings.Builder
+	orig := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	rr := httptest.NewRecorder()
+	h.Join(rr, newWaitlistRequestWithSalt(testEmail, "test-pii-salt"))
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on DB error, got %d", rr.Code)
+	}
+
+	logged := logBuf.String()
+	if strings.Contains(logged, testEmail) {
+		t.Errorf("PII log violation: raw email %q found in log output — must be omitted: %q", testEmail, logged)
+	}
+}
+
+// TestWaitlist_PIILog_Mailchimp_NoRawEmail verifies that the Mailchimp error
+// log goroutine (line 198 equivalent) also omits the raw email (#135).
+func TestWaitlist_PIILog_Mailchimp_NoRawEmail(t *testing.T) {
+	const testEmail = "mailchimp-pii@example.com"
+
+	repo := newStubWaitlistRepo("uuid-mc-pii", 1, true)
+	mc := newStubMailchimpClient(fmt.Errorf("mailchimp: 500"))
+	h := handlers.NewWaitlistHandler(repo, mc, "test-pii-salt")
+
+	// Use a mutex-protected log writer to avoid a data race between the
+	// Mailchimp goroutine's log.Printf (which fires AFTER AddMember returns
+	// and mc.done is signalled) and this test reading the buffer.
+	var mu sync.Mutex
+	var logLines []string
+	orig := log.Writer()
+	log.SetOutput(&safeLogWriter{mu: &mu, lines: &logLines})
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	rr := httptest.NewRecorder()
+	h.Join(rr, newWaitlistRequestWithSalt(testEmail, "test-pii-salt"))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	// Wait for Mailchimp goroutine's AddMember to be called.
+	<-mc.done
+
+	// The log.Printf in the goroutine fires AFTER AddMember returns (which is
+	// when mc.done is signalled). Yield to allow the goroutine to complete the
+	// log write before we read. Using runtime.Gosched() in a brief loop is
+	// sufficient since the goroutine has no other work after log.Printf.
+	for range 10 {
+		mu.Lock()
+		n := len(logLines)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		// Brief yield — the goroutine only has log.Printf left after mc.done.
+		time.Sleep(time.Millisecond)
+	}
+
+	mu.Lock()
+	logged := strings.Join(logLines, "\n")
+	mu.Unlock()
+
+	if strings.Contains(logged, testEmail) {
+		t.Errorf("Mailchimp goroutine log PII violation: raw email %q found — must be omitted: %q", testEmail, logged)
+	}
+}
+
+// safeLogWriter is a thread-safe io.Writer for capturing log output in tests
+// where goroutines may write to the logger concurrently.
+type safeLogWriter struct {
+	mu    *sync.Mutex
+	lines *[]string
+}
+
+func (s *safeLogWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	*s.lines = append(*s.lines, string(p))
+	s.mu.Unlock()
+	return len(p), nil
+}
+
+// TestWaitlist_RateMapCap_Eviction verifies the rateByIP map is bounded at
+// WaitlistRateMapCap and does not grow without bound (#132 / S-07 mirror).
+func TestWaitlist_RateMapCap_Eviction(t *testing.T) {
+	repo := newStubWaitlistRepo("uuid-cap", 1, true)
+	h := handlers.NewWaitlistHandler(repo, nil, "test-pii-salt")
+
+	flood := handlers.WaitlistRateMapCap + 500
+	for i := range flood {
+		body, _ := json.Marshal(map[string]string{"email": fmt.Sprintf("flood%d@example.com", i)})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Real-IP", fmt.Sprintf("10.%d.%d.%d", (i/65536)%256, (i/256)%256, i%256))
+		rr := httptest.NewRecorder()
+		h.Join(rr, req)
+	}
+
+	size := h.WaitlistRateMapSize()
+	if size > handlers.WaitlistRateMapCap {
+		t.Errorf("rateByIP map size %d exceeds cap %d", size, handlers.WaitlistRateMapCap)
+	}
+}
+
+// ─── additional helpers for PR A tests ───────────────────────────────────────
+
+// newWaitlistRequestWithSalt creates a waitlist POST with the given email
+// and application/json Content-Type (post-PR-A contract).
+func newWaitlistRequestWithSalt(email, _ string) *http.Request {
+	body, _ := json.Marshal(map[string]string{"email": email})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "1.2.3.4:12345"
+	return req
+}
+
+// stubWaitlistRepoCapture is a stub that records the email passed to InsertIfNew.
+type stubWaitlistRepoCapture struct {
+	capturedEmail string
+}
+
+func newStubWaitlistRepoCapture() *stubWaitlistRepoCapture {
+	return &stubWaitlistRepoCapture{}
+}
+
+func (s *stubWaitlistRepoCapture) InsertIfNew(_ context.Context, email string, _, _, _ *string, _ *string) (string, int64, bool, error) {
+	s.capturedEmail = email
+	return "uuid-cap", 1, true, nil
+}
+
+func (s *stubWaitlistRepoCapture) UpdateMailchimpStatus(_ context.Context, _, _ string) error {
+	return nil
 }
 
 // ─── assertion helpers ────────────────────────────────────────────────────────

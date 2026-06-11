@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/mail"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,17 @@ const (
 	// waitlistRateLimitMax is the maximum POST /api/v1/waitlist calls allowed
 	// per IP per waitlistRateLimitWindow (RC5).
 	waitlistRateLimitMax = 5
+
+	// waitlistBodyLimitBytes is the maximum accepted request body size (4 KB).
+	// Requests with a body exceeding this limit are rejected with 413 (#132).
+	waitlistBodyLimitBytes = 4096
+
+	// WaitlistRateMapCap is the maximum number of entries in the rateByIP map.
+	// Mirrors BootSignalRateMapCap: without a bound, unique spoofed X-Real-IP
+	// values can grow the map without limit on this public unauth endpoint.
+	// At ~200 bytes per entry, 50 000 entries ≈ 10 MB ceiling.
+	// Exported so tests can assert the eviction bound.
+	WaitlistRateMapCap = 50_000
 )
 
 // waitlistRateEntry tracks request timestamps for one IP address.
@@ -78,6 +90,15 @@ type MailchimpClient interface {
 //
 // Public endpoint (no Clerk auth required). Rate limited at 5 req/hour per IP.
 //
+// Guard order (hardened per tickets #132/#133/#134/#135):
+//  1. Content-Type: application/json prefix check → 415
+//  2. http.MaxBytesReader wraps body (4096 bytes) → 413 if exceeded
+//  3. Per-IP rate check (realIP) → 429
+//  4. json.Decode → 400 on parse/oversize error
+//  5. Email empty check → 400
+//  6. net/mail.ParseAddress email format check → 400
+//  7. InsertIfNew → 500 on DB error; 409 on duplicate; 200 on new insert
+//
 // New email: 200 OK with {"position": N} (1-based row count at insert time).
 // Duplicate email: 409 Conflict with {"error": "This email is already registered."}.
 // Mailchimp is NOT called again on duplicate — the member is already subscribed.
@@ -88,6 +109,11 @@ type MailchimpClient interface {
 //
 // Analytics: fires funnel_waitlist_signup_completed on the new-email path only.
 // Goroutine-dispatched so analytics latency does not block the HTTP response.
+//
+// PII logging (#135): log lines omit the raw email entirely. Identity adds
+// nothing to diagnosis on the DB error path; the Mailchimp reconciler retries
+// off the row, not the log. Add email correlation to logs only if a concrete
+// operational need arises.
 type WaitlistHandler struct {
 	repo      waitlistRepo
 	mailchimp MailchimpClient
@@ -96,9 +122,13 @@ type WaitlistHandler struct {
 	rateByIP  map[string]*waitlistRateEntry
 }
 
-// NewWaitlistHandler returns a handler backed by repo. mc may be nil in tests
-// or when MAILCHIMP_API_KEY is not configured; Mailchimp signup is skipped.
-func NewWaitlistHandler(repo waitlistRepo, mc MailchimpClient) *WaitlistHandler {
+// NewWaitlistHandler returns a handler backed by repo.
+// mc may be nil in tests or when MAILCHIMP_API_KEY is not configured.
+// piiSalt is accepted for forward compatibility — per Ray Q4 ruling, email is
+// omitted from log lines entirely (not hashed). The parameter is intentionally
+// blank so callers pass cfg.AnalyticsPIISalt and the signature stays stable if
+// salted-hash logging is added later.
+func NewWaitlistHandler(repo waitlistRepo, mc MailchimpClient, _ string) *WaitlistHandler {
 	return &WaitlistHandler{
 		repo:      repo,
 		mailchimp: mc,
@@ -118,6 +148,14 @@ func (h *WaitlistHandler) WithAnalyticsClient(c *analytics.Client) *WaitlistHand
 	return h
 }
 
+// WaitlistRateMapSize returns the current number of entries in the rateByIP map.
+// Exported for test use only — lets the test package assert the eviction bound.
+func (h *WaitlistHandler) WaitlistRateMapSize() int {
+	h.rateMu.Lock()
+	defer h.rateMu.Unlock()
+	return len(h.rateByIP)
+}
+
 // waitlistRequest is the JSON body for POST /api/v1/waitlist.
 type waitlistRequest struct {
 	Email       string `json:"email"`
@@ -135,25 +173,58 @@ type waitlistResponse struct {
 
 // Join handles POST /api/v1/waitlist.
 func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
-	// Per-IP rate limit: 5 req/hour. Uses the same rateEntry type as daemon_register.
+	// 1. Content-Type guard: must be application/json (prefix match allows
+	//    "application/json; charset=utf-8" etc.). Waitlist is a user-facing
+	//    JSON POST — unlike boot-signal which accepts text/plain (sendBeacon
+	//    CORS-simple constraint). 415 Unsupported Media Type.
+	ct := r.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		writeJSONError(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	// 2. Body size cap: 4096 bytes. Wrap before any read so that an oversized
+	//    body is bounded and the subsequent json.Decode returns a MaxBytesError.
+	r.Body = http.MaxBytesReader(w, r.Body, waitlistBodyLimitBytes)
+
+	// 3. Per-IP rate limit: 5 req/hour.
 	ip := realIP(r)
 	if !h.rateAllow(ip) {
 		writeJSONError(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 
+	// 4. Decode. MaxBytesReader returns a *http.MaxBytesError when the body
+	//    exceeds the limit — map that to 413; all other decode errors to 400.
 	var req waitlistRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if isMaxBytesError(err) {
+			writeJSONError(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		log.Printf("[waitlist] decode body: %v", err)
 		writeJSONError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	email := strings.TrimSpace(strings.ToLower(req.Email))
-	if email == "" {
+	// 5. Empty-email check.
+	rawEmail := strings.TrimSpace(req.Email)
+	if rawEmail == "" {
 		writeJSONError(w, "email is required", http.StatusBadRequest)
 		return
 	}
+
+	// 6. Email format validation (net/mail.ParseAddress — RFC 5322, stdlib, no deps).
+	//    Normalise to strings.ToLower(strings.TrimSpace(addr.Address)) before storing:
+	//    - addr.Address strips the display-name wrapper ("Name <user@x.com>" → "user@x.com")
+	//    - lowercase + trim ensures dedup stability ("User@X.com" ≡ "user@x.com")
+	//    Ray Q2 ruling: store addr.Address, not raw req.Email.
+	addr, err := mail.ParseAddress(rawEmail)
+	if err != nil {
+		writeJSONError(w, "invalid email address", http.StatusBadRequest)
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(addr.Address))
 
 	nullableStr := func(s string) *string {
 		v := strings.TrimSpace(s)
@@ -168,12 +239,14 @@ func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
 	utmCampaign := nullableStr(req.UTMCampaign)
 	referrer := nullableStr(req.Referrer)
 
-	// Insert or no-op. ON CONFLICT DO NOTHING: no row returned → email already existed.
+	// 7. Insert or no-op. ON CONFLICT DO NOTHING: no row returned → email already existed.
 	// Returns position (1-based COUNT(*)) on new insert so the SPA can show the
 	// queue position immediately without a second round-trip.
+	// PII log (#135): omit email from the error log — identity adds nothing to
+	// diagnosis on this path; the reconciler retries off the DB row, not the log.
 	id, position, created, err := h.repo.InsertIfNew(r.Context(), email, utmSource, utmMedium, utmCampaign, referrer)
 	if err != nil {
-		log.Printf("[waitlist] InsertIfNew email=%s: %v", email, err)
+		log.Printf("[waitlist] InsertIfNew: %v", err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -188,30 +261,33 @@ func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
 
 	// Best-effort Mailchimp signup. Non-fatal: on any error the row keeps
 	// mailchimp_status='failed' and a future reconciler will retry.
+	// PII log (#135): omit email from the error log — the reconciler retries
+	// off the DB row (row id), not the log line.
 	if h.mailchimp != nil {
-		go func(rowID, addr string) {
+		go func(rowID string) {
 			mcCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			mcErr := h.mailchimp.AddMember(mcCtx, addr)
+			mcErr := h.mailchimp.AddMember(mcCtx, email)
 			if mcErr != nil {
-				log.Printf("[waitlist] mailchimp AddMember email=%s: %v (non-fatal; reconciler will retry)", addr, mcErr)
+				log.Printf("[waitlist] mailchimp AddMember id=%s: %v (non-fatal; reconciler will retry)", rowID, mcErr)
 				return
 			}
 
 			if dbErr := h.repo.UpdateMailchimpStatus(mcCtx, rowID, "subscribed"); dbErr != nil {
 				log.Printf("[waitlist] UpdateMailchimpStatus id=%s: %v", rowID, dbErr)
 			}
-		}(id, email)
+		}(id)
 	}
 
 	// Fire funnel_waitlist_signup_completed on the new-email path only.
 	// Goroutine-dispatched: analytics latency must not block the HTTP response.
-	// distinct_id: SHA-256 hash of email — uses identityhash for PII safety.
+	// distinct_id: HashAccountID(email) — unsalted, per I-10 / Ray Q1 ruling.
+	// (PostHog dedup requires stability across sessions — unsalted is intentional.)
 	// Operational: true — waitlist signup is pre-auth; GDPR §6(1)(f) carve-out.
 	ac := h.analytics
-	go func(addr string, src, medium, campaign, ref *string) {
-		hashedAddr := identityhash.HashAccountID(addr)
+	go func(src, medium, campaign, ref *string) {
+		hashedAddr := identityhash.HashAccountID(email)
 		if err := ac.Capture(context.Background(), hashedAddr, "funnel_waitlist_signup_completed", map[string]any{
 			"utm_source":   strOrEmpty(src),
 			"utm_medium":   strOrEmpty(medium),
@@ -220,7 +296,7 @@ func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
 		}, analytics.CaptureOptions{Operational: true}); err != nil {
 			log.Printf("[waitlist] analytics capture: %v", err)
 		}
-	}(email, utmSource, utmMedium, utmCampaign, referrer)
+	}(utmSource, utmMedium, utmCampaign, referrer)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -238,15 +314,68 @@ func strOrEmpty(p *string) string {
 }
 
 // rateAllow checks and records a rate-limit call for ip.
+// On new-IP insert it enforces the WaitlistRateMapCap bound (mirrors
+// BootSignalHandler.rateAllow): if the map is at capacity, expired entries
+// are evicted first; if none are expired the oldest entry is removed.
+// Parallel implementation: types differ from bootSignalRateEntry so no shared
+// helper; see BootSignalHandler.rateAllow for the parallel. Re-evaluate
+// extraction at a third consumer.
 func (h *WaitlistHandler) rateAllow(ip string) bool {
 	h.rateMu.Lock()
 	entry, ok := h.rateByIP[ip]
 	if !ok {
+		if len(h.rateByIP) >= WaitlistRateMapCap {
+			h.evictOldestLocked()
+		}
 		entry = &waitlistRateEntry{}
 		h.rateByIP[ip] = entry
 	}
 	h.rateMu.Unlock()
 	return entry.allow()
+}
+
+// evictOldestLocked removes stale or oldest entries to make room for a new IP.
+// Must be called with h.rateMu held. Mirrors BootSignalHandler.evictOldestLocked.
+// Strategy: scan for any fully-expired entry first; if none, remove least-recent.
+func (h *WaitlistHandler) evictOldestLocked() {
+	cutoff := time.Now().Add(-waitlistRateLimitWindow)
+
+	// First pass: evict any fully-expired entry.
+	for k, e := range h.rateByIP {
+		e.mu.Lock()
+		live := 0
+		for _, t := range e.callTimes {
+			if t.After(cutoff) {
+				live++
+			}
+		}
+		e.mu.Unlock()
+		if live == 0 {
+			delete(h.rateByIP, k)
+			return
+		}
+	}
+
+	// No fully-expired entry: remove the least-recently-active entry.
+	var oldestKey string
+	var oldestTime time.Time
+	for k, e := range h.rateByIP {
+		e.mu.Lock()
+		var last time.Time
+		for _, t := range e.callTimes {
+			if t.After(last) {
+				last = t
+			}
+		}
+		e.mu.Unlock()
+		if oldestKey == "" || last.Before(oldestTime) {
+			oldestKey = k
+			oldestTime = last
+		}
+	}
+	if oldestKey != "" {
+		delete(h.rateByIP, oldestKey)
+	}
 }
 
 // realIP extracts the client IP for rate-limiting.

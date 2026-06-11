@@ -1562,7 +1562,7 @@ func TestWaitlistHandler_Integration_200WithPosition(t *testing.T) {
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM waitlist_entries WHERE email = $1`, email)
 	})
 
-	h := handlers.NewWaitlistHandler(repo, nil)
+	h := handlers.NewWaitlistHandler(repo, nil, "")
 
 	body, _ := json.Marshal(map[string]string{"email": email})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/waitlist", bytes.NewReader(body))
@@ -1600,7 +1600,7 @@ func TestWaitlistHandler_Integration_409OnDuplicate(t *testing.T) {
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM waitlist_entries WHERE email = $1`, email)
 	})
 
-	h := handlers.NewWaitlistHandler(repo, nil)
+	h := handlers.NewWaitlistHandler(repo, nil, "")
 
 	makeReq := func() *httptest.ResponseRecorder {
 		body, _ := json.Marshal(map[string]string{"email": email})
