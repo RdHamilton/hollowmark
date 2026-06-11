@@ -88,6 +88,51 @@ func TestCanarySelectCollection_AtSanityFloor_OK(t *testing.T) {
 	assert.Len(t, got.Entries, MinSaneCollection)
 }
 
+func TestCanarySanityBand_ProfRecommendedValues(t *testing.T) {
+	// Prof's player-value consult (hollowmark-tickets#1285 comment 4684603354):
+	// floor 250 (a real post-NPE account sits ~300 distinct grpIds), soft-warn
+	// 50k (unusually-large-but-valid collection — telemetry only), hard ceiling
+	// 100k (wrong-region scan). Do not change without a fresh Prof consult.
+	assert.Equal(t, 250, MinSaneCollection)
+	assert.Equal(t, 50_000, SoftWarnCollection)
+	assert.Equal(t, 100_000, MaxSaneCollection)
+}
+
+func TestCanarySelectCollection_AboveSoftWarn_NoError_WarnsLoudly(t *testing.T) {
+	regions := []RegionScan{
+		{Addr: 0x1000, Size: 64 << 20, Entries: makeEntries(SoftWarnCollection + 1)},
+	}
+
+	got, err := SelectCollection(regions)
+	require.NoError(t, err, "above soft-warn but under hard ceiling must NOT hard-error")
+	assert.Len(t, got.Entries, SoftWarnCollection+1)
+	require.NotEmpty(t, got.Warning, "soft-warn band must produce a telemetry warning")
+	assert.Contains(t, got.Warning, fmt.Sprintf("%d", SoftWarnCollection+1),
+		"warning must report the entry count")
+	assert.NotContains(t, got.Warning, DriftToken,
+		"soft warning must NOT carry the hard-alarm token — CloudWatch filter would page on it")
+}
+
+func TestCanarySelectCollection_AtSoftWarnBoundary_NoWarning(t *testing.T) {
+	regions := []RegionScan{
+		{Addr: 0x1000, Size: 64 << 20, Entries: makeEntries(SoftWarnCollection)},
+	}
+
+	got, err := SelectCollection(regions)
+	require.NoError(t, err)
+	assert.Empty(t, got.Warning, "exactly SoftWarnCollection entries is still in the normal band")
+}
+
+func TestCanarySelectCollection_NormalResult_NoWarning(t *testing.T) {
+	regions := []RegionScan{
+		{Addr: 0x1000, Size: 16 << 20, Entries: makeEntries(19_263)},
+	}
+
+	got, err := SelectCollection(regions)
+	require.NoError(t, err)
+	assert.Empty(t, got.Warning)
+}
+
 func TestCanarySelectCollection_AboveSanityCeiling_DriftError(t *testing.T) {
 	regions := []RegionScan{
 		{Addr: 0x1000, Size: 64 << 20, Entries: makeEntries(MaxSaneCollection + 1)},
