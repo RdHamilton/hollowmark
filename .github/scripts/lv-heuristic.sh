@@ -6,11 +6,14 @@
 # Called by pr-local-verification-check.yml with the PR body written to a
 # temporary file. The workflow sets the following env vars before calling:
 #
-#   IS_DEPENDABOT  -- "yes" if github.actor == 'dependabot[bot]', else "no"
+#   IS_DEPENDABOT  -- set from `${{ github.actor == 'dependabot[bot]' }}` in the
+#                     workflow (evaluates to the string "true"/"false"); also
+#                     accepts "yes"/"no" for test-harness use.
 #   SHELL_TOUCHED  -- "yes" if the PR touches *.sh or scripts/deploy/, else "no"
 #
 # Usage:
 #   IS_DEPENDABOT=no SHELL_TOUCHED=no bash lv-heuristic.sh /path/to/pr_body.txt
+#   IS_DEPENDABOT=yes bash lv-heuristic.sh /dev/null   # Dependabot exemption path
 #
 # Exit codes:
 #   0 -- heuristic PASS (or Dependabot exemption)
@@ -44,6 +47,20 @@ BODY_FILE="${1:-}"
 IS_DEPENDABOT="${IS_DEPENDABOT:-no}"
 SHELL_TOUCHED="${SHELL_TOUCHED:-no}"
 
+# ---------------------------------------------------------------------------
+# Dependabot exemption (#826) -- checked BEFORE body file validation so the
+# step can run without a body file (which is not fetched for bot PRs).
+# github.actor == 'dependabot[bot]' evaluates to the string "true" in GHA
+# expressions; also accept the literal "yes" for test-harness use.
+# ---------------------------------------------------------------------------
+if [ "${IS_DEPENDABOT}" = "true" ] || [ "${IS_DEPENDABOT}" = "yes" ]; then
+  echo "Actor: dependabot[bot]"
+  echo "Dependabot PR -- Local Verification section not required."
+  echo "permissionDecision: ALLOW"
+  echo "Local Verification heuristic check: PASS (Dependabot exemption)"
+  exit 0
+fi
+
 if [ -z "$BODY_FILE" ]; then
   echo "Usage: IS_DEPENDABOT=no SHELL_TOUCHED=no $0 <pr_body_file>"
   exit 1
@@ -52,17 +69,6 @@ fi
 if [ ! -f "$BODY_FILE" ]; then
   echo "ERROR: body file not found: $BODY_FILE"
   exit 1
-fi
-
-# ---------------------------------------------------------------------------
-# Dependabot exemption (#826)
-# ---------------------------------------------------------------------------
-if [ "${IS_DEPENDABOT}" = "yes" ]; then
-  echo "Actor: dependabot[bot]"
-  echo "Dependabot PR -- Local Verification section not required."
-  echo "permissionDecision: ALLOW"
-  echo "Local Verification heuristic check: PASS (Dependabot exemption)"
-  exit 0
 fi
 
 # ---------------------------------------------------------------------------

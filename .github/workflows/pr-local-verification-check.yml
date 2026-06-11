@@ -248,9 +248,8 @@ jobs:
           echo "Shell-flavored PR: $SHELL_TOUCHED"
 
       - name: Parse Local Verification section
-        if: github.actor != 'dependabot[bot]'
         env:
           SHELL_TOUCHED: ${{ steps.shellfiles.outputs.shell_touched }}
-          IS_DEPENDABOT: "no"
+          IS_DEPENDABOT: ${{ github.actor == 'dependabot[bot]' }}
         run: |
           bash .github/scripts/lv-heuristic.sh /tmp/pr_body.txt
