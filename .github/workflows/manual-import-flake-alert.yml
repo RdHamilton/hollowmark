@@ -1,0 +1,284 @@
+# Manual-import smoke-gate flakiness alert — hollowmark/RdHamilton
+#
+# Implements hollowmark-tickets#1167 (AC1–AC4).
+#
+# Problem: the manual-import E2E smoke gate (#895/#901, live as of PR #3089/
+# #3105) runs on every push to main. A single failure triggers the existing
+# per-run build-failure-notify alert, but a *pattern* of intermittent failures
+# (flakiness) can go undetected because each individual failure looks like a
+# transient blip rather than a trend. This workflow closes that gap.
+#
+# Mechanism (AC1):
+#   Queries the GHA REST API for the most recent FLAKE_WINDOW_RUNS completed
+#   runs of "E2E Smoke Tests" on main. Counts failures vs. non-failures. This
+#   is a rolling window measured in run count (not wall time) so it is stable
+#   against quiet periods (weekends, holidays).
+#
+# Alert condition (AC2):
+#   If (failure_count / total_counted * 100) >= FLAKE_THRESHOLD_PCT, posts a
+#   :warning: alert to Discord #team (same channel as the per-run failure
+#   alert). Message includes the failure rate, counts, and a link to the
+#   workflow run history so the on-call engineer can drill in immediately.
+#
+# Configuration (AC3):
+#   FLAKE_WINDOW_RUNS   — number of recent completed runs in the rolling
+#                         window. Default: 20.
+#   FLAKE_THRESHOLD_PCT — minimum failure-rate % (integer) that triggers the
+#                         alert. Default: 20 (fire when 4+ of the last 20
+#                         runs failed).
+#   Both vars live as top-level env: keys and can be overridden via
+#   workflow_dispatch inputs without any code change (AC3).
+#
+# Runbook (AC4):
+#   hollowmark-docs/engineering/runbooks/build-failure-discord-alert.md
+#   section: Manual-Import Flakiness Alert
+#
+# Loop prevention: this workflow is NOT listed in main-failure-notify.yml, so
+# a failure here cannot trigger the per-run alert for itself.
+#
+# IAM: uses AWS_DEPLOY_ROLE_ARN (github-actions-oidc-deploy). The
+# SSMParameterRead Sid grants ssm:GetParameter on /vaultmtg/*, which covers
+# /vaultmtg/prod/discord-bot-token. No new IAM changes required.
+
+name: Manual-Import Flake Alert
+
+on:
+  # Run every 6 hours to keep the rolling-window view fresh.
+  schedule:
+    - cron: '0 */6 * * *'
+  # Allow manual trigger for testing or incident response.
+  workflow_dispatch:
+    inputs:
+      flake_window_runs:
+        description: 'Number of recent E2E smoke runs to evaluate (overrides env default)'
+        required: false
+        type: string
+        default: ''
+      flake_threshold_pct:
+        description: 'Failure-rate % threshold that fires the alert (overrides env default)'
+        required: false
+        type: string
+        default: ''
+
+# ---------------------------------------------------------------------------
+# Configuration (AC3) — change these without touching any logic below.
+# ---------------------------------------------------------------------------
+env:
+  # Rolling window: evaluate this many recent completed runs on main.
+  FLAKE_WINDOW_RUNS: "20"
+  # Fire the alert when failure_count/total * 100 >= this value (integer %).
+  FLAKE_THRESHOLD_PCT: "20"
+  # GHA run-history URL shown in the Discord alert.
+  SMOKE_RUNS_URL: "https://github.com/RdHamilton/hollowmark/actions/workflows/e2e-smoke.yml?query=branch%3Amain"
+  # Discord channel id for #team.
+  DISCORD_CHANNEL_ID: "1510975923292213278"
+  # SSM path for the Discord bot token.
+  SSM_DISCORD_TOKEN_PATH: /vaultmtg/prod/discord-bot-token
+  AWS_REGION: us-east-1
+
+permissions:
+  contents: read
+  id-token: write   # OIDC for AWS credential assumption (SSM read)
+  actions: read     # List workflow runs via GITHUB_TOKEN
+
+jobs:
+  check-flake:
+    name: Check manual-import smoke-gate flake rate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # ------------------------------------------------------------------
+      # Step 1: Resolve effective config — dispatch inputs override env vars
+      # ------------------------------------------------------------------
+      - name: Resolve effective configuration
+        id: config
+        run: |
+          WINDOW="${{ inputs.flake_window_runs }}"
+          THRESHOLD="${{ inputs.flake_threshold_pct }}"
+          # Fall back to env defaults when dispatch inputs are empty.
+          WINDOW="${WINDOW:-$FLAKE_WINDOW_RUNS}"
+          THRESHOLD="${THRESHOLD:-$FLAKE_THRESHOLD_PCT}"
+          echo "window=$WINDOW" >> "$GITHUB_OUTPUT"
+          echo "threshold=$THRESHOLD" >> "$GITHUB_OUTPUT"
+          echo "Effective window=$WINDOW threshold=$THRESHOLD"
+
+      # ------------------------------------------------------------------
+      # Step 2: Fetch run history and calculate failure rate (AC1)
+      # ------------------------------------------------------------------
+      - name: Evaluate flake rate over rolling window
+        id: flake
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOW: ${{ steps.config.outputs.window }}
+          THRESHOLD: ${{ steps.config.outputs.threshold }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess, sys
+
+          window    = int(os.environ["WINDOW"])
+          threshold = int(os.environ["THRESHOLD"])
+          token     = os.environ["GH_TOKEN"]
+
+          # Fetch (window * 2) completed runs to have surplus after filtering.
+          # GitHub caps per_page at 100.
+          per_page = min(window * 2, 100)
+
+          result = subprocess.run(
+              [
+                  "gh", "api",
+                  (
+                      "repos/RdHamilton/hollowmark/actions/workflows"
+                      "/e2e-smoke.yml/runs"
+                      f"?branch=main&status=completed&per_page={per_page}"
+                  ),
+                  "--jq", ".workflow_runs[] | {conclusion, id}",
+              ],
+              capture_output=True, text=True,
+              env={**os.environ, "GH_TOKEN": token},
+          )
+          if result.returncode != 0:
+              print(f"API error: {result.stderr}", file=sys.stderr)
+              sys.exit(1)
+
+          runs = []
+          for line in result.stdout.strip().splitlines():
+              if line.strip():
+                  runs.append(json.loads(line))
+
+          # Take the most recent `window` runs.
+          recent = runs[:window]
+          total  = len(recent)
+
+          if total == 0:
+              print("No completed runs found — skipping alert check.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("should_alert=false\n")
+                  f.write("rate=0\n")
+                  f.write("failures=0\n")
+                  f.write("total=0\n")
+              sys.exit(0)
+
+          # Count only 'failure' conclusions; ignore 'cancelled' / 'skipped'
+          # to avoid false positives on manually-cancelled runs.
+          failures = sum(1 for r in recent if r.get("conclusion") == "failure")
+          rate_pct = int(failures / total * 100)
+
+          print(f"Rolling window: last {total} completed runs on main")
+          print(f"Failures: {failures} | Rate: {rate_pct}% | Threshold: {threshold}%")
+
+          should_alert = "true" if rate_pct >= threshold else "false"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"should_alert={should_alert}\n")
+              f.write(f"rate={rate_pct}\n")
+              f.write(f"failures={failures}\n")
+              f.write(f"total={total}\n")
+          PYEOF
+
+      # ------------------------------------------------------------------
+      # Step 3: Assume OIDC role + read Discord bot token (only on alert)
+      # ------------------------------------------------------------------
+      - name: Configure AWS credentials (OIDC)
+        if: steps.flake.outputs.should_alert == 'true'
+        uses: aws-actions/configure-aws-credentials@796449b3e38e3c256861227399e58b780e0e5538  # v6 SHA-pinned
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Read Discord bot token from SSM
+        id: ssm
+        if: steps.flake.outputs.should_alert == 'true'
+        run: |
+          TOKEN=$(aws ssm get-parameter \
+            --name "$SSM_DISCORD_TOKEN_PATH" \
+            --with-decryption \
+            --query "Parameter.Value" \
+            --output text \
+            --region "$AWS_REGION")
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------------
+      # Step 4: Post flakiness alert to Discord #team (AC2)
+      # ------------------------------------------------------------------
+      - name: Post flakiness alert to Discord #team
+        if: steps.flake.outputs.should_alert == 'true'
+        env:
+          DISCORD_TOKEN: ${{ steps.ssm.outputs.token }}
+          RATE: ${{ steps.flake.outputs.rate }}
+          FAILURES: ${{ steps.flake.outputs.failures }}
+          TOTAL: ${{ steps.flake.outputs.total }}
+          WINDOW: ${{ steps.config.outputs.window }}
+          THRESHOLD: ${{ steps.config.outputs.threshold }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess, sys
+
+          token     = os.environ["DISCORD_TOKEN"]
+          channel   = os.environ["DISCORD_CHANNEL_ID"]
+          rate      = os.environ["RATE"]
+          failures  = os.environ["FAILURES"]
+          total     = os.environ["TOTAL"]
+          window    = os.environ["WINDOW"]
+          threshold = os.environ["THRESHOLD"]
+          runs_url  = os.environ["SMOKE_RUNS_URL"]
+
+          message = (
+              f":warning: **Manual-import smoke gate is flaky** "
+              f"({failures}/{total} of the last {window} runs on `main` failed, "
+              f"{rate}% >= {threshold}% threshold).\n"
+              f"**Workflow:** E2E Smoke Tests (manual-import suite)\n"
+              f"**Run history:** {runs_url}\n"
+              f"See runbook: build-failure-discord-alert.md "
+              f"section: Manual-Import Flakiness Alert"
+          )
+
+          if len(message) > 2000:
+              message = message[:1997] + "..."
+
+          payload = json.dumps({"content": message})
+
+          with open("/tmp/discord-flake-payload.json", "w") as f:
+              f.write(payload)
+
+          result = subprocess.run(
+              [
+                  "curl", "-s", "-X", "POST",
+                  "-H", f"Authorization: Bot {token}",
+                  "-H", "Content-Type: application/json",
+                  "--data", "@/tmp/discord-flake-payload.json",
+                  f"https://discord.com/api/v10/channels/{channel}/messages",
+              ],
+              capture_output=True,
+              text=True,
+          )
+          resp = json.loads(result.stdout) if result.stdout else {}
+          msg_id = resp.get("id", "")
+          if not msg_id:
+              print(
+                  f"POST FAILED. stdout={result.stdout!r} "
+                  f"stderr={result.stderr!r}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          print(f"Posted flakiness alert to Discord #team — message id={msg_id}")
+          PYEOF
+
+      # ------------------------------------------------------------------
+      # Step 5: Summary — always runs; useful in the GHA run UI
+      # ------------------------------------------------------------------
+      - name: Log result summary
+        if: always()
+        env:
+          SHOULD_ALERT: ${{ steps.flake.outputs.should_alert }}
+          RATE: ${{ steps.flake.outputs.rate }}
+          FAILURES: ${{ steps.flake.outputs.failures }}
+          TOTAL: ${{ steps.flake.outputs.total }}
+          THRESHOLD: ${{ steps.config.outputs.threshold }}
+        run: |
+          if [ "$SHOULD_ALERT" = "true" ]; then
+            echo "ALERT FIRED: failure rate ${RATE}% >= ${THRESHOLD}% threshold (${FAILURES}/${TOTAL} runs)"
+          else
+            echo "No alert: failure rate ${RATE:-0}% < ${THRESHOLD}% threshold (${FAILURES:-0}/${TOTAL:-0} runs in window)"
+          fi
