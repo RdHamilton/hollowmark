@@ -77,7 +77,7 @@ func (e *waitlistRateEntry) allow() bool {
 
 // waitlistRepo is the subset of WaitlistRepository used by WaitlistHandler.
 type waitlistRepo interface {
-	InsertIfNew(ctx context.Context, email string, utmSource, utmMedium, utmCampaign *string, referrer *string) (id string, position int64, created bool, err error)
+	InsertIfNew(ctx context.Context, email string, utmSource, utmMedium, utmCampaign *string, utmContent, utmTerm *string, referrer *string) (id string, position int64, created bool, err error)
 	UpdateMailchimpStatus(ctx context.Context, id, status string) error
 }
 
@@ -162,6 +162,8 @@ type waitlistRequest struct {
 	UTMSource   string `json:"utm_source"`
 	UTMMedium   string `json:"utm_medium"`
 	UTMCampaign string `json:"utm_campaign"`
+	UTMContent  string `json:"utm_content"`
+	UTMTerm     string `json:"utm_term"`
 	Referrer    string `json:"referrer"`
 }
 
@@ -237,6 +239,8 @@ func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
 	utmSource := nullableStr(req.UTMSource)
 	utmMedium := nullableStr(req.UTMMedium)
 	utmCampaign := nullableStr(req.UTMCampaign)
+	utmContent := nullableStr(req.UTMContent)
+	utmTerm := nullableStr(req.UTMTerm)
 	referrer := nullableStr(req.Referrer)
 
 	// 7. Insert or no-op. ON CONFLICT DO NOTHING: no row returned → email already existed.
@@ -244,7 +248,7 @@ func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
 	// queue position immediately without a second round-trip.
 	// PII log (#135): omit email from the error log — identity adds nothing to
 	// diagnosis on this path; the reconciler retries off the DB row, not the log.
-	id, position, created, err := h.repo.InsertIfNew(r.Context(), email, utmSource, utmMedium, utmCampaign, referrer)
+	id, position, created, err := h.repo.InsertIfNew(r.Context(), email, utmSource, utmMedium, utmCampaign, utmContent, utmTerm, referrer)
 	if err != nil {
 		log.Printf("[waitlist] InsertIfNew: %v", err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
@@ -286,17 +290,19 @@ func (h *WaitlistHandler) Join(w http.ResponseWriter, r *http.Request) {
 	// (PostHog dedup requires stability across sessions — unsalted is intentional.)
 	// Operational: true — waitlist signup is pre-auth; GDPR §6(1)(f) carve-out.
 	ac := h.analytics
-	go func(src, medium, campaign, ref *string) {
+	go func(src, medium, campaign, content, term, ref *string) {
 		hashedAddr := identityhash.HashAccountID(email)
 		if err := ac.Capture(context.Background(), hashedAddr, "funnel_waitlist_signup_completed", map[string]any{
 			"utm_source":   strOrEmpty(src),
 			"utm_medium":   strOrEmpty(medium),
 			"utm_campaign": strOrEmpty(campaign),
+			"utm_content":  strOrEmpty(content),
+			"utm_term":     strOrEmpty(term),
 			"referrer":     strOrEmpty(ref),
 		}, analytics.CaptureOptions{Operational: true}); err != nil {
 			log.Printf("[waitlist] analytics capture: %v", err)
 		}
-	}(utmSource, utmMedium, utmCampaign, referrer)
+	}(utmSource, utmMedium, utmCampaign, utmContent, utmTerm, referrer)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

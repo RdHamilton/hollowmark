@@ -13,6 +13,8 @@ type WaitlistEntry struct {
 	UTMSource       *string
 	UTMMedium       *string
 	UTMCampaign     *string
+	UTMContent      *string
+	UTMTerm         *string
 	Referrer        *string
 }
 
@@ -43,6 +45,7 @@ func (r *WaitlistRepository) InsertIfNew(
 	ctx context.Context,
 	email string,
 	utmSource, utmMedium, utmCampaign *string,
+	utmContent, utmTerm *string,
 	referrer *string,
 ) (id string, position int64, created bool, err error) {
 	// The CTE inserts the row (DO NOTHING on conflict) and RETURNING gives us the
@@ -51,15 +54,16 @@ func (r *WaitlistRepository) InsertIfNew(
 	// QueryRowContext returns sql.ErrNoRows.
 	const q = `
 		WITH inserted AS (
-			INSERT INTO waitlist_entries (email, utm_source, utm_medium, utm_campaign, referrer)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO waitlist_entries
+				(email, utm_source, utm_medium, utm_campaign, utm_content, utm_term, referrer)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (email) DO NOTHING
 			RETURNING id
 		)
 		SELECT inserted.id, (SELECT COUNT(*) FROM waitlist_entries) AS position
 		FROM inserted`
 
-	row := r.db.QueryRowContext(ctx, q, email, utmSource, utmMedium, utmCampaign, referrer)
+	row := r.db.QueryRowContext(ctx, q, email, utmSource, utmMedium, utmCampaign, utmContent, utmTerm, referrer)
 	if err := row.Scan(&id, &position); err == sql.ErrNoRows {
 		return "", 0, false, nil
 	} else if err != nil {

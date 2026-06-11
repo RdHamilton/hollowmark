@@ -52,7 +52,7 @@ func newStubWaitlistRepoErr(err error) *stubWaitlistRepo {
 	}
 }
 
-func (s *stubWaitlistRepo) InsertIfNew(_ context.Context, _ string, _, _, _ *string, _ *string) (string, int64, bool, error) {
+func (s *stubWaitlistRepo) InsertIfNew(_ context.Context, _ string, _, _, _, _, _ *string, _ *string) (string, int64, bool, error) {
 	return s.insertID, s.insertPosition, s.insertCreated, s.insertErr
 }
 
@@ -673,7 +673,7 @@ func newStubWaitlistRepoCapture() *stubWaitlistRepoCapture {
 	return &stubWaitlistRepoCapture{}
 }
 
-func (s *stubWaitlistRepoCapture) InsertIfNew(_ context.Context, email string, _, _, _ *string, _ *string) (string, int64, bool, error) {
+func (s *stubWaitlistRepoCapture) InsertIfNew(_ context.Context, email string, _, _, _, _, _ *string, _ *string) (string, int64, bool, error) {
 	s.capturedEmail = email
 	return "uuid-cap", 1, true, nil
 }

@@ -786,7 +786,7 @@ func TestRouter_AdminFleetHealth_RouteAbsent_WhenHandlerNil(t *testing.T) {
 // returns 200 OK with {"position":1}.
 type stubWaitlistRouterRepo struct{}
 
-func (s *stubWaitlistRouterRepo) InsertIfNew(_ context.Context, _ string, _, _, _ *string, _ *string) (string, int64, bool, error) {
+func (s *stubWaitlistRouterRepo) InsertIfNew(_ context.Context, _ string, _, _, _, _, _ *string, _ *string) (string, int64, bool, error) {
 	return "uuid-router-test", 1, true, nil
 }
 
