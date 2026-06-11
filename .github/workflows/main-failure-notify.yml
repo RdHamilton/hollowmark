@@ -50,6 +50,9 @@ on:
 jobs:
   alert:
     name: Alert on failure
+    permissions:
+      id-token: write   # OIDC for callee's configure-aws-credentials
+      contents: read    # callee declares it; matches restricted repo default
     if: ${{ github.event.workflow_run.conclusion == 'failure' }}
     uses: RdHamilton/hollowmark-infra/.github/workflows/build-failure-alert.yml@main
     with:
