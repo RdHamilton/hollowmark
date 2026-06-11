@@ -3,6 +3,6 @@
 DROP TABLE IF EXISTS standard_config CASCADE;
 DROP INDEX IF EXISTS idx_sets_standard;
 DROP INDEX IF EXISTS idx_set_cards_legalities;
-ALTER TABLE set_cards DROP COLUMN IF EXISTS legalities;
-ALTER TABLE sets DROP COLUMN IF EXISTS rotation_date;
-ALTER TABLE sets DROP COLUMN IF EXISTS is_standard_legal;
+ALTER TABLE IF EXISTS set_cards DROP COLUMN IF EXISTS legalities;
+ALTER TABLE IF EXISTS sets DROP COLUMN IF EXISTS rotation_date;
+ALTER TABLE IF EXISTS sets DROP COLUMN IF EXISTS is_standard_legal;
