@@ -693,7 +693,6 @@ func main() {
 			worker.WithCounterStore(gameEventCountersRepo)
 			worker.WithCardPlayStore(gamePlayRepo)
 			worker.WithGameRowWriter(gamePlayRepo)
-			worker.WithGameIDResolver(gamePlayRepo)
 			worker.WithDLQ(projectionErrorsRepo)
 			// Wire draft → deck creation (ADR-051 deck linkage).
 			decksRepo := repository.NewDecksRepository(sqlDB)
