@@ -62,7 +62,7 @@ async function setClerkSignedIn(page: Page): Promise<void> {
  * and into the "No matches yet" render path. The strip element itself
  * (data-testid="status-strip") is present on all three paths.
  */
-async function mockStatusFooterEndpoints(page: Page): Promise<void> {
+async function mockStatusStripEndpoints(page: Page): Promise<void> {
   await page.route('**/api/v1/matches/stats', (route) => {
     void route.fulfill({
       status: 200,
@@ -203,7 +203,7 @@ async function mockHomeEndpoints(page: Page): Promise<void> {
 test.describe('Compendium Phase-1 — Status Strip presence @smoke', () => {
   test.beforeEach(async ({ page }) => {
     await setClerkSignedIn(page);
-    await mockStatusFooterEndpoints(page);
+    await mockStatusStripEndpoints(page);
   });
 
   test('@smoke status strip present on /home', async ({ page }) => {
@@ -318,7 +318,7 @@ test.describe('Compendium Phase-1 — Status Strip presence @smoke', () => {
  * Mock StatusStrip BFF dependencies with a connected daemon + one match so
  * all 4 stable labels render: Matches:, Win Rate:, Last Played:, Synced:.
  *
- * Key differences from mockStatusFooterEndpoints:
+ * Key differences from mockStatusStripEndpoints:
  *   - /api/v1/health/daemon returns { status: 'connected' } — no data envelope,
  *     because getDaemonHealth (bffHealth.ts) reads result.status from response.json()
  *     directly rather than through the apiClient envelope-unwrapper. This makes
@@ -376,7 +376,7 @@ test.describe('Compendium Phase-1 — Status Strip label-text assertions @smoke 
 
   test('@smoke status strip shows Matches: and Win Rate: labels on /home', async ({ page }) => {
     // Baseline: these two labels always render once the strip exits loading state.
-    await mockStatusFooterEndpoints(page);
+    await mockStatusStripEndpoints(page);
     await page.goto('/home');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
 
@@ -412,7 +412,7 @@ test.describe('Compendium Phase-1 — Status Strip label-text assertions @smoke 
 test.describe('Compendium Phase-1 — Hollowmark logo + wordmark in nav @smoke', () => {
   test.beforeEach(async ({ page }) => {
     await setClerkSignedIn(page);
-    await mockStatusFooterEndpoints(page);
+    await mockStatusStripEndpoints(page);
     await mockHomeEndpoints(page);
   });
 
@@ -474,7 +474,7 @@ test.describe('Compendium Phase-1 — Hollowmark logo + wordmark in nav @smoke',
 test.describe('Compendium Phase-1 — --hollowmark-gilt token @smoke', () => {
   test.beforeEach(async ({ page }) => {
     await setClerkSignedIn(page);
-    await mockStatusFooterEndpoints(page);
+    await mockStatusStripEndpoints(page);
     await mockHomeEndpoints(page);
   });
 
@@ -528,7 +528,7 @@ test.describe('Compendium Phase-1 — --hollowmark-gilt token @smoke', () => {
 test.describe('Compendium Phase-1 — Gilt on Quests surfaces', () => {
   test.beforeEach(async ({ page }) => {
     await setClerkSignedIn(page);
-    await mockStatusFooterEndpoints(page);
+    await mockStatusStripEndpoints(page);
     await mockQuestsEndpoints(page);
   });
 

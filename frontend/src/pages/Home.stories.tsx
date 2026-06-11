@@ -27,11 +27,11 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
-  ClockIcon,
-  RectangleStackIcon,
-  Squares2X2Icon,
-  ArchiveBoxIcon,
-} from '@heroicons/react/24/outline';
+  LedgerGlyph,
+  FanCardsGlyph,
+  DeckStackGlyph,
+  BinderGlyph,
+} from '../components/MagicGlyphs';
 import ManaWheel from '../components/ManaWheel';
 import Home from './Home';
 import './Home.css';
@@ -50,26 +50,26 @@ export default meta;
 type Story = StoryObj<typeof Home>;
 
 // ---------------------------------------------------------------------------
-// Shared QUICK NAV block — uses the same Heroicon components as Home.tsx
+// Shared QUICK NAV block — uses the same MagicGlyphs components as Home.tsx
 // ---------------------------------------------------------------------------
 
 function QuickNavTiles() {
   return (
     <div className="home-quick-nav" data-testid="home-quick-nav">
       <button className="home-nav-tile" aria-label="Match History">
-        <ClockIcon className="home-nav-icon" aria-hidden="true" />
+        <LedgerGlyph className="home-nav-icon" size={20} />
         <span className="home-nav-label">Match History</span>
       </button>
       <button className="home-nav-tile" aria-label="Draft">
-        <RectangleStackIcon className="home-nav-icon" aria-hidden="true" />
+        <FanCardsGlyph className="home-nav-icon" size={20} />
         <span className="home-nav-label">Draft</span>
       </button>
       <button className="home-nav-tile" aria-label="Decks">
-        <Squares2X2Icon className="home-nav-icon" aria-hidden="true" />
+        <DeckStackGlyph className="home-nav-icon" size={20} />
         <span className="home-nav-label">Decks</span>
       </button>
       <button className="home-nav-tile" aria-label="Collection">
-        <ArchiveBoxIcon className="home-nav-icon" aria-hidden="true" />
+        <BinderGlyph className="home-nav-icon" size={20} />
         <span className="home-nav-label">Collection</span>
       </button>
     </div>
