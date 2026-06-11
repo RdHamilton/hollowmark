@@ -281,6 +281,18 @@ while [ "$i" -lt "$MANIFEST_KEY_COUNT" ]; do
     INTERNAL_SVC_SECRET)
       SSM_PATH="$SSM_STAGING_INTERNAL_SVC_SECRET"
       ;;
+    MAILCHIMP_API_KEY)
+      SSM_PATH="$SSM_VAULTMTG_STAGING_MAILCHIMP_API_KEY"
+      ;;
+    MAILCHIMP_LIST_ID)
+      SSM_PATH="$SSM_VAULTMTG_STAGING_MAILCHIMP_LIST_ID"
+      ;;
+    POSTHOG_PERSONAL_API_KEY)
+      SSM_PATH="$SSM_STAGING_POSTHOG_PERSONAL_API_KEY"
+      ;;
+    POSTHOG_PROJECT_ID)
+      SSM_PATH="$SSM_STAGING_POSTHOG_PROJECT_ID"
+      ;;
     *)
       # staging-only entries: the manifest SSM_VAR already points to the staging path.
       eval "SSM_VAR=\${MANIFEST_KEY_${i}_SSM_VAR}"
