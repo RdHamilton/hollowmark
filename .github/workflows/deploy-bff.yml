@@ -27,7 +27,7 @@ on:
     inputs:
       environment:
         description: 'Target GitHub environment: staging or production'
-        required: true
+        default: 'production'
         type: string
       # Staging callers set this to the literal bucket name.
       # Production callers leave it blank and pass DEPLOY_BUCKET as a secret.
