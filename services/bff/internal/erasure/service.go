@@ -2,6 +2,7 @@ package erasure
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -61,7 +62,10 @@ func (s *Service) StartErasureJob(ctx context.Context, userID, accountID int64) 
 	//
 	// Design choice: the handler passes clerkUserID via the request context using the
 	// middleware key.  We read it here using the same key.
-	clerkUserID, _ := clerkUserIDFromContext(ctx)
+	clerkUserID, ok := clerkUserIDFromContext(ctx)
+	if !ok || clerkUserID == "" {
+		return "", fmt.Errorf("erasure: SetClerkUserIDFromContextFn not configured or returned empty — cannot write deletion_audit_log without a Clerk user ID")
+	}
 
 	// Create the audit log entry synchronously before dispatching the goroutine.
 	// This ensures the job_id exists in the DB before the 202 is returned, so the
