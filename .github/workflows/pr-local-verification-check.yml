@@ -20,10 +20,13 @@ name: PR Local Verification Check
 # --------------
 # 1. The PR body contains a `## Local Verification` section header.
 # 2. The section contains >= 1 fenced code block (``` ... ```).
-# 3. >= 1 fenced code block contains a shell-prompt indicator line OR
-#    the code block contains >= 2 non-blank lines (relaxed fallback for
-#    genuine transcripts that omit the prompt prefix -- see #828).
+# 3. >= 1 fenced code block contains a shell-prompt indicator line (strict
+#    path), OR the relaxed fallback fires: code block has >= 2 non-blank
+#    lines AND at least one non-marker line matches a command/output shape
+#    (see #828 and the prose-in-fence gap fix in #831).
 #    Accepted prompt prefixes: `$ ` | `> ` | `# ` | `[user@host]$ ` | `PS> ` | `>> `
+#    A code block with only prose sentences (no command/output shape lines)
+#    fails even if it has >= 2 non-blank lines (#831).
 #    A code block with a single PASS-only line still fails (no real content).
 # 4. The section contains >= 1 explicit success marker:
 #       PASS | OK | SUCCESS  (case-insensitive)
@@ -106,7 +109,8 @@ name: PR Local Verification Check
 #        0 errors
 #        SUCCESS
 #        ```
-#      -> 1 fence, no prompt, but >=2 non-blank lines + marker `SUCCESS` -> PASS
+#      -> 1 fence, no prompt, >=2 non-blank lines, "0 errors" matches
+#         command/output shape -> PASS
 #
 #   M) Dependabot PR -- actor == 'dependabot[bot]':
 #      -> LV check skipped entirely -> PASS (exemption, #826)
@@ -159,6 +163,19 @@ name: PR Local Verification Check
 #        ```
 #      -> PASS (declaration-only escape hatch: sh -n / shellcheck accepted
 #              in lieu of --dry-run when no executable entrypoint is changed).
+#
+# NEW FAIL case -- prose-in-fence (#831):
+#   N) Code block with prose sentences + PASS (no command/output shape lines):
+#        ```
+#        This change looks correct to me.
+#        PASS
+#        ```
+#      -> FAIL (#831 prose-in-fence: no non-marker line matches a
+#              command/output shape pattern).
+#
+# The heuristic logic lives in .github/scripts/lv-heuristic.sh and is tested
+# by .github/tests/lv-heuristic-test.sh. Run the test suite locally with:
+#   bash .github/tests/lv-heuristic-test.sh
 # ---------------------------------------------------------------------------
 
 on:
@@ -234,201 +251,6 @@ jobs:
         if: github.actor != 'dependabot[bot]'
         env:
           SHELL_TOUCHED: ${{ steps.shellfiles.outputs.shell_touched }}
+          IS_DEPENDABOT: "no"
         run: |
-          set -u
-          BODY_FILE=/tmp/pr_body.txt
-
-          fail() {
-            local msg="$1"
-            local hint="${2:-}"
-            echo ""
-            echo "permissionDecision: BLOCKED"
-            echo "ERROR: Local Verification gate -- ${msg}"
-            if [ -n "${hint}" ]; then
-              echo ""
-              echo "HINT: ${hint}"
-            fi
-            echo ""
-            echo "Required structure (see PR template):"
-            echo ""
-            echo "  ## Local Verification"
-            echo "  \`\`\`"
-            echo "  \$ <command you actually ran>"
-            echo "  <actual terminal output>"
-            echo "  ... PASS"
-            echo "  \`\`\`"
-            echo ""
-            echo "Rules:"
-            echo "  - >=1 fenced code block in the section"
-            echo "  - >=1 non-blank content lines inside the block (beyond the PASS marker)"
-            echo "  - >=1 PASS / OK / SUCCESS marker in the section"
-            if [ "${SHELL_TOUCHED}" = "yes" ]; then
-              echo "  - Shell-script PR: transcript must contain --dry-run"
-            fi
-            exit 1
-          }
-
-          # ---- 1. Section header present ----
-          if ! grep -qE '^## Local Verification' "$BODY_FILE"; then
-            fail "PR body is missing the '## Local Verification' section header."
-          fi
-
-          # ---- Extract section (between '## Local Verification' and next '## ') ----
-          # awk: print lines from the Local Verification header up to (but not
-          # including) the next top-level `## ` header. End-of-file also ends
-          # the section.
-          awk '
-            /^## Local Verification/ { inside=1; next }
-            inside && /^## / { inside=0 }
-            inside { print }
-          ' "$BODY_FILE" > /tmp/lv_section.txt
-
-          if [ ! -s /tmp/lv_section.txt ]; then
-            fail "Local Verification section is empty."
-          fi
-
-          echo "---- Local Verification section ----"
-          cat /tmp/lv_section.txt
-          echo "------------------------------------"
-
-          # ---- 2. >=1 fenced code block ----
-          # Count fence-opener lines (triple-backtick at line start). A valid
-          # section needs at least one opener AND one closer => fence count >=2.
-          FENCE_COUNT=$(grep -cE '^[[:space:]]*```' /tmp/lv_section.txt || true)
-          if [ "${FENCE_COUNT:-0}" -lt 2 ]; then
-            echo ""
-            echo "Parser expected: lines matching regex  ^[[:space:]]*\`\`\`  (raw triple-backtick at line start)"
-            echo "Expected form (opening and closing fence on their own lines):"
-            echo "  \`\`\`"
-            echo "  \$ your-command"
-            echo "  actual output"
-            echo "  PASS"
-            echo "  \`\`\`"
-            echo ""
-            # AC3: Hex-dump any line that looks like an escaped fence so the author
-            # can see the invisible bytes (e.g. backslash-escaped ``` from LLM output).
-            # Search for lines containing a backslash immediately before a backtick.
-            ESCAPED_FENCE=$(grep -E "\\\\[\`]" /tmp/lv_section.txt | head -3 || true)
-            if [ -n "${ESCAPED_FENCE}" ]; then
-              echo "Possible escaped-fence lines detected (showing hex via cat -A):"
-              printf '%s\n' "${ESCAPED_FENCE}" | head -3 | cat -A
-              echo ""
-              echo "Those backslash-escaped backticks are NOT recognized as fences."
-              echo "Replace them with three raw backtick characters on their own line."
-            fi
-            fail "No fenced code block found in Local Verification (need an opening and closing \`\`\`)."
-          fi
-
-          # ---- 3. >=1 prompt indicator inside a code block, OR relaxed fallback ----
-          # Extract content inside fenced code blocks only, then look for prompt lines.
-          #
-          # Relaxed fallback (#828): if no prompt prefix is found but the code block
-          # contains >= 2 non-blank lines, accept it. This allows genuine transcripts
-          # that omit the `$ ` prefix (e.g. `npx tsc --noEmit  # passes`) to pass.
-          # A block with only a PASS marker (1 non-blank line) still fails because
-          # there is no real command/output content to support the claim.
-          awk '
-            /^[[:space:]]*```/ { fence = !fence; next }
-            fence { print }
-          ' /tmp/lv_section.txt > /tmp/lv_code.txt
-
-          if [ ! -s /tmp/lv_code.txt ]; then
-            fail "Fenced code block(s) present but empty."
-          fi
-
-          # Prompt regex:
-          #   ^\s*\$\s    bash/zsh prompt
-          #   ^\s*>\s     PowerShell or quoted prompt
-          #   ^\s*#\s     root prompt / comment-style (cheap signal)
-          #   ^\[.*\]\$   `[user@host]$` style
-          #   ^\s*PS>     PowerShell explicit
-          #   ^\s*>>\s    secondary prompt (continuation)
-          PROMPT_FOUND=no
-          if grep -qE '(^[[:space:]]*\$ )|(^[[:space:]]*> )|(^[[:space:]]*# )|(^\[[^]]+\]\$)|(^[[:space:]]*PS> )|(^[[:space:]]*>> )' /tmp/lv_code.txt; then
-            PROMPT_FOUND=yes
-          fi
-
-          if [ "${PROMPT_FOUND}" = "no" ]; then
-            # Relaxed fallback: count non-blank lines inside the code blocks.
-            # >= 2 non-blank lines confirms there is real command/output content
-            # beyond the PASS marker alone.
-            NONBLANK_COUNT=$(grep -cE '[^[:space:]]' /tmp/lv_code.txt || true)
-            if [ "${NONBLANK_COUNT:-0}" -lt 2 ]; then
-              echo ""
-              echo "No shell-prompt prefix found AND code block has fewer than 2 non-blank lines."
-              echo ""
-              echo "Parser expected EITHER:"
-              echo "  (a) At least one line matching a prompt prefix:"
-              echo "      \`\$ \`  \`> \`  \`# \`  \`[user@host]\$\`  \`PS> \`  \`>> \`"
-              echo "  OR"
-              echo "  (b) At least 2 non-blank lines inside the code block"
-              echo "      (command + output content, beyond the PASS marker alone)"
-              echo ""
-              echo "A block containing only \`PASS\` (with no command or output) is not a real transcript."
-              echo ""
-              fail "Code block appears to have no real transcript content. Add your actual command output, or prefix command lines with \`\$ \`."
-            fi
-            echo "No prompt prefix found -- relaxed fallback accepted (${NONBLANK_COUNT} non-blank lines in code block)."
-          fi
-
-          # ---- 4. >=1 PASS/OK/SUCCESS marker (case-insensitive) ----
-          # Word-boundary match to avoid matching things like "passport" or
-          # "OKAY-NOTHING". Allow bare "ok" (go test format) too.
-          if ! grep -qiE '(\bPASS\b)|(\bOK\b)|(\bSUCCESS\b)' /tmp/lv_section.txt; then
-            echo ""
-            echo "Parser expected: at least one line in the section matching regex (case-insensitive, word-boundary):"
-            printf '  (\\bPASS\\b)|(\\bOK\\b)|(\\bSUCCESS\\b)\n'
-            echo "Accepted markers: PASS  OK  SUCCESS  (any case; must be a whole word)"
-            echo ""
-            fail "No PASS / OK / SUCCESS marker found in Local Verification section."
-          fi
-
-          # ---- 5. Shell-script PRs require --dry-run / dry-run ----
-          # Exception (declaration-only): if the author cannot produce a
-          # meaningful dry-run (the change only adds a function, constant,
-          # or `source` call with no new executable entrypoint), a syntax
-          # or lint check is accepted in lieu of --dry-run.  The LV section
-          # must contain `sh -n` or `shellcheck` against the changed file.
-          # Rule: executable entrypoint changes -> --dry-run required;
-          #       declaration-only changes      -> sh -n / shellcheck accepted.
-          if [ "${SHELL_TOUCHED}" = "yes" ]; then
-            HAS_DRY_RUN=no
-            HAS_SYNTAX_CHECK=no
-            if grep -qE '(--dry-run|dry-run)' /tmp/lv_section.txt; then
-              HAS_DRY_RUN=yes
-            fi
-            if grep -qE '(\bsh[[:space:]]+-n[[:space:]]|shellcheck[[:space:]])' /tmp/lv_section.txt; then
-              HAS_SYNTAX_CHECK=yes
-            fi
-            if [ "${HAS_DRY_RUN}" = "no" ] && [ "${HAS_SYNTAX_CHECK}" = "no" ]; then
-              echo ""
-              echo "Parser expected: at least one of:"
-              echo "  (a) regex  (--dry-run|dry-run)  for executable entrypoint changes"
-              echo "  (b) regex  (sh -n |shellcheck )  for declaration-only changes"
-              echo "This PR touches a *.sh file or scripts/deploy/."
-              echo "Executable entrypoint change -> include a --dry-run transcript."
-              echo "Declaration-only change (function/constant/source only) -> include sh -n or shellcheck."
-              echo ""
-              fail "Shell-script PR (touches *.sh or scripts/deploy/): Local Verification must include either (a) a --dry-run transcript showing the actual code path was exercised, or (b) a syntax/lint check (sh -n or shellcheck) for declaration-only changes that add no executable entrypoint." \
-                   "If your change only adds a function, constant, or source call, use: sh -n <file> && shellcheck <file>"
-            fi
-          fi
-
-          echo ""
-          echo "permissionDecision: ALLOW"
-          echo "Local Verification heuristic check: PASS"
-          echo "  - Section header: present"
-          echo "  - Fenced code blocks: ${FENCE_COUNT} fence markers found"
-          if [ "${PROMPT_FOUND}" = "yes" ]; then
-            echo "  - Shell-prompt indicator: present"
-          else
-            echo "  - Shell-prompt indicator: absent (relaxed fallback -- ${NONBLANK_COUNT} non-blank lines)"
-          fi
-          echo "  - Success marker: present"
-          if [ "${SHELL_TOUCHED}" = "yes" ]; then
-            if [ "${HAS_DRY_RUN}" = "yes" ]; then
-              echo "  - Shell-script verification: --dry-run present"
-            else
-              echo "  - Shell-script verification: declaration-only (sh -n / shellcheck accepted)"
-            fi
-          fi
+          bash .github/scripts/lv-heuristic.sh /tmp/pr_body.txt
