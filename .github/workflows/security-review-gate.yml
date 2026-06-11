@@ -76,8 +76,8 @@
 # before -- and is independent of -- the SHA-delta staleness logic (#119), which
 # is left untouched.
 #
-# STALENESS: SHA-DELTA CHECK WITH A' GUARDED SKIP (tickets #119, #231, #1134)
-# ----------------------------------------------------------------------------
+# STALENESS: SHA-DELTA CHECK WITH A' GUARDED SKIP (tickets #119, #231, #1134, #1224)
+# ---------------------------------------------------------------------------------
 # When an APPROVED comment exists but predates the current HEAD (e.g., because
 # Lee ran update-branch to pull in main), the gate performs an A'-guarded
 # SHA-delta check before marking the verdict stale:
@@ -85,21 +85,35 @@
 #   1. Collect all PR commits whose committer date is AFTER the verdict timestamp.
 #   2. For each commit, fetch parents[] and files[] in a single commits/{sha} call.
 #   3. For single-parent commits: test files[] against §1A trigger globs directly.
-#   4. For merge commits (parents >= 2, parent[1] SHA available):
-#      a. Call compare/{parent[1]}...{sha} scoped to §1A globs (A' predicate).
-#         This isolates what the merge AUTHORED vs what it pulled in from parent[1].
+#   4. For merge commits (parents >= 2, parent[0] SHA available):
+#      a. Call compare/{parent[0]}...{sha} scoped to §1A globs (A' predicate).
+#         parent[0] is the PR's own prior tip (the commit Sarah approved).
+#         This compare returns ONLY what the merge pulled in from main (parent[1]),
+#         isolating new §1A content that arrived from outside the PR.
 #      b. Empty result  -> merge is security-inert; skip (carry verdict forward).
-#      c. Non-empty result -> §1A content was introduced by the merge; STALE.
+#      c. Non-empty result -> §1A content arrived from main; STALE (re-review needed).
 #   5. If ZERO §1A-path changes across all commits -> FRESH (carry verdict forward).
 #   6. If ANY §1A-path change found -> STALE (Sarah must re-review).
 #
-# Octopus merges (parents >= 3): the compare is taken against parent[1] regardless
-# of parent count. Content unique to parent[2]+ appears in the compare as a diff
-# vs parent[1] -- over-inclusive, never under-inclusive. This is intentionally
-# fail-closed: over-stale (false block) is acceptable; under-stale (missed security
-# content) is not. Do NOT change to check all parents without a new ADR + Sarah review.
+# WHY parent[0], NOT parent[1] (fix for hollowmark-tickets#1224):
+#   An update-branch merge commit has parent[0]=prior_PR_tip, parent[1]=main_tip.
+#   compare(parent[1]...merge) returns the PR's own work relative to main -- which
+#   includes any §1A files the PR itself modified. For a §1A-touching PR, this always
+#   produces a non-empty result -> false STALE on every update-branch (the bug).
+#   compare(parent[0]...merge) returns only what main contributed to the merge,
+#   isolating the security question: "did main bring in new §1A content after the
+#   verdict?" If not -> carry verdict forward. If yes -> re-review required.
+#   Evil merge: if the branch side tampers with §1A content between parent[0] and
+#   the merge commit, compare(parent[0]...merge) catches it (it appears as new
+#   content relative to parent[0]).
 #
-# Fail-closed behaviour: if parent[1] SHA is unavailable (API error), the commit
+# Octopus merges (parents >= 3): the compare is taken against parent[0] regardless
+# of parent count. Content arriving via parent[2]+ that differs from parent[0] shows
+# up in the compare -- over-inclusive in the fail-closed direction. This is correct:
+# over-stale (false block) is acceptable; under-stale (missed security content) is not.
+# Do NOT change to check all parents without a new ADR + Sarah review.
+#
+# Fail-closed behaviour: if parent[0] SHA is unavailable (API error), the commit
 # falls through to the files[] scan (over-stale direction). If the compare call
 # fails, MERGE_CONTRIB falls back to COMMIT_FILES (over-stale, not under-stale).
 # The single-parent authored path is unchanged and unaffected.
@@ -114,8 +128,9 @@
 # preserving gate integrity for real security changes (including evil merges).
 #
 # Ticket #231 (vault-mtg-tickets) is the canonical implementation ticket.
-# Ticket #1134 (hollowmark-tickets) fixes the false-stale on update-branch and
-# adds the A' guarded-skip predicate. Runbook: §1D of infra-security-review-gate.md.
+# Ticket #1134 (hollowmark-tickets) adds the A' guarded-skip predicate.
+# Ticket #1224 (hollowmark-tickets) fixes the A' compare base: parent[0] not parent[1].
+# Runbook: §1D of infra-security-review-gate.md.
 
 name: Security Review Gate (S-07)
 
@@ -510,43 +525,49 @@ jobs:
                     python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('parents',[])) if d else 0)" \
                     2>/dev/null || echo "0")
 
-                  PARENT1_SHA=$(echo "${COMMIT_JSON}" | \
-                    python3 -c "import json,sys; d=json.load(sys.stdin); ps=d.get('parents',[]) if d else []; print(ps[1]['sha'] if len(ps)>=2 else '')" \
+                  PARENT0_SHA=$(echo "${COMMIT_JSON}" | \
+                    python3 -c "import json,sys; d=json.load(sys.stdin); ps=d.get('parents',[]) if d else []; print(ps[0]['sha'] if len(ps)>=1 else '')" \
                     2>/dev/null || echo "")
 
                   echo "  Parent count: ${PARENT_COUNT}"
                   echo "  Changed files: $(echo "${COMMIT_FILES}" | tr '\n' ' ')"
 
                   # ------------------------------------------------------------------
-                  # A' guarded skip (ticket #1134):
+                  # A' guarded skip (tickets #1134, #1224):
                   #
-                  # For merge commits (parents >= 2 with a non-empty parent[1] SHA),
+                  # For merge commits (parents >= 2 with a non-empty parent[0] SHA),
                   # the full files[] list includes content that arrived via parent[1]
                   # (the already-reviewed main tip) -- not changes authored by this
                   # branch. A flat files[] scan therefore false-stales on update-branch.
                   #
-                  # Instead, call compare/{parent1}...{sha} scoped to §1A globs:
+                  # Instead, call compare/{parent0}...{sha} scoped to §1A globs:
                   #   empty  -> merge is security-inert (skip; carry verdict forward)
-                  #   non-empty -> §1A content was authored by this merge (stale)
+                  #   non-empty -> §1A content arrived via main (or evil merge); STALE
                   #
-                  # Octopus merges (parents >= 3): the compare is taken against parent[1]
-                  # regardless of parent count. Content unique to parent[2]+ appears in
-                  # the compare as a diff vs parent[1] -- over-inclusive, never under-
-                  # inclusive. That is intentionally fail-closed (over-stale is safe;
-                  # under-stale masks security content and is not acceptable).
+                  # WHY parent[0] (fix for #1224): parent[0] is the PR's own prior tip
+                  # (what Sarah already approved). compare(parent[0]...merge) isolates
+                  # what main brought in -- not the PR's own §1A work already in parent[0].
+                  # compare(parent[1]...merge) would return the PR's own §1A content,
+                  # causing false STALE on every update-branch for §1A-touching PRs.
+                  #
+                  # Octopus merges (parents >= 3): the compare is taken against parent[0]
+                  # regardless of parent count. Content arriving via parent[2]+ that
+                  # differs from parent[0] appears in the compare -- over-inclusive,
+                  # never under-inclusive. That is intentionally fail-closed (over-stale
+                  # is safe; under-stale masks security content and is not acceptable).
                   # Do NOT change this to check all parents without a new ADR + Sarah review.
                   #
                   # Fail-closed guards:
-                  #   - PARENT1_SHA empty (API error / no parent[1]) -> falls through to
+                  #   - PARENT0_SHA empty (API error / no parents) -> falls through to
                   #     the else branch: full files[] check -> over-stale, not under-stale.
                   #   - compare API error -> MERGE_CONTRIB falls back to COMMIT_FILES
                   #     (over-stale, not under-stale). The single-parent path (which has
                   #     no compare) remains unchanged.
                   # ------------------------------------------------------------------
-                  if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
-                    echo "  Merge commit: running A' compare/${PARENT1_SHA}...${COMMIT_SHA} scoped to §1A globs..."
+                  if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
+                    echo "  Merge commit: running A' compare/${PARENT0_SHA}...${COMMIT_SHA} scoped to §1A globs..."
 
-                    MERGE_CONTRIB=$(gh api "repos/${REPO}/compare/${PARENT1_SHA}...${COMMIT_SHA}" \
+                    MERGE_CONTRIB=$(gh api "repos/${REPO}/compare/${PARENT0_SHA}...${COMMIT_SHA}" \
                       --jq '[.files[].filename] | join("\n")' 2>/dev/null || echo "${COMMIT_FILES}")
 
                     echo "  A' compare files: $(echo "${MERGE_CONTRIB}" | tr '\n' ' ')"
@@ -573,7 +594,7 @@ jobs:
                     fi
                   fi
 
-                  # Single-parent commit (or merge commit where parent[1] SHA is unavailable):
+                  # Single-parent commit (or merge commit where parent[0] SHA is unavailable):
                   # use the full files[] list against §1A globs.
                   if [ -z "${COMMIT_FILES}" ]; then
                     echo "  (no files listed -- API error; skipping)"
