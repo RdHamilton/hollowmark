@@ -74,7 +74,8 @@ func TestMigration123_NewRowDefaultsToZeroAttempts(t *testing.T) {
 	}
 
 	var attempts int
-	if err := db.QueryRowContext(ctx,
+	if err := db.QueryRowContext(
+		ctx,
 		`SELECT mailchimp_attempts FROM waitlist_entries WHERE id = $1`, id,
 	).Scan(&attempts); err != nil {
 		t.Fatalf("read mailchimp_attempts: %v", err)
@@ -112,14 +113,16 @@ func TestWaitlistRepository_ListFailedEntries(t *testing.T) {
 			t.Fatalf("InsertIfNew %s: %v", email, err)
 		}
 		if status != "failed" {
-			if _, err := db.ExecContext(ctx,
+			if _, err := db.ExecContext(
+				ctx,
 				`UPDATE waitlist_entries SET mailchimp_status=$2 WHERE id=$1`, id, status,
 			); err != nil {
 				t.Fatalf("set status for %s: %v", email, err)
 			}
 		}
 		if attempts > 0 {
-			if _, err := db.ExecContext(ctx,
+			if _, err := db.ExecContext(
+				ctx,
 				`UPDATE waitlist_entries SET mailchimp_attempts=$2 WHERE id=$1`, id, attempts,
 			); err != nil {
 				t.Fatalf("set attempts for %s: %v", email, err)
@@ -189,7 +192,8 @@ func TestWaitlistRepository_MarkWaitlistSubscribed(t *testing.T) {
 	}
 
 	var status string
-	if err := db.QueryRowContext(ctx,
+	if err := db.QueryRowContext(
+		ctx,
 		`SELECT mailchimp_status FROM waitlist_entries WHERE id = $1`, id,
 	).Scan(&status); err != nil {
 		t.Fatalf("read status: %v", err)
@@ -226,7 +230,8 @@ func TestWaitlistRepository_IncrementAttemptsAndMaybeTerminate_Increments(t *tes
 
 	var attempts int
 	var status string
-	if err := db.QueryRowContext(ctx,
+	if err := db.QueryRowContext(
+		ctx,
 		`SELECT mailchimp_attempts, mailchimp_status FROM waitlist_entries WHERE id = $1`, id,
 	).Scan(&attempts, &status); err != nil {
 		t.Fatalf("read row: %v", err)
@@ -260,7 +265,8 @@ func TestWaitlistRepository_IncrementAttemptsAndMaybeTerminate_Terminates(t *tes
 	}
 
 	// Seed attempts at threshold - 1 = 9 (threshold=10).
-	if _, err := db.ExecContext(ctx,
+	if _, err := db.ExecContext(
+		ctx,
 		`UPDATE waitlist_entries SET mailchimp_attempts = 9 WHERE id = $1`, id,
 	); err != nil {
 		t.Fatalf("seed attempts: %v", err)
@@ -273,7 +279,8 @@ func TestWaitlistRepository_IncrementAttemptsAndMaybeTerminate_Terminates(t *tes
 
 	var attempts int
 	var status string
-	if err := db.QueryRowContext(ctx,
+	if err := db.QueryRowContext(
+		ctx,
 		`SELECT mailchimp_attempts, mailchimp_status FROM waitlist_entries WHERE id = $1`, id,
 	).Scan(&attempts, &status); err != nil {
 		t.Fatalf("read row: %v", err)
@@ -326,7 +333,8 @@ func TestWaitlistRepository_IncrementAttemptsAndMaybeTerminate_A1Guard(t *testin
 	// Verify: status remains 'subscribed'; attempts remain 0.
 	var attempts int
 	var status string
-	if err := db.QueryRowContext(ctx,
+	if err := db.QueryRowContext(
+		ctx,
 		`SELECT mailchimp_attempts, mailchimp_status FROM waitlist_entries WHERE id = $1`, id,
 	).Scan(&attempts, &status); err != nil {
 		t.Fatalf("read row: %v", err)
