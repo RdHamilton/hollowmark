@@ -4,9 +4,12 @@
 # Test harness for the LV heuristic script (.github/scripts/lv-heuristic.sh).
 #
 # Covers the three cluster tickets:
-#   #826 -- dependabot[bot] exemption  (IS_DEPENDABOT=yes skips all checks)
-#   #828 -- bare command lines without $ prefix accepted (relaxed fallback)
-#   #831 -- prose-in-fence must NOT pass the relaxed fallback
+#   #826  -- dependabot[bot] actor exemption (IS_DEPENDABOT=yes skips all checks)
+#   #828  -- bare command lines without $ prefix accepted (relaxed fallback)
+#   #831  -- prose-in-fence must NOT pass the relaxed fallback
+#   #1146 -- dependabot/* branch-prefix exemption (job-level if in workflow;
+#             lv-heuristic.sh receives IS_DEPENDABOT=true from GHA expression
+#             github.actor == 'dependabot[bot]' OR startsWith(head_ref,'dependabot/'))
 #
 # Run:
 #   bash .github/tests/lv-heuristic-test.sh
@@ -32,7 +35,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# run_case <name> <expected_exit: 0|1> <shell_touched: yes|no> <is_dependabot: yes|no> <body_content>
+# run_case <name> <expected_exit: 0|1> <shell_touched: yes|no> <is_dependabot: yes|no|true|false> <body_content>
 run_case() {
   local name="$1"
   local expected_exit="$2"
@@ -63,7 +66,7 @@ run_case() {
 }
 
 # ---------------------------------------------------------------------------
-# #826 -- Dependabot exemption
+# #826 -- Dependabot actor exemption
 # A dependabot[bot] PR with NO Local Verification section must exit 0.
 # A human PR with no LV section must still exit 1.
 # ---------------------------------------------------------------------------
@@ -80,6 +83,27 @@ run_case \
   1 \
   "no" \
   "no" \
+  "## Summary
+Fix a bug"
+
+# ---------------------------------------------------------------------------
+# #1146 -- Branch-prefix exemption: workflow sets IS_DEPENDABOT="true" (the
+# literal string returned by a GHA boolean expression) when the branch name
+# starts with "dependabot/". The script must accept both "yes" and "true".
+# ---------------------------------------------------------------------------
+run_case \
+  "#1146: IS_DEPENDABOT=true (GHA expression value) — branch-prefix exemption exits 0" \
+  0 \
+  "no" \
+  "true" \
+  "## Summary
+Bump actions/checkout from 3 to 4"
+
+run_case \
+  "#1146: IS_DEPENDABOT=false — non-dependabot branch still enforced (exits 1)" \
+  1 \
+  "no" \
+  "false" \
   "## Summary
 Fix a bug"
 
