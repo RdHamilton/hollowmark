@@ -2006,3 +2006,120 @@ func TestWithAuthPaused_ZeroValueIsNotPaused(t *testing.T) {
 	assert.False(t, svc.authPaused.Load(),
 		"newly constructed Service must not be auth-paused (zero value = false)")
 }
+
+// ---------------------------------------------------------------------------
+// Tray ingest-health truthfulness — dispatchDegradedThreshold (#1234)
+// ---------------------------------------------------------------------------
+
+// newSvcWithTrayHooks builds a minimal Service wired with a SetSyncDegraded
+// recorder so tests can assert on tray-hook call semantics without spinning
+// up a real HTTP server.
+func newSvcWithTrayHooks(t *testing.T) (*Service, *trayDegradedRecorder) {
+	t.Helper()
+	cfg := &config.Config{
+		CloudAPIURL: "http://127.0.0.1:0", // unreachable — tests call hooks directly
+		IngestPath:  "/v1/ingest/events",
+		APIKey:      "test-key",
+		AccountID:   "acc-tray",
+	}
+	svc := New(cfg)
+	rec := &trayDegradedRecorder{}
+	svc.WithTray(TrayHooks{
+		SetSyncDegraded: rec.record,
+	})
+	return svc, rec
+}
+
+// trayDegradedRecorder records every SetSyncDegraded(bool) call.
+type trayDegradedRecorder struct {
+	mu    sync.Mutex
+	calls []bool
+}
+
+func (r *trayDegradedRecorder) record(degraded bool) {
+	r.mu.Lock()
+	r.calls = append(r.calls, degraded)
+	r.mu.Unlock()
+}
+
+func (r *trayDegradedRecorder) snapshot() []bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]bool, len(r.calls))
+	copy(out, r.calls)
+	return out
+}
+
+// TestTrayDegradedOnThreshold verifies that SetSyncDegraded(true) is called
+// exactly once, at count == dispatchDegradedThreshold, not before.
+func TestTrayDegradedOnThreshold(t *testing.T) {
+	svc, rec := newSvcWithTrayHooks(t)
+
+	// Below threshold — no hook call.
+	for i := uint32(0); i < dispatchDegradedThreshold-1; i++ {
+		svc.recordBFFFailure(503)
+	}
+	assert.Empty(t, rec.snapshot(), "SetSyncDegraded must not fire below threshold")
+
+	// At threshold — exactly one hook call with degraded=true.
+	svc.recordBFFFailure(503)
+	calls := rec.snapshot()
+	require.Len(t, calls, 1, "SetSyncDegraded must fire exactly once at threshold")
+	assert.True(t, calls[0], "SetSyncDegraded must be called with true at threshold")
+}
+
+// TestTrayRecoveryOnSuccess verifies that SetSyncDegraded(false) is called when
+// clearBFFFailureCounter runs from the degraded state (prior count >= threshold).
+func TestTrayRecoveryOnSuccess(t *testing.T) {
+	svc, rec := newSvcWithTrayHooks(t)
+
+	// Put counter at threshold (degraded).
+	for i := uint32(0); i < dispatchDegradedThreshold; i++ {
+		svc.recordBFFFailure(503)
+	}
+	require.Len(t, rec.snapshot(), 1, "prerequisite: degraded hook must have fired once")
+
+	// Clear the counter — recovery hook must fire.
+	svc.clearBFFFailureCounter()
+	calls := rec.snapshot()
+	require.Len(t, calls, 2, "SetSyncDegraded must fire again on recovery")
+	assert.False(t, calls[1], "SetSyncDegraded must be called with false on recovery")
+}
+
+// TestTrayNoDegradedBelowThreshold verifies that no tray hook fires when the
+// failure count stays below dispatchDegradedThreshold.
+func TestTrayNoDegradedBelowThreshold(t *testing.T) {
+	svc, rec := newSvcWithTrayHooks(t)
+
+	for i := uint32(0); i < dispatchDegradedThreshold-1; i++ {
+		svc.recordBFFFailure(503)
+	}
+	assert.Empty(t, rec.snapshot(), "SetSyncDegraded must not fire below threshold")
+}
+
+// TestTrayDegradedNoDoubleTransition verifies that when failures accumulate past
+// the threshold, SetSyncDegraded(true) fires exactly once — at count == threshold —
+// not on every subsequent failure.
+func TestTrayDegradedNoDoubleTransition(t *testing.T) {
+	svc, rec := newSvcWithTrayHooks(t)
+
+	// Fire 5 failures (threshold + 2 extra).
+	for i := 0; i < 5; i++ {
+		svc.recordBFFFailure(503)
+	}
+	calls := rec.snapshot()
+	require.Len(t, calls, 1, "SetSyncDegraded(true) must fire exactly once regardless of extra failures")
+	assert.True(t, calls[0])
+}
+
+// TestTrayRecoveryNotCalledWhenNeverDegraded verifies the edge-fire rule for
+// recovery: clearBFFFailureCounter must NOT call SetSyncDegraded(false) when
+// the counter was never at or above the threshold (i.e. success-while-never-degraded).
+func TestTrayRecoveryNotCalledWhenNeverDegraded(t *testing.T) {
+	svc, rec := newSvcWithTrayHooks(t)
+
+	// Only one failure (below threshold), then immediately clear.
+	svc.recordBFFFailure(503)
+	svc.clearBFFFailureCounter()
+	assert.Empty(t, rec.snapshot(), "SetSyncDegraded(false) must not fire when counter was below threshold")
+}

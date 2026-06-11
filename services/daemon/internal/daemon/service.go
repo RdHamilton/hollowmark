@@ -1369,22 +1369,33 @@ func (s *Service) snapshotAndResetDrift() (count uint32, hash string, types []st
 	return count, hash, types
 }
 
-// sentryDispatchDegradedThreshold is the consecutive-failure count at which
-// recordBFFFailure emits a Sentry warning event. Mirrors the BFF-side
-// dispatchDegradedThreshold (services/bff/internal/api/handlers/ingest.go) so
-// the two systems agree on what "degraded" means. Held as a separate constant
-// to avoid a daemon→bff package import.
-const sentryDispatchDegradedThreshold = uint32(3)
+// dispatchDegradedThreshold is the consecutive-failure count at which the daemon
+// considers BFF ingest "degraded". Three consumers:
+//  1. recordBFFFailure — emits a Sentry warning event at the transition edge.
+//  2. recordBFFFailure — calls trayHooks.SetSyncDegraded(true) at the edge so
+//     the tray flips from "Tracking" to "Sync issues — games may not be saving".
+//  3. The heartbeat payload mirrors consecutiveBFFFailures to the BFF
+//     (service.go heartbeat section) so the server-side health endpoint can
+//     reflect the same semantic.
+//
+// Mirrors the BFF-side dispatchDegradedThreshold
+// (services/bff/internal/api/handlers/ingest.go) so the two systems agree on
+// what "degraded" means. Held as a daemon-local constant to avoid a
+// daemon→bff package import. (#1234 Ray amendment §1)
+const dispatchDegradedThreshold = uint32(3)
 
 // recordBFFFailure increments the consecutive-BFF-failure counter and records
 // the last status code. Called by the onBFFFailure callback wired into the
 // Dispatcher in New(). Safe to call concurrently; bffMu is held internally.
 //
-// On the transition into a multi-failure streak (count == sentryDispatchDegradedThreshold),
-// emit a Sentry message so degraded-BFF episodes surface in the crash
-// aggregator. We emit at the threshold rather than on every failure so a brief
-// network blip doesn't spam Sentry — only sustained degradation reaches the
-// alert surface. #1832.
+// On the transition into a multi-failure streak (count == dispatchDegradedThreshold):
+//   - emits a Sentry warning event so degraded-BFF episodes surface in the
+//     crash aggregator (only at the threshold, not on every failure);
+//   - calls trayHooks.SetSyncDegraded(true) so the tray reflects actual ingest
+//     health rather than local process state (#1234).
+//
+// The tray hook is called outside bffMu (no lock nesting with statusMu in tray.App).
+// The hook is nil-safe per the existing pattern (collection.go:167).
 func (s *Service) recordBFFFailure(statusCode int) {
 	s.bffMu.Lock()
 	s.consecutiveBFFFailures++
@@ -1392,7 +1403,7 @@ func (s *Service) recordBFFFailure(statusCode int) {
 	s.lastBFFStatusCode = statusCode
 	s.bffMu.Unlock()
 
-	if count == sentryDispatchDegradedThreshold {
+	if count == dispatchDegradedThreshold {
 		sentry.WithScope(func(scope *sentry.Scope) {
 			scope.SetTag("event", "daemon.dispatch_degraded")
 			scope.SetTag("bff_status_code", fmt.Sprintf("%d", statusCode))
@@ -1401,16 +1412,33 @@ func (s *Service) recordBFFFailure(statusCode int) {
 				"daemon.dispatch_degraded count=%d status=%d", count, statusCode,
 			))
 		})
+		// Edge-fire: only transition the tray at the threshold, not on every
+		// subsequent failure (Ray amendment §3, #1234).
+		if s.trayHooks.SetSyncDegraded != nil {
+			s.trayHooks.SetSyncDegraded(true)
+		}
 	}
 }
 
 // clearBFFFailureCounter resets the consecutive-failure counter and status code
 // to zero. Called after a successful SendOrBuffer. Safe to call concurrently.
+//
+// Recovery edge-fire (Ray amendment §3, #1234): the tray hook SetSyncDegraded(false)
+// is called only when the prior count was >= dispatchDegradedThreshold (i.e. the
+// tray was actually in the degraded state). Calling it on every success would
+// spam SetStatus once per dispatch on the success path.
 func (s *Service) clearBFFFailureCounter() {
 	s.bffMu.Lock()
+	prior := s.consecutiveBFFFailures
 	s.consecutiveBFFFailures = 0
 	s.lastBFFStatusCode = 0
 	s.bffMu.Unlock()
+
+	if prior >= dispatchDegradedThreshold {
+		if s.trayHooks.SetSyncDegraded != nil {
+			s.trayHooks.SetSyncDegraded(false)
+		}
+	}
 }
 
 // authFailedPayload is the JSON body of a daemon.auth_failed dispatch event.

@@ -12,19 +12,26 @@ type Status int
 
 const (
 	StatusStarting Status = iota
+	// StatusConnected is the healthy ingest state. Label is "● Tracking" per
+	// Prof UX sign-off (#1234); constant name unchanged to avoid blast-radius.
 	StatusConnected
 	StatusWaitingForArena
 	StatusError
 	StatusKeychainError
 	StatusSetupRequired
+	// StatusSyncIssues indicates consecutive BFF ingest failures have reached
+	// dispatchDegradedThreshold while Arena is running. (#1234)
+	StatusSyncIssues
 )
 
 func (s Status) label() string {
 	switch s {
 	case StatusConnected:
-		return "● Connected"
+		return "● Tracking"
 	case StatusWaitingForArena:
 		return "◌ Waiting for Arena..."
+	case StatusSyncIssues:
+		return "⚠ Sync issues — games may not be saving"
 	case StatusError:
 		return "✕ Error — check logs"
 	case StatusKeychainError:
@@ -120,6 +127,8 @@ func (a *App) SetSetupRequired(show bool) {
 		a.status = StatusSetupRequired
 	}
 }
+
 func (a *App) SetWaitingForArena(_ bool)         {}
+func (a *App) SetSyncDegraded(_ bool)            {} // headless stub — no tray to update (#1234)
 func (a *App) NotifySyncResult(_ error)          {} // headless stub — no tray label to update
 func (a *App) NotifyUpdateAvailable(_, _ string) {} // headless stub — no tray item to show
