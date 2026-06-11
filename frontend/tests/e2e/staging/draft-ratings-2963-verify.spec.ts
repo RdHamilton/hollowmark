@@ -218,7 +218,7 @@ test.describe('PR #2963 draft-ratings fix — live pack grid names+grades', () =
     // and this assertion logs INCONCLUSIVE rather than failing — em-dashes are valid
     // output (the BFF returns "—" when no rating row exists for the card). The primary
     // AC3 assertion is that inject ran (code 0) and grade cells are not blank/raw-id.
-    const letterGrades = grades.filter((g) => /^[A-F][+\-]?$/.test(g));
+    const letterGrades = grades.filter((g) => /^[A-F][+-]?$/.test(g));
     console.log('[grades] letter grades found:', letterGrades.length, '/', grades.length,
       letterGrades.length === 0 ? '(INCONCLUSIVE — injected set may have no staging ratings)' : '(PASS)');
     // Do not hard-fail on zero letter grades — em-dashes are valid when the set
