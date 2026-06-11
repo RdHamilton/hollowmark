@@ -65,10 +65,11 @@
 #       fallback used by infra/scripts).
 #
 #   C11 Source->upload->fetch triangle (#1148): every file sourced via
-#       `. /tmp/<f>` in a provision script MUST (a) exist under
-#       scripts/deploy/ (the directory that `aws s3 sync` uploads) AND
-#       (b) appear as an explicit `aws s3 cp` fetch in the relevant
-#       PROVISION_CMD block in deploy-bff.yml.  Root cause of #3081:
+#       `. /tmp/<f>` (POSIX dot) or `source /tmp/<f>` (bash keyword) in a
+#       provision script MUST (a) exist under scripts/deploy/ (the
+#       directory that `aws s3 sync` uploads) AND (b) appear as an
+#       explicit `aws s3 cp` fetch in the relevant PROVISION_CMD block in
+#       deploy-bff.yml.  Root cause of #3081:
 #       provision-staging-env.sh sourced provision-lib.sh and
 #       ssm-key-manifest.sh but neither had an s3 cp fetch in the
 #       staging PROVISION_CMD -- files were in S3 but never copied to
@@ -616,9 +617,10 @@ echo
 
 # ---- C11: source→upload→fetch triangle (#1148) ----------------------------
 # Asserts the three-way contract that caused the #3081 staging regression:
-#   (a) UPLOAD: every file sourced (`. /tmp/<f>`) by a provision script
-#       MUST exist under scripts/deploy/ -- that directory is what
-#       `aws s3 sync scripts/deploy/ s3://.../scripts/` uploads.
+#   (a) UPLOAD: every file sourced (`. /tmp/<f>` or `source /tmp/<f>`) by
+#       a provision script MUST exist under scripts/deploy/ -- that
+#       directory is what `aws s3 sync scripts/deploy/ s3://.../scripts/`
+#       uploads.
 #   (b) FETCH: every such file MUST appear as an explicit `aws s3 cp`
 #       fetch in the corresponding PROVISION_CMD sequence in deploy-bff.yml
 #       -- without the fetch, the file is in S3 but never on the EC2 /tmp/.
@@ -689,17 +691,18 @@ if [[ "$c11_ok" -eq 1 ]]; then
     [[ -f "$script" ]] || continue
     script_base=$(basename "$script")
 
-    # Collect all `. /tmp/<filename>` sourced helpers (POSIX dot-source
-    # syntax as used on EC2).  Skip deploy-env.sh -- C9 guards it.
+    # Collect all sourced helpers via `. /tmp/<f>` (POSIX dot) OR
+    # `source /tmp/<f>` (bash keyword).  Both forms are used on EC2.
+    # Skip deploy-env.sh -- C9 guards it.
     sourced_files=()
     while IFS= read -r srcline; do
-      # Match `. /tmp/<basename>` -- the shell `. ` invocation.
-      fname=$(echo "$srcline" | sed -E 's/^[[:space:]]*\.[[:space:]]+\/tmp\/([^[:space:];]+).*/\1/')
+      # Group 1 = keyword (. or source); group 2 = filename.
+      fname=$(echo "$srcline" | sed -E 's/^[[:space:]]*(\.|source)[[:space:]]+\/tmp\/([^[:space:];]+).*/\2/')
       [[ "$fname" = "$srcline" ]] && continue  # no match -- sed returned full line
       [[ "$fname" = "deploy-env.sh" ]] && continue  # covered by C9
       [[ -z "$fname" ]] && continue
       sourced_files+=("$fname")
-    done < <(grep -E '^[[:space:]]*\.[[:space:]]+/tmp/' "$script" 2>/dev/null)
+    done < <(grep -E '^[[:space:]]*(\.|source)[[:space:]]+/tmp/' "$script" 2>/dev/null)
 
     [[ ${#sourced_files[@]} -eq 0 ]] && continue  # script sources nothing beyond deploy-env.sh
 
