@@ -66,12 +66,14 @@ func (r *GameEventCountersRepository) InsertCounters(ctx context.Context, insert
 }
 
 // CountByMatchGameResult returns the number of game_event_counters rows for the
-// given match_game_result_id.  Used in integration tests.
-func (r *GameEventCountersRepository) CountByMatchGameResult(ctx context.Context, matchGameResultID int64) (int, error) {
-	const q = `SELECT COUNT(*) FROM game_event_counters WHERE match_game_result_id = $1`
+// given (account_id, match_game_result_id) pair.  The account_id filter is a
+// defence-in-depth cross-tenant guard (#621): a caller must own the
+// match_game_result row to read its counter count.  Used in integration tests.
+func (r *GameEventCountersRepository) CountByMatchGameResult(ctx context.Context, accountID int64, matchGameResultID int64) (int, error) {
+	const q = `SELECT COUNT(*) FROM game_event_counters WHERE account_id = $1 AND match_game_result_id = $2`
 
 	var n int
-	err := r.db.QueryRowContext(ctx, q, matchGameResultID).Scan(&n)
+	err := r.db.QueryRowContext(ctx, q, accountID, matchGameResultID).Scan(&n)
 
 	return n, err
 }
