@@ -337,20 +337,26 @@ func (r *GamePlayRepository) UpsertGameRow(ctx context.Context, matchID string, 
 	return id, nil
 }
 
-// GameIDByMatchAndNumber resolves games.id for the given (match_id, game_number)
-// pair. Used by the projection worker to obtain the FK required before writing
-// per-turn card plays to game_plays.
+// GameIDByMatchAndNumber resolves games.id for the given (account_id,
+// match_id, game_number) triple. The account_id is enforced via a JOIN to
+// matches so that a games row owned by a different account cannot be resolved
+// — defence-in-depth cross-account isolation (ticket #669).
 //
-// Returns sql.ErrNoRows when no games row exists yet for the pair — this is
+// Returns sql.ErrNoRows when no games row exists yet for the triple — this is
 // expected when match.game_ended arrives before match.completed is projected.
 // The caller must treat sql.ErrNoRows as a non-fatal skip condition.
-func (r *GamePlayRepository) GameIDByMatchAndNumber(ctx context.Context, matchID string, gameNumber int) (int64, error) {
-	const q = `SELECT id FROM games WHERE match_id = $1 AND game_number = $2 LIMIT 1`
+func (r *GamePlayRepository) GameIDByMatchAndNumber(ctx context.Context, accountID int64, matchID string, gameNumber int) (int64, error) {
+	const q = `
+		SELECT g.id
+		FROM games g
+		JOIN matches m ON m.id = g.match_id
+		WHERE m.account_id = $1 AND g.match_id = $2 AND g.game_number = $3
+		LIMIT 1`
 
 	var id int64
-	err := r.db.QueryRowContext(ctx, q, matchID, gameNumber).Scan(&id)
+	err := r.db.QueryRowContext(ctx, q, accountID, matchID, gameNumber).Scan(&id)
 	if err != nil {
-		return 0, fmt.Errorf("GameIDByMatchAndNumber match_id=%q game_number=%d: %w", matchID, gameNumber, err)
+		return 0, fmt.Errorf("GameIDByMatchAndNumber account_id=%d match_id=%q game_number=%d: %w", accountID, matchID, gameNumber, err)
 	}
 
 	return id, nil

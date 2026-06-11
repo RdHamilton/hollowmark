@@ -3,6 +3,7 @@ package repository_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -710,9 +711,9 @@ func TestGamePlayRepository_GameIDByMatchAndNumber_NotFound(t *testing.T) {
 	repo := repository.NewGamePlayRepository(db)
 	ctx := context.Background()
 
-	_, err := repo.GameIDByMatchAndNumber(ctx, "no-such-match-xyz", 1)
+	_, err := repo.GameIDByMatchAndNumber(ctx, 0, "no-such-match-xyz", 1)
 	if err == nil {
-		t.Fatal("expected error for nonexistent (match_id, game_number), got nil")
+		t.Fatal("expected error for nonexistent (account_id, match_id, game_number), got nil")
 	}
 }
 
@@ -931,8 +932,8 @@ func TestGamePlayRepository_UpsertGameRow_CreatesRow(t *testing.T) {
 		t.Error("UpsertGameRow returned id=0")
 	}
 
-	// Verify the row is readable by GameIDByMatchAndNumber.
-	resolvedID, err := repo.GameIDByMatchAndNumber(ctx, matchID, 1)
+	// Verify the row is readable by GameIDByMatchAndNumber (account-scoped).
+	resolvedID, err := repo.GameIDByMatchAndNumber(ctx, accountID, matchID, 1)
 	if err != nil {
 		t.Fatalf("GameIDByMatchAndNumber after UpsertGameRow: %v", err)
 	}
@@ -1028,4 +1029,91 @@ func TestGamePlayRepository_UpsertGameRow_ThenInsertCardPlays(t *testing.T) {
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM game_plays WHERE game_id = $1`, gameID)
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE id = $1`, gameID)
 	})
+}
+
+// ─── GameIDByMatchAndNumber account-scoping tests (#669) ───────────────────
+
+// TestGameIDByMatchAndNumber_CrossAccountIsolation proves that
+// GameIDByMatchAndNumber is scoped to the calling account and cannot resolve
+// a games row that belongs to a different account — even when (match_id,
+// game_number) uniquely identifies a row in the current schema.  This test is
+// the regression gate for the defence-in-depth fix: supplying the wrong
+// account_id must return sql.ErrNoRows, not the other account's id.
+//
+// Setup:
+//   - accountA owns matchA / game 1 → gamesID_A
+//   - accountB owns matchB / game 1 → gamesID_B
+//
+// Assertions:
+//  1. GameIDByMatchAndNumber(accountA, matchA, 1) == gamesID_A  (happy path)
+//  2. GameIDByMatchAndNumber(accountB, matchB, 1) == gamesID_B  (happy path)
+//  3. GameIDByMatchAndNumber(accountA, matchB, 1) returns sql.ErrNoRows
+//     (cross-account attempt: accountA presenting accountB's match_id)
+func TestGameIDByMatchAndNumber_CrossAccountIsolation(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	// Seed two separate accounts and their matches.
+	accountA := insertTestAccountForGamePlay(t, db, "xacct-A-669")
+	accountB := insertTestAccountForGamePlay(t, db, "xacct-B-669")
+
+	matchA := fmt.Sprintf("match-xacct-A-%d", accountA)
+	matchB := fmt.Sprintf("match-xacct-B-%d", accountB)
+
+	insertTestMatchForCardPlays(t, db, matchA, accountA)
+	insertTestMatchForCardPlays(t, db, matchB, accountB)
+
+	// Upsert one games row per account (same game_number=1 in each).
+	var gameIDA, gameIDB int64
+	if err := db.QueryRowContext(
+		ctx,
+		`INSERT INTO games (match_id, game_number, result) VALUES ($1, 1, 'win') RETURNING id`,
+		matchA,
+	).Scan(&gameIDA); err != nil {
+		t.Fatalf("insert game for accountA: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE id = $1`, gameIDA)
+	})
+
+	if err := db.QueryRowContext(
+		ctx,
+		`INSERT INTO games (match_id, game_number, result) VALUES ($1, 1, 'win') RETURNING id`,
+		matchB,
+	).Scan(&gameIDB); err != nil {
+		t.Fatalf("insert game for accountB: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE id = $1`, gameIDB)
+	})
+
+	// 1. Happy-path: accountA resolves its own game.
+	gotA, err := repo.GameIDByMatchAndNumber(ctx, accountA, matchA, 1)
+	if err != nil {
+		t.Fatalf("GameIDByMatchAndNumber(accountA, matchA, 1): unexpected error: %v", err)
+	}
+	if gotA != gameIDA {
+		t.Errorf("GameIDByMatchAndNumber(accountA, matchA, 1): want %d, got %d", gameIDA, gotA)
+	}
+
+	// 2. Happy-path: accountB resolves its own game.
+	gotB, err := repo.GameIDByMatchAndNumber(ctx, accountB, matchB, 1)
+	if err != nil {
+		t.Fatalf("GameIDByMatchAndNumber(accountB, matchB, 1): unexpected error: %v", err)
+	}
+	if gotB != gameIDB {
+		t.Errorf("GameIDByMatchAndNumber(accountB, matchB, 1): want %d, got %d", gameIDB, gotB)
+	}
+
+	// 3. Cross-account attempt: accountA must NOT resolve matchB's row.
+	// Without the account_id filter the resolver would return gamesID_B.
+	// With the fix it must return sql.ErrNoRows.
+	_, crossErr := repo.GameIDByMatchAndNumber(ctx, accountA, matchB, 1)
+	if crossErr == nil {
+		t.Fatal("GameIDByMatchAndNumber(accountA, matchB, 1): expected error (cross-account), got nil — account_id filter is missing")
+	}
+	if !errors.Is(crossErr, sql.ErrNoRows) {
+		t.Errorf("GameIDByMatchAndNumber(accountA, matchB, 1): want sql.ErrNoRows, got %v", crossErr)
+	}
 }
