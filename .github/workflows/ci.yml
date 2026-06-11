@@ -274,7 +274,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.bff == 'true' || needs.detect-changes.outputs.logparse == 'true' || needs.detect-changes.outputs.meta_scrape == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
@@ -290,6 +290,19 @@ jobs:
           services/meta-scrape/go.sum
           services/contract/go.sum
           pkg/logparse/go.sum
+
+    # Node + frontend deps are required for the TypeScript taxonomy staleness
+    # check below (gen-analytics-taxonomy.ts requires js-yaml from
+    # frontend/node_modules). Mirror the setup from frontend-component-tests.
+    - name: Set up Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: '24'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install frontend dependencies
+      run: npm ci --prefix frontend
 
     - name: go vet — all modules
       env:
