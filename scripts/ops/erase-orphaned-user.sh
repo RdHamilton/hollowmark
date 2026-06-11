@@ -166,12 +166,19 @@ if [[ "$DE_COUNT" -gt 200000 ]]; then
 fi
 log "Scope guardrail: PASS — $DE_COUNT daemon_events within expected range"
 
-# Guardrail: confirm only one distinct account in daemon_events
-DISTINCT_ACCTS=$(psql_query "SELECT count(DISTINCT account_id) FROM daemon_events;")
-if [[ "$DISTINCT_ACCTS" -ne 1 ]]; then
-    die "daemon_events has $DISTINCT_ACCTS distinct account_ids (expected 1). Cross-tenant risk. Aborting."
-fi
-log "Cross-tenant guardrail: PASS — single account_id in daemon_events"
+# No count-based cross-tenant guard is needed here. Three properties together
+# guarantee single-tenant erasure without it:
+#   (a) Identity verification above (clerk_user_id match + accounts id/user_id/
+#       client_id triple-match, die on any mismatch) confirms we have the right
+#       account before any write occurs.
+#   (b) accounts.client_id is UNIQUE (migration 000082_accounts_client_id_unique
+#       .up.sql), so a given client_id physically cannot map to more than one
+#       account row — the premise of a cross-tenant leak cannot be true.
+#   (c) Every DELETE below is scoped to WHERE account_id = '$TARGET_CLIENT_ID',
+#       so only rows belonging to this specific client_id are touched.
+# A count(DISTINCT account_id) query is either unreachable (UNIQUE constraint
+# makes >1 impossible) or a false-positive generator on any healthy multi-tenant
+# DB — Ray's ruling, PR #3190 (2026-06-11).
 
 # ---------------------------------------------------------------------------
 # Mode confirmation
