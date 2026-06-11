@@ -4,8 +4,18 @@
 -- to its destination table (matches / draft_sessions). NULL means "pending".
 --
 -- event_id is the daemon-issued unique identifier for the event used for
--- ON CONFLICT idempotency. The daemon already populates this in payload.event_id;
--- promote it to a top-level column so we can index it.
+-- ON CONFLICT idempotency. Promoted to a top-level column so we can index it.
+--
+-- IMPORTANT — NULL event_id is load-bearing for the self-heal path:
+--   A NULL event_id indicates the daemon did not (or could not) populate this
+--   field for a given row. This is the signal that enables daemon ReadFromStart
+--   + BFF re-projection: the re-projection pass re-derives corrected fields on
+--   replay for any row where event_id IS NULL (Ray's ADR). The backfill below
+--   handles pre-existing rows where payload.event_id is present; rows without
+--   it are intentionally left NULL and remain skippable by the projection
+--   worker. Do NOT force-populate event_id (e.g. by altering default or
+--   backfilling unconditionally) without first revisiting the self-heal design
+--   (daemon ReadFromStart + BFF re-projection — Ray's ADR).
 --
 -- Acceptance: ticket #1401
 
