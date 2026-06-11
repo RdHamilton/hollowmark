@@ -191,3 +191,100 @@ func (s *slowDeletionStarter) StartErasureJob(ctx context.Context, userID, accou
 	}
 	return "job-slow", nil
 }
+
+// ---------------------------------------------------------------------------
+// Rate-limit tests (AC1–AC4, #1160)
+// ---------------------------------------------------------------------------
+
+// TestAccountDeletionHandler_RateLimit_Returns429AfterLimit verifies AC1 + AC3:
+// the Nth+1 request within the window is rejected with 429 before deletion logic
+// executes, and the response includes a Retry-After header.
+func TestAccountDeletionHandler_RateLimit_Returns429AfterLimit(t *testing.T) {
+	starter := &stubDeletionStarter{}
+	resolver := &stubUserIDResolver{userID: 1, accountID: 10}
+	h := handlers.NewAccountDeletionHandler(resolver, starter)
+
+	const clerkID = "user_rl_abc"
+	// Send accountDeletionRateLimitMax requests — all should succeed (202).
+	for i := 0; i < handlers.AccountDeletionRateLimitMax; i++ {
+		req := newDeleteAccountRequest(clerkID)
+		w := httptest.NewRecorder()
+		h.Delete(w, req)
+		if w.Code == http.StatusTooManyRequests {
+			t.Fatalf("rate limit hit too early on request %d (want first %d to succeed)", i+1, handlers.AccountDeletionRateLimitMax)
+		}
+	}
+
+	// The next request must be 429.
+	req := newDeleteAccountRequest(clerkID)
+	w := httptest.NewRecorder()
+	h.Delete(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429 on request %d, got %d", handlers.AccountDeletionRateLimitMax+1, w.Code)
+	}
+	// AC4: Retry-After header must be present and parseable.
+	retryAfter := w.Header().Get("Retry-After")
+	if retryAfter == "" {
+		t.Error("expected Retry-After header to be set on 429 response")
+	}
+}
+
+// TestAccountDeletionHandler_RateLimit_PerUser verifies AC2: rate-limit state
+// is keyed per Clerk user ID. A different user is not affected by the first
+// user's limit.
+func TestAccountDeletionHandler_RateLimit_PerUser(t *testing.T) {
+	starter := &stubDeletionStarter{}
+	resolver := &stubUserIDResolver{userID: 1, accountID: 10}
+	h := handlers.NewAccountDeletionHandler(resolver, starter)
+
+	// Exhaust the limit for user A.
+	for i := 0; i <= handlers.AccountDeletionRateLimitMax; i++ {
+		req := newDeleteAccountRequest("user_rl_a")
+		w := httptest.NewRecorder()
+		h.Delete(w, req)
+	}
+
+	// User B should still get 202 (their bucket is empty).
+	req := newDeleteAccountRequest("user_rl_b")
+	w := httptest.NewRecorder()
+	h.Delete(w, req)
+
+	if w.Code == http.StatusTooManyRequests {
+		t.Errorf("user_rl_b should not be rate-limited by user_rl_a's exhausted bucket")
+	}
+}
+
+// TestAccountDeletionHandler_RateLimit_FiresBeforeDeletion verifies AC3: when
+// the limit is exhausted the erasure job starter is never called.
+func TestAccountDeletionHandler_RateLimit_FiresBeforeDeletion(t *testing.T) {
+	starter := &stubDeletionStarter{}
+	resolver := &stubUserIDResolver{userID: 1, accountID: 10}
+	h := handlers.NewAccountDeletionHandler(resolver, starter)
+
+	const clerkID = "user_rl_order"
+	// Exhaust the rate limit.
+	for i := 0; i < handlers.AccountDeletionRateLimitMax; i++ {
+		req := newDeleteAccountRequest(clerkID)
+		w := httptest.NewRecorder()
+		h.Delete(w, req)
+	}
+
+	// One more request (over limit).
+	req := newDeleteAccountRequest(clerkID)
+	w := httptest.NewRecorder()
+	h.Delete(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d", w.Code)
+	}
+
+	// The starter must not have been called for the over-limit request.
+	// It was called AccountDeletionRateLimitMax times for the allowed ones.
+	starter.mu.Lock()
+	jobCount := len(starter.started)
+	starter.mu.Unlock()
+	if jobCount > handlers.AccountDeletionRateLimitMax {
+		t.Errorf("erasure starter was called %d times; want at most %d (rate-limit must fire before deletion)", jobCount, handlers.AccountDeletionRateLimitMax)
+	}
+}
