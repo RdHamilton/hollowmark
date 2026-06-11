@@ -125,17 +125,18 @@ jobs:
           echo "RESOLVED_BUCKET=${{ secrets.DEPLOY_BUCKET }}" >> "$GITHUB_ENV"
         fi
 
-    # Staging bucket is created on first use (idempotent).
-    # Production bucket is pre-provisioned; the create-bucket call returns a
-    # BucketAlreadyOwnedByYou error which is suppressed by "|| true".
-    - name: Ensure deploy S3 bucket exists
+    # Assert that the deploy bucket already exists (head-bucket requires only
+    # s3:ListBucket, which the deploy role retains).  Bootstrap is complete:
+    # all six deploy buckets are pre-provisioned via CloudFormation or were
+    # created out-of-band before this assertion was introduced.  The old
+    # create-bucket + put-bucket-versioning calls are removed as part of the
+    # s3:CreateBucket least-privilege cleanup (hollowmark-tickets#2414).
+    # Note: mtga-companion-deploy-artifacts-staging is consumed by the infra
+    # repo's ec2-staging bootstrap under gha-infra-cfn-deploy, not this role —
+    # it is NOT asserted here (see hollowmark-tickets#2414 for follow-on F2).
+    - name: Assert deploy S3 bucket exists
       run: |
-        aws s3api create-bucket \
-          --bucket "$RESOLVED_BUCKET" \
-          --region us-east-1 2>/dev/null || true
-        aws s3api put-bucket-versioning \
-          --bucket "$RESOLVED_BUCKET" \
-          --versioning-configuration Status=Enabled 2>/dev/null || true
+        aws s3api head-bucket --bucket "$RESOLVED_BUCKET"
 
     - name: Upload binary to S3
       run: |
