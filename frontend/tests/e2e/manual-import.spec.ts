@@ -17,11 +17,10 @@ const __dirname = path.dirname(__filename);
  *   1. @smoke tests — run today. They exercise the collection-browse surface
  *      that manual-import feeds into. A regression there means the import
  *      destination is broken even before the upload step.
- *   2. test.fixme tests — shape-holders for the full upload flow (AC1 of
- *      #901). These activate automatically (become failing tests) when Frank
- *      lands #895 and the UI selectors they reference exist. Until then they
- *      appear in the report as "fixme" rather than "skip" — reviewers can see
- *      the pending coverage at a glance.
+ *   2. Upload happy-path tests (Suite 3) — live as of #895 / PR #3105
+ *      (merged 2026-06-10). These exercise the full import flow: file select,
+ *      submit, success/error state, and post-import collection browsability.
+ *      All four stable data-testid selectors introduced in #895 are used.
  *
  * Auth: tests inject the Clerk test state via window.__CLERK_TEST_STATE__ so
  * ProtectedRoute passes without a live Clerk session. All BFF data endpoints
@@ -300,14 +299,15 @@ test.describe('Manual-Import: settings import-export section gate', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Suite 3 — Upload happy-path (test.fixme — activates when #895 lands)
+// Suite 3 — Upload happy-path (live — activated by #895 / PR #3105)
 //
-// These are the full AC1 tests from #901. They are marked test.fixme so they
-// appear in CI reports as pending-but-known rather than skipped silently.
-// When Frank implements the import UI (#895), remove the test.fixme() calls
-// and verify the tests go RED, then GREEN with the real selectors.
+// These were shape-holders (test.fixme) until #895 landed. The test.fixme()
+// calls were removed in PR #3105 (merged 2026-06-10) once Frank added the
+// stable data-testid selectors to CollectionImportForm.tsx:
+//   manual-import-file-input, manual-import-submit,
+//   manual-import-success, manual-import-error
 //
-// Do NOT convert these to test.skip — test.fixme keeps them visible.
+// Ticket: #1181 — confirmed live by Frida (2026-06-11).
 // ---------------------------------------------------------------------------
 
 test.describe('Manual-Import: upload happy path', () => {
