@@ -660,3 +660,200 @@ test.describe('Compendium Phase-1 — Tier-badge D17 colors (PENDING #3048)', ()
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
   });
 });
+
+// ===========================================================================
+// Suite 8: Collection gilt surface — mythic wildcard tally (#1064)
+//
+// Asserts the wildcard advisor panel renders the mythic wildcard gem on the
+// Collection page after the user toggles the panel open. The gem element carries
+// data-testid="wildcard-advisor-gem-mythic" on the BudgetGem span
+// (WildcardAdvisorPanel.tsx line 119).
+//
+// Flow:
+//   1. Navigate to /collection (with mocked collection + wildcard-advisor endpoints)
+//   2. Click [data-testid="collection-toggle-wildcard-advisor"] to open the panel
+//   3. Wait for [data-testid="wildcard-advisor-budget"] to appear (panel data state)
+//   4. Assert [data-testid="wildcard-advisor-gem-mythic"] is visible
+//   5. Assert aria-label matches the mocked count ("3 Mythic wildcards")
+//   6. Assert the count text "3" is present inside .wildcard-advisor__budget-gem-count
+//
+// Color note: the gem uses --vault-rarity-mythic (#DC7E0E, orange) via --gem-color,
+// NOT --hollowmark-gilt. The gilt CSS token is used by BuildAroundSeedModal and
+// SetCompletion for their mythic surfaces; WildcardAdvisorPanel uses the standard
+// rarity token. The assertions here are structural (element presence + aria-label +
+// count text) per the selector confirmed by Frank (comment 4683759775 on #1064).
+//
+// BFF mock: the wildcard-advisor endpoint is NOT wrapped by the apiClient envelope;
+// bffWildcardAdvisor.ts reads the JSON body directly (WildcardAdvisorResponse shape).
+// The collection endpoints use the standard { data: { ... } } envelope.
+// ===========================================================================
+
+/**
+ * Mock the Collection page's BFF endpoints so it renders without a live BFF.
+ * Mirrors the mock pattern from wildcard-advisor.spec.ts.
+ */
+async function mockCollectionEndpointsForSuite8(page: Page): Promise<void> {
+  await page.route('**/api/v1/collection', (route) => {
+    void route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          cards: [],
+          totalCount: 0,
+          filterCount: 0,
+          unknownCardsRemaining: 0,
+          unknownCardsFetched: 0,
+        },
+      }),
+    });
+  });
+  await page.route('**/api/v1/collection/value', (route) => {
+    void route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { totalValueUsd: 0 } }),
+    });
+  });
+  await page.route('**/api/v1/collection/stats', (route) => {
+    void route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: {} }),
+    });
+  });
+  await page.route('**/api/v1/collection/sets', (route) => {
+    void route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: [] }),
+    });
+  });
+  await page.route('**/api/v1/cards/sets', (route) => {
+    void route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: [] }),
+    });
+  });
+}
+
+/**
+ * Mock the wildcard-advisor endpoint with 3 mythic wildcards in the budget.
+ *
+ * The bffWildcardAdvisor adapter reads the response body directly (no apiClient
+ * envelope); shape is WildcardAdvisorResponse, NOT { data: WildcardAdvisorResponse }.
+ *
+ * wildcard_budget.mythic = 3 → BudgetGem renders aria-label="3 Mythic wildcards"
+ * and count text "3" inside .wildcard-advisor__budget-gem-count.
+ */
+async function mockWildcardAdvisorWithMythicBudget(page: Page): Promise<void> {
+  await page.route('**/api/v1/recommendations/wildcards**', (route) => {
+    void route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        format: 'Standard',
+        recommendations: [
+          {
+            arena_id: 101,
+            name: 'Sheoldred, the Apocalypse',
+            rarity: 'mythic',
+            owned_copies: 1,
+            missing_copies: 3,
+            gihwr: 64.5,
+            set_code: 'DMU',
+          },
+        ],
+        wildcard_budget: { common: 12, uncommon: 9, rare: 5, mythic: 3 },
+      }),
+    });
+  });
+}
+
+test.describe('Compendium Phase-1 — Collection gilt surface: mythic wildcard tally @smoke (#1064)', () => {
+  test.beforeEach(async ({ page }) => {
+    await setClerkSignedIn(page);
+    await mockStatusStripEndpoints(page);
+    await mockCollectionEndpointsForSuite8(page);
+    await mockWildcardAdvisorWithMythicBudget(page);
+  });
+
+  test('@smoke wildcard advisor panel appears after toggle on /collection', async ({ page }) => {
+    // Navigate directly to /collection — mocks registered in beforeEach
+    await page.goto('/collection');
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+    await expect(page.locator('[data-testid="collection-page"]')).toBeVisible();
+
+    // Toggle the wildcard advisor panel open
+    const toggleBtn = page.locator('[data-testid="collection-toggle-wildcard-advisor"]');
+    await expect(toggleBtn).toBeVisible({ timeout: 10000 });
+    await toggleBtn.click();
+
+    // Panel must appear and reach the data state (budget section visible)
+    await expect(
+      page.locator('[data-testid="wildcard-advisor-panel"]')
+    ).toBeVisible({ timeout: 15000 });
+    await expect(
+      page.locator('[data-testid="wildcard-advisor-budget"]')
+    ).toBeVisible({ timeout: 15000 });
+  });
+
+  test('@smoke mythic wildcard gem is visible in budget panel after toggle', async ({ page }) => {
+    await page.goto('/collection');
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+    await expect(page.locator('[data-testid="collection-page"]')).toBeVisible();
+
+    // Open the advisor panel
+    await page.locator('[data-testid="collection-toggle-wildcard-advisor"]').click();
+
+    // Wait for the budget section to confirm the panel is in the data state
+    await expect(
+      page.locator('[data-testid="wildcard-advisor-budget"]')
+    ).toBeVisible({ timeout: 20000 });
+
+    // Assert the mythic gem element is present via the full scoped selector path
+    // confirmed by Frank (comment 4683759775 on #1064):
+    //   [data-testid="wildcard-advisor-panel"]
+    //     [data-testid="wildcard-advisor-budget"]
+    //       [data-testid="wildcard-advisor-gem-mythic"]
+    const mythicGem = page.locator(
+      '[data-testid="wildcard-advisor-panel"] [data-testid="wildcard-advisor-budget"] [data-testid="wildcard-advisor-gem-mythic"]'
+    );
+    await expect(mythicGem).toBeVisible();
+  });
+
+  test('@smoke mythic gem aria-label reflects mocked wildcard count', async ({ page }) => {
+    await page.goto('/collection');
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+
+    await page.locator('[data-testid="collection-toggle-wildcard-advisor"]').click();
+    await expect(
+      page.locator('[data-testid="wildcard-advisor-budget"]')
+    ).toBeVisible({ timeout: 20000 });
+
+    const mythicGem = page.locator('[data-testid="wildcard-advisor-gem-mythic"]');
+    await expect(mythicGem).toBeVisible();
+
+    // BudgetGem renders: aria-label={`${count} Mythic wildcard${count !== 1 ? 's' : ''}`}
+    // With wildcard_budget.mythic = 3 → "3 Mythic wildcards"
+    await expect(mythicGem).toHaveAttribute('aria-label', '3 Mythic wildcards');
+  });
+
+  test('@smoke mythic gem count text reflects mocked wildcard budget', async ({ page }) => {
+    await page.goto('/collection');
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+
+    await page.locator('[data-testid="collection-toggle-wildcard-advisor"]').click();
+    await expect(
+      page.locator('[data-testid="wildcard-advisor-budget"]')
+    ).toBeVisible({ timeout: 20000 });
+
+    // The numeric count is inside .wildcard-advisor__budget-gem-count (per Frank's comment)
+    const mythicGem = page.locator('[data-testid="wildcard-advisor-gem-mythic"]');
+    await expect(mythicGem).toBeVisible();
+
+    const countEl = mythicGem.locator('.wildcard-advisor__budget-gem-count');
+    await expect(countEl).toHaveText('3');
+  });
+});
