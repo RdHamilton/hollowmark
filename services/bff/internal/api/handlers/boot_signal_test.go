@@ -15,6 +15,7 @@ package handlers_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -466,5 +467,89 @@ func TestBootSignal_ContentType_TextPlain_Accepted(t *testing.T) {
 
 	if rr.Code != http.StatusNoContent {
 		t.Errorf("Content-Type: text/plain: want 204, got %d", rr.Code)
+	}
+}
+
+// ── S-07 FINDING-1 fix: log injection via internal newlines ──────────────────
+
+// TestBootSignal_AppVersion_LogInjection_NewlineStripped verifies that an
+// app_version value containing an embedded newline does NOT produce a second
+// forged log line. The sanitizeBootVersion function must replace internal control
+// chars (< 0x20 or == 0x7F) with '_' before truncating (Sarah S-07 FINDING-1).
+//
+// A forged line would appear as a new log record starting after the injected \n.
+// The test asserts that the captured log output for this request contains exactly
+// one msg=boot_signal record (no second record starting with "fake_field=").
+func TestBootSignal_AppVersion_LogInjection_NewlineStripped(t *testing.T) {
+	h := handlers.NewBootSignalHandler("test-pii-salt")
+
+	var logBuf strings.Builder
+	orig := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	// Poisoned app_version: embedded newline followed by forged log fields.
+	poisoned := "v1.0\nfake_field=injected level=error msg=forged"
+	body := bootSignalBody("network", "production", poisoned, time.Now().UTC().Format(time.RFC3339))
+	req := bootSignalReq(body)
+	rr := httptest.NewRecorder()
+
+	h.Handle(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("poisoned app_version: want 204, got %d", rr.Code)
+	}
+
+	logged := logBuf.String()
+
+	// The log output must contain no literal newline WITHIN the boot_signal entry.
+	// Without the fix, the injected \n would produce a second log line starting with
+	// "fake_field=injected". With the fix, \n is replaced with '_' and the forged
+	// content is embedded inside the app_version value on the same line.
+	if strings.Contains(logged, "\nfake_field=injected") {
+		t.Errorf("log injection: forged field appeared as a separate log record — sanitizeBootVersion did not strip internal newline: %q", logged)
+	}
+
+	// The control character was replaced with '_', so the sanitized form is present.
+	if !strings.Contains(logged, "app_version=v1.0_fake_field=injected") {
+		t.Errorf("sanitized app_version not found in log — got: %q", logged)
+	}
+}
+
+// ── S-07 FINDING-2 fix: bounded rateByIP map ─────────────────────────────────
+
+// TestBootSignal_RateMap_BoundedUnderFlood verifies that the rateByIP map is
+// capped at bootSignalRateMapCap and does not grow without bound under a flood
+// of unique spoofed IPs (Sarah S-07 FINDING-2).
+//
+// After inserting cap+N unique IPs the map size must not exceed cap.
+// The limiter must still function for a legitimate IP after the cap is hit.
+func TestBootSignal_RateMap_BoundedUnderFlood(t *testing.T) {
+	h := handlers.NewBootSignalHandler("test-pii-salt")
+
+	// Flood with unique IPs well beyond the cap.
+	// Use 10.A.B.C notation spread across the /8 block (16M unique addresses).
+	flood := handlers.BootSignalRateMapCap + 1000
+	for i := range flood {
+		body := bootSignalBody("network", "production", "v0.4.3", time.Now().UTC().Format(time.RFC3339))
+		req := bootSignalReq(body)
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("10.%d.%d.%d", (i/65536)%256, (i/256)%256, i%256))
+		rr := httptest.NewRecorder()
+		h.Handle(rr, req)
+	}
+
+	size := h.RateMapSize()
+	if size > handlers.BootSignalRateMapCap {
+		t.Errorf("rateByIP map size %d exceeds cap %d — unbounded growth under IP flood", size, handlers.BootSignalRateMapCap)
+	}
+
+	// Limiter must still accept a new legitimate request after cap eviction.
+	body := bootSignalBody("network", "production", "v0.4.3", time.Now().UTC().Format(time.RFC3339))
+	req := bootSignalReq(body)
+	req.Header.Set("X-Forwarded-For", "192.0.2.1") // TEST-NET, not in flood range
+	rr := httptest.NewRecorder()
+	h.Handle(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Errorf("post-cap legitimate request: want 204, got %d", rr.Code)
 	}
 }

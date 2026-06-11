@@ -53,6 +53,15 @@ const (
 
 	// bootSignalRateLimitWindow is the sliding window for per-IP rate limiting.
 	bootSignalRateLimitWindow = time.Minute
+
+	// BootSignalRateMapCap is the maximum number of entries in the rateByIP map.
+	// Security control (S-07 FINDING-2): without a cap, unique spoofed
+	// X-Forwarded-For values grow the map without bound on this public unauth
+	// endpoint. At ~200 bytes per entry, 50 000 entries ≈ 10 MB ceiling.
+	// When the map hits the cap on insert, expired entries are evicted first;
+	// if none are expired the oldest entry (by last-call time) is removed.
+	// Exported so the test package can assert the bound.
+	BootSignalRateMapCap = 50_000
 )
 
 // validBootFailureTypes is the set of accepted failure_type enum values.
@@ -117,6 +126,8 @@ func (e *bootSignalRateEntry) allow() bool {
 //
 // Public endpoint (no Clerk auth required — AC7). Rate limited at 20 req/min
 // per IP. Sink: structured CloudWatch log line only (no DB writes — AC6).
+//
+// The rateByIP map is capped at BootSignalRateMapCap entries (S-07 FINDING-2).
 type BootSignalHandler struct {
 	piiSalt  string
 	rateMu   sync.Mutex
@@ -132,6 +143,15 @@ func NewBootSignalHandler(piiSalt string) *BootSignalHandler {
 		piiSalt:  piiSalt,
 		rateByIP: make(map[string]*bootSignalRateEntry),
 	}
+}
+
+// RateMapSize returns the current number of entries in the rateByIP map.
+// Exported for test use only — lets the test package assert the eviction bound
+// without accessing unexported fields.
+func (h *BootSignalHandler) RateMapSize() int {
+	h.rateMu.Lock()
+	defer h.rateMu.Unlock()
+	return len(h.rateByIP)
 }
 
 // Handle implements the POST /api/v1/boot-signal handler.
@@ -202,15 +222,69 @@ func (h *BootSignalHandler) Handle(w http.ResponseWriter, r *http.Request) {
 }
 
 // rateAllow checks and records a rate-limit call for ip.
+// On new-IP insert it enforces the BootSignalRateMapCap bound (S-07 FINDING-2):
+// if the map is at capacity, expired entries are evicted first; if none are
+// expired the entry with the oldest last-call time is removed.
 func (h *BootSignalHandler) rateAllow(ip string) bool {
 	h.rateMu.Lock()
 	entry, ok := h.rateByIP[ip]
 	if !ok {
+		if len(h.rateByIP) >= BootSignalRateMapCap {
+			h.evictOldestLocked()
+		}
 		entry = &bootSignalRateEntry{}
 		h.rateByIP[ip] = entry
 	}
 	h.rateMu.Unlock()
 	return entry.allow()
+}
+
+// evictOldestLocked removes stale or oldest entries to make room for a new IP.
+// Must be called with h.rateMu held.
+// Strategy: scan once for any fully-expired entry (all callTimes outside the
+// window); if found, remove it and return. If no fully-expired entry exists,
+// remove the entry whose most-recent call time is oldest (least recently active).
+// This is O(n) over the map — called only when the map reaches BootSignalRateMapCap,
+// which is an exceptional condition under normal traffic.
+func (h *BootSignalHandler) evictOldestLocked() {
+	cutoff := time.Now().Add(-bootSignalRateLimitWindow)
+
+	// First pass: evict any fully-expired entry (zero live call times).
+	for k, e := range h.rateByIP {
+		e.mu.Lock()
+		live := 0
+		for _, t := range e.callTimes {
+			if t.After(cutoff) {
+				live++
+			}
+		}
+		e.mu.Unlock()
+		if live == 0 {
+			delete(h.rateByIP, k)
+			return
+		}
+	}
+
+	// No fully-expired entry: remove the least-recently-active entry.
+	var oldestKey string
+	var oldestTime time.Time
+	for k, e := range h.rateByIP {
+		e.mu.Lock()
+		var last time.Time
+		for _, t := range e.callTimes {
+			if t.After(last) {
+				last = t
+			}
+		}
+		e.mu.Unlock()
+		if oldestKey == "" || last.Before(oldestTime) {
+			oldestKey = k
+			oldestTime = last
+		}
+	}
+	if oldestKey != "" {
+		delete(h.rateByIP, oldestKey)
+	}
 }
 
 // BackdateRateEntry is exported for test use only. It backdates all recorded
@@ -233,10 +307,21 @@ func (h *BootSignalHandler) BackdateRateEntry(ip string, by time.Duration) {
 	}
 }
 
-// sanitizeBootVersion strips whitespace and truncates app_version to 32 chars
-// to prevent log injection and bound the log field (Ray R3 — keep app_version).
+// sanitizeBootVersion sanitizes app_version for safe log emission.
+// Security (S-07 FINDING-1): replaces any control character (< 0x20 or == 0x7F)
+// with '_' BEFORE truncating, preventing log-injection via embedded newlines or
+// other control sequences. strings.TrimSpace alone is insufficient — it only
+// strips leading/trailing whitespace; internal \n, \r, \t survive and can forge
+// a second log line via log.Printf's format string expansion.
+// Order: TrimSpace → control-char replacement → truncate to 32 → empty guard.
 func sanitizeBootVersion(v string) string {
 	v = strings.TrimSpace(v)
+	v = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7F {
+			return '_'
+		}
+		return r
+	}, v)
 	if len(v) > 32 {
 		v = v[:32]
 	}
