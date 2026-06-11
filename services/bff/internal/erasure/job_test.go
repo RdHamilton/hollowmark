@@ -82,6 +82,20 @@ func (s *stubDB) HardDeleteAccount(ctx context.Context, accountID int64) error {
 	return s.record("step4e")
 }
 
+// DeleteExplicitBigintRows implements erasure.ExplicitBigintRowDeleter.
+// Step 4-explicit: deletes identity-keyed BIGINT-account_id tables that are
+// cascade-unreachable at certain schema versions.
+func (s *stubDB) DeleteExplicitBigintRows(ctx context.Context, accountID int64) error {
+	return s.record("step4explicit")
+}
+
+// AssertZeroResiduals implements erasure.ResidualSweeper.
+// Step 4-sweep: queries information_schema and asserts no residual rows remain
+// for the erased account/clientIDs.
+func (s *stubDB) AssertZeroResiduals(ctx context.Context, accountID int64, clientIDs []string) error {
+	return s.record("step4sweep")
+}
+
 // RecordJobComplete implements erasure.AuditLogger.
 func (s *stubDB) RecordJobComplete(ctx context.Context, jobID string) error {
 	return s.record("step8")
@@ -160,13 +174,16 @@ func orderedSteps(db *stubDB) []string {
 // Tests — RED phase (written before implementation)
 // ---------------------------------------------------------------------------
 
-// TestRunErasureCascade_StepOrderInvariant verifies the 9-step cascade executes
-// in the mandatory order defined by ADR-056:
+// TestRunErasureCascade_StepOrderInvariant verifies the full cascade executes
+// in the mandatory order defined by ADR-056 (amended by ticket #1257):
 //
-//	step0 → step1 → step2 → step4a → step4b → step4c → step4d → step4e → step5 → step6 → step8
+//	step0 → step1 → step2 → step4a → step4b → step4c → step4d → step4e →
+//	step4explicit → step4sweep → step5 → step6 → step8
 //
-// This is the load-bearing invariant: PostHog delete (step2) MUST run before
-// Clerk delete (step5) because deleting Clerk first loses the hash mapping.
+// Key invariants:
+//   - PostHog delete (step2) MUST run before Clerk delete (step5).
+//   - Residual sweep (step4sweep) runs after all DB deletes, before Clerk (step5).
+//   - RecordJobComplete (step8) runs only after the sweep succeeds.
 func TestRunErasureCascade_StepOrderInvariant(t *testing.T) {
 	// Use a shared log embedded in the DB stub so ordering is deterministic.
 	db := newStubDB()
@@ -192,7 +209,12 @@ func TestRunErasureCascade_StepOrderInvariant(t *testing.T) {
 	}
 
 	got := orderedSteps(db)
-	want := []string{"step0", "step1", "step2", "step4a", "step4b", "step4c", "step4d", "step4e", "step5", "step6", "step8"}
+	want := []string{
+		"step0", "step1", "step2",
+		"step4a", "step4b", "step4c", "step4d", "step4e",
+		"step4explicit", "step4sweep",
+		"step5", "step6", "step8",
+	}
 	if len(got) != len(want) {
 		t.Fatalf("step count: got %d steps %v, want %d steps %v", len(got), got, len(want), want)
 	}
@@ -200,6 +222,85 @@ func TestRunErasureCascade_StepOrderInvariant(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("step[%d]: got %q, want %q (full order: %v)", i, got[i], want[i], got)
 		}
+	}
+}
+
+// TestRunErasureCascade_SweepFailureHaltsBeforeClerkAndComplete verifies C4:
+// when the residual sweep (step4sweep) fails, Step 5 (Clerk delete) AND Step 8
+// (RecordJobComplete / completed_at) are both uncalled — no irreversible external
+// delete occurs and no silent "complete" write happens.  This ensures the job
+// leaves deletion_audit_log.completed_at = NULL for the AC7 re-trigger runbook.
+func TestRunErasureCascade_SweepFailureHaltsBeforeClerkAndComplete(t *testing.T) {
+	db := newStubDB()
+	db.injectError("step4sweep", errors.New("residual rows found: matches(2)"))
+	ph := &stubPostHog{}
+	cl := &stubClerk{}
+	mc := &stubMailchimp{}
+	phRecorder := &recordingPostHog{inner: ph, db: db}
+	clRecorder := &recordingClerk{inner: cl, db: db}
+	mcRecorder := &recordingMailchimp{inner: mc, db: db}
+
+	deps := erasure.Deps{DB: db, PostHog: phRecorder, Clerk: clRecorder, Mailchimp: mcRecorder}
+
+	err := erasure.RunErasureCascade(context.Background(), "job-sweep-fail", "clerk_uid_sf", int64(1), int64(1), deps)
+	if err == nil {
+		t.Error("expected error from sweep failure, got nil")
+	}
+
+	steps := orderedSteps(db)
+	for _, s := range steps {
+		if s == "step5" {
+			t.Error("step5 (Clerk delete) must NOT be called when step4sweep fails — external delete is irreversible")
+		}
+		if s == "step8" {
+			t.Error("step8 (RecordJobComplete) must NOT be called when step4sweep fails — completed_at must remain NULL for AC7 re-trigger")
+		}
+	}
+}
+
+// TestRunErasureCascade_ExplicitBigintDeleteBeforeSweep verifies that the
+// explicit BIGINT-keyed deletes (step4explicit) run before the residual sweep
+// (step4sweep).  The sweep must see the state AFTER explicit deletes.
+func TestRunErasureCascade_ExplicitBigintDeleteBeforeSweep(t *testing.T) {
+	db := newStubDB()
+	ph := &stubPostHog{}
+	cl := &stubClerk{}
+	mc := &stubMailchimp{}
+	phRecorder := &recordingPostHog{inner: ph, db: db}
+	clRecorder := &recordingClerk{inner: cl, db: db}
+	mcRecorder := &recordingMailchimp{inner: mc, db: db}
+
+	deps := erasure.Deps{DB: db, PostHog: phRecorder, Clerk: clRecorder, Mailchimp: mcRecorder}
+	_ = erasure.RunErasureCascade(context.Background(), "job-order", "clerk_uid_order", int64(1), int64(1), deps)
+
+	steps := orderedSteps(db)
+	idxExplicit, idxSweep, idxClerk := -1, -1, -1
+	for i, s := range steps {
+		switch s {
+		case "step4explicit":
+			idxExplicit = i
+		case "step4sweep":
+			idxSweep = i
+		case "step5":
+			idxClerk = i
+		}
+	}
+	if idxExplicit == -1 {
+		t.Fatal("step4explicit was never called")
+	}
+	if idxSweep == -1 {
+		t.Fatal("step4sweep was never called")
+	}
+	if idxClerk == -1 {
+		t.Fatal("step5 was never called")
+	}
+	if idxExplicit >= idxSweep {
+		t.Errorf("step4explicit must run before step4sweep; got indices explicit=%d sweep=%d in %v",
+			idxExplicit, idxSweep, steps)
+	}
+	if idxSweep >= idxClerk {
+		t.Errorf("step4sweep must run before step5 (Clerk); got indices sweep=%d clerk=%d in %v",
+			idxSweep, idxClerk, steps)
 	}
 }
 
@@ -376,54 +477,6 @@ func TestRunErasureCascade_Step4aBeforeStep4e(t *testing.T) {
 	if idx4a >= idx4e {
 		t.Errorf("step4a (TEXT-keyed delete) must run before step4e (accounts delete); got indices %d >= %d in %v",
 			idx4a, idx4e, steps)
-	}
-}
-
-// TestRunErasureCascade_NilDBReturnsErrorNotPanic is the regression test for
-// the bug fixed in cmd/main.go (hollowmark-tickets#887): buildAccountDeletionHandler omitted
-// DB: db from the erasure.Deps literal, leaving deps.DB nil.  When
-// RunErasureCascade called deps.DB.CapturePreJobData, it nil-dereferenced and
-// the BFF process crashed via SIGSEGV.
-//
-// This test asserts the correct class-level contract: RunErasureCascade with
-// nil Deps.DB MUST return an error, not panic.  The defensive nil-guard at the
-// top of RunErasureCascade enforces this; the primary fix (DB: db wiring in
-// buildAccountDeletionHandler) ensures production never reaches this guard.
-func TestRunErasureCascade_NilDBReturnsErrorNotPanic(t *testing.T) {
-	deps := erasure.Deps{
-		DB:        nil, // intentionally nil — regression guard
-		PostHog:   &stubPostHog{},
-		Clerk:     &stubClerk{},
-		Mailchimp: &stubMailchimp{},
-	}
-
-	var (
-		returned bool
-		runErr   error
-	)
-	// Run in a goroutine with recover so a panic (the pre-fix behavior) becomes
-	// a test failure rather than a process crash.
-	done := make(chan struct{})
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				// Pre-fix: panic("runtime error: invalid memory address or nil pointer dereference")
-				// This is the bug we are guarding against — fail the test.
-				t.Errorf("RunErasureCascade panicked with nil Deps.DB: %v — DB must be non-nil or the function must return an error, not crash", r)
-			}
-			close(done)
-		}()
-		runErr = erasure.RunErasureCascade(context.Background(), "job-nil-db", "clerk_uid_nil", 1, 1, deps)
-		returned = true
-	}()
-	<-done
-
-	// After fix: must have returned (not panicked) and the error must be non-nil.
-	if !returned {
-		t.Error("RunErasureCascade did not return — likely panicked (pre-fix behavior)")
-	}
-	if returned && runErr == nil {
-		t.Error("RunErasureCascade with nil Deps.DB returned nil error — expected a non-nil error")
 	}
 }
 

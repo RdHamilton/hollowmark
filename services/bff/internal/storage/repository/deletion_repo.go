@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -75,35 +77,39 @@ func (r *DeletionRepository) SoftDeleteUser(ctx context.Context, userID int64) e
 	return nil
 }
 
-// DeleteTextKeyedRows deletes all rows from the four no-FK TEXT-keyed tables
-// that use MTGA client_id strings as their account identifier.  These tables
-// cannot be reached by the FK cascade from accounts(id), so they must be
-// explicitly deleted.
+// DeleteTextKeyedRows deletes all rows from TEXT-keyed tables that use MTGA
+// client_id strings as their account identifier.  These tables cannot be
+// reached by the FK cascade from accounts(id) and must be explicitly deleted.
 //
 // Tables addressed (FM-3 Step 4a):
 //   - daemon_events.account_id TEXT
 //   - daemon_api_keys.account_id TEXT
 //   - user_play_patterns.account_id TEXT
 //   - projection_errors.account_id TEXT
+//   - inventory_history.account_id TEXT (incremental path via 000068 only;
+//     the fresh-init path via 000054 has BIGINT FK CASCADE — see below)
+//
+// # inventory_history schema fork (F1 — #1257)
+//
+// Migration 000068 added account_id as TEXT NOT NULL DEFAULT ” to
+// inventory_history on the incremental upgrade path.  Migration 000054 (fresh
+// init) created it as BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE.
+// There is no conversion migration between these two paths.
+//
+// On the TEXT path: this method handles inventory_history via the TEXT ANY($1)
+// delete below.  On the BIGINT path: inventory_history is covered by
+// HardDeleteAccount (cascade) and/or DeleteExplicitBigintRows.  The method
+// gates on information_schema.data_type to avoid a SQLSTATE 22P02 type error.
 //
 // NOTE: quest_session_tracking is NOT in this list.  Migration 000080 converted
 // quest_session_tracking.account_id from TEXT (raw MTGA client_id) to BIGINT FK
-// referencing accounts(id) ON DELETE CASCADE.  It is now erased automatically
-// by HardDeleteAccount (Step 4e) — the same cascade path as inventory, collection,
-// decks, etc.  Attempting to delete it here with a text[] binding throws
-// SQLSTATE 22P02 (invalid input syntax for type bigint).
+// referencing accounts(id) ON DELETE CASCADE.  Attempting to delete it here
+// with a text[] binding throws SQLSTATE 22P02 (invalid input syntax for type bigint).
 //
 // The delete is idempotent — re-running on an already-empty set is a no-op.
 func (r *DeletionRepository) DeleteTextKeyedRows(ctx context.Context, clientIDs []string) error {
 	if len(clientIDs) == 0 {
 		return nil
-	}
-
-	// Build a $N parameter list for ANY($1, $2, ...).
-	// pgx uses positional $N placeholders, not ?.
-	args := make([]any, len(clientIDs))
-	for i, id := range clientIDs {
-		args[i] = id
 	}
 
 	// Use ANY with a single TEXT[] parameter for simplicity and correctness.
@@ -131,6 +137,34 @@ func (r *DeletionRepository) DeleteTextKeyedRows(ctx context.Context, clientIDs 
 	if _, err := r.db.ExecContext(ctx, projectionErrorsQ, clientIDs); err != nil {
 		return fmt.Errorf("DeleteTextKeyedRows projection_errors: %w", err)
 	}
+
+	// inventory_history — TEXT path only (incremental migration via 000068).
+	//
+	// Gate on information_schema to determine the column data type before
+	// issuing a TEXT-array bind.  On the BIGINT path (fresh-init 000054) the
+	// column carries a FK CASCADE from accounts(id) so cascade + Step 4-explicit
+	// cover it; a TEXT bind against a BIGINT column would throw SQLSTATE 22P02.
+	//
+	// PROD NOTE: the incremental production path has TEXT; this branch executes
+	// on prod and is a no-op on fresh-init (CI) test databases.
+	var invHistDataType string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COALESCE(data_type, '')
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name   = 'inventory_history'
+		  AND column_name  = 'account_id'`).Scan(&invHistDataType)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("DeleteTextKeyedRows inventory_history data_type lookup: %w", err)
+	}
+	invHistDataType = strings.ToLower(invHistDataType)
+	if invHistDataType == "text" || invHistDataType == "character varying" || invHistDataType == "character" {
+		const inventoryHistoryQ = `DELETE FROM inventory_history WHERE account_id = ANY($1)`
+		if _, err := r.db.ExecContext(ctx, inventoryHistoryQ, clientIDs); err != nil {
+			return fmt.Errorf("DeleteTextKeyedRows inventory_history (TEXT path): %w", err)
+		}
+	}
+	// BIGINT or missing: handled by HardDeleteAccount cascade + DeleteExplicitBigintRows.
 
 	return nil
 }
@@ -180,16 +214,16 @@ func (r *DeletionRepository) HardDeleteUser(ctx context.Context, userID int64) e
 // HardDeleteAccount deletes the accounts row for accountID.
 //
 // This fires two database-level cascades:
-//  1. ON DELETE CASCADE on all BIGINT FK user-keyed tables (25+ tables per
-//     ADR-056 FM-3 enumeration — collection, matches, decks, drafts, inventory,
-//     game_plays, rank_history, draft_events, draft_sessions, quests,
-//     user_settings, recommendation_feedback, card_inventory, draft_picks,
-//     draft_packs, draft_match_results, game_event_counters, life_change_tracking,
-//     matchup_statistics, deck_performance_history, currency_history, player_stats,
-//     match_game_results, quest_session_tracking, and all their sub-cascades via
-//     decks/matches/games).  Note: quest_session_tracking.account_id was TEXT
-//     at creation (migration 000071) but was converted to BIGINT FK in migration
-//     000080 — it is now reached by this cascade, not by DeleteTextKeyedRows.
+//  1. ON DELETE CASCADE on BIGINT FK user-keyed tables (collection, decks,
+//     drafts, inventory, draft_sessions, quests, user_settings,
+//     recommendation_feedback, card_inventory, draft_picks, draft_packs,
+//     draft_match_results, game_event_counters, life_change_tracking,
+//     matchup_statistics, deck_performance_history, currency_history,
+//     match_game_results, quest_session_tracking, and sub-cascades via
+//     decks/matches/games).
+//     NOTE: game_plays has no FK CASCADE today (000120 deferred it);
+//     matches/player_stats/rank_history/collection_history gained FKs in
+//  000119. These are covered defense-in-depth by DeleteExplicitBigintRows.
 //  2. ON DELETE SET NULL on consent_log.account_id (migration #885).
 func (r *DeletionRepository) HardDeleteAccount(ctx context.Context, accountID int64) error {
 	const q = `DELETE FROM accounts WHERE id = $1`
@@ -197,6 +231,223 @@ func (r *DeletionRepository) HardDeleteAccount(ctx context.Context, accountID in
 		return fmt.Errorf("HardDeleteAccount: %w", err)
 	}
 	return nil
+}
+
+// DeleteExplicitBigintRows performs defense-in-depth explicit DELETEs on
+// BIGINT-account_id tables that may be cascade-unreachable at some schema
+// versions (#1257 — erasure completeness class fix).
+//
+// Tables covered:
+//   - matches          — FK added 000119; absent on pre-119 DBs (P1 incident class).
+//   - player_stats     — FK added 000119; absent on pre-119 DBs.
+//   - rank_history     — FK added 000119; absent on pre-119 DBs.
+//   - collection_history — FK added 000119; absent on pre-119 DBs.
+//   - game_plays       — TEXT→BIGINT in 000120; NO FK CASCADE today (deferred).
+//   - inventory_history — BIGINT FK CASCADE on fresh-init (000054) path only.
+//     See data_type gate below (mirrors 000120's approach for game_plays).
+//
+// Called AFTER HardDeleteAccount (step4e) so FK cascades have already fired;
+// these deletes are idempotent no-ops when cascade already removed the rows.
+//
+// # inventory_history data_type gate (F1)
+//
+// On the incremental path (000068): account_id is TEXT — already handled by
+// DeleteTextKeyedRows (step4a).  On the fresh-init path (000054): account_id
+// is BIGINT NOT NULL FK CASCADE, so issuing a BIGINT WHERE clause here is
+// correct.  The gate reads information_schema.data_type at runtime, mirroring
+// how migration 000120 handles the game_plays type fork.
+func (r *DeletionRepository) DeleteExplicitBigintRows(ctx context.Context, accountID int64) error {
+	// Delete from tables with confirmed BIGINT account_id that may lack FK CASCADE.
+	// Using $1 for accountID — pgx positional binding, type BIGINT.
+
+	const matchesQ = `DELETE FROM matches WHERE account_id = $1`
+	if _, err := r.db.ExecContext(ctx, matchesQ, accountID); err != nil {
+		return fmt.Errorf("DeleteExplicitBigintRows matches: %w", err)
+	}
+
+	const playerStatsQ = `DELETE FROM player_stats WHERE account_id = $1`
+	if _, err := r.db.ExecContext(ctx, playerStatsQ, accountID); err != nil {
+		return fmt.Errorf("DeleteExplicitBigintRows player_stats: %w", err)
+	}
+
+	const rankHistoryQ = `DELETE FROM rank_history WHERE account_id = $1`
+	if _, err := r.db.ExecContext(ctx, rankHistoryQ, accountID); err != nil {
+		return fmt.Errorf("DeleteExplicitBigintRows rank_history: %w", err)
+	}
+
+	const collectionHistoryQ = `DELETE FROM collection_history WHERE account_id = $1`
+	if _, err := r.db.ExecContext(ctx, collectionHistoryQ, accountID); err != nil {
+		return fmt.Errorf("DeleteExplicitBigintRows collection_history: %w", err)
+	}
+
+	const gamePlaysQ = `DELETE FROM game_plays WHERE account_id = $1`
+	if _, err := r.db.ExecContext(ctx, gamePlaysQ, accountID); err != nil {
+		return fmt.Errorf("DeleteExplicitBigintRows game_plays: %w", err)
+	}
+
+	// inventory_history — data_type-gated (F1).
+	//
+	// PROD path: TEXT (incremental 000068) — already handled by DeleteTextKeyedRows;
+	// the gate returns '' or 'text' here, so this block is skipped on prod.
+	// CI / fresh-init path: BIGINT NOT NULL FK CASCADE (000054) — issue BIGINT delete.
+	// The gate is a no-op (returns '') if the table/column doesn't exist.
+	var invHistDataType string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COALESCE(data_type, '')
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name   = 'inventory_history'
+		  AND column_name  = 'account_id'`).Scan(&invHistDataType)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("DeleteExplicitBigintRows inventory_history data_type lookup: %w", err)
+	}
+
+	invHistDataType = strings.ToLower(invHistDataType)
+	switch invHistDataType {
+	case "bigint", "integer", "int8", "int4":
+		// BIGINT path (fresh-init 000054): issue BIGINT WHERE clause.
+		const inventoryHistoryQ = `DELETE FROM inventory_history WHERE account_id = $1`
+		if _, err := r.db.ExecContext(ctx, inventoryHistoryQ, accountID); err != nil {
+			return fmt.Errorf("DeleteExplicitBigintRows inventory_history (BIGINT path): %w", err)
+		}
+	case "text", "character varying", "character":
+		// TEXT path (incremental 000068): covered by DeleteTextKeyedRows (step4a).
+		// No action needed here.
+	case "":
+		// Table or column absent — no action.
+	default:
+		// Unexpected type: fail loudly to surface schema drift.
+		return fmt.Errorf("DeleteExplicitBigintRows inventory_history: unexpected data_type %q — manual investigation required", invHistDataType)
+	}
+
+	return nil
+}
+
+// AssertZeroResiduals queries information_schema.columns for every public base
+// table with an account_id or user_id column and asserts zero residual rows for
+// the erased accountID and clientIDs.
+//
+// Coverage strategy (C2):
+//   - For each identity-keyed base table found, attempts a COUNT query using
+//     accountID (BIGINT) for tables whose account_id is a numeric type, and
+//     clientIDs (TEXT[]) for tables whose account_id is TEXT.
+//   - Skips the TEXT-keyed count when clientIDs is empty (C2 condition).
+//
+// Retention exclusions (C1 / Ray ruling #1257):
+//   - deletion_audit_log     — compliance evidence; numeric ID, non-identifiable post-erasure.
+//   - restriction_audit_log  — GDPR Art.18 audit trail.
+//   - dsr_access_log         — GDPR Art.15 access log.
+//   - rectification_audit_log — GDPR Art.16 rectification audit.
+//
+// On failure: returns a non-nil error listing ALL offending tables (fail-all,
+// not fail-first — C2).  Identifiers are sanitized via
+// information_schema.columns (trusted system catalog) and quoted with
+// QuoteIdentifier to prevent SQL injection from schema names.
+func (r *DeletionRepository) AssertZeroResiduals(ctx context.Context, accountID int64, clientIDs []string) error {
+	// retainedTables are excluded from the sweep by Ray's retention ruling (#1257).
+	retainedTables := map[string]bool{
+		"deletion_audit_log":      true,
+		"restriction_audit_log":   true,
+		"dsr_access_log":          true,
+		"rectification_audit_log": true,
+	}
+
+	// Query information_schema for all public base tables with account_id or user_id.
+	const schemaQ = `
+		SELECT c.table_name, c.column_name, c.data_type
+		FROM information_schema.columns c
+		JOIN information_schema.tables t
+		  ON t.table_schema = c.table_schema
+		 AND t.table_name   = c.table_name
+		WHERE c.table_schema = 'public'
+		  AND c.column_name IN ('account_id', 'user_id')
+		  AND t.table_type   = 'BASE TABLE'
+		ORDER BY c.table_name, c.column_name`
+
+	rows, err := r.db.QueryContext(ctx, schemaQ)
+	if err != nil {
+		return fmt.Errorf("AssertZeroResiduals: schema query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type tableCol struct {
+		tableName  string
+		columnName string
+		dataType   string
+	}
+	var cols []tableCol
+	for rows.Next() {
+		var tc tableCol
+		if err := rows.Scan(&tc.tableName, &tc.columnName, &tc.dataType); err != nil {
+			return fmt.Errorf("AssertZeroResiduals: scan schema row: %w", err)
+		}
+		cols = append(cols, tc)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("AssertZeroResiduals: schema rows.Err: %w", err)
+	}
+
+	var offending []string
+	for _, tc := range cols {
+		if retainedTables[tc.tableName] {
+			continue
+		}
+
+		dt := strings.ToLower(tc.dataType)
+		isTextType := dt == "text" || dt == "character varying" || dt == "character"
+
+		// Skip TEXT-keyed count when clientIDs is empty (C2).
+		if isTextType && len(clientIDs) == 0 {
+			continue
+		}
+
+		// QuoteIdentifier: table names come from information_schema (trusted catalog),
+		// but we still quote to handle any reserved-word names safely.
+		quotedTable := quoteIdentifier(tc.tableName)
+		quotedCol := quoteIdentifier(tc.columnName)
+
+		var count int64
+		if isTextType {
+			q := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s = ANY($1)`, quotedTable, quotedCol)
+			if err := r.db.QueryRowContext(ctx, q, clientIDs).Scan(&count); err != nil {
+				// If the table doesn't exist (e.g. draft_events dropped in 000025),
+				// skip it gracefully.
+				if strings.Contains(err.Error(), "does not exist") {
+					continue
+				}
+				return fmt.Errorf("AssertZeroResiduals: count %s.%s (TEXT): %w", tc.tableName, tc.columnName, err)
+			}
+		} else {
+			// Numeric type — use BIGINT accountID.
+			q := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s = $1`, quotedTable, quotedCol)
+			if err := r.db.QueryRowContext(ctx, q, accountID).Scan(&count); err != nil {
+				if strings.Contains(err.Error(), "does not exist") {
+					continue
+				}
+				return fmt.Errorf("AssertZeroResiduals: count %s.%s (BIGINT): %w", tc.tableName, tc.columnName, err)
+			}
+		}
+
+		if count > 0 {
+			offending = append(offending, fmt.Sprintf("%s.%s(%d)", tc.tableName, tc.columnName, count))
+		}
+	}
+
+	if len(offending) > 0 {
+		sort.Strings(offending)
+		return fmt.Errorf("AssertZeroResiduals: residual rows found after erasure — manual investigation required: %s",
+			strings.Join(offending, ", "))
+	}
+
+	return nil
+}
+
+// quoteIdentifier wraps an identifier in double-quotes for safe SQL embedding.
+// All table/column names passed here come from information_schema (system
+// catalog) and are therefore trusted, but quoting is still applied for
+// correctness with any reserved-word names.
+func quoteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // RecordJobComplete marks the deletion_audit_log row as complete by setting
