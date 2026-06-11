@@ -1502,7 +1502,7 @@ func TestWaitlistRepo_InsertIfNew_Integration(t *testing.T) {
 	})
 
 	t.Run("FirstInsert_ReturnsPosition1_Created", func(t *testing.T) {
-		id, position, created, err := repo.InsertIfNew(ctx, email1, nil, nil, nil, nil)
+		id, position, created, err := repo.InsertIfNew(ctx, email1, nil, nil, nil, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("InsertIfNew: %v", err)
 		}
@@ -1518,7 +1518,7 @@ func TestWaitlistRepo_InsertIfNew_Integration(t *testing.T) {
 	})
 
 	t.Run("SecondInsert_ReturnsHigherPosition_Created", func(t *testing.T) {
-		id, position, created, err := repo.InsertIfNew(ctx, email2, nil, nil, nil, nil)
+		id, position, created, err := repo.InsertIfNew(ctx, email2, nil, nil, nil, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("InsertIfNew: %v", err)
 		}
@@ -1534,7 +1534,7 @@ func TestWaitlistRepo_InsertIfNew_Integration(t *testing.T) {
 	})
 
 	t.Run("DuplicateInsert_ReturnsNotCreated", func(t *testing.T) {
-		id, position, created, err := repo.InsertIfNew(ctx, email1, nil, nil, nil, nil)
+		id, position, created, err := repo.InsertIfNew(ctx, email1, nil, nil, nil, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("InsertIfNew: %v", err)
 		}
