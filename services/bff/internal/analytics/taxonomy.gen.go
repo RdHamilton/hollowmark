@@ -106,4 +106,28 @@ const (
 	// EventDaemonKeychainError corresponds to the "daemon_keychain_error" PostHog event.
 	// Category: system | Surface: bff | Consent: necessary
 	EventDaemonKeychainError = "daemon_keychain_error"
+
+	// EventGetDeck corresponds to the "get_deck" PostHog event.
+	// Category: feature_use | Surface: bff | Consent: analytics
+	EventGetDeck = "get_deck"
+
+	// EventCreateDeck corresponds to the "create_deck" PostHog event.
+	// Category: feature_use | Surface: bff | Consent: analytics
+	EventCreateDeck = "create_deck"
+
+	// EventUpdateDeck corresponds to the "update_deck" PostHog event.
+	// Category: feature_use | Surface: bff | Consent: analytics
+	EventUpdateDeck = "update_deck"
+
+	// EventDeleteDeck corresponds to the "delete_deck" PostHog event.
+	// Category: feature_use | Surface: bff | Consent: analytics
+	EventDeleteDeck = "delete_deck"
+
+	// EventCloneDeck corresponds to the "clone_deck" PostHog event.
+	// Category: feature_use | Surface: bff | Consent: analytics
+	EventCloneDeck = "clone_deck"
+
+	// EventExportDeck corresponds to the "export_deck" PostHog event.
+	// Category: feature_use | Surface: bff | Consent: analytics
+	EventExportDeck = "export_deck"
 )

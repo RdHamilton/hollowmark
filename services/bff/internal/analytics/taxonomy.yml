@@ -330,3 +330,88 @@ events:
       - name: daemon_version
         type: string
         pii_class: none
+
+  - name: get_deck
+    category: feature_use
+    trigger_surface: bff
+    consent_category: analytics
+    properties:
+      - name: deck_id
+        type: string
+        pii_class: none
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+
+  - name: create_deck
+    category: feature_use
+    trigger_surface: bff
+    consent_category: analytics
+    properties:
+      - name: format
+        type: string
+        pii_class: none
+      - name: source
+        type: string
+        pii_class: none
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+
+  - name: update_deck
+    category: feature_use
+    trigger_surface: bff
+    consent_category: analytics
+    properties:
+      - name: deck_id
+        type: string
+        pii_class: none
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+
+  - name: delete_deck
+    category: feature_use
+    trigger_surface: bff
+    consent_category: analytics
+    properties:
+      - name: deck_id
+        type: string
+        pii_class: none
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+
+  - name: clone_deck
+    category: feature_use
+    trigger_surface: bff
+    consent_category: analytics
+    properties:
+      - name: source_deck_id
+        type: string
+        pii_class: none
+      - name: new_deck_id
+        type: string
+        pii_class: none
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+
+  - name: export_deck
+    category: feature_use
+    trigger_surface: bff
+    consent_category: analytics
+    properties:
+      - name: deck_id
+        type: string
+        pii_class: none
+      - name: deck_name
+        type: string
+        pii_class: pii_hashed
+        description: "User-supplied free-text deck name — may contain personal data; must be hashed before forwarding to PostHog."
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+      - name: format
+        type: string
+        pii_class: none
