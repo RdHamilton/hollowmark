@@ -232,5 +232,10 @@ func scanProcess(pid int) (map[int]int, error) {
 	}
 	log.Printf("[helper] selected collection region 0x%x: %d entries (runner-up %d) signature_version=%s",
 		sel.Addr, len(sel.Entries), sel.RunnerUpEntries, CollectionSignatureVersion)
+	if sel.Warning != "" {
+		// Soft telemetry signal (Prof band, #1285): valid result, no DriftToken —
+		// must not trip the CloudWatch hard alarm.
+		log.Printf("[helper] COLLECTION_SCAN_SOFT_WARN %s", sel.Warning)
+	}
 	return sel.Entries, nil
 }

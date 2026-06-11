@@ -8,18 +8,26 @@ import "fmt"
 const DriftToken = "COLLECTION_SCAN_DRIFT"
 
 // Sanity band for the extracted collection (hollowmark-tickets#1285).
-// A result outside this band is treated as scanner drift and FAILS LOUDLY
+// A result outside the hard band is treated as scanner drift and FAILS LOUDLY
 // (DriftToken error) instead of silently returning a wrong/empty collection.
 //
-// PROVISIONAL bounds pending Prof's player-value review:
-//   - Floor: every MTGA account owns well over 100 unique cards (the new-player
-//     starter decks alone grant ~1,000+ unique grpIds). A best candidate below
-//     100 means we found a stray dictionary, not the collection.
-//   - Ceiling: comfortably above MTGA's total distinct grpId pool (a veteran
-//     near-complete collection measured 19,263 unique grpIds on 2026-06-11).
+// Bounds per Prof's player-value consult (#1285 comment 4684603354):
+//   - MinSaneCollection (hard floor): any real post-new-player-experience
+//     account sits ~300+ distinct grpIds; a best candidate below 250 is a
+//     stray dictionary, not the collection.
+//   - SoftWarnCollection (soft signal): an unusually-large-but-valid
+//     collection. Telemetry warning only — never a hard error. Selection
+//     .Warning is populated and callers log it WITHOUT DriftToken so the
+//     CloudWatch alarm does not page.
+//   - MaxSaneCollection (hard ceiling): beyond any plausible collection —
+//     a wrong-region scan. Hard DriftToken error.
+//
+// Reference point: a veteran near-complete collection measured 19,263 unique
+// grpIds on 2026-06-11 (MTGA 2026.59.30).
 const (
-	MinSaneCollection = 100
-	MaxSaneCollection = 100_000
+	MinSaneCollection  = 250
+	SoftWarnCollection = 50_000
+	MaxSaneCollection  = 100_000
 )
 
 // RegionScan is one memory region's scan result: every valid
@@ -38,6 +46,10 @@ type Selection struct {
 	// Logged for drift triage: a runner-up close to the winner means the
 	// discriminator is weak and the next MTGA patch deserves scrutiny.
 	RunnerUpEntries int
+	// Warning is non-empty when the result is valid but unusual (above
+	// SoftWarnCollection). Callers should log it for telemetry. It never
+	// contains DriftToken — soft signals must not trip the hard alarm.
+	Warning string
 }
 
 // SelectCollection picks the collection dictionary from per-region scan
@@ -78,5 +90,10 @@ func SelectCollection(regions []RegionScan) (*Selection, error) {
 			"probable scanner drift; re-derive per ADR-040 §G4", DriftToken, best.Addr, n, MinSaneCollection, MaxSaneCollection)
 	}
 
-	return &Selection{Addr: best.Addr, Entries: best.Entries, RunnerUpEntries: runnerUp}, nil
+	sel := &Selection{Addr: best.Addr, Entries: best.Entries, RunnerUpEntries: runnerUp}
+	if n := len(best.Entries); n > SoftWarnCollection {
+		sel.Warning = fmt.Sprintf("collection unusually large: %d entries exceeds soft-warn threshold %d "+
+			"(region 0x%x) — valid result, telemetry review advised", n, SoftWarnCollection, best.Addr)
+	}
+	return sel, nil
 }

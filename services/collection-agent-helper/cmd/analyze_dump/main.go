@@ -126,6 +126,9 @@ func main() {
 	fmt.Printf("VERDICT: production scan SUCCEEDS on this dump.\n")
 	fmt.Printf("  -> scanner.SelectCollection picks region 0x%x: %d entries (runner-up %d), sanity band [%d, %d] OK.\n",
 		sel.Addr, len(sel.Entries), sel.RunnerUpEntries, scanner.MinSaneCollection, scanner.MaxSaneCollection)
+	if sel.Warning != "" {
+		fmt.Printf("  -> SOFT WARN: %s\n", sel.Warning)
+	}
 	fmt.Println("  -> If users still see scan failures on this MTGA build, the defect is NOT region selection —")
 	fmt.Println("     check the installed helper binary version, socket path, and daemon-side logs.")
 }
