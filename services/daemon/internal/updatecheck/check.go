@@ -102,9 +102,14 @@ func CheckWithOptions(ctx context.Context, baseURL string, currentVersion string
 		return
 	}
 
-	// semver.Compare requires a "v" prefix.
-	current := "v" + currentVersion
-	latest := "v" + vr.Latest
+	// semver.Compare requires a "v" prefix. Release builds inject
+	// main.Version WITH the prefix already (daemon-release.yml PLAIN_VERSION
+	// strips only the "daemon/" tag namespace), so blindly prepending "v"
+	// produced "vv0.4.1" — invalid semver, ordered below every valid version,
+	// firing a phantom update notification on every check (#1231 S3).
+	// normalizeSemver adds the prefix only when absent.
+	current := normalizeSemver(currentVersion)
+	latest := normalizeSemver(vr.Latest)
 	if semver.Compare(latest, current) > 0 {
 		log.Printf("[mtga-daemon] WARN: new version available: %s (current: %s) — %s", vr.Latest, currentVersion, vr.DownloadURL)
 

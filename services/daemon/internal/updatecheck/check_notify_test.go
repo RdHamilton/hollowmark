@@ -100,3 +100,55 @@ type versionResponseFull struct {
 	Sha256SumsURL  string `json:"sha256sums_url"`
 	AttestationURL string `json:"attestation_url"`
 }
+
+// TestCheck_VPrefixedCurrentVersion_SameVersion_NoNotify reproduces incident
+// hollowmark-tickets#1231 symptom 3: release builds inject main.Version WITH a
+// "v" prefix (daemon-release.yml strips only the "daemon/" namespace, so
+// PLAIN_VERSION = "v0.4.1"). The old compare built "v" + currentVersion =
+// "vv0.4.1" — invalid semver, which x/mod/semver orders below every valid
+// version — so the tray showed a phantom "Update available: v0.4.1" while
+// already running v0.4.1.
+func TestCheck_VPrefixedCurrentVersion_SameVersion_NoNotify(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(versionResponseFull{Latest: "0.4.1"})
+	}))
+	defer srv.Close()
+
+	called := false
+	opts := updatecheck.Options{
+		NotifyUpdateAvailable: func(version, downloadURL string) {
+			called = true
+		},
+	}
+
+	updatecheck.CheckWithOptions(context.Background(), srv.URL, "v0.4.1", opts)
+
+	if called {
+		t.Error("NotifyUpdateAvailable must not fire when v-prefixed current equals latest (phantom update, #1231)")
+	}
+}
+
+// TestCheck_VPrefixedCurrentVersion_NewerLatest_Notifies verifies a real
+// upgrade is still detected when the running version carries the release
+// builds' "v" prefix.
+func TestCheck_VPrefixedCurrentVersion_NewerLatest_Notifies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(versionResponseFull{Latest: "0.4.2"})
+	}))
+	defer srv.Close()
+
+	called := false
+	opts := updatecheck.Options{
+		NotifyUpdateAvailable: func(version, downloadURL string) {
+			called = true
+		},
+	}
+
+	updatecheck.CheckWithOptions(context.Background(), srv.URL, "v0.4.1", opts)
+
+	if !called {
+		t.Error("NotifyUpdateAvailable must fire for a genuine upgrade with v-prefixed current version")
+	}
+}
