@@ -20,42 +20,178 @@ import { test, expect } from '@playwright/test';
  * metaStalenessThreshold in wildcard_recommendations.go). Bob/Bianca must
  * re-seed with current timestamps.
  *
+ * Authentication (tickets#1190):
+ *   Rewired from the stale STAGING_SMOKE_TOKEN path to the Backend-API
+ *   sign-in-token + FAPI ticket chain. This is the authoritative headless auth
+ *   pattern for prod-type Clerk instances (same as staging-smoke.spec.ts,
+ *   multi-device-433.spec.ts, and the staging-replay-gate.yml corpus-replay
+ *   gate). CLERK_SECRET_KEY absence causes a hard INCONCLUSIVE failure — not a
+ *   silent skip.
+ *
  * Required environment variables:
- *   STAGING_API_URL       — override the staging BFF base URL (optional)
- *   STAGING_SMOKE_TOKEN   — Clerk Development JWT. Required for auth tests.
+ *   STAGING_API_URL     — override the staging BFF base URL (optional)
+ *   CLERK_SECRET_KEY    — Clerk Backend API secret key (sk_live_*). REQUIRED
+ *                         for authenticated tests. Injected from SSM
+ *                         /vaultmtg/app/staging/CLERK_SECRET_KEY by CI.
+ *   CI_SMOKE_USER_ID    — override the ci-smoke Clerk user ID (optional)
  */
 
-const STAGING_API = process.env.STAGING_API_URL ?? 'https://staging-api.vaultmtg.app';
-const SMOKE_TOKEN = process.env.STAGING_SMOKE_TOKEN ?? '';
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+const STAGING_API = process.env.STAGING_API_URL ?? 'https://staging-api.hollowmark.app';
+
+const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY ?? '';
 
 /**
- * Hard-fail with an INCONCLUSIVE verdict when the token is absent.
- * Matches the pattern established in staging-smoke.spec.ts (#678).
+ * Staging FAPI base URL — the per-application Clerk Frontend API subdomain for
+ * the staging Hollowmark Clerk instance.
  */
-function requireTokenOrFail(context: string): void {
-  if (!SMOKE_TOKEN) {
+const STAGING_FAPI_HOST = 'https://clerk.stg-app.hollowmark.app';
+
+/**
+ * ci-smoke Clerk user ID. Dedicated synthetic account in the staging Clerk
+ * instance with card_inventory rows seeded.
+ */
+const CI_SMOKE_USER_ID =
+  process.env.CI_SMOKE_USER_ID ?? 'user_3EmtmrSgZrtd0yRRdisTIIFYnnF';
+
+// ---------------------------------------------------------------------------
+// Auth enforcement
+// ---------------------------------------------------------------------------
+
+/**
+ * Fail hard with an INCONCLUSIVE verdict when CLERK_SECRET_KEY is absent.
+ *
+ * Replaces the former requireTokenOrFail / STAGING_SMOKE_TOKEN check.
+ * A suite that skips all authenticated surfaces and reports PASS provides false
+ * confidence (#678 auth-enforcement contract, tickets#1190).
+ */
+function requireAuthOrFail(context: string): void {
+  if (!CLERK_SECRET_KEY) {
     throw new Error(
-      `INCONCLUSIVE: STAGING_SMOKE_TOKEN is not set.\n` +
+      `INCONCLUSIVE: CLERK_SECRET_KEY is not set.\n` +
       `Cannot exercise authenticated surface: ${context}\n` +
-      'Verdict: INCONCLUSIVE — treat as FAIL.',
+      '\n' +
+      'In CI (staging deploy workflow) CLERK_SECRET_KEY is always injected from\n' +
+      'SSM /vaultmtg/app/staging/CLERK_SECRET_KEY. Its absence indicates a secrets\n' +
+      'misconfiguration or a missing OIDC role SSM grant.\n' +
+      '\n' +
+      'Verdict: INCONCLUSIVE (unauthenticated) — treat as FAIL.\n' +
+      '\n' +
+      'To run locally:\n' +
+      '  export CLERK_SECRET_KEY=$(aws ssm get-parameter \\\n' +
+      '    --name /vaultmtg/app/staging/CLERK_SECRET_KEY \\\n' +
+      '    --with-decryption --query Parameter.Value --output text \\\n' +
+      '    --profile personal --region us-east-1)\n' +
+      '  export CI_SMOKE_USER_ID=user_3EmtmrSgZrtd0yRRdisTIIFYnnF\n' +
+      '  npx playwright test --config=playwright.staging.config.ts',
     );
   }
 }
 
-const authHeader = (): Record<string, string> =>
-  SMOKE_TOKEN ? { Authorization: `Bearer ${SMOKE_TOKEN}` } : {};
+// ---------------------------------------------------------------------------
+// Headless Clerk auth helper (Backend-API sign-in-token chain)
+// ---------------------------------------------------------------------------
+
+/**
+ * Obtain a Clerk session JWT for the ci-smoke account using the Backend-API
+ * sign-in-token + FAPI ticket strategy.
+ *
+ * Boundary 1 — Clerk Backend API: POST api.clerk.com/v1/sign_in_tokens
+ *   Authorization: Bearer CLERK_SECRET_KEY (sk_live_* from SSM)
+ *   Body: { user_id: CI_SMOKE_USER_ID }
+ *   → sign-in ticket (sit_xxx, one-use)
+ *
+ * Boundary 2 — Staging FAPI: POST clerk.stg-app.hollowmark.app/v1/client/sign_ins
+ *   strategy=ticket&ticket=sit_xxx
+ *   → { client: { sessions: [{ last_active_token: { jwt } }] }, response: { status: "complete" } }
+ *
+ * Returns the session JWT string for use as a Bearer header value. Accepted by
+ * BFF routes protected by ClerkAuthMiddleware.
+ *
+ * This is the authoritative headless auth pattern for prod-type Clerk instances
+ * — identical to the pattern in staging-smoke.spec.ts and multi-device-433.spec.ts.
+ */
+async function obtainClerkSessionToken(): Promise<string> {
+  // Boundary 1: Clerk Backend API — mint sign-in ticket (one-use)
+  const tokenRes = await fetch('https://api.clerk.com/v1/sign_in_tokens', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${CLERK_SECRET_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ user_id: CI_SMOKE_USER_ID, expires_in_seconds: 300 }),
+  });
+  if (!tokenRes.ok) {
+    const body = await tokenRes.text();
+    throw new Error(
+      `Clerk Backend API /v1/sign_in_tokens failed: HTTP ${tokenRes.status} — ${body}\n` +
+      'Check: CLERK_SECRET_KEY is sk_live_* for staging? CI_SMOKE_USER_ID exists in staging Clerk?',
+    );
+  }
+  const { token: ticketToken } = await tokenRes.json() as { token: string };
+
+  // Boundary 2: Staging FAPI — exchange ticket for session JWT
+  const signinRes = await fetch(
+    `${STAGING_FAPI_HOST}/v1/client/sign_ins?__clerk_api_version=2025-11-10&_clerk_js_version=6.12.1`,
+    {
+      method: 'POST',
+      headers: {
+        Origin: 'https://stg-app.hollowmark.app',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: `strategy=ticket&ticket=${ticketToken}`,
+    },
+  );
+  if (!signinRes.ok) {
+    const body = await signinRes.text();
+    throw new Error(
+      `Staging FAPI /v1/client/sign_ins failed: HTTP ${signinRes.status} — ${body}\n` +
+      `Check: STAGING_FAPI_HOST correct (${STAGING_FAPI_HOST})? Ticket not expired?`,
+    );
+  }
+  const signinData = await signinRes.json() as {
+    client: { sessions: Array<{ last_active_token: { jwt: string } }> };
+    response: { status: string };
+  };
+  if (signinData.response?.status !== 'complete') {
+    throw new Error(
+      `Staging FAPI sign_in did not complete: status=${signinData.response?.status ?? 'unknown'}`,
+    );
+  }
+  const sessions = signinData.client?.sessions ?? [];
+  if (sessions.length === 0) {
+    throw new Error('Staging FAPI sign_in response contained no sessions');
+  }
+  const sessionToken = sessions[0].last_active_token?.jwt;
+  if (!sessionToken) {
+    throw new Error(
+      'Staging FAPI session has no JWT — cannot obtain Bearer token for BFF calls',
+    );
+  }
+  return sessionToken;
+}
 
 // ---------------------------------------------------------------------------
 // 1. Staging deploy confirmation — endpoint is reachable and registered
 // ---------------------------------------------------------------------------
 
 test.describe('Wildcard advisor (#424): deploy confirmation', () => {
+  let sessionToken: string;
+
+  test.beforeAll(async () => {
+    requireAuthOrFail('GET /api/v1/recommendations/wildcards (deploy confirmation)');
+    sessionToken = await obtainClerkSessionToken();
+  });
+
   test('GET /api/v1/recommendations/wildcards is registered (not 404)', async ({ request }) => {
-    requireTokenOrFail('GET /api/v1/recommendations/wildcards (deploy confirmation)');
+    requireAuthOrFail('GET /api/v1/recommendations/wildcards (deploy confirmation)');
 
     const res = await request.get(
       `${STAGING_API}/api/v1/recommendations/wildcards`,
-      { headers: authHeader() },
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
 
     // The endpoint must be registered — any response other than 404 confirms
@@ -109,12 +245,19 @@ test.describe('Wildcard advisor (#424): auth guard', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('Wildcard advisor (#424): format param handling', () => {
+  let sessionToken: string;
+
+  test.beforeAll(async () => {
+    requireAuthOrFail('GET /api/v1/recommendations/wildcards (format param tests)');
+    sessionToken = await obtainClerkSessionToken();
+  });
+
   test('invalid ?format= value is not rejected with 422', async ({ request }) => {
-    requireTokenOrFail('GET /api/v1/recommendations/wildcards?format=Pauper');
+    requireAuthOrFail('GET /api/v1/recommendations/wildcards?format=Pauper');
 
     const res = await request.get(
       `${STAGING_API}/api/v1/recommendations/wildcards?format=Pauper`,
-      { headers: authHeader() },
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
 
     // The handler silently defaults to Standard — must never 422.
@@ -128,11 +271,11 @@ test.describe('Wildcard advisor (#424): format param handling', () => {
   });
 
   test('empty ?format= param is accepted (defaults to Standard)', async ({ request }) => {
-    requireTokenOrFail('GET /api/v1/recommendations/wildcards?format=');
+    requireAuthOrFail('GET /api/v1/recommendations/wildcards?format=');
 
     const res = await request.get(
       `${STAGING_API}/api/v1/recommendations/wildcards?format=`,
-      { headers: authHeader() },
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
 
     expect(res.status()).not.toBe(422);
@@ -160,11 +303,13 @@ test.describe('Wildcard advisor (#424): 409 on empty collection [SKIPPED — no 
   );
 
   test('returns 409 with collection_not_synced when card_inventory is empty', async ({ request }) => {
-    requireTokenOrFail('GET /api/v1/recommendations/wildcards (409 collection_not_synced)');
+    requireAuthOrFail('GET /api/v1/recommendations/wildcards (409 collection_not_synced)');
+
+    const sessionToken = await obtainClerkSessionToken();
 
     const res = await request.get(
       `${STAGING_API}/api/v1/recommendations/wildcards`,
-      { headers: authHeader() },
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
 
     expect(
@@ -195,12 +340,19 @@ test.describe('Wildcard advisor (#424): 409 on empty collection [SKIPPED — no 
 // ---------------------------------------------------------------------------
 
 test.describe('Wildcard advisor (#424): happy-path response shape', () => {
+  let sessionToken: string;
+
+  test.beforeAll(async () => {
+    requireAuthOrFail('GET /api/v1/recommendations/wildcards (happy-path)');
+    sessionToken = await obtainClerkSessionToken();
+  });
+
   test('200 response contains required ADR-045 §1 fields', async ({ request }) => {
-    requireTokenOrFail('GET /api/v1/recommendations/wildcards (happy-path shape)');
+    requireAuthOrFail('GET /api/v1/recommendations/wildcards (happy-path shape)');
 
     const res = await request.get(
       `${STAGING_API}/api/v1/recommendations/wildcards`,
-      { headers: authHeader() },
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
 
     expect(res.status()).toBe(200);
@@ -249,11 +401,11 @@ test.describe('Wildcard advisor (#424): happy-path response shape', () => {
   });
 
   test('recommendations list is capped at 10 items (ADR-045 §3)', async ({ request }) => {
-    requireTokenOrFail('GET /api/v1/recommendations/wildcards (max 10 cap)');
+    requireAuthOrFail('GET /api/v1/recommendations/wildcards (max 10 cap)');
 
     const res = await request.get(
       `${STAGING_API}/api/v1/recommendations/wildcards`,
-      { headers: authHeader() },
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
 
     if (res.status() !== 200) {
@@ -270,12 +422,12 @@ test.describe('Wildcard advisor (#424): happy-path response shape', () => {
   });
 
   test('response time is under 500ms (ADR-045 fitness function)', async ({ request }) => {
-    requireTokenOrFail('GET /api/v1/recommendations/wildcards (latency)');
+    requireAuthOrFail('GET /api/v1/recommendations/wildcards (latency)');
 
     const start = Date.now();
     const res = await request.get(
       `${STAGING_API}/api/v1/recommendations/wildcards`,
-      { headers: authHeader() },
+      { headers: { Authorization: `Bearer ${sessionToken}` } },
     );
     const elapsed = Date.now() - start;
 

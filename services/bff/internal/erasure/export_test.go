@@ -13,6 +13,13 @@ import (
 	"net/http"
 )
 
+// ResetClerkUserIDFromContextFn clears the package-level context-key extractor
+// so tests can exercise the "fn not configured" error path in StartErasureJob.
+// Only for use in tests — not part of the production surface.
+func ResetClerkUserIDFromContextFn() {
+	clerkUserIDFromContextFn.Store(nil)
+}
+
 // MailchimpErasureClientForTest is a test-double version of MailchimpErasureClient
 // that accepts an arbitrary base URL instead of constructing one from an API key.
 // Used by mailchimp_client_test.go to point the client at an httptest.Server.
