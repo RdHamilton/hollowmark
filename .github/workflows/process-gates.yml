@@ -116,7 +116,8 @@ jobs:
       !startsWith(github.head_ref, 'fix/ci/') &&
       !startsWith(github.head_ref, 'fix/infra/') &&
       !startsWith(github.head_ref, 'fix/release/') &&
-      !startsWith(github.head_ref, 'fix/staging/')
+      !startsWith(github.head_ref, 'fix/staging/') &&
+      !startsWith(github.head_ref, 'dependabot/')
 
     steps:
       - name: Check for Pre-Review Checklist header

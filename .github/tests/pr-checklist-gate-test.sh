@@ -8,7 +8,8 @@
 # Pre-Review Checklist requirement. This test verifies that the exemption
 # function correctly classifies every known exempt and non-exempt prefix.
 #
-# Ticket: #661 — fix/release/ prefix not in exemption list
+# Tickets: #661  — fix/release/ prefix not in exemption list
+#          #1146 — dependabot/* branch prefix exemption
 #
 # Run:
 #   bash .github/tests/pr-checklist-gate-test.sh
@@ -33,12 +34,13 @@ FAIL_COUNT=0
 is_exempt() {
   local branch="$1"
   case "$branch" in
-    chore/*)      return 0 ;;
-    docs/*)       return 0 ;;
-    fix/ci/*)     return 0 ;;
-    fix/infra/*)  return 0 ;;
+    chore/*)       return 0 ;;
+    docs/*)        return 0 ;;
+    fix/ci/*)      return 0 ;;
+    fix/infra/*)   return 0 ;;
     fix/staging/*) return 0 ;;
     fix/release/*) return 0 ;;
+    dependabot/*)  return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -79,12 +81,19 @@ run_case "fix/release/ prefix"      "fix/release/goreleaser-config"  "yes"
 run_case "fix/release/ nested path" "fix/release/v0.4.3/daemon-tag"  "yes"
 
 echo ""
+echo "-- #1146: dependabot/* exempt branches (checklist NOT required) --"
+run_case "dependabot/ npm prefix"     "dependabot/npm_and_yarn/lodash-4.17.21"     "yes"
+run_case "dependabot/ go prefix"      "dependabot/go_modules/golang.org/x/net"     "yes"
+run_case "dependabot/ actions prefix" "dependabot/github_actions/actions/checkout" "yes"
+
+echo ""
 echo "-- Non-exempt branches (checklist IS required) --"
-run_case "feat/ prefix"             "feat/new-draft-advisor"         "no"
-run_case "fix/ (no sub-namespace)"  "fix/661-checklist-gate-prefix"  "no"
-run_case "fix/foo/ prefix"          "fix/foo/some-change"            "no"
-run_case "main branch"              "main"                           "no"
-run_case "bare fix/release (no trailing slash)" "fix/release"       "no"
+run_case "feat/ prefix"              "feat/new-draft-advisor"         "no"
+run_case "fix/ (no sub-namespace)"   "fix/661-checklist-gate-prefix"  "no"
+run_case "fix/foo/ prefix"           "fix/foo/some-change"            "no"
+run_case "main branch"               "main"                           "no"
+run_case "bare fix/release (no trailing slash)" "fix/release"        "no"
+run_case "bare dependabot (no trailing slash)"  "dependabot"         "no"
 
 echo ""
 echo "=== Results: ${PASS_COUNT} passed, ${FAIL_COUNT} failed ==="

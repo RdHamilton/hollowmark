@@ -44,13 +44,25 @@ name: PR Local Verification Check
 #    fails. The rule: executable entrypoint changes require `--dry-run`;
 #    declaration-only changes accept `sh -n` / `shellcheck`.
 #
-# DEPENDABOT EXEMPTION (#826)
-# ---------------------------
-# When github.actor == 'dependabot[bot]', the LV-section heuristic is
-# skipped entirely. Dependabot PRs are automated dependency bumps, not
-# human-authored code changes. Requiring a ## Local Verification transcript
-# for them adds no security value. The job still runs and reports SUCCESS
-# so the required status check is satisfied without a manual body patch.
+# DEPENDABOT EXEMPTION (#826, #1146)
+# ------------------------------------
+# Dependabot PRs are automated dependency bumps, not human-authored code
+# changes. Requiring a ## Local Verification transcript for them adds no
+# security value. Two complementary exemptions apply:
+#
+#   1. Job-level branch-prefix exemption (#1146): the job's `if:` condition
+#      skips the entire job for branches starting with `dependabot/`. A
+#      skipped required status check is treated as passing by GitHub branch
+#      protection. This mirrors the PC-11 branch-prefix exemption pattern
+#      used by the pr-checklist-gate in process-gates.yml.
+#
+#   2. Actor-based step-level exemption (#826): when github.actor ==
+#      'dependabot[bot]', the individual steps skip (or exit 0 early) so
+#      the job reports SUCCESS. This is a defense-in-depth fallback for
+#      any dependabot-actor PR not on a dependabot/* branch.
+#
+# Together these cover the standard case (branch-prefix skip) and the
+# defense-in-depth case (actor guard inside the job).
 #
 # WHAT IT DOES NOT CHECK
 # ----------------------
@@ -112,8 +124,10 @@ name: PR Local Verification Check
 #      -> 1 fence, no prompt, >=2 non-blank lines, "0 errors" matches
 #         command/output shape -> PASS
 #
-#   M) Dependabot PR -- actor == 'dependabot[bot]':
-#      -> LV check skipped entirely -> PASS (exemption, #826)
+#   M) Dependabot PR -- branch starts with 'dependabot/' (#1146):
+#      -> job skipped entirely (job-level if:) -> PASS (branch-prefix exemption)
+#   M2) Dependabot PR -- actor == 'dependabot[bot]', no dependabot/ branch (#826):
+#      -> actor-based step guard exits 0 -> PASS (defense-in-depth fallback)
 #
 # FAIL cases:
 #   D) No `## Local Verification` header at all -> FAIL (missing section).
@@ -196,6 +210,12 @@ jobs:
     name: Local Verification heuristic check
     runs-on: ubuntu-latest
     timeout-minutes: 3
+    # #1146: Dependabot branch-prefix exemption — mirrors the actor-based
+    # step-level exemption below. A dependabot/* branch always produces
+    # machine-generated PR bodies with no ## Local Verification transcript.
+    # Skipping at the job level means the required status check reports
+    # SUCCESS (skipped jobs count as passing in GitHub branch protection).
+    if: "!startsWith(github.head_ref, 'dependabot/')"
 
     steps:
       - name: Checkout code
@@ -204,12 +224,10 @@ jobs:
           fetch-depth: 0
 
       # -----------------------------------------------------------------------
-      # Dependabot exemption (#826)
-      # Dependabot PRs are automated dependency bumps, not human-authored code
-      # changes. Requiring a ## Local Verification transcript for them adds no
-      # security value and forces a manual body patch each cycle. Skip the LV
-      # heuristic entirely for the dependabot[bot] actor. The job still runs
-      # and reports SUCCESS so the required status check is satisfied.
+      # Dependabot actor exemption (#826) — defense-in-depth fallback.
+      # The job is already skipped for dependabot/* branches via the job-level
+      # if: condition (#1146). This step-level actor guard remains as a fallback
+      # for any dependabot[bot] actor PR not routed through a dependabot/ branch.
       # -----------------------------------------------------------------------
       - name: Skip LV check for Dependabot
         if: github.actor == 'dependabot[bot]'
