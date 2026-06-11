@@ -332,6 +332,44 @@ PGPASSWORD="$MASTER_PASSWORD" psql \
     -f "$GRANT_SQL"
 
 echo "[run-staging-migrations] Table grants applied."
+
+# ---------------------------------------------------------------------------
+# Post-migration: apply the ci-smoke staging seed (tickets#1189).
+#
+# Seeds a durable, idempotent fixture match row for the ci-smoke service
+# account so the staging smoke AC2 assertion (≥1 match row) is always
+# satisfiable regardless of prior test runs.
+#
+# The seed uses ON CONFLICT DO NOTHING and a DO $$ block that silently
+# exits when the ci-smoke users/accounts rows don't exist yet (first-run
+# bootstrap; they are JIT-provisioned on the first authenticated smoke run).
+# Re-running this script is always safe.
+#
+# This step runs ONLY in this script (staging path). It is never executed
+# on the production deploy path (deploy-bff.yml calls this script only for
+# environment=staging; production runs provision-env.sh, not this script).
+# ---------------------------------------------------------------------------
+echo "[run-staging-migrations] Applying ci-smoke staging seed (tickets#1189)..."
+
+SEED_SQL="$REPO_ROOT/infra/db/seed-ci-smoke-staging.sql"
+if [[ ! -f "$SEED_SQL" ]] && [[ -n "$DEPLOY_BUCKET" ]]; then
+    echo "[run-staging-migrations] Downloading seed-ci-smoke-staging.sql from S3 ..."
+    aws s3 cp "s3://$DEPLOY_BUCKET/infra-db/seed-ci-smoke-staging.sql" /tmp/seed-ci-smoke-staging.sql --region "$REGION"
+    SEED_SQL="/tmp/seed-ci-smoke-staging.sql"
+fi
+
+if [[ -f "$SEED_SQL" ]]; then
+    PGPASSWORD="$MASTER_PASSWORD" psql \
+        -h "$DB_ENDPOINT" \
+        -U "$MASTER_USER" \
+        -d "$DB_STAGING_NAME" \
+        -v ON_ERROR_STOP=1 \
+        -f "$SEED_SQL"
+    echo "[run-staging-migrations] ci-smoke staging seed applied."
+else
+    echo "[run-staging-migrations] WARNING: seed-ci-smoke-staging.sql not found at $SEED_SQL — skipping seed step."
+fi
+
 echo ""
 echo "[run-staging-migrations] vaultmtg_staging is fully initialized and ready."
 echo ""
