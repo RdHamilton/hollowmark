@@ -95,6 +95,19 @@ jobs:
         GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: go test -v -count=1 -coverprofile=coverage-integration-repo.out -covermode=atomic ./internal/storage/repository/...
 
+    - name: Run collection import handler integration tests
+      # Closes RdHamilton/hollowmark-tickets#1166: handler-level integration
+      # test for POST /api/v1/collection/import (request → handler → real
+      # CardSetResolver + CardInventoryRepository → DB).
+      # Covers AC1 (happy path + idempotency), AC2 (validation 400s),
+      # and AC3 (closed-DB → 500).
+      working-directory: services/bff
+      env:
+        DATABASE_URL: postgres://mtga:mtga@localhost:5432/mtga_test?sslmode=disable
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+      run: go test -v -tags integration -run TestCollectionImportHandler_Integration -coverprofile=coverage-integration-import.out -covermode=atomic ./...
+
     - name: Upload integration coverage to Codecov
       uses: codecov/codecov-action@v7
       with:

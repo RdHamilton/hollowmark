@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1631,4 +1632,242 @@ func TestWaitlistHandler_Integration_409OnDuplicate(t *testing.T) {
 	if errMsg != "This email is already registered." {
 		t.Errorf("409 error body: want %q, got %q", "This email is already registered.", errMsg)
 	}
+}
+
+// ─── POST /api/v1/collection/import integration tests ───────────────────────
+//
+// These tests exercise the full handler → repository → DB path for the
+// collection import endpoint (#895 / #1166).  They complement the
+// handler-unit tests in internal/api/handlers/collection_import_test.go
+// (which use stub resolver+writer) by driving the real CardSetResolver and
+// CardInventoryRepository against a live test database.
+//
+// importMultipart builds an *http.Request carrying an MTGA Arena export file
+// as multipart/form-data.  The request context carries userID via
+// bffmiddleware.WithUserID so the handler's auth check passes without a real
+// Clerk JWT.
+func importMultipart(t *testing.T, content string, userID int64) *http.Request {
+	t.Helper()
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "collection.csv")
+	if err != nil {
+		t.Fatalf("importMultipart CreateFormFile: %v", err)
+	}
+	if _, err := fw.Write([]byte(content)); err != nil {
+		t.Fatalf("importMultipart write: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("importMultipart close: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/collection/import", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	return req.WithContext(bffmiddleware.WithUserID(req.Context(), userID))
+}
+
+// importRespEnvelope decodes the {"data": {accepted, rejected}} envelope that
+// writeMatchesJSON wraps every handler response in.
+type importRespEnvelope struct {
+	Data struct {
+		Accepted int `json:"accepted"`
+		Rejected []struct {
+			Line   string `json:"line"`
+			Reason string `json:"reason"`
+		} `json:"rejected"`
+	} `json:"data"`
+}
+
+// TestCollectionImportHandler_Integration covers AC1–AC3 of #1166 against a
+// real PostgreSQL test database.
+//
+// AC1 — happy path: valid import file → 200, rows persisted to card_inventory.
+// AC2 — validation: missing file field / empty file / no parseable rows → 400.
+// AC3 — downstream failure: closed DB → 500 (real repository error path).
+func TestCollectionImportHandler_Integration(t *testing.T) {
+	db := openIntegrationDB(t)
+
+	// ── seed a set_cards row the resolver can find ──────────────────────────
+	// arenaID 999901 is used as the test card's identifier throughout.
+	const (
+		testSetCode = "TST"
+		testName    = "Integration Test Card"
+		testArenaID = 999901
+	)
+	testArenaIDInt := testArenaID
+	upsertSetCardsInlined(t, db, []scryfallCardStub{
+		{
+			ArenaID:    &testArenaIDInt,
+			ScryfallID: "scryfall-itc-1",
+			Name:       testName,
+			SetCode:    testSetCode,
+			ManaCost:   "{1}{U}",
+			CMC:        2,
+			TypeLine:   "Instant",
+			Colors:     []string{"U"},
+			Rarity:     "common",
+			OracleText: "Test oracle text.",
+			Power:      "",
+			Toughness:  "",
+		},
+	})
+
+	// ── seed user + account ──────────────────────────────────────────────────
+	userID := seedUser(t, db, fmt.Sprintf("import-%d", time.Now().UnixNano()))
+	accountRepo := repository.NewAccountRepository(db)
+	accountID, err := accountRepo.GetOrCreateByClientID(
+		context.Background(),
+		fmt.Sprintf("import-client-%d", userID),
+		userID,
+	)
+	if err != nil {
+		t.Fatalf("GetOrCreateByClientID: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM card_inventory WHERE account_id = $1`, accountID)
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM accounts WHERE id = $1`, accountID)
+	})
+
+	// ── wire real repositories ───────────────────────────────────────────────
+	resolver := repository.NewCardSetResolver(db)
+	writer := repository.NewCardInventoryRepository(db)
+	h := handlers.NewCollectionImportHandler(resolver, writer, accountRepo)
+
+	// ── AC1: happy path ──────────────────────────────────────────────────────
+	t.Run("HappyPath_200_RowPersisted", func(t *testing.T) {
+		// Clean up any card_inventory row before and after this sub-test.
+		t.Cleanup(func() {
+			_, _ = db.ExecContext(context.Background(),
+				`DELETE FROM card_inventory WHERE account_id = $1 AND card_id = $2`,
+				accountID, testArenaID)
+		})
+
+		content := fmt.Sprintf("3 %s (%s) 1\n", testName, testSetCode)
+		req := importMultipart(t, content, userID)
+		rr := httptest.NewRecorder()
+		h.Import(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d — body: %s", rr.Code, rr.Body.String())
+		}
+
+		var env importRespEnvelope
+		if err := json.NewDecoder(rr.Body).Decode(&env); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		resp := env.Data
+
+		if resp.Accepted != 1 {
+			t.Errorf("expected accepted=1, got %d; rejected=%v", resp.Accepted, resp.Rejected)
+		}
+		if len(resp.Rejected) != 0 {
+			t.Errorf("expected 0 rejected rows, got %d: %v", len(resp.Rejected), resp.Rejected)
+		}
+
+		// Verify the row actually landed in card_inventory.
+		var count int
+		if err := db.QueryRowContext(
+			context.Background(),
+			`SELECT COUNT(*) FROM card_inventory WHERE account_id = $1 AND card_id = $2`,
+			accountID, testArenaID,
+		).Scan(&count); err != nil {
+			t.Fatalf("count card_inventory: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("expected 1 card_inventory row for card_id=%d, got %d", testArenaID, count)
+		}
+	})
+
+	// ── AC1 addendum: idempotency — same import twice → one row ─────────────
+	t.Run("Idempotency_SameImportTwice_OneRow", func(t *testing.T) {
+		t.Cleanup(func() {
+			_, _ = db.ExecContext(context.Background(),
+				`DELETE FROM card_inventory WHERE account_id = $1 AND card_id = $2`,
+				accountID, testArenaID)
+		})
+
+		content := fmt.Sprintf("2 %s (%s) 1\n", testName, testSetCode)
+		for i := 0; i < 2; i++ {
+			req := importMultipart(t, content, userID)
+			rr := httptest.NewRecorder()
+			h.Import(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("import %d: expected 200, got %d — body: %s", i+1, rr.Code, rr.Body.String())
+			}
+		}
+
+		var count int
+		if err := db.QueryRowContext(
+			context.Background(),
+			`SELECT COUNT(*) FROM card_inventory WHERE account_id = $1 AND card_id = $2`,
+			accountID, testArenaID,
+		).Scan(&count); err != nil {
+			t.Fatalf("count card_inventory: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("expected exactly 1 row after two identical imports, got %d", count)
+		}
+	})
+
+	// ── AC2: validation errors return 400 ────────────────────────────────────
+
+	t.Run("AC2_MissingFileField_400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/collection/import",
+			bytes.NewBufferString(`{"not":"multipart"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(bffmiddleware.WithUserID(req.Context(), userID))
+		rr := httptest.NewRecorder()
+		h.Import(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 for non-multipart body, got %d", rr.Code)
+		}
+	})
+
+	t.Run("AC2_EmptyFile_400", func(t *testing.T) {
+		req := importMultipart(t, "", userID)
+		rr := httptest.NewRecorder()
+		h.Import(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 for empty file, got %d", rr.Code)
+		}
+	})
+
+	t.Run("AC2_NoParsableRows_400", func(t *testing.T) {
+		req := importMultipart(t, "// only comments\n// nothing here\n", userID)
+		rr := httptest.NewRecorder()
+		h.Import(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 for zero-parseable-row file, got %d", rr.Code)
+		}
+	})
+
+	// ── AC3: real downstream failure → 500 ───────────────────────────────────
+	// A second DB handle is opened and immediately closed; GetAccountIDByUserID
+	// will fail with sql.ErrConnDone, exercising the 500 response path without
+	// any mocking.
+	t.Run("AC3_ClosedDB_Returns500", func(t *testing.T) {
+		deadDB, err := sql.Open("pgx", testDBURL)
+		if err != nil {
+			t.Fatalf("sql.Open: %v", err)
+		}
+		deadDB.Close() // deliberately poison the connection
+
+		deadH := handlers.NewCollectionImportHandler(
+			repository.NewCardSetResolver(deadDB),
+			repository.NewCardInventoryRepository(deadDB),
+			repository.NewAccountRepository(deadDB),
+		)
+
+		content := fmt.Sprintf("1 %s (%s) 1\n", testName, testSetCode)
+		req := importMultipart(t, content, userID)
+		rr := httptest.NewRecorder()
+		deadH.Import(rr, req)
+
+		if rr.Code != http.StatusInternalServerError {
+			t.Errorf("expected 500 on closed-DB, got %d — body: %s", rr.Code, rr.Body.String())
+		}
+	})
 }
