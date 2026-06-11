@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // MailchimpErasureClient implements MailchimpPermanentDeleter using the
@@ -42,7 +43,7 @@ func NewMailchimpErasureClient(apiKey, listID string) (*MailchimpErasureClient, 
 		apiKey:     apiKey,
 		listID:     listID,
 		datacenter: parts[1],
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}, nil
 }
 

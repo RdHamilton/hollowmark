@@ -39,7 +39,7 @@
 #
 # -----------------------------------------------------------------------
 
-MANIFEST_KEY_COUNT=20
+MANIFEST_KEY_COUNT=22
 
 # 0 -- ALLOWED_ORIGINS
 MANIFEST_KEY_0_NAME=ALLOWED_ORIGINS
@@ -103,17 +103,23 @@ MANIFEST_KEY_8_SSM_VAR=SSM_VAULTMTG_STAGING_DISCORD_GUILD_ID
 MANIFEST_KEY_8_TYPE=plain
 MANIFEST_KEY_8_SCOPE=staging-only
 
-# 9 -- MAILCHIMP_API_KEY (staging-only)
+# 9 -- MAILCHIMP_API_KEY (both: prod erasure cascade + staging; ticket #887)
+#   Prod path: SSM_PROD_MAILCHIMP_API_KEY (/vaultmtg/app/production/mailchimp-api-key).
+#   Staging path override: provision-staging-env.sh case statement overrides to
+#   SSM_VAULTMTG_STAGING_MAILCHIMP_API_KEY (/vaultmtg/app/staging/mailchimp-api-key).
 MANIFEST_KEY_9_NAME=MAILCHIMP_API_KEY
-MANIFEST_KEY_9_SSM_VAR=SSM_VAULTMTG_STAGING_MAILCHIMP_API_KEY
+MANIFEST_KEY_9_SSM_VAR=SSM_PROD_MAILCHIMP_API_KEY
 MANIFEST_KEY_9_TYPE=secret
-MANIFEST_KEY_9_SCOPE=staging-only
+MANIFEST_KEY_9_SCOPE=both
 
-# 10 -- MAILCHIMP_LIST_ID (staging-only)
+# 10 -- MAILCHIMP_LIST_ID (both: prod erasure cascade + staging; ticket #887)
+#   Prod path: SSM_PROD_MAILCHIMP_LIST_ID (/vaultmtg/app/production/mailchimp-list-id).
+#   Staging path override: provision-staging-env.sh case statement overrides to
+#   SSM_VAULTMTG_STAGING_MAILCHIMP_LIST_ID (/vaultmtg/app/staging/mailchimp-list-id).
 MANIFEST_KEY_10_NAME=MAILCHIMP_LIST_ID
-MANIFEST_KEY_10_SSM_VAR=SSM_VAULTMTG_STAGING_MAILCHIMP_LIST_ID
+MANIFEST_KEY_10_SSM_VAR=SSM_PROD_MAILCHIMP_LIST_ID
 MANIFEST_KEY_10_TYPE=plain
-MANIFEST_KEY_10_SCOPE=staging-only
+MANIFEST_KEY_10_SCOPE=both
 
 # 11 -- CRISP_WEBSITE_ID (staging-only)
 MANIFEST_KEY_11_NAME=CRISP_WEBSITE_ID
@@ -184,3 +190,24 @@ MANIFEST_KEY_19_NAME=INTERNAL_SVC_SECRET
 MANIFEST_KEY_19_SSM_VAR=SSM_PROD_INTERNAL_SVC_SECRET
 MANIFEST_KEY_19_TYPE=secret
 MANIFEST_KEY_19_SCOPE=both
+
+# 20 -- POSTHOG_PERSONAL_API_KEY (ticket #887: GDPR Art.17 PostHog bulk-delete)
+#   Prod path: SSM_PROD_POSTHOG_PERSONAL_API_KEY (/vaultmtg/app/production/posthog-personal-api-key).
+#   Staging path override: provision-staging-env.sh case statement overrides to
+#   SSM_STAGING_POSTHOG_PERSONAL_API_KEY (/vaultmtg/app/staging/posthog-personal-api-key).
+#   SecureString: personal API key with bulk-delete scope.
+#   DISTINCT from POSTHOG_API_KEY (project key used for analytics emits).
+MANIFEST_KEY_20_NAME=POSTHOG_PERSONAL_API_KEY
+MANIFEST_KEY_20_SSM_VAR=SSM_PROD_POSTHOG_PERSONAL_API_KEY
+MANIFEST_KEY_20_TYPE=secret
+MANIFEST_KEY_20_SCOPE=both
+
+# 21 -- POSTHOG_PROJECT_ID (ticket #887: GDPR Art.17 PostHog bulk-delete)
+#   Prod path: SSM_PROD_POSTHOG_PROJECT_ID (/vaultmtg/app/production/posthog-project-id).
+#   Staging path override: provision-staging-env.sh case statement overrides to
+#   SSM_STAGING_POSTHOG_PROJECT_ID (/vaultmtg/app/staging/posthog-project-id).
+#   Plain String: numeric project ID (e.g. "12345").
+MANIFEST_KEY_21_NAME=POSTHOG_PROJECT_ID
+MANIFEST_KEY_21_SSM_VAR=SSM_PROD_POSTHOG_PROJECT_ID
+MANIFEST_KEY_21_TYPE=plain
+MANIFEST_KEY_21_SCOPE=both

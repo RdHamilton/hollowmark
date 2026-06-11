@@ -159,6 +159,19 @@ SSM_PROD_SENTRY_DSN_BFF="/vaultmtg/app/production/sentry-dsn-bff"
 SSM_PROD_SENTRY_DSN_SPA="/vaultmtg/app/production/sentry-dsn-spa"
 SSM_PROD_POSTHOG_API_KEY="/vaultmtg/app/production/posthog-api-key"
 SSM_PROD_POSTHOG_HOST="/vaultmtg/app/production/posthog-host"
+# PostHog GDPR Art.17 erasure keys (ticket #887).
+#   POSTHOG_PERSONAL_API_KEY — personal API key with bulk-delete scope (SecureString).
+#   POSTHOG_PROJECT_ID       — numeric project ID string (plain String).
+#   Both required by the erasure cascade (Step 2: PostHog bulk-delete).
+#   Ray created the SSM params 2026-06-10; wired into deploy by PR #887.
+SSM_PROD_POSTHOG_PERSONAL_API_KEY="/vaultmtg/app/production/posthog-personal-api-key"
+SSM_PROD_POSTHOG_PROJECT_ID="/vaultmtg/app/production/posthog-project-id"
+# Mailchimp GDPR Art.17 erasure keys (ticket #887) — prod paths.
+#   MAILCHIMP_API_KEY — Mailchimp API key (SecureString). Also used by waitlist handler.
+#   MAILCHIMP_LIST_ID — Mailchimp audience ID (plain String). Also used by waitlist handler.
+#   Ray created the prod SSM params 2026-06-10; wired into deploy by PR #887.
+SSM_PROD_MAILCHIMP_API_KEY="/vaultmtg/app/production/mailchimp-api-key"
+SSM_PROD_MAILCHIMP_LIST_ID="/vaultmtg/app/production/mailchimp-list-id"
 
 # Daemon version metadata — read by BFF at startup to serve GET /api/v1/daemon/version.
 #   BFF_DAEMON_LATEST_VERSION — semver of the latest published daemon release (e.g. 0.3.5)
@@ -248,6 +261,9 @@ SSM_VAULTMTG_STAGING_DISCORD_BOT_TOKEN="/vaultmtg/app/staging/discord-bot-token"
 SSM_VAULTMTG_STAGING_DISCORD_GUILD_ID="/vaultmtg/app/staging/discord-guild-id"
 SSM_VAULTMTG_STAGING_MAILCHIMP_API_KEY="/vaultmtg/app/staging/mailchimp-api-key"
 SSM_VAULTMTG_STAGING_MAILCHIMP_LIST_ID="/vaultmtg/app/staging/mailchimp-list-id"
+# PostHog GDPR Art.17 erasure keys — staging mirrors (ticket #887).
+SSM_STAGING_POSTHOG_PERSONAL_API_KEY="/vaultmtg/app/staging/posthog-personal-api-key"
+SSM_STAGING_POSTHOG_PROJECT_ID="/vaultmtg/app/staging/posthog-project-id"
 SSM_VAULTMTG_STAGING_CRISP_WEBSITE_ID="/vaultmtg/app/staging/crisp-website-id"
 
 # ───────────────────────────────────────────────────────────────────────────

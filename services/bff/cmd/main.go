@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 	"github.com/RdHamilton/hollowmark/services/bff/internal/api/sse"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/config"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/dbpool"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/erasure"
+	"github.com/RdHamilton/hollowmark/services/bff/internal/observability"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/projection"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage"
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
@@ -162,6 +165,19 @@ func main() {
 	} else {
 		log.Println("SENTRY_DSN not set — Sentry disabled (development mode only).")
 	}
+
+	// Wire the Clerk user ID context-key extractor for the erasure service.
+	// MUST be called after Sentry init (C3) so that any Sentry alert from the
+	// mount-gate or cascade has an active hub.  The extractor reads the Clerk
+	// session claims that RequireClerkAuth stores in the request context via
+	// clerk.ContextWithSessionClaims.
+	erasure.SetClerkUserIDFromContextFn(func(ctx context.Context) (string, bool) {
+		claims, ok := clerk.SessionClaimsFromContext(ctx)
+		if !ok || claims == nil {
+			return "", false
+		}
+		return claims.Subject, true
+	})
 
 	if cfg.DatabaseURL != "" {
 		// Pre-flight: detect a rolled-back binary deployed against a DB that has
@@ -312,7 +328,19 @@ func main() {
 		restrictionHandler                *handlers.RestrictionHandler
 		adminRestrictionHandler           *handlers.AdminRestrictionHandler
 		accountProfileHandler             *handlers.AccountProfileHandler
+		accountDeletionHandler            *handlers.AccountDeletionHandler
+		accountDeletionStatusHandler      *handlers.AccountDeletionStatusHandler
 	)
+
+	// erasureWG tracks in-flight erasure cascade goroutines.  The BFF shutdown
+	// sequence waits for this group before exiting so no cascade is abandoned
+	// mid-flight on SIGTERM.
+	var erasureWG sync.WaitGroup
+
+	// bffCtx is the BFF root context — used by long-lived background goroutines
+	// (erasure cascade jobs) that must NOT be cancelled on SIGTERM.  They drain
+	// via erasureWG before the process exits.
+	bffCtx := context.Background()
 
 	// projCtx is cancelled on SIGTERM so the projection worker exits cleanly.
 	projCtx, projCancel := context.WithCancel(context.Background())
@@ -615,6 +643,29 @@ func main() {
 			clerkFetcher,
 		)
 
+		// GDPR Art.17 — account deletion entry point (#887).
+		//
+		// buildAccountDeletionHandler constructs the erasure clients and applies the
+		// mount-gate: if any client is a Noop in production/staging, the gate fires,
+		// a Sentry alert is sent, and nil is returned (route stays 404).  In
+		// development Noop clients are acceptable — the route is always mounted.
+		//
+		// The erasure Service is wired to bffCtx (not the request context) so
+		// in-flight cascade goroutines survive the HTTP request lifecycle.
+		deletionRepo := repository.NewDeletionRepository(sqlDB)
+		accountDeletionHandler = buildAccountDeletionHandler(
+			cfg,
+			buildPostHogDeleter(cfg),
+			buildMailchimpErasureClient(cfg),
+			buildClerkAdminClient(cfg),
+			bffCtx,
+			deletionRepo,
+			&erasureWG,
+		)
+		if accountDeletionHandler != nil {
+			accountDeletionStatusHandler = handlers.NewAccountDeletionStatusHandler(deletionRepo)
+		}
+
 		// Wire Clerk→DB user ID bridge when both Clerk and a database are available.
 		// userRepo was created above for daemonRegisterHandler/daemonAPIKeyAuthMiddl.
 		clerkUserResolver = bffmiddleware.ClerkUserResolver(userRepo)
@@ -721,6 +772,8 @@ func main() {
 		RestrictionHandler:                restrictionHandler,
 		AdminRestrictionHandler:           adminRestrictionHandler,
 		AccountProfileHandler:             accountProfileHandler,
+		AccountDeletionHandler:            accountDeletionHandler,
+		AccountDeletionStatusHandler:      accountDeletionStatusHandler,
 		HealthzHandler:                    healthzHandler,
 		InternalSvcAuthMiddl:              internalSvcAuthMiddl,
 		ClerkAuthMiddl:                    clerkAuthMiddl,
@@ -761,6 +814,13 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+
+	// Drain in-flight erasure cascade goroutines before exit.  Each goroutine
+	// increments erasureWG.Add(1) before launch and defers Done.  We wait here
+	// so no cascade is abandoned mid-flight on SIGTERM.  The goroutines use
+	// bffCtx (context.Background()) so they are not affected by the SIGTERM
+	// signal; they run to natural completion.
+	erasureWG.Wait()
 
 	fmt.Println("BFF stopped.")
 }
@@ -909,6 +969,15 @@ type RouterDeps struct {
 	// the correct address. date_of_birth_year is rejected with 400 (COPPA-gated).
 	// Protected by composeClerkAuth.
 	AccountProfileHandler *handlers.AccountProfileHandler
+	// AccountDeletionHandler serves DELETE /api/v1/account (#887).
+	// GDPR Art.17 Right to Erasure entry point.  Returns 202 Accepted with a
+	// job_id.  When nil (mount-gate fired), the route returns 404.
+	// Protected by composeClerkAuth.
+	AccountDeletionHandler *handlers.AccountDeletionHandler
+	// AccountDeletionStatusHandler serves GET /api/v1/account/deletion-status/{job_id}.
+	// Returns pending/completed status for a deletion job scoped to the caller.
+	// Protected by composeClerkAuth.
+	AccountDeletionStatusHandler *handlers.AccountDeletionStatusHandler
 	// HealthzHandler serves GET /healthz — intentionally public (no auth).
 	HealthzHandler *handlers.HealthzHandler
 	// InternalSvcAuthMiddl protects the /internal/v1/* route group with
@@ -1478,6 +1547,31 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 		}
 	}
 
+	// GDPR Art.17 Right to Erasure (#887).
+	//
+	// DELETE /api/v1/account — submit a deletion request (202 + job_id).
+	// GET    /api/v1/account/deletion-status/{job_id} — poll cascade status.
+	//
+	// Both routes are mounted only when AccountDeletionHandler is non-nil.  A
+	// nil AccountDeletionHandler means the mount-gate fired (a required erasure
+	// client is Noop in production/staging) and the routes return 404 — this
+	// is intentional fail-loud behaviour so an Art.17 request is never silently
+	// accepted and then discarded.
+	//
+	// The mount-gate fires a Sentry alert inside buildAccountDeletionHandler so
+	// the engineering team is notified if an SSM parameter is missing at deploy.
+	if deps.AccountDeletionHandler != nil {
+		if deps.ClerkAuthMiddl != nil {
+			auth := composeClerkAuth(deps.ClerkAuthMiddl, deps.ClerkUserResolver)
+			r.With(auth).Delete("/api/v1/account", deps.AccountDeletionHandler.Delete)
+			if deps.AccountDeletionStatusHandler != nil {
+				r.With(auth).Get("/api/v1/account/deletion-status/{job_id}", deps.AccountDeletionStatusHandler.Status)
+			}
+		} else {
+			log.Println("WARN: DELETE /api/v1/account disabled — Clerk auth middleware not configured")
+		}
+	}
+
 	// ADR-045 §6 — wildcard recommendations scaffold (ticket #416, v0.3.7).
 	// GET /api/v1/recommendations/wildcards — returns 501 stub with the complete
 	// ADR-045 response shape. Full implementation in v0.3.8 ticket #420.
@@ -1821,4 +1915,129 @@ type sseBroadcast struct {
 
 func (b *sseBroadcast) BroadcastDaemonEvent(userID int64, event contract.DaemonEvent) {
 	b.broker.Publish(userID, event)
+}
+
+// ── Erasure client constructors ───────────────────────────────────────────────
+
+// buildPostHogDeleter returns a real PostHogHTTPClient when both
+// POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID are configured; otherwise
+// returns NoopPostHogDeleter.
+func buildPostHogDeleter(cfg *config.Config) erasure.PostHogDeleter {
+	if cfg.PostHogPersonalAPIKey != "" && cfg.PostHogProjectID != "" {
+		client := erasure.NewPostHogHTTPClient(
+			cfg.PostHogPersonalAPIKey,
+			cfg.PostHogProjectID,
+			cfg.PostHogHost,
+		)
+		log.Println("PostHog erasure client initialised.")
+		return client
+	}
+	log.Println("POSTHOG_PERSONAL_API_KEY or POSTHOG_PROJECT_ID not set — PostHog erasure client disabled.")
+	return erasure.NoopPostHogDeleter{}
+}
+
+// buildMailchimpErasureClient returns a real MailchimpErasureClient when both
+// MAILCHIMP_API_KEY and MAILCHIMP_LIST_ID are configured; otherwise returns
+// NoopMailchimpDeleter.
+func buildMailchimpErasureClient(cfg *config.Config) erasure.MailchimpPermanentDeleter {
+	if cfg.MailchimpAPIKey != "" && cfg.MailchimpListID != "" {
+		mc, err := erasure.NewMailchimpErasureClient(cfg.MailchimpAPIKey, cfg.MailchimpListID)
+		if err != nil {
+			log.Printf("WARN: mailchimp erasure client init failed: %v — erasure Mailchimp step disabled", err)
+			return erasure.NoopMailchimpDeleter{}
+		}
+		log.Println("Mailchimp erasure client initialised.")
+		return mc
+	}
+	log.Println("MAILCHIMP_API_KEY or MAILCHIMP_LIST_ID not set — Mailchimp erasure client disabled.")
+	return erasure.NoopMailchimpDeleter{}
+}
+
+// buildClerkAdminClient returns a real ClerkAdminClient when CLERK_SECRET_KEY
+// is configured; otherwise returns NoopClerkDeleter.
+func buildClerkAdminClient(cfg *config.Config) erasure.ClerkDeleter {
+	if cfg.ClerkSecretKey != "" {
+		client := erasure.NewClerkAdminClient(
+			cfg.ClerkSecretKey,
+			&http.Client{Timeout: 30 * time.Second},
+		)
+		log.Println("Clerk admin erasure client initialised.")
+		return client
+	}
+	log.Println("CLERK_SECRET_KEY not set — Clerk admin erasure client disabled.")
+	return erasure.NoopClerkDeleter{}
+}
+
+// buildAccountDeletionHandler constructs the erasure.Service and the
+// AccountDeletionHandler, applying the mount-gate (C2).
+//
+// The mount-gate fires in production and staging when any required erasure
+// client is a Noop (meaning its SSM parameter was not provisioned).  In that
+// case buildAccountDeletionHandler:
+//   - fires a Sentry alert so the team is notified immediately,
+//   - returns nil so the route is NOT mounted (DELETE /api/v1/account → 404).
+//
+// In development the gate is skipped — Noop clients are acceptable and the
+// route is always mounted for local testing.
+//
+// C2 compliance: the gate uses direct type assertions against the concrete Noop
+// types (NoopPostHogDeleter, NoopMailchimpDeleter, NoopClerkDeleter).  The Noop
+// types are value receivers implementing the interfaces — the assertions match
+// the value form, not the pointer form, which is what all three constructors
+// return.  The mount_gate_test.go test suite verifies both directions:
+// gate fires when a client IS Noop; gate does NOT fire when clients are real.
+func buildAccountDeletionHandler(
+	cfg *config.Config,
+	ph erasure.PostHogDeleter,
+	mc erasure.MailchimpPermanentDeleter,
+	ck erasure.ClerkDeleter,
+	rootCtx context.Context,
+	db *repository.DeletionRepository,
+	wg *sync.WaitGroup,
+) *handlers.AccountDeletionHandler {
+	isProd := cfg.Env == "production" || cfg.Env == "staging"
+
+	// C2: type assertions against the concrete Noop value types.
+	// Value-receiver assertions (not pointer) — matches how all three
+	// constructors return them.
+	_, phIsNoop := ph.(erasure.NoopPostHogDeleter)
+	_, mcIsNoop := mc.(erasure.NoopMailchimpDeleter)
+	_, ckIsNoop := ck.(erasure.NoopClerkDeleter)
+
+	if isProd && (phIsNoop || mcIsNoop || ckIsNoop) {
+		// Fail-loud: alert and withhold the route so an Art.17 request is
+		// never silently accepted and then not processed.
+		errMsg := fmt.Sprintf(
+			"[erasure mount-gate] DELETE /api/v1/account NOT mounted: "+
+				"one or more erasure clients are Noop in %s "+
+				"(posthog_noop=%v mailchimp_noop=%v clerk_noop=%v) — "+
+				"check POSTHOG_PERSONAL_API_KEY, POSTHOG_PROJECT_ID, "+
+				"MAILCHIMP_API_KEY, MAILCHIMP_LIST_ID, CLERK_SECRET_KEY in SSM",
+			cfg.Env, phIsNoop, mcIsNoop, ckIsNoop,
+		)
+		log.Println(errMsg)
+		observability.ReportError(context.Background(), fmt.Errorf("%s", errMsg))
+		return nil
+	}
+
+	deps := erasure.Deps{
+		PostHog:   ph,
+		Mailchimp: mc,
+		Clerk:     ck,
+		Reporter:  observability.Reporter{},
+	}
+
+	var erasureSvc *erasure.Service
+	if db != nil {
+		erasureSvc = erasure.NewService(rootCtx, db, deps, wg)
+	}
+
+	if erasureSvc == nil {
+		// No DB — development mode without a database.
+		log.Println("WARN: no database — AccountDeletionHandler not wired (development only).")
+		return nil
+	}
+
+	// resolver uses the DeletionRepository's ResolveUserAndAccount method.
+	return handlers.NewAccountDeletionHandler(db, erasureSvc)
 }

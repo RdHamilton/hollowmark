@@ -65,7 +65,7 @@ type Config struct {
 	// GitHubToken is an optional GitHub token used by the daemon-version
 	// resolver to authenticate its GitHub Releases API calls (5000 req/hr vs the
 	// 60 req/hr anonymous limit).  Sourced from BFF_GITHUB_TOKEN (provisioned
-	// from SSM /vaultmtg/prod/github-token at deploy time).  Empty string when
+	// from SSM /vaultmtg/app/{env}/github-token at deploy time).  Empty string when
 	// unset, in which case the resolver fetches anonymously.
 	GitHubToken string
 
@@ -95,7 +95,7 @@ type Config struct {
 	// sentry-go SDK at BFF startup.
 	//
 	// Sourced from SENTRY_DSN.  The actual value is stored in AWS SSM
-	// Parameter Store at /vaultmtg/prod/sentry-bff-dsn and injected as an
+	// Parameter Store at /vaultmtg/app/{env}/sentry-dsn-bff and injected as an
 	// environment variable at deploy time.
 	//
 	// When empty (e.g. local development without a Sentry account), Sentry
@@ -149,24 +149,51 @@ type Config struct {
 	BFFAdminToken string
 
 	// MailchimpAPIKey is the Mailchimp Marketing API key (format: <key>-<dc>)
-	// used by the waitlist handler to subscribe new emails.
+	// used by the waitlist handler to subscribe new emails and by the GDPR
+	// Art.17 erasure cascade (Step 6) to permanently delete a member.
 	//
-	// Sourced from MAILCHIMP_API_KEY (set by ec2-bootstrap.sh from SSM
-	// /vaultmtg/prod/mailchimp-api-key — Ray will provision via ticket #122).
+	// Sourced from MAILCHIMP_API_KEY (set by provision-staging-env.sh /
+	// deploy-bff.yml from SSM /vaultmtg/app/{env}/mailchimp-api-key).
 	//
 	// When empty, the waitlist handler still persists DB rows but skips the
 	// Mailchimp API call. The value must NEVER be logged or included in any
 	// error response body.
 	MailchimpAPIKey string
 
-	// MailchimpListID is the Mailchimp audience list ID to subscribe members to.
+	// MailchimpListID is the Mailchimp audience list ID to subscribe members to
+	// and to target for GDPR Art.17 erasure (Step 6 delete-permanent).
 	//
-	// Sourced from MAILCHIMP_LIST_ID (set by ec2-bootstrap.sh from SSM
-	// /vaultmtg/prod/mailchimp-list-id — Ray will provision via ticket #122).
+	// Sourced from MAILCHIMP_LIST_ID (set by provision-staging-env.sh /
+	// deploy-bff.yml from SSM /vaultmtg/app/{env}/mailchimp-list-id).
 	//
 	// When empty, the Mailchimp client is not constructed (same effect as an
 	// empty MailchimpAPIKey).
 	MailchimpListID string
+
+	// PostHogPersonalAPIKey is the PostHog personal API key used by the GDPR
+	// Art.17 erasure cascade (Step 2) to call the PostHog bulk-delete API.
+	//
+	// This is DISTINCT from PostHogAPIKey (the project API key used for
+	// server-side event capture). The personal API key is required for the
+	// DELETE /api/projects/{pk}/persons/ endpoint.
+	//
+	// Sourced from POSTHOG_PERSONAL_API_KEY (set by provision-staging-env.sh /
+	// deploy-bff.yml from SSM /vaultmtg/app/{env}/posthog-personal-api-key,
+	// SecureString).
+	//
+	// When empty, the erasure PostHog client falls back to NoopPostHogDeleter
+	// and the mount-gate blocks the deletion route in production/staging.
+	// This value must NEVER be logged or included in any error response body.
+	PostHogPersonalAPIKey string
+
+	// PostHogProjectID is the PostHog project ID (numeric string, e.g. "12345")
+	// used by the GDPR Art.17 erasure cascade to construct the delete-person URL.
+	//
+	// Sourced from POSTHOG_PROJECT_ID (set by provision-staging-env.sh /
+	// deploy-bff.yml from SSM /vaultmtg/app/{env}/posthog-project-id, String).
+	//
+	// When empty, the erasure PostHog client falls back to NoopPostHogDeleter.
+	PostHogProjectID string
 
 	// TOSVersion is the current Terms of Service version string recorded on
 	// every signup consent event. This is the SERVER-CANONICAL value — client-
@@ -301,6 +328,8 @@ func Load() (*Config, error) {
 		BFFAdminToken:                       strings.TrimSpace(os.Getenv("BFF_ADMIN_TOKEN")),
 		MailchimpAPIKey:                     strings.TrimSpace(os.Getenv("MAILCHIMP_API_KEY")),
 		MailchimpListID:                     strings.TrimSpace(os.Getenv("MAILCHIMP_LIST_ID")),
+		PostHogPersonalAPIKey:               strings.TrimSpace(os.Getenv("POSTHOG_PERSONAL_API_KEY")),
+		PostHogProjectID:                    strings.TrimSpace(os.Getenv("POSTHOG_PROJECT_ID")),
 		TOSVersion:                          tosVersion(os.Getenv("BFF_TOS_VERSION")),
 		PrivacyPolicyVersion:                tosVersion(os.Getenv("BFF_PRIVACY_POLICY_VERSION")),
 		AnalyticsPIISalt:                    analyticsPIISalt,

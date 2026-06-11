@@ -245,6 +245,35 @@ func (r *DeletionRepository) CreateAuditLogEntry(ctx context.Context, clerkUserI
 	return jobID, false, nil
 }
 
+// ResolveUserAndAccount resolves a Clerk user ID to the internal users.id and
+// accounts.id.  It satisfies the handlers.userAndAccountResolver interface so
+// AccountDeletionHandler can use DeletionRepository as its single dependency.
+//
+// The lookup uses users.clerk_user_id to find users.id, then accounts.user_id
+// to find accounts.id.  Both lookups are scoped to the authenticated principal
+// — no cross-tenant reads are possible.
+//
+// Returns (0, 0, sql.ErrNoRows-wrapped error) when either row is not found.
+func (r *DeletionRepository) ResolveUserAndAccount(ctx context.Context, clerkUserID string) (userID, accountID int64, err error) {
+	const userQ = `SELECT id FROM users WHERE clerk_user_id = $1`
+	if err := r.db.QueryRowContext(ctx, userQ, clerkUserID).Scan(&userID); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, 0, fmt.Errorf("ResolveUserAndAccount: user not found for clerk_user_id %s", clerkUserID)
+		}
+		return 0, 0, fmt.Errorf("ResolveUserAndAccount: query user: %w", err)
+	}
+
+	const accountQ = `SELECT id FROM accounts WHERE user_id = $1 LIMIT 1`
+	if err := r.db.QueryRowContext(ctx, accountQ, userID).Scan(&accountID); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, 0, fmt.Errorf("ResolveUserAndAccount: account not found for user_id %d", userID)
+		}
+		return 0, 0, fmt.Errorf("ResolveUserAndAccount: query account: %w", err)
+	}
+
+	return userID, accountID, nil
+}
+
 // GetJobStatus returns the status of an erasure job by job_id, scoped to the
 // caller's clerk_user_id.  Returns (nil, nil) if no row matches — either the
 // job does not exist OR it belongs to a different user.  This prevents IDOR:
