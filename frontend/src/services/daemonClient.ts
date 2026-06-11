@@ -21,16 +21,22 @@
 
 import type { ApiConfig, ApiError } from './apiClient';
 import { ApiRequestError, getApiKey } from './apiClient';
-import { daemonApiBaseUrl } from './daemonConfig';
+import { getDaemonApiBaseUrl } from './daemonConfig';
 
 // ---------------------------------------------------------------------------
-// Configuration
+// Configuration — ADR-077 call-time derivation
+//
+// getDaemonApiBaseUrl() is called inside getDaemonConfig() at request time, not
+// at module load. This prevents a "loadConfig() has not completed" throw when
+// daemonClient is imported before the boot sequence sets the runtime config.
 // ---------------------------------------------------------------------------
 
-const config: ApiConfig = {
-  baseUrl: daemonApiBaseUrl,
-  timeout: 30000,
-};
+function getDaemonConfig(): ApiConfig {
+  return {
+    baseUrl: getDaemonApiBaseUrl(),
+    timeout: 30000,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Auth header (same localStorage key as apiClient)
@@ -51,10 +57,11 @@ async function request<T>(
   body?: unknown,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${config.baseUrl}${path}`;
+  const daemonConfig = getDaemonConfig();
+  const url = `${daemonConfig.baseUrl}${path}`;
 
   const controller = new globalThis.AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), config.timeout);
+  const timeoutId = setTimeout(() => controller.abort(), daemonConfig.timeout);
 
   try {
     const response = await fetch(url, {

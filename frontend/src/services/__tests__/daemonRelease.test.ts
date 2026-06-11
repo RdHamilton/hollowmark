@@ -27,6 +27,18 @@ import {
   daemonChannel,
   daemonArtifactChannelInfix,
 } from '../daemonRelease';
+import { setRuntimeConfig, _resetRuntimeConfig } from '../../config/runtimeConfig';
+
+// ADR-077: sentryEnv is now read from runtimeConfig.sentryEnv at call time.
+// Tests must call setRuntimeConfig() before invoking isStaging()-dependent functions.
+const testDefaults = {
+  clerkPublishableKey: 'pk_test_dGVzdA',
+  bffUrl: 'http://localhost:8080/api/v1',
+  sentryEnv: 'production',
+  envLabel: 'test',
+  daemonUrl: 'http://localhost:9001/api/v1',
+  posthogHost: 'https://app.posthog.com',
+};
 
 const GITHUB_REPO = 'RdHamilton/hollowmark';
 const RELEASES_API = `https://api.github.com/repos/${GITHUB_REPO}/releases`;
@@ -55,11 +67,15 @@ function githubResponse(releases: ReturnType<typeof makeRelease>[]) {
 describe('fetchLatestDaemonRelease', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // ADR-077: default to 'production' sentryEnv so tests that don't
+    // override it get the safe prod-channel behavior.
+    setRuntimeConfig(testDefaults);
   });
 
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
+    _resetRuntimeConfig();
   });
 
   // ---------------------------------------------------------------------------
@@ -140,7 +156,7 @@ describe('fetchLatestDaemonRelease', () => {
   });
 
   it('does NOT skip prerelease releases in staging env (prereleases are valid staging targets)', async () => {
-    vi.stubEnv('VITE_SENTRY_ENV', 'staging');
+    setRuntimeConfig({ ...testDefaults, sentryEnv: 'staging' });
     mockFetch.mockResolvedValueOnce(
       githubResponse([makeRelease('daemon/v0.4.0-rc1', { prerelease: true })])
     );
@@ -215,9 +231,9 @@ describe('fetchLatestDaemonRelease', () => {
   // prod     → resolves daemon/v0.3.2     (RC is excluded from stable channel)
   // ---------------------------------------------------------------------------
 
-  describe('env-channel: staging (VITE_SENTRY_ENV=staging)', () => {
+  describe('env-channel: staging (sentryEnv=staging)', () => {
     beforeEach(() => {
-      vi.stubEnv('VITE_SENTRY_ENV', 'staging');
+      setRuntimeConfig({ ...testDefaults, sentryEnv: 'staging' });
     });
 
     it('resolves the RC prerelease when staging env is set', async () => {
@@ -250,9 +266,9 @@ describe('fetchLatestDaemonRelease', () => {
     });
   });
 
-  describe('env-channel: prod (VITE_SENTRY_ENV=production)', () => {
+  describe('env-channel: prod (sentryEnv=production)', () => {
     beforeEach(() => {
-      vi.stubEnv('VITE_SENTRY_ENV', 'production');
+      setRuntimeConfig({ ...testDefaults, sentryEnv: 'production' });
     });
 
     it('skips the RC prerelease and resolves the stable release', async () => {
@@ -283,9 +299,9 @@ describe('fetchLatestDaemonRelease', () => {
     });
   });
 
-  describe('env-channel: fail-safe default (unknown / undefined VITE_SENTRY_ENV)', () => {
-    it('excludes prereleases when VITE_SENTRY_ENV is undefined (safe default = prod behaviour)', async () => {
-      // No vi.stubEnv call — env var is absent, IS_STAGING evaluates to false.
+  describe('env-channel: fail-safe default (non-staging sentryEnv)', () => {
+    it('excludes prereleases when sentryEnv is "production" (safe default = prod behaviour)', async () => {
+      // testDefaults already sets sentryEnv: 'production' via beforeEach.
       mockFetch.mockResolvedValueOnce(
         githubResponse([
           makeRelease('daemon/v0.3.3-rc1', { prerelease: true }),
@@ -299,8 +315,8 @@ describe('fetchLatestDaemonRelease', () => {
       expect(result!.tag).toBe('daemon/v0.3.2');
     });
 
-    it('excludes prereleases when VITE_SENTRY_ENV is an unrecognised value', async () => {
-      vi.stubEnv('VITE_SENTRY_ENV', 'preview');
+    it('excludes prereleases when sentryEnv is an unrecognised value (fail-safe)', async () => {
+      setRuntimeConfig({ ...testDefaults, sentryEnv: 'preview' });
       mockFetch.mockResolvedValueOnce(
         githubResponse([
           makeRelease('daemon/v0.3.3-rc1', { prerelease: true }),
@@ -366,7 +382,7 @@ describe('fetchLatestDaemonRelease', () => {
     });
 
     it('resolves the stable release when page 1 is crowded with non-daemon and RC tags (prod env)', async () => {
-      vi.stubEnv('VITE_SENTRY_ENV', 'production');
+      setRuntimeConfig({ ...testDefaults, sentryEnv: 'production' });
 
       // Page 1: mix of non-daemon tags and RC daemon tags (full page)
       const page1Releases = [
@@ -391,7 +407,7 @@ describe('fetchLatestDaemonRelease', () => {
     });
 
     it('finds stable release on page 2 in staging env when page 1 only has RCs', async () => {
-      vi.stubEnv('VITE_SENTRY_ENV', 'staging');
+      setRuntimeConfig({ ...testDefaults, sentryEnv: 'staging' });
 
       // Page 1: only RC daemon releases — staging should pick these up immediately
       mockFetch.mockResolvedValueOnce(
@@ -465,35 +481,34 @@ describe('fetchLatestDaemonRelease', () => {
 /**
  * Channel helpers — single source of truth for the download-asset channel.
  *
- * These back the staging-macOS-404 fix in DaemonDownload: the channel must be
- * derived from the same VITE_SENTRY_ENV signal used to select prereleases, so
- * the resolved release tag and the asset filename can never disagree.
+ * ADR-077: these now read from runtimeConfig.sentryEnv (set by setRuntimeConfig)
+ * instead of VITE_SENTRY_ENV (build-time baked).
  */
 describe('daemonChannel / daemonArtifactChannelInfix', () => {
   afterEach(() => {
-    vi.unstubAllEnvs();
+    _resetRuntimeConfig();
   });
 
   it('staging env → channel "staging", infix "-staging"', () => {
-    vi.stubEnv('VITE_SENTRY_ENV', 'staging');
+    setRuntimeConfig({ ...testDefaults, sentryEnv: 'staging' });
     expect(daemonChannel()).toBe('staging');
     expect(daemonArtifactChannelInfix()).toBe('-staging');
   });
 
   it('production env → channel "stable", infix ""', () => {
-    vi.stubEnv('VITE_SENTRY_ENV', 'production');
+    setRuntimeConfig({ ...testDefaults, sentryEnv: 'production' });
     expect(daemonChannel()).toBe('stable');
     expect(daemonArtifactChannelInfix()).toBe('');
   });
 
   it('unknown env value → fail-safe to stable (no prerelease asset leak)', () => {
-    vi.stubEnv('VITE_SENTRY_ENV', 'preview-xyz');
+    setRuntimeConfig({ ...testDefaults, sentryEnv: 'preview-xyz' });
     expect(daemonChannel()).toBe('stable');
     expect(daemonArtifactChannelInfix()).toBe('');
   });
 
-  it('undefined env → fail-safe to stable', () => {
-    vi.stubEnv('VITE_SENTRY_ENV', '');
+  it('empty sentryEnv → fail-safe to stable', () => {
+    setRuntimeConfig({ ...testDefaults, sentryEnv: '' });
     expect(daemonChannel()).toBe('stable');
     expect(daemonArtifactChannelInfix()).toBe('');
   });

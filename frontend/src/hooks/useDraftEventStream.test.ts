@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
+const testRuntimeConfig = {
+  clerkPublishableKey: 'pk_test_dGVzdA',
+  bffUrl: 'http://localhost:8080/api/v1',
+  sentryEnv: 'test',
+  envLabel: 'test',
+  daemonUrl: 'http://localhost:9001/api/v1',
+  posthogHost: 'https://app.posthog.com',
+};
+
 // ---------------------------------------------------------------------------
 // Clerk useAuth mock — the hook calls getToken() on every (re)connect to
 // append a fresh JWT as ?token=.  We control auth state per test.
@@ -110,7 +119,7 @@ function makeDraftEvent(type: string, overrides: Partial<Record<string, unknown>
 // ---------------------------------------------------------------------------
 
 describe('useDraftEventStream', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     instances = [];
     MockEventSource.mockClear();
     mockGetToken.mockReset();
@@ -119,6 +128,14 @@ describe('useDraftEventStream', () => {
     mockIsSignedIn = true;
     mockGetToken.mockResolvedValue('clerk-test-jwt');
     vi.useFakeTimers();
+    // ADR-077: hook calls getRuntimeConfig().bffUrl at connect time.
+    // vi.resetModules() (called in afterEach) creates a fresh module instance,
+    // so we must dynamically import setRuntimeConfig from the fresh instance to
+    // ensure the hook's getRuntimeConfig() reads from the same registry.
+    const { setRuntimeConfig: freshSetRuntimeConfig } = await import(
+      '../config/runtimeConfig'
+    );
+    freshSetRuntimeConfig(testRuntimeConfig);
   });
 
   afterEach(() => {
