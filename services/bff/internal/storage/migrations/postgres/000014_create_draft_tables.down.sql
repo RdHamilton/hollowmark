@@ -10,7 +10,11 @@ DROP INDEX IF EXISTS idx_set_cards_set_code;
 DROP INDEX IF EXISTS idx_set_cards_scryfall_id;
 
 -- Drop tables
-DROP TABLE IF EXISTS draft_picks;
-DROP TABLE IF EXISTS draft_packs;
-DROP TABLE IF EXISTS draft_sessions;
-DROP TABLE IF EXISTS set_cards;
+-- CASCADE guards against incomplete later downs and dirty states. On a correct
+-- sequential down, dependents are already gone before this migration runs;
+-- CASCADE is a safety net for partial failures and future FK additions that
+-- lack a corresponding down update.
+DROP TABLE IF EXISTS draft_picks CASCADE;
+DROP TABLE IF EXISTS draft_packs CASCADE;
+DROP TABLE IF EXISTS draft_sessions CASCADE;
+DROP TABLE IF EXISTS set_cards CASCADE;

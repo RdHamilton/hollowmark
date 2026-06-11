@@ -2,8 +2,11 @@
 
 DROP INDEX IF EXISTS idx_deck_tags_tag;
 DROP INDEX IF EXISTS idx_deck_tags_deck_id;
-DROP TABLE IF EXISTS deck_tags;
-
+-- CASCADE guards against incomplete later downs and dirty states. On a correct
+-- sequential down, dependents are already gone before this migration runs;
+-- CASCADE is a safety net for partial failures and future FK additions that
+-- lack a corresponding down update.
+DROP TABLE IF EXISTS deck_tags CASCADE;
 DROP INDEX IF EXISTS idx_decks_draft_event_id;
 DROP INDEX IF EXISTS idx_decks_source;
 
