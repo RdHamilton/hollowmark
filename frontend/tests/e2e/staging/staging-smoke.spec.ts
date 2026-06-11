@@ -214,19 +214,21 @@ test.describe('Staging smoke: auth-gated routes return 401', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. Authenticated POST /api/v1/matches — real auth, response shape (AC2)
+// 3. Authenticated POST /api/v1/matches — real auth, ≥1 row assertion (AC2)
 //
 // Uses the Backend-API sign-in-token chain (Option A, #759).
-// Verifies: Clerk session JWT accepted by BFF, response is valid JSON envelope.
+// Verifies: Clerk session JWT accepted by BFF, response contains ≥1 match row.
 //
 // NOTE: The staging BFF uses POST for /api/v1/matches (Phase 2 list-with-filters
 // design). GET /api/v1/matches returns 405. The AC2 ticket wording says "GET" but
 // the BFF does not expose a GET on this route — POST is the correct method.
 //
-// The "≥1 match row" assertion from AC2 depends on seeded data in the ci-smoke
-// staging account. If the account has no matches (staging data not seeded), this
-// emits a console warning rather than hard-failing — the auth contract is proven
-// by the 200 status and valid JSON envelope. Data seeding is tracked separately.
+// Durable seed (tickets#1189): infra/db/seed-ci-smoke-staging.sql inserts the
+// fixture match ci_smoke_fixture_match_001 for the ci-smoke account after every
+// staging migration run. This guarantees ≥1 row exists at all times so the
+// assertion below is deterministic, not best-effort. The hard assert replaces
+// the former console.warn soft-check that allowed false-PASS when no rows
+// were present (Lee's AC2 deviation ruling on PR #3114, tickets#1189).
 // ---------------------------------------------------------------------------
 
 test.describe('Staging smoke: authenticated POST /api/v1/matches (AC2)', () => {
@@ -262,16 +264,25 @@ test.describe('Staging smoke: authenticated POST /api/v1/matches (AC2)', () => {
     const body = await res.json() as Record<string, unknown>;
     expect(body, 'POST /api/v1/matches response is not a valid JSON object').toBeTruthy();
 
-    // Warn (not fail) if no match rows are present — data seeding is outside this
-    // ticket's scope. Auth passing and envelope being valid satisfies AC2's core intent.
+    // AC2 hard assertion (tickets#1189): the ci-smoke staging account MUST have
+    // ≥1 match row. The durable seed in infra/db/seed-ci-smoke-staging.sql
+    // guarantees this by inserting fixture match ci_smoke_fixture_match_001 after
+    // every staging migration run (idempotent — ON CONFLICT DO NOTHING).
+    //
+    // A zero-row response means either (a) the seed has not been applied yet
+    // (apply by re-running the staging deploy / run-staging-migrations.sh) or
+    // (b) the ci-smoke account was deleted and not re-provisioned. Investigate
+    // with: run-staging-sql.yml → SELECT COUNT(*) FROM matches WHERE account_id =
+    //   (SELECT a.id FROM accounts a JOIN users u ON a.user_id = u.id
+    //    WHERE u.clerk_user_id = 'user_3EmtmrSgZrtd0yRRdisTIIFYnnF');
     const matches = (body.data as Record<string, unknown[]>)?.Matches ?? (body.matches as unknown[]) ?? [];
-    if (matches.length === 0) {
-      console.warn(
-        'WARNING: POST /api/v1/matches returned 0 rows for ci-smoke account.\n' +
-        'AC2 requires ≥1 seeded match row. This is a data-seeding gap in staging, not an auth failure.\n' +
-        'Auth is proven by the 200 status and valid JSON envelope.',
-      );
-    }
+    expect(
+      matches.length,
+      `AC2 FAIL: POST /api/v1/matches returned 0 rows for ci-smoke account.\n` +
+      `Expected ≥1 row from the durable seed (infra/db/seed-ci-smoke-staging.sql, tickets#1189).\n` +
+      `Fix: re-run staging deploy (or run-staging-migrations.sh) to apply the seed.\n` +
+      `If running locally: ensure CLERK_SECRET_KEY + CI_SMOKE_USER_ID are set and the account exists on staging.`,
+    ).toBeGreaterThanOrEqual(1);
   });
 });
 
