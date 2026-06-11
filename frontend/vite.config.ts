@@ -7,8 +7,8 @@ import { sentryVitePlugin } from '@sentry/vite-plugin'
 //
 // @sentry/vite-plugin: uploads source maps to Sentry during production/staging builds.
 // Gated on SENTRY_AUTH_TOKEN being present so local builds (no secret) are unaffected.
-// SENTRY_ORG and SENTRY_PROJECT are injected from GH Actions secrets; they must not be
-// hardcoded here. The plugin release value matches VITE_APP_VERSION so source maps are
+// SENTRY_ORG and SENTRY_PROJECT are injected from GH Actions vars (non-sensitive org/project
+// slugs); SENTRY_AUTH_TOKEN remains a secret. The plugin release value matches VITE_APP_VERSION so source maps are
 // tied to the same Sentry release tag as the running application.
 const sentryPlugin = process.env.SENTRY_AUTH_TOKEN
   ? [
