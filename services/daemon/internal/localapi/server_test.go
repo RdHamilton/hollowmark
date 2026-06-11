@@ -196,3 +196,39 @@ func TestHealthAuthStatusAlwaysPresent(t *testing.T) {
 		t.Error("auth_status key must always be present in /health response (no omitempty)")
 	}
 }
+
+// TestCORSPreflightAllowsHollowmarkOrigins verifies the canonical hollowmark.app
+// origins are echoed back like the legacy vaultmtg.app set (quiet-cutover C2
+// origin parity, incident hollowmark-tickets#1231). The BFF's ALLOWED_ORIGINS
+// gained these at the v0.4.0 cutover; the daemon localapi allowlist must match
+// so credentialed callers never silently break on the canonical domain.
+func TestCORSPreflightAllowsHollowmarkOrigins(t *testing.T) {
+	srv := localapi.New(0, localapi.State{Version: "test"})
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = srv.Stop() }()
+
+	origins := []string{
+		"https://app.hollowmark.app",
+		"https://stg-app.hollowmark.app",
+		"https://hollowmark.app",
+		"https://www.hollowmark.app",
+	}
+	for _, origin := range origins {
+		req, _ := http.NewRequest(http.MethodOptions, "http://"+srv.Addr()+"/health", nil)
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Access-Control-Request-Method", "GET")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("OPTIONS %s: %v", origin, err)
+		}
+		got := resp.Header.Get("Access-Control-Allow-Origin")
+		_ = resp.Body.Close()
+
+		if got != origin {
+			t.Errorf("Allow-Origin for %s: got %q, want echo", origin, got)
+		}
+	}
+}
