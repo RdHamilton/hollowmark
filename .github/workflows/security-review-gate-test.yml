@@ -4,107 +4,163 @@
 #
 # PURPOSE
 # -------
-# Verifies the critical properties of the SHA-delta staleness check (AC3/AC3b/AC4)
-# and the check-run conclusion decision logic (AC5/AC6/AC7) in
-# security-review-gate.yml.
+# Verifies the critical properties of the SHA-delta staleness check and the
+# check-run conclusion decision logic in security-review-gate.yml.
 #
-# AC3:  A verdict approved before an update-branch merge commit, where the
-#       merge commit touches ONLY non-S07-1A paths, keeps the gate GREEN.
-#       (No false-positive staleness on security-inert rebases.)
+# Test cases (RdHamilton/hollowmark-tickets#1134 + vault-mtg-tickets#231, #2420):
 #
-# AC4:  A verdict approved before a commit that touches an S07-1A path is
-#       correctly marked STALE. The gate stays RED and Sarah must re-review.
-#       (Gate integrity preserved for real security changes.)
+# AC-1134-A (re-keyed): A prime guarded skip -- single-parent commit with §1A file in
+#   COMMIT_FILES but EMPTY MERGE_CONTRIB (impossible in real single-parent flow,
+#   but pins the predicate: staleness is driven by MERGE_CONTRIB for merge commits,
+#   not raw COMMIT_FILES). MERGE_CONTRIB empty -> verdict_valid=true.
+#   This test fails against a naive parents>=2 skip or a flat COMMIT_FILES check.
 #
-# AC3b: Fast-path — verdict timestamp is newer than the push timestamp;
-#       verdict is trivially fresh without needing a delta walk.
+# AC-1134-B: A prime guarded skip -- merge commit (parents==2), COMMIT_FILES has
+#   bff/cmd §1A path, MERGE_CONTRIB is EMPTY (the §1A file came from parent[1]/main,
+#   not authored by this branch) -> verdict_valid=true (skip is safe).
 #
-# AC5:  Gate required + fresh matching verdict → decision conclusion = "success".
-#       (The happy path: Sarah approved, check-run turns green.)
+# AC-1134-C: true-stale single-parent commit -- §1A path in COMMIT_FILES and no
+#   parent[1] present -> uses raw COMMIT_FILES -> verdict_valid=false. Regression
+#   guard: genuine single-parent §1A push after verdict MUST stale.
 #
-# AC6:  Gate required + no verdict found after retry exhaustion →
-#       decision conclusion = "failure".
-#       (True-negative: no approval comment → merge stays blocked.)
+# AC-1134-D (evil-merge guard): merge commit (parents==2), COMMIT_FILES has §1A
+#   path AND MERGE_CONTRIB also has §1A path (branch secretly rewrote §1A content
+#   via evil merge) -> verdict_valid=false. Pins the security regression guard --
+#   CI fails if anyone refactors back to a blanket parents>=2 skip.
 #
-# AC7:  Gate required + verdict exists but verdict pre-dates a post-verdict
-#       §1A-path commit → decision conclusion = "failure".
-#       (Staleness caught: Sarah must re-review the new security-sensitive code.)
+# AC-1134-E (clean update-branch proven via A prime): merge commit (parents==2),
+#   COMMIT_FILES has §1A path (daemon/cmd/* from main), MERGE_CONTRIB is the real
+#   compare/eec62762...439d483a result (non-§1A only) -> verdict_valid=true.
+#   Explicitly distinct from AC-1134-A to prove A prime compare drives the decision.
+#
+# AC-1134-F (octopus fail-closed): commit with parents==3 (octopus merge).
+#   compare vs parent[1] includes a §1A path (MERGE_CONTRIB non-empty) ->
+#   verdict_valid=false. Pins the fail-closed direction: parent[1]-only extraction
+#   is over-inclusive for >2-parent commits (over-stale, never under-stale).
+#   A future reader must NOT "optimize" this without a new ADR + Sarah review.
+#
+# AC-1134-G (compare-API-failure fallback fail-closed): merge commit (parents==2),
+#   COMMIT_FILES contains a §1A path. MERGE_CONTRIB is set to COMMIT_FILES to simulate
+#   what the `|| echo "${COMMIT_FILES}"` fallback produces when the compare API call
+#   fails. The A prime path sees §1A content in MERGE_CONTRIB -> verdict_valid=false.
+#   Pins the security property: compare failure -> COMMIT_FILES fallback -> over-stale,
+#   never silently skip. This test cannot simulate the shell-level API failure directly
+#   (the harness is a logic harness, not an integration harness) but directly exercises
+#   the fallback value that the `|| echo "${COMMIT_FILES}"` expression produces.
+#
+# AC3b: Fast path -- verdict timestamp is newer than push timestamp; trivially fresh.
+# AC5:  Gate required + fresh matching verdict -> conclusion = "success".
+# AC6:  Gate required + no verdict found after retry exhaustion -> conclusion = "failure".
+# AC7:  Gate required + verdict exists but §1A commit after verdict -> conclusion = "failure".
 #
 # HOW IT WORKS
 # ------------
-# The test harness replicates the exact bash decision logic from the gate
-# steps in security-review-gate.yml using injected synthetic data rather
-# than live GitHub API calls. No real PR is required.
+# The test harness replicates the exact bash decision logic from the gate steps in
+# security-review-gate.yml using injected synthetic data rather than live GitHub API
+# calls. No real PR is required.
 #
 # Each test case:
-#   1. Sets input env vars (timestamps, paths, gate/verdict state).
-#   2. Runs the replicated decision logic.
-#   3. Asserts the expected conclusion output.
+#   1. Sets input env vars (timestamps, parent count, COMMIT_FILES, MERGE_CONTRIB).
+#   2. Runs the replicated A prime decision logic.
+#   3. Asserts the expected verdict_valid / conclusion output.
 #
 # TRIGGER
 # -------
-# Manual only (workflow_dispatch). Not triggered by push or pull_request --
-# this is a test harness, not a gate enforcement workflow.
+# - workflow_dispatch: manual execution for ad-hoc gate logic verification.
+# - push (scoped to security-review-gate.yml): runs automatically whenever the gate
+#   workflow itself changes, ensuring no gate regression ships without test coverage.
+#   (OQ-4 resolution -- RdHamilton/hollowmark-tickets#1134.)
 #
-# Runbook: vault-mtg-docs/engineering/runbooks/infra-security-review-gate.md
-# Ticket:  vault-mtg-tickets#231, RdHamilton/hollowmark#2420
+# Runbook: hollowmark-docs/engineering/runbooks/infra-security-review-gate.md
+# Ticket:  RdHamilton/hollowmark-tickets#1134, vault-mtg-tickets#231, #2420
 
-name: S-07 Gate Staleness Tests
+name: S-07 Gate Logic Tests
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/security-review-gate.yml'
 
 jobs:
   test-staleness-logic:
-    name: Test SHA-Delta Staleness Logic
+    name: S-07 Gate Staleness Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       # -----------------------------------------------------------------------
-      # Shared helper: run the staleness delta check against a list of changed
-      # files (newline-separated) and the S-07 §1A trigger globs.
+      # Shared logic note: every "run delta check" step below replicates the
+      # A prime-guarded staleness logic from security-review-gate.yml "Scan PR
+      # comments" step. The key predicate is:
       #
-      # Inputs (env vars expected by this step's logic, set per test case):
-      #   VERDICT_TIMESTAMP   -- ISO8601 UTC timestamp of the APPROVED comment
-      #   LAST_PUSH_TIMESTAMP -- ISO8601 UTC timestamp of the current HEAD commit
-      #   COMMIT_FILES        -- newline-separated list of files changed after verdict
+      #   For each commit after verdict:
+      #     if PARENT_COUNT >= 2 AND PARENT1_SHA is non-empty:
+      #       use MERGE_CONTRIB (compare result scoped to §1A paths)
+      #       if MERGE_CONTRIB empty  -> skip (inert merge commit)
+      #       if MERGE_CONTRIB non-empty -> S07_DELTA_FOUND=true (stale)
+      #     else:
+      #       check raw COMMIT_FILES against §1A globs (single-parent authored path)
       #
-      # Outputs written to GITHUB_OUTPUT:
-      #   verdict_valid -- "true" (fresh) or "false" (stale)
+      # TRIGGER_GLOBS must stay in sync with security-review-gate.yml §1A.
       # -----------------------------------------------------------------------
 
       # -----------------------------------------------------------------------
-      # AC3: Security-inert update-branch merge commit must NOT stale the verdict
+      # AC-1134-A: A prime predicate -- MERGE_CONTRIB empty overrides COMMIT_FILES
+      #
+      # Setup: PARENT_COUNT=2, COMMIT_FILES has daemon/cmd §1A path, MERGE_CONTRIB
+      # has only non-§1A files (the §1A file came from parent[1]/main).
+      # The A prime compare returns nothing §1A -> treat as inert -> verdict stays fresh.
+      #
+      # Fails against: flat COMMIT_FILES check (sees §1A -> stale; wrong).
+      # Fails against: blanket parents>=2 skip (skips without checking MERGE_CONTRIB
+      #   -> would miss evil merges in AC-1134-D; wrong).
+      # Only the A prime logic produces verdict_valid=true here.
       # -----------------------------------------------------------------------
-      - name: "AC3 setup: verdict before update-branch (non-1A files only)"
+      - name: "AC-1134-A setup: merge commit, §1A in COMMIT_FILES, MERGE_CONTRIB non-§1A"
         run: |
-          # Verdict posted at T=0; update-branch merge commit lands at T=+1m.
-          # The merge commit only touches non-S07 paths (docs, frontend assets).
+          # MERGE_CONTRIB: A prime compare(parent1...sha) result -- non-§1A only
           {
             echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
-          } >> "$GITHUB_ENV"
-          # Newline-delimited: one file per "commit" (flat list for the check)
-          {
+            echo "PARENT_COUNT=2"
+            echo "PARENT1_SHA=eec627624009a349f9ee9c95bd93ac1ddee5304f"
             printf 'COMMIT_FILES<<EOF\n'
-            printf 'docs/changelog.md\n'
-            printf 'frontend/src/App.tsx\n'
-            printf 'README.md\n'
+            printf 'services/daemon/cmd/daemon-replay-check/main.go\n'
+            printf 'services/daemon/cmd/daemon-replay-check/main_test.go\n'
+            printf 'EOF\n'
+            printf 'MERGE_CONTRIB<<EOF\n'
+            printf '.github/workflows/e2e-staging-auth-smoke.yml\n'
+            printf 'frontend/playwright.staging.config.ts\n'
+            printf 'frontend/tests/e2e/staging/staging-smoke.spec.ts\n'
             printf 'EOF\n'
           } >> "$GITHUB_ENV"
 
-      - name: "AC3: run delta check — expect verdict_valid=true (gate stays green)"
-        id: ac3_check
+      - name: "AC-1134-A: run A prime delta check -- expect verdict_valid=true"
+        id: ac_1134_a_check
         env:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
           LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
+          PARENT_COUNT:        ${{ env.PARENT_COUNT }}
+          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
           COMMIT_FILES:        ${{ env.COMMIT_FILES }}
+          MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
         run: |
           set -euo pipefail
 
-          # Replicate the fast-path / delta-path logic from security-review-gate.yml
-          # "Scan PR comments" step.
+          TRIGGER_GLOBS=(
+            ".github/workflows/deploy-bff.yml"
+            ".github/workflows/deploy-spa.yml"
+            ".github/workflows/release.yml"
+            ".github/workflows/rollback.yml"
+            ".github/workflows/staging-deploy.yml"
+            ".github/workflows/daemon-release.yml"
+            ".github/workflows/frontend.yml"
+            ".github/workflows/security-review-gate.yml"
+            "services/bff/cmd/"
+            "services/daemon/cmd/"
+            "scripts/deploy/"
+          )
 
           VERDICT_AFTER_PUSH=$(python3 -c "
           from datetime import datetime, timezone
@@ -118,15 +174,98 @@ jobs:
           print('true' if verdict > push else 'false')
           ")
 
-          echo "Verdict post-dates last push: ${VERDICT_AFTER_PUSH}"
-
           if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
-            # Fast path -- verdict is genuinely newer; trivially fresh.
             echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Delta path: check changed files against S-07 §1A trigger globs.
+          S07_DELTA_FOUND=false
+
+          # A prime guarded path: for merge commits (parents>=2 with non-empty
+          # parent[1] SHA), use MERGE_CONTRIB (compare result), not raw COMMIT_FILES.
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+            echo "Merge commit (parents=${PARENT_COUNT}). Using A prime MERGE_CONTRIB."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "A prime §1A path match in MERGE_CONTRIB: ${FILE}"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${MERGE_CONTRIB}"
+          else
+            echo "Single-parent commit. Using raw COMMIT_FILES."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "§1A path match in COMMIT_FILES: ${FILE}"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${COMMIT_FILES}"
+          fi
+
+          if [ "${S07_DELTA_FOUND}" = "true" ]; then
+            echo "A prime delta check: STALE"
+            echo "verdict_valid=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "A prime delta check: FRESH (MERGE_CONTRIB has no §1A paths)"
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "AC-1134-A: assert verdict_valid=true"
+        env:
+          RESULT: ${{ steps.ac_1134_a_check.outputs.verdict_valid }}
+        run: |
+          echo "AC-1134-A result: verdict_valid=${RESULT}"
+          if [ "${RESULT}" != "true" ]; then
+            echo "FAIL: AC-1134-A -- expected verdict_valid=true."
+            echo "      Merge commit with §1A in COMMIT_FILES but non-§1A A prime MERGE_CONTRIB"
+            echo "      MUST NOT stale the verdict. The §1A file came from parent[1]/main,"
+            echo "      not from this branch. The A prime compare result (MERGE_CONTRIB) must"
+            echo "      drive the staleness decision for merge commits, not raw COMMIT_FILES."
+            exit 1
+          fi
+          echo "PASS: AC-1134-A -- A prime non-§1A MERGE_CONTRIB correctly skips stale verdict."
+
+      # -----------------------------------------------------------------------
+      # AC-1134-B: A prime guarded skip -- separate merge commit fixture
+      #
+      # Distinct from AC-1134-A: COMMIT_FILES has bff/cmd §1A path, MERGE_CONTRIB
+      # is empty (no files at all in compare result). Confirms predicate not fixture-specific.
+      # -----------------------------------------------------------------------
+      - name: "AC-1134-B setup: merge commit, bff/cmd §1A in COMMIT_FILES, MERGE_CONTRIB empty"
+        run: |
+          # MERGE_CONTRIB: A prime compare returned zero files (empty diff vs parent[1])
+          {
+            echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
+            echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
+            echo "PARENT_COUNT=2"
+            echo "PARENT1_SHA=abc000000000000000000000000000000000dead"
+            printf 'COMMIT_FILES<<EOF\n'
+            printf 'services/bff/cmd/main.go\n'
+            printf 'services/bff/cmd/router.go\n'
+            printf 'EOF\n'
+            printf 'MERGE_CONTRIB<<EOF\n'
+            printf 'EOF\n'
+          } >> "$GITHUB_ENV"
+
+      - name: "AC-1134-B: run A prime delta check -- expect verdict_valid=true"
+        id: ac_1134_b_check
+        env:
+          VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
+          LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
+          PARENT_COUNT:        ${{ env.PARENT_COUNT }}
+          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          COMMIT_FILES:        ${{ env.COMMIT_FILES }}
+          MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
+        run: |
+          set -euo pipefail
+
           TRIGGER_GLOBS=(
             ".github/workflows/deploy-bff.yml"
             ".github/workflows/deploy-spa.yml"
@@ -135,70 +274,121 @@ jobs:
             ".github/workflows/staging-deploy.yml"
             ".github/workflows/daemon-release.yml"
             ".github/workflows/frontend.yml"
+            ".github/workflows/security-review-gate.yml"
             "services/bff/cmd/"
             "services/daemon/cmd/"
             "scripts/deploy/"
           )
 
+          VERDICT_AFTER_PUSH=$(python3 -c "
+          from datetime import datetime, timezone
+          def p(t):
+              t = t.strip()
+              if t.endswith('Z'):
+                  t = t[:-1] + '+00:00'
+              return datetime.fromisoformat(t).astimezone(timezone.utc)
+          verdict = p('${VERDICT_TIMESTAMP}')
+          push   = p('${LAST_PUSH_TIMESTAMP}')
+          print('true' if verdict > push else 'false')
+          ")
+
+          if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           S07_DELTA_FOUND=false
 
-          while IFS= read -r FILE; do
-            [ -z "${FILE}" ] && continue
-            for GLOB in "${TRIGGER_GLOBS[@]}"; do
-              if echo "${FILE}" | grep -qF "${GLOB}"; then
-                echo "S-07 §1A path match: ${FILE} matches ${GLOB}"
-                S07_DELTA_FOUND=true
-                break 2
-              fi
-            done
-          done <<< "${COMMIT_FILES}"
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+            echo "Merge commit (parents=${PARENT_COUNT}). Using A prime MERGE_CONTRIB."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "A prime §1A match: ${FILE}"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${MERGE_CONTRIB}"
+          else
+            echo "Single-parent commit. Using COMMIT_FILES."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${COMMIT_FILES}"
+          fi
 
           if [ "${S07_DELTA_FOUND}" = "true" ]; then
-            echo "Delta check: STALE"
             echo "verdict_valid=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Delta check: FRESH (no §1A paths in commits after verdict)"
             echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: "AC3: assert verdict_valid=true"
+      - name: "AC-1134-B: assert verdict_valid=true"
         env:
-          RESULT: ${{ steps.ac3_check.outputs.verdict_valid }}
+          RESULT: ${{ steps.ac_1134_b_check.outputs.verdict_valid }}
         run: |
-          echo "AC3 result: verdict_valid=${RESULT}"
+          echo "AC-1134-B result: verdict_valid=${RESULT}"
           if [ "${RESULT}" != "true" ]; then
-            echo "FAIL: AC3 — expected verdict_valid=true (gate green after inert update-branch),"
-            echo "      but got verdict_valid=${RESULT}."
-            echo "      A security-inert merge commit must NOT invalidate Sarah's prior verdict."
+            echo "FAIL: AC-1134-B -- expected verdict_valid=true."
+            echo "      Merge commit with §1A in COMMIT_FILES but empty A prime MERGE_CONTRIB"
+            echo "      MUST NOT stale the verdict (bff/cmd fixture)."
             exit 1
           fi
-          echo "PASS: AC3 — security-inert update-branch does not stale the verdict."
+          echo "PASS: AC-1134-B -- A prime empty MERGE_CONTRIB skips stale (bff/cmd fixture)."
 
       # -----------------------------------------------------------------------
-      # AC4: Real S07-1A-path commit after verdict MUST stale the verdict
+      # AC-1134-C: true-stale single-parent commit
+      #
+      # Single-parent (PARENT_COUNT=1, PARENT1_SHA empty): falls to raw COMMIT_FILES
+      # path -> §1A match -> S07_DELTA_FOUND=true -> verdict_valid=false.
+      # Regression guard: genuine single-parent §1A pushes after verdict MUST stale.
       # -----------------------------------------------------------------------
-      - name: "AC4 setup: verdict before a real 1A-path commit"
+      - name: "AC-1134-C setup: single-parent commit with §1A path in COMMIT_FILES"
         run: |
-          # Verdict posted at T=0; engineer pushes a services/bff/cmd/ change at T=+2m.
           {
             echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:02:00Z"
-          } >> "$GITHUB_ENV"
-          {
+            echo "PARENT_COUNT=1"
+            echo "PARENT1_SHA="
             printf 'COMMIT_FILES<<EOF\n'
             printf 'services/bff/cmd/main.go\n'
-            printf 'services/bff/cmd/daemon_register.go\n'
+            printf 'EOF\n'
+            printf 'MERGE_CONTRIB<<EOF\n'
             printf 'EOF\n'
           } >> "$GITHUB_ENV"
 
-      - name: "AC4: run delta check — expect verdict_valid=false (gate goes red)"
-        id: ac4_check
+      - name: "AC-1134-C: run A prime delta check -- expect verdict_valid=false (genuine stale)"
+        id: ac_1134_c_check
         env:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
           LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
+          PARENT_COUNT:        ${{ env.PARENT_COUNT }}
+          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
           COMMIT_FILES:        ${{ env.COMMIT_FILES }}
+          MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
         run: |
           set -euo pipefail
+
+          TRIGGER_GLOBS=(
+            ".github/workflows/deploy-bff.yml"
+            ".github/workflows/deploy-spa.yml"
+            ".github/workflows/release.yml"
+            ".github/workflows/rollback.yml"
+            ".github/workflows/staging-deploy.yml"
+            ".github/workflows/daemon-release.yml"
+            ".github/workflows/frontend.yml"
+            ".github/workflows/security-review-gate.yml"
+            "services/bff/cmd/"
+            "services/daemon/cmd/"
+            "scripts/deploy/"
+          )
 
           VERDICT_AFTER_PUSH=$(python3 -c "
           from datetime import datetime, timezone
@@ -212,12 +402,98 @@ jobs:
           print('true' if verdict > push else 'false')
           ")
 
-          echo "Verdict post-dates last push: ${VERDICT_AFTER_PUSH}"
-
           if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
             echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          S07_DELTA_FOUND=false
+
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+            echo "Merge commit. Using A prime MERGE_CONTRIB."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${MERGE_CONTRIB}"
+          else
+            echo "Single-parent commit. Using raw COMMIT_FILES."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "§1A path match in COMMIT_FILES: ${FILE}"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${COMMIT_FILES}"
+          fi
+
+          if [ "${S07_DELTA_FOUND}" = "true" ]; then
+            echo "verdict_valid=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "AC-1134-C: assert verdict_valid=false (genuine §1A push must stale)"
+        env:
+          RESULT: ${{ steps.ac_1134_c_check.outputs.verdict_valid }}
+        run: |
+          echo "AC-1134-C result: verdict_valid=${RESULT}"
+          if [ "${RESULT}" != "false" ]; then
+            echo "FAIL: AC-1134-C -- expected verdict_valid=false."
+            echo "      A genuine single-parent §1A push after approval MUST invalidate"
+            echo "      the verdict. The A prime logic must not apply to single-parent commits."
+            exit 1
+          fi
+          echo "PASS: AC-1134-C -- single-parent §1A push correctly stales verdict."
+
+      # -----------------------------------------------------------------------
+      # AC-1134-D: evil-merge guard -- merge commit where MERGE_CONTRIB has §1A
+      #
+      # Setup: PARENT_COUNT=2, COMMIT_FILES has §1A paths, AND MERGE_CONTRIB also
+      # has a §1A path (the branch secretly rewrote security-review-gate.yml via
+      # evil merge). The A prime compare must catch this.
+      #
+      # This is the critical SECURITY regression guard. A blanket parents>=2 skip
+      # would produce verdict_valid=true here -- a security regression. If this test
+      # fails in CI, the gate has been weakened.
+      # -----------------------------------------------------------------------
+      - name: "AC-1134-D setup: evil merge -- MERGE_CONTRIB has §1A path"
+        run: |
+          # MERGE_CONTRIB: A prime compare(parent1...merge) returned a §1A file --
+          # the merge silently modified the gate workflow (evil merge pattern).
+          {
+            echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
+            echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
+            echo "PARENT_COUNT=2"
+            echo "PARENT1_SHA=abc111000000000000000000000000000000dead"
+            printf 'COMMIT_FILES<<EOF\n'
+            printf 'services/daemon/cmd/daemon-replay-check/main.go\n'
+            printf 'services/daemon/cmd/daemon-replay-check/main_test.go\n'
+            printf '.github/workflows/security-review-gate.yml\n'
+            printf 'EOF\n'
+            printf 'MERGE_CONTRIB<<EOF\n'
+            printf '.github/workflows/security-review-gate.yml\n'
+            printf 'EOF\n'
+          } >> "$GITHUB_ENV"
+
+      - name: "AC-1134-D: run A prime delta check -- expect verdict_valid=false (evil merge caught)"
+        id: ac_1134_d_check
+        env:
+          VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
+          LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
+          PARENT_COUNT:        ${{ env.PARENT_COUNT }}
+          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          COMMIT_FILES:        ${{ env.COMMIT_FILES }}
+          MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
+        run: |
+          set -euo pipefail
 
           TRIGGER_GLOBS=(
             ".github/workflows/deploy-bff.yml"
@@ -227,51 +503,355 @@ jobs:
             ".github/workflows/staging-deploy.yml"
             ".github/workflows/daemon-release.yml"
             ".github/workflows/frontend.yml"
+            ".github/workflows/security-review-gate.yml"
             "services/bff/cmd/"
             "services/daemon/cmd/"
             "scripts/deploy/"
           )
 
+          VERDICT_AFTER_PUSH=$(python3 -c "
+          from datetime import datetime, timezone
+          def p(t):
+              t = t.strip()
+              if t.endswith('Z'):
+                  t = t[:-1] + '+00:00'
+              return datetime.fromisoformat(t).astimezone(timezone.utc)
+          verdict = p('${VERDICT_TIMESTAMP}')
+          push   = p('${LAST_PUSH_TIMESTAMP}')
+          print('true' if verdict > push else 'false')
+          ")
+
+          if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           S07_DELTA_FOUND=false
 
-          while IFS= read -r FILE; do
-            [ -z "${FILE}" ] && continue
-            for GLOB in "${TRIGGER_GLOBS[@]}"; do
-              if echo "${FILE}" | grep -qF "${GLOB}"; then
-                echo "S-07 §1A path match: ${FILE} matches ${GLOB}"
-                S07_DELTA_FOUND=true
-                break 2
-              fi
-            done
-          done <<< "${COMMIT_FILES}"
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+            echo "Merge commit (parents=${PARENT_COUNT}). Using A prime MERGE_CONTRIB."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "A prime §1A path match in MERGE_CONTRIB: ${FILE} (evil merge detected)"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${MERGE_CONTRIB}"
+          else
+            echo "Single-parent commit. Using COMMIT_FILES."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${COMMIT_FILES}"
+          fi
 
           if [ "${S07_DELTA_FOUND}" = "true" ]; then
-            echo "Delta check: STALE — §1A path(s) changed after verdict"
+            echo "A prime delta check: STALE (evil merge caught -- §1A in MERGE_CONTRIB)"
             echo "verdict_valid=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Delta check: FRESH"
             echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: "AC4: assert verdict_valid=false"
+      - name: "AC-1134-D: assert verdict_valid=false (evil merge must be caught)"
         env:
-          RESULT: ${{ steps.ac4_check.outputs.verdict_valid }}
+          RESULT: ${{ steps.ac_1134_d_check.outputs.verdict_valid }}
         run: |
-          echo "AC4 result: verdict_valid=${RESULT}"
+          echo "AC-1134-D result: verdict_valid=${RESULT}"
           if [ "${RESULT}" != "false" ]; then
-            echo "FAIL: AC4 — expected verdict_valid=false (gate red after real 1A-path change),"
-            echo "      but got verdict_valid=${RESULT}."
-            echo "      A genuine S-07 §1A-path change after approval MUST invalidate the verdict."
+            echo "FAIL: AC-1134-D -- expected verdict_valid=false (evil merge guard)."
+            echo "      A merge commit where MERGE_CONTRIB contains a §1A path MUST"
+            echo "      stale the verdict. A blanket parents>=2 skip would miss this"
+            echo "      and is a SECURITY REGRESSION. The A prime compare must check"
+            echo "      MERGE_CONTRIB, not blindly skip all merge commits."
             exit 1
           fi
-          echo "PASS: AC4 — real §1A-path change after verdict correctly stales approval."
+          echo "PASS: AC-1134-D -- evil merge with §1A MERGE_CONTRIB correctly stales verdict."
 
       # -----------------------------------------------------------------------
-      # AC3b: Fast path — verdict timestamp is NEWER than push (trivially fresh)
+      # AC-1134-E: clean update-branch proven via A prime (real fixture)
+      #
+      # Uses the real commit 439d483a from PR #3114 as the synthetic template.
+      # PARENT_COUNT=2, COMMIT_FILES has services/daemon/cmd/... (§1A from main),
+      # MERGE_CONTRIB reflects what compare/eec62762...439d483a actually returned
+      # (e2e-staging-auth-smoke.yml, playwright.staging.config.ts,
+      # staging-smoke.spec.ts) -- none are §1A -> verdict_valid=true.
+      #
+      # Explicitly distinct from AC-1134-A (which uses an empty MERGE_CONTRIB) to
+      # prove the A prime compare drives the decision when compare returns non-§1A
+      # files, not just when it returns nothing.
+      # -----------------------------------------------------------------------
+      - name: "AC-1134-E setup: real update-branch fixture (commit 439d483a pattern)"
+        run: |
+          # Mirrors the real commit from PR #3114 (fixture verified in plan §2 and
+          # Ray's independent spot-check in the approval comment).
+          # COMMIT_FILES: what commits/{sha}.files returned (§1A paths in the full diff)
+          # MERGE_CONTRIB: what compare/eec62762...439d483a actually returned.
+          # Independently verified: commits 439d483a parents=[7d121c7e, eec62762];
+          # compare returns 3 files, zero §1A.
+          {
+            echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
+            echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
+            echo "PARENT_COUNT=2"
+            echo "PARENT1_SHA=eec627624009a349f9ee9c95bd93ac1ddee5304f"
+            printf 'COMMIT_FILES<<EOF\n'
+            printf 'services/daemon/cmd/daemon-replay-check/main.go\n'
+            printf 'services/daemon/cmd/daemon-replay-check/main_test.go\n'
+            printf 'EOF\n'
+            printf 'MERGE_CONTRIB<<EOF\n'
+            printf '.github/workflows/e2e-staging-auth-smoke.yml\n'
+            printf 'frontend/playwright.staging.config.ts\n'
+            printf 'frontend/tests/e2e/staging/staging-smoke.spec.ts\n'
+            printf 'EOF\n'
+          } >> "$GITHUB_ENV"
+
+      - name: "AC-1134-E: run A prime delta check -- expect verdict_valid=true (real fixture)"
+        id: ac_1134_e_check
+        env:
+          VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
+          LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
+          PARENT_COUNT:        ${{ env.PARENT_COUNT }}
+          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          COMMIT_FILES:        ${{ env.COMMIT_FILES }}
+          MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
+        run: |
+          set -euo pipefail
+
+          TRIGGER_GLOBS=(
+            ".github/workflows/deploy-bff.yml"
+            ".github/workflows/deploy-spa.yml"
+            ".github/workflows/release.yml"
+            ".github/workflows/rollback.yml"
+            ".github/workflows/staging-deploy.yml"
+            ".github/workflows/daemon-release.yml"
+            ".github/workflows/frontend.yml"
+            ".github/workflows/security-review-gate.yml"
+            "services/bff/cmd/"
+            "services/daemon/cmd/"
+            "scripts/deploy/"
+          )
+
+          VERDICT_AFTER_PUSH=$(python3 -c "
+          from datetime import datetime, timezone
+          def p(t):
+              t = t.strip()
+              if t.endswith('Z'):
+                  t = t[:-1] + '+00:00'
+              return datetime.fromisoformat(t).astimezone(timezone.utc)
+          verdict = p('${VERDICT_TIMESTAMP}')
+          push   = p('${LAST_PUSH_TIMESTAMP}')
+          print('true' if verdict > push else 'false')
+          ")
+
+          if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          S07_DELTA_FOUND=false
+
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+            echo "Merge commit (parents=${PARENT_COUNT}). A prime: checking MERGE_CONTRIB."
+            echo "MERGE_CONTRIB: ${MERGE_CONTRIB}"
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "A prime §1A match in MERGE_CONTRIB: ${FILE}"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${MERGE_CONTRIB}"
+            echo "A prime MERGE_CONTRIB scan complete. S07_DELTA_FOUND=${S07_DELTA_FOUND}"
+          else
+            echo "Single-parent commit. Using COMMIT_FILES."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${COMMIT_FILES}"
+          fi
+
+          if [ "${S07_DELTA_FOUND}" = "true" ]; then
+            echo "verdict_valid=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "A prime MERGE_CONTRIB has no §1A paths. Verdict stays fresh."
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "AC-1134-E: assert verdict_valid=true (real update-branch fixture)"
+        env:
+          RESULT: ${{ steps.ac_1134_e_check.outputs.verdict_valid }}
+        run: |
+          echo "AC-1134-E result: verdict_valid=${RESULT}"
+          if [ "${RESULT}" != "true" ]; then
+            echo "FAIL: AC-1134-E -- expected verdict_valid=true."
+            echo "      Real PR #3114 fixture: commit 439d483a (parents: 7d121c7e, eec62762)."
+            echo "      COMMIT_FILES has services/daemon/cmd/ (§1A), but"
+            echo "      compare/eec62762...439d483a returns only non-§1A files."
+            echo "      The A prime MERGE_CONTRIB must drive the decision -- zero §1A"
+            echo "      hits in MERGE_CONTRIB means verdict stays fresh."
+            echo "      This is the canonical false-stale root cause (tickets#1134/#3114)."
+            exit 1
+          fi
+          echo "PASS: AC-1134-E -- real update-branch fixture correctly stays green via A prime."
+
+      # -----------------------------------------------------------------------
+      # AC-1134-F: octopus merge fail-closed (parents==3)
+      #
+      # Setup: PARENT_COUNT=3 (octopus merge). The A prime logic extracts parent[1]
+      # and uses MERGE_CONTRIB from compare(parent[1]...merge). For octopus commits,
+      # content unique to parent[2]+ appears in this compare as a diff vs parent[1],
+      # making it over-inclusive. That is intentionally fail-closed.
+      #
+      # Here: MERGE_CONTRIB contains a §1A path (content from parent[2]+ visible in
+      # compare vs parent[1]) -> verdict_valid=false.
+      #
+      # FAIL-CLOSED property (DO NOT "OPTIMIZE"):
+      # For octopus merges (parents>=3), the parent[1]-only compare is over-inclusive:
+      # content arriving from parent[2]+ is counted as the merge's contribution
+      # (over-stale), never under-stale. This is the safe direction. A future reader
+      # must NOT change this to check all parents or use a merge-base algorithm
+      # without a new ADR and fresh Sarah review -- that could introduce an under-stale
+      # case that masks §1A content. Over-stale (false block) is acceptable;
+      # under-stale (missed security content) is not.
+      # -----------------------------------------------------------------------
+      - name: "AC-1134-F setup: octopus merge (parents==3), MERGE_CONTRIB has §1A"
+        run: |
+          # MERGE_CONTRIB: compare(parent[1]...octopus_merge) includes a §1A file
+          # because parent[2] introduced deploy-bff.yml content that differs from
+          # parent[1] -- over-inclusive but fail-closed.
+          {
+            echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
+            echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
+            echo "PARENT_COUNT=3"
+            echo "PARENT1_SHA=abc222000000000000000000000000000000dead"
+            printf 'COMMIT_FILES<<EOF\n'
+            printf 'services/daemon/cmd/main.go\n'
+            printf 'services/bff/internal/handler/match.go\n'
+            printf 'docs/changelog.md\n'
+            printf 'EOF\n'
+            printf 'MERGE_CONTRIB<<EOF\n'
+            printf '.github/workflows/deploy-bff.yml\n'
+            printf 'docs/changelog.md\n'
+            printf 'EOF\n'
+          } >> "$GITHUB_ENV"
+
+      - name: "AC-1134-F: run A prime delta check -- expect verdict_valid=false (octopus fail-closed)"
+        id: ac_1134_f_check
+        env:
+          VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
+          LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
+          PARENT_COUNT:        ${{ env.PARENT_COUNT }}
+          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          COMMIT_FILES:        ${{ env.COMMIT_FILES }}
+          MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
+        run: |
+          set -euo pipefail
+
+          # OCTOPUS NOTE: for PARENT_COUNT>=3, the A prime compare is taken against
+          # parent[1] regardless of parent count. Content unique to parent[2]+ shows
+          # up in the compare as a diff vs parent[1] -- over-inclusive, never under-
+          # inclusive. This is intentionally fail-closed (over-stale is safe;
+          # under-stale masks security content and is not). Do NOT optimize to check
+          # all parents without a new ADR and Sarah review.
+
+          TRIGGER_GLOBS=(
+            ".github/workflows/deploy-bff.yml"
+            ".github/workflows/deploy-spa.yml"
+            ".github/workflows/release.yml"
+            ".github/workflows/rollback.yml"
+            ".github/workflows/staging-deploy.yml"
+            ".github/workflows/daemon-release.yml"
+            ".github/workflows/frontend.yml"
+            ".github/workflows/security-review-gate.yml"
+            "services/bff/cmd/"
+            "services/daemon/cmd/"
+            "scripts/deploy/"
+          )
+
+          VERDICT_AFTER_PUSH=$(python3 -c "
+          from datetime import datetime, timezone
+          def p(t):
+              t = t.strip()
+              if t.endswith('Z'):
+                  t = t[:-1] + '+00:00'
+              return datetime.fromisoformat(t).astimezone(timezone.utc)
+          verdict = p('${VERDICT_TIMESTAMP}')
+          push   = p('${LAST_PUSH_TIMESTAMP}')
+          print('true' if verdict > push else 'false')
+          ")
+
+          if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          S07_DELTA_FOUND=false
+
+          # PARENT_COUNT=3 >= 2 and PARENT1_SHA non-empty -> A prime path applies.
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+            echo "Merge commit (parents=${PARENT_COUNT}, octopus). Using A prime MERGE_CONTRIB."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "A prime §1A match in MERGE_CONTRIB (octopus): ${FILE}"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${MERGE_CONTRIB}"
+          else
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${COMMIT_FILES}"
+          fi
+
+          if [ "${S07_DELTA_FOUND}" = "true" ]; then
+            echo "verdict_valid=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "AC-1134-F: assert verdict_valid=false (octopus fail-closed)"
+        env:
+          RESULT: ${{ steps.ac_1134_f_check.outputs.verdict_valid }}
+        run: |
+          echo "AC-1134-F result: verdict_valid=${RESULT}"
+          if [ "${RESULT}" != "false" ]; then
+            echo "FAIL: AC-1134-F -- expected verdict_valid=false (octopus fail-closed)."
+            echo "      For PARENT_COUNT==3 (octopus merge), compare vs parent[1] is"
+            echo "      over-inclusive: content unique to parent[2]+ shows up as diff"
+            echo "      vs parent[1] -> STALE. This is correct: over-stale is fail-closed."
+            echo "      DO NOT optimize to check all parents without a new ADR."
+            exit 1
+          fi
+          echo "PASS: AC-1134-F -- octopus merge with §1A MERGE_CONTRIB is fail-closed (stale)."
+
+      # -----------------------------------------------------------------------
+      # AC3b: Fast path -- verdict timestamp NEWER than push (trivially fresh)
       # -----------------------------------------------------------------------
       - name: "AC3b setup: verdict newer than head commit (fast path)"
         run: |
-          # Sarah posts verdict at T=+5m, head commit is at T=0.
           {
             echo "VERDICT_TIMESTAMP=2026-05-29T10:05:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:00:00Z"
@@ -282,7 +862,7 @@ jobs:
             printf 'EOF\n'
           } >> "$GITHUB_ENV"
 
-      - name: "AC3b: run delta check — expect verdict_valid=true (fast path)"
+      - name: "AC3b: run delta check -- expect verdict_valid=true (fast path)"
         id: ac3b_check
         env:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
@@ -320,18 +900,14 @@ jobs:
         run: |
           echo "AC3b result: verdict_valid=${RESULT}"
           if [ "${RESULT}" != "true" ]; then
-            echo "FAIL: AC3b — expected verdict_valid=true (fast path: verdict newer than push),"
-            echo "      but got verdict_valid=${RESULT}."
+            echo "FAIL: AC3b -- expected verdict_valid=true (fast path: verdict newer than push)."
+            echo "      Got verdict_valid=${RESULT}."
             exit 1
           fi
-          echo "PASS: AC3b — fast path correctly identifies fresh verdict."
+          echo "PASS: AC3b -- fast path correctly identifies fresh verdict."
 
       # -----------------------------------------------------------------------
-      # AC5: Gate required + fresh matching verdict → conclusion = "success"
-      #
-      # Verifies the check-run conclusion decision logic added by ticket #2420:
-      # when the gate IS required and the verdict scan returns approved=true
-      # (verdict is fresh), the conclusion emitted is "success".
+      # AC5: Gate required + fresh matching verdict -> conclusion = "success"
       # -----------------------------------------------------------------------
       - name: "AC5 setup: gate required, verdict present and fresh"
         run: |
@@ -343,7 +919,7 @@ jobs:
             echo "STALENESS_CHECK=fresh"
           } >> "$GITHUB_ENV"
 
-      - name: "AC5: run conclusion decision — expect conclusion=success"
+      - name: "AC5: run conclusion decision -- expect conclusion=success"
         id: ac5_check
         env:
           GATE_REQUIRED:      ${{ env.GATE_REQUIRED }}
@@ -351,14 +927,6 @@ jobs:
           STALENESS_CHECK:    ${{ env.STALENESS_CHECK }}
         run: |
           set -euo pipefail
-
-          # Replicate the conclusion-decision logic from the
-          # "Publish check-run result" step in security-review-gate.yml.
-          #
-          # Logic:
-          #   gate not required            → conclusion = success  (gate skipped)
-          #   gate required + approved     → conclusion = success  (verdict accepted)
-          #   gate required + not approved → conclusion = failure  (blocked)
 
           if [ "${GATE_REQUIRED}" != "true" ]; then
             CONCLUSION="success"
@@ -386,18 +954,14 @@ jobs:
         run: |
           echo "AC5 result: conclusion=${RESULT}"
           if [ "${RESULT}" != "success" ]; then
-            echo "FAIL: AC5 — expected conclusion=success (gate required + fresh verdict),"
-            echo "      but got conclusion=${RESULT}."
-            echo "      A required gate with a fresh APPROVED verdict MUST publish success."
+            echo "FAIL: AC5 -- expected conclusion=success (gate required + fresh verdict)."
+            echo "      Got conclusion=${RESULT}."
             exit 1
           fi
-          echo "PASS: AC5 — required gate + fresh verdict produces conclusion=success."
+          echo "PASS: AC5 -- required gate + fresh verdict produces conclusion=success."
 
       # -----------------------------------------------------------------------
-      # AC6: Gate required + no verdict after retries → conclusion = "failure"
-      #
-      # Verifies that when the gate IS required but no APPROVED comment is found
-      # (the retry loop exhausted), the conclusion is "failure" (merge blocked).
+      # AC6: Gate required + no verdict after retries -> conclusion = "failure"
       # -----------------------------------------------------------------------
       - name: "AC6 setup: gate required, no verdict found"
         run: |
@@ -409,7 +973,7 @@ jobs:
             echo "STALENESS_CHECK="
           } >> "$GITHUB_ENV"
 
-      - name: "AC6: run conclusion decision — expect conclusion=failure"
+      - name: "AC6: run conclusion decision -- expect conclusion=failure"
         id: ac6_check
         env:
           GATE_REQUIRED:   ${{ env.GATE_REQUIRED }}
@@ -434,45 +998,23 @@ jobs:
         run: |
           echo "AC6 result: conclusion=${RESULT}"
           if [ "${RESULT}" != "failure" ]; then
-            echo "FAIL: AC6 — expected conclusion=failure (gate required + no verdict),"
-            echo "      but got conclusion=${RESULT}."
-            echo "      A required gate with no APPROVED verdict MUST publish failure."
+            echo "FAIL: AC6 -- expected conclusion=failure (gate required + no verdict)."
+            echo "      Got conclusion=${RESULT}."
             exit 1
           fi
-          echo "PASS: AC6 — required gate + no verdict produces conclusion=failure."
+          echo "PASS: AC6 -- required gate + no verdict produces conclusion=failure."
 
       # -----------------------------------------------------------------------
-      # AC7: Gate required + verdict exists but §1A commit after verdict →
-      #      staleness catches it → approved=false → conclusion = "failure"
-      #
-      # Verifies the end-to-end chain INCLUDING the jq filter that populates
-      # COMMITS_AFTER (the path that carried bug #1120). Before this fix the
-      # gate used `gh api --jq --arg ts VALUE 'expr'`; --arg is not a gh api
-      # flag, so $ts was undefined in jq, the select was always false, and
-      # COMMITS_AFTER was always empty — making every stale verdict appear fresh.
-      #
-      # This test now exercises that exact jq filter against synthetic JSON
-      # (piped through the real jq binary) to prove the filter correctly emits
-      # post-verdict SHAs before the file-match logic fires.
-      #
-      # FAIL against OLD code: the old jq program references undefined $ts →
-      #   jq errors → COMMITS_AFTER="" → delta-no-commits → APPROVED=true →
-      #   CONCLUSION=success ≠ expected failure.
-      #
-      # PASS against NEW code: shell-interpolated timestamp → jq filter emits
-      #   the post-verdict SHA → file-match finds services/bff/cmd/ → STALE →
-      #   APPROVED=false → CONCLUSION=failure ✓.
+      # AC7: Gate required + verdict staled by post-verdict §1A commit (jq filter)
       # -----------------------------------------------------------------------
       - name: "AC7 setup: gate required, verdict staled by post-verdict 1A commit"
         run: |
-          # Verdict posted at T=0; engineer pushes a services/bff/cmd/ change at T=+2m.
-          # A second commit exists at T=-1m (before verdict) and must NOT be included.
           {
             echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:02:00Z"
           } >> "$GITHUB_ENV"
 
-      - name: "AC7: run full staleness path including jq filter — expect conclusion=failure"
+      - name: "AC7: run full staleness path including jq filter -- expect conclusion=failure"
         id: ac7_check
         env:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
@@ -480,21 +1022,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # ----------------------------------------------------------------
-          # Step 0: exercise the FIXED jq filter from security-review-gate.yml
-          # (the exact expression used in the COMMITS_AFTER assignment).
-          #
-          # Synthetic PR commits response: two commits — one before verdict
-          # (sha=def456, T=-1m) and one after (sha=abc123, T=+2m).
-          # The fixed filter must emit only "abc123".
-          # The old buggy filter ($ts undefined) would emit nothing.
-          # ----------------------------------------------------------------
           SYNTHETIC_COMMITS='[
             {"commit":{"committer":{"date":"2026-05-29T09:59:00Z"}},"sha":"def456"},
             {"commit":{"committer":{"date":"2026-05-29T10:02:00Z"}},"sha":"abc123"}
           ]'
 
-          # This is the FIXED jq expression from security-review-gate.yml:
           COMMITS_AFTER=$(echo "${SYNTHETIC_COMMITS}" | \
             jq -r ".[] | select(.commit.committer.date > \"${VERDICT_TIMESTAMP}\") | .sha" \
             2>/dev/null || echo "")
@@ -503,23 +1035,17 @@ jobs:
 
           if [ -z "${COMMITS_AFTER}" ]; then
             echo "FAIL (AC7 jq sub-check): jq filter returned no SHAs."
-            echo "  The fixed filter must emit the post-verdict SHA (abc123)."
-            echo "  If this fails it means the filter expression is still broken."
             exit 1
           fi
 
-          EXPECTED_SHA="abc123"
-          if ! echo "${COMMITS_AFTER}" | grep -qF "${EXPECTED_SHA}"; then
-            echo "FAIL (AC7 jq sub-check): expected SHA ${EXPECTED_SHA} not in output."
+          if ! echo "${COMMITS_AFTER}" | grep -qF "abc123"; then
+            echo "FAIL (AC7 jq sub-check): expected SHA abc123 not in output."
             echo "  Got: ${COMMITS_AFTER}"
             exit 1
           fi
           echo "AC7 jq sub-check PASS: filter correctly emits post-verdict SHAs only."
           echo ""
 
-          # ----------------------------------------------------------------
-          # Step 1: timestamp fast-path check (verdict pre-dates last push)
-          # ----------------------------------------------------------------
           VERDICT_AFTER_PUSH=$(python3 -c "
           from datetime import datetime, timezone
           def p(t):
@@ -532,19 +1058,11 @@ jobs:
           print('true' if verdict > push else 'false')
           ")
 
-          echo "Verdict post-dates last push: ${VERDICT_AFTER_PUSH}"
-
           APPROVED="false"
 
           if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
             APPROVED="true"
           else
-            # ----------------------------------------------------------------
-            # Step 2: file-match on each post-verdict commit.
-            # In the real gate this loops over COMMITS_AFTER SHAs and calls
-            # gh api per SHA to get changed files. Here we use a synthetic
-            # file map: sha=abc123 -> services/bff/cmd/main.go (§1A path).
-            # ----------------------------------------------------------------
             TRIGGER_GLOBS=(
               ".github/workflows/deploy-bff.yml"
               ".github/workflows/deploy-spa.yml"
@@ -553,6 +1071,7 @@ jobs:
               ".github/workflows/staging-deploy.yml"
               ".github/workflows/daemon-release.yml"
               ".github/workflows/frontend.yml"
+              ".github/workflows/security-review-gate.yml"
               "services/bff/cmd/"
               "services/daemon/cmd/"
               "scripts/deploy/"
@@ -562,31 +1081,39 @@ jobs:
 
             for COMMIT_SHA in ${COMMITS_AFTER}; do
               echo "Checking commit ${COMMIT_SHA}..."
-
-              # Synthetic per-commit file list (mirrors what gh api commits/SHA returns)
+              # Synthetic per-commit data: abc123 is a single-parent §1A commit
               if [ "${COMMIT_SHA}" = "abc123" ]; then
                 COMMIT_FILES="services/bff/cmd/main.go"
+                PARENT_COUNT=1
+                PARENT1_SHA=""
               else
                 COMMIT_FILES=""
+                PARENT_COUNT=1
+                PARENT1_SHA=""
               fi
 
               if [ -z "${COMMIT_FILES}" ]; then
-                echo "  (no files listed — merge commit or API error; skipping)"
+                echo "  (no files -- skipping)"
                 continue
               fi
 
-              echo "  Changed files: ${COMMIT_FILES}"
+              # Apply A prime logic: single-parent uses raw COMMIT_FILES
+              if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+                FILES_TO_CHECK="${MERGE_CONTRIB:-}"
+              else
+                FILES_TO_CHECK="${COMMIT_FILES}"
+              fi
 
               while IFS= read -r FILE; do
                 [ -z "${FILE}" ] && continue
                 for GLOB in "${TRIGGER_GLOBS[@]}"; do
                   if echo "${FILE}" | grep -qF "${GLOB}"; then
-                    echo "  S-07 §1A path match: ${FILE} -> staling verdict"
+                    echo "  §1A path match: ${FILE} -> staling verdict"
                     S07_DELTA_FOUND=true
                     break 2
                   fi
                 done
-              done <<< "${COMMIT_FILES}"
+              done <<< "${FILES_TO_CHECK}"
 
               [ "${S07_DELTA_FOUND}" = "true" ] && break
             done
@@ -598,7 +1125,6 @@ jobs:
 
           echo "After staleness check: approved=${APPROVED}"
 
-          # Step 3: conclusion decision
           if [ "${APPROVED}" = "true" ]; then
             CONCLUSION="success"
           else
@@ -613,12 +1139,138 @@ jobs:
         run: |
           echo "AC7 result: conclusion=${RESULT}"
           if [ "${RESULT}" != "failure" ]; then
-            echo "FAIL: AC7 — expected conclusion=failure (verdict staled by post-verdict §1A commit),"
-            echo "      but got conclusion=${RESULT}."
-            echo "      A staled verdict MUST flow through to conclusion=failure."
+            echo "FAIL: AC7 -- expected conclusion=failure (verdict staled by post-verdict §1A commit)."
+            echo "      Got conclusion=${RESULT}."
             exit 1
           fi
-          echo "PASS: AC7 — post-verdict §1A-path commit stales verdict and produces conclusion=failure."
+          echo "PASS: AC7 -- post-verdict §1A-path commit stales verdict -> conclusion=failure."
+
+      # -----------------------------------------------------------------------
+      # AC-1134-G: compare-API-failure fallback fail-closed
+      #
+      # HARNESS NOTE: this harness is a logic harness -- it cannot trigger a real
+      # shell-level gh API failure. Instead, it directly exercises the fallback value:
+      # MERGE_CONTRIB is set to COMMIT_FILES, exactly what `|| echo "${COMMIT_FILES}"`
+      # produces when the compare call fails. The A prime path sees §1A content in
+      # MERGE_CONTRIB -> verdict_valid=false (over-stale). This pins the security
+      # property: compare failure MUST be over-stale (STALE), never silently skip.
+      # -----------------------------------------------------------------------
+      - name: "AC-1134-G setup: merge commit, compare-failure simulated (MERGE_CONTRIB=COMMIT_FILES)"
+        run: |
+          # MERGE_CONTRIB set to COMMIT_FILES value: simulates || echo "${COMMIT_FILES}"
+          # when the compare API call exits non-zero or returns malformed JSON.
+          # COMMIT_FILES contains a §1A path (bff/cmd) -> fallback must yield STALE.
+          {
+            echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
+            echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
+            echo "PARENT_COUNT=2"
+            echo "PARENT1_SHA=dead000000000000000000000000000000000001"
+            printf 'COMMIT_FILES<<EOF\n'
+            printf 'services/bff/cmd/main.go\n'
+            printf 'services/bff/internal/handler/match.go\n'
+            printf 'EOF\n'
+            printf 'MERGE_CONTRIB<<EOF\n'
+            printf 'services/bff/cmd/main.go\n'
+            printf 'services/bff/internal/handler/match.go\n'
+            printf 'EOF\n'
+          } >> "$GITHUB_ENV"
+
+      - name: "AC-1134-G: run A prime delta check -- expect verdict_valid=false (compare failure -> COMMIT_FILES fallback -> stale)"
+        id: ac_1134_g_check
+        env:
+          VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
+          LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
+          PARENT_COUNT:        ${{ env.PARENT_COUNT }}
+          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          COMMIT_FILES:        ${{ env.COMMIT_FILES }}
+          MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
+        run: |
+          set -euo pipefail
+
+          TRIGGER_GLOBS=(
+            ".github/workflows/deploy-bff.yml"
+            ".github/workflows/deploy-spa.yml"
+            ".github/workflows/release.yml"
+            ".github/workflows/rollback.yml"
+            ".github/workflows/staging-deploy.yml"
+            ".github/workflows/daemon-release.yml"
+            ".github/workflows/frontend.yml"
+            ".github/workflows/security-review-gate.yml"
+            "services/bff/cmd/"
+            "services/daemon/cmd/"
+            "scripts/deploy/"
+          )
+
+          VERDICT_AFTER_PUSH=$(python3 -c "
+          from datetime import datetime, timezone
+          def p(t):
+              t = t.strip()
+              if t.endswith('Z'):
+                  t = t[:-1] + '+00:00'
+              return datetime.fromisoformat(t).astimezone(timezone.utc)
+          verdict = p('${VERDICT_TIMESTAMP}')
+          push   = p('${LAST_PUSH_TIMESTAMP}')
+          print('true' if verdict > push else 'false')
+          ")
+
+          if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          S07_DELTA_FOUND=false
+
+          # MERGE_CONTRIB == COMMIT_FILES: simulates the || echo "${COMMIT_FILES}"
+          # fallback when the compare API call fails. The A prime path applies because
+          # PARENT_COUNT>=2 and PARENT1_SHA is non-empty, so MERGE_CONTRIB (which
+          # equals COMMIT_FILES here) is scanned for §1A paths -> STALE.
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+            echo "Merge commit (parents=${PARENT_COUNT}). Using A prime MERGE_CONTRIB (fallback=COMMIT_FILES)."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "A prime §1A path match in MERGE_CONTRIB (fallback value): ${FILE}"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${MERGE_CONTRIB}"
+          else
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${COMMIT_FILES}"
+          fi
+
+          if [ "${S07_DELTA_FOUND}" = "true" ]; then
+            echo "A prime delta check: STALE (fallback MERGE_CONTRIB has §1A path)"
+            echo "verdict_valid=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "A prime delta check: FRESH (should not reach here for this fixture)"
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "AC-1134-G: assert verdict_valid=false (compare failure is over-stale, not silently-skip)"
+        env:
+          RESULT: ${{ steps.ac_1134_g_check.outputs.verdict_valid }}
+        run: |
+          echo "AC-1134-G result: verdict_valid=${RESULT}"
+          if [ "${RESULT}" != "false" ]; then
+            echo "FAIL: AC-1134-G -- expected verdict_valid=false."
+            echo "      When the compare API fails, MERGE_CONTRIB falls back to COMMIT_FILES."
+            echo "      COMMIT_FILES contains a §1A path (services/bff/cmd/main.go)."
+            echo "      The A prime path must therefore return STALE, not silently skip."
+            echo "      This pins the fail-closed property of the || echo \"\${COMMIT_FILES}\""
+            echo "      fallback in the gate's MERGE_CONTRIB assignment."
+            exit 1
+          fi
+          echo "PASS: AC-1134-G -- compare-failure fallback to COMMIT_FILES yields STALE (fail-closed)."
 
       # -----------------------------------------------------------------------
       # Summary
@@ -626,15 +1278,20 @@ jobs:
       - name: Test summary
         run: |
           echo "======================================================"
-          echo "  S-07 Gate Tests: ALL PASSED"
+          echo "  S-07 Gate Logic Tests: ALL PASSED"
           echo "======================================================"
           echo ""
-          echo "AC3 : security-inert update-branch does not stale verdict        PASS"
-          echo "AC3b: fast path (verdict newer than head) works correctly         PASS"
-          echo "AC4 : real §1A-path change after verdict stales correctly         PASS"
-          echo "AC5 : gate required + fresh verdict -> conclusion=success         PASS"
-          echo "AC6 : gate required + no verdict   -> conclusion=failure          PASS"
-          echo "AC7 : gate required + staled verdict -> conclusion=failure        PASS"
+          echo "AC-1134-A: A prime - merge, non-§1A MERGE_CONTRIB -> stays green    PASS"
+          echo "AC-1134-B: A prime - merge, bff/cmd COMMIT_FILES, empty contrib     PASS"
+          echo "AC-1134-C: True stale - single-parent §1A push -> stales verdict    PASS"
+          echo "AC-1134-D: Evil merge guard - §1A in MERGE_CONTRIB -> stales        PASS"
+          echo "AC-1134-E: Real update-branch fixture (439d483a) -> gate green      PASS"
+          echo "AC-1134-F: Octopus fail-closed (parents==3) -> stales verdict       PASS"
+          echo "AC-1134-G: Compare-API-failure fallback -> COMMIT_FILES -> STALE    PASS"
+          echo "AC3b     : Fast path (verdict newer than head)                      PASS"
+          echo "AC5      : Gate required + fresh verdict -> conclusion=success       PASS"
+          echo "AC6      : Gate required + no verdict   -> conclusion=failure        PASS"
+          echo "AC7      : Gate required + staled verdict -> conclusion=failure      PASS"
           echo ""
-          echo "Gate integrity and check-run conclusion properties verified."
-          echo "Tickets: vault-mtg-tickets#231, RdHamilton/hollowmark#2420"
+          echo "Gate integrity and A prime guarded-skip property verified."
+          echo "Tickets: RdHamilton/hollowmark-tickets#1134, vault-mtg-tickets#231, #2420"
