@@ -6,7 +6,9 @@
 //
 //	go run ./cmd/analyze_dump <outdir> <outdir>/manifest.json
 //
-// H1 (region filter too strict): at least one region shows >= 500 entries at <= 3% fill.
+// The verdict is produced by running the dump through scanner.SelectCollection —
+// the EXACT selection logic production scanProcess uses (hollowmark-tickets#1285;
+// the previous canned-text verdict asserted mechanisms production didn't have).
 // H2 (Unity layout drift): no region shows any matches — inspect bytes around a known GRP ID.
 package main
 
@@ -55,6 +57,7 @@ func main() {
 	var totalEntries int
 	var bestRegion *manifestEntry
 	var bestEntries map[int]int
+	var scans []scanner.RegionScan
 
 	for i := range entries {
 		e := &entries[i]
@@ -92,6 +95,12 @@ func main() {
 			bestRegion = e
 			bestEntries = got
 		}
+
+		var addr uint64
+		if _, scanErr := fmt.Sscanf(e.AddrHex, "0x%x", &addr); scanErr != nil {
+			fmt.Fprintf(os.Stderr, "parse addr %q: %v\n", e.AddrHex, scanErr)
+		}
+		scans = append(scans, scanner.RegionScan{Addr: addr, Size: e.Size, Entries: got})
 	}
 
 	fmt.Printf("\nTotal entries across all regions: %d\n", totalEntries)
@@ -100,18 +109,23 @@ func main() {
 			bestRegion.AddrHex, bestRegion.RegionN, len(bestEntries))
 	}
 
-	// H1/H2 verdict
+	// Production-selection verdict: run the dump through the EXACT selector
+	// production scanProcess uses, so this tool reports what production would
+	// actually do — never an inferred mechanism.
 	fmt.Println()
-	if bestRegion != nil && len(bestEntries) >= 500 {
-		fmt.Println("VERDICT: H1 — region has >= 500 entries but was filtered out by minEntries/maxFillPct.")
-		fmt.Println("  -> Check actual fillPct above. Adjust minEntries or maxFillPct in mem_darwin.go.")
-	} else if totalEntries > 0 && (bestRegion == nil || len(bestEntries) < 500) {
-		fmt.Println("VERDICT: H1 (partial) — entries found but below minEntries=500 threshold.")
-		fmt.Printf("  -> Best region has %d entries. Lower minEntries or check maxFillPct cap.\n", len(bestEntries))
-	} else {
-		fmt.Println("VERDICT: H2 (likely) — no entries found in any region.")
-		fmt.Println("  -> Unity dictionary layout may have changed.")
-		fmt.Println("  -> Search a .bin for a known GRP ID in little-endian to inspect stride.")
-		fmt.Println("     Example: card 96804 = 0x17A64 -> bytes: 64 7A 01 00")
+	sel, err := scanner.SelectCollection(scans)
+	if err != nil {
+		fmt.Printf("VERDICT: production scan FAILS on this dump — %v\n", err)
+		if totalEntries == 0 {
+			fmt.Println("  -> H2 (likely): Unity dictionary layout may have changed.")
+			fmt.Println("  -> Search a .bin for a known GRP ID in little-endian to inspect stride.")
+			fmt.Println("     Example: card 96804 = 0x17A64 -> bytes: 64 7A 01 00")
+		}
+		return
 	}
+	fmt.Printf("VERDICT: production scan SUCCEEDS on this dump.\n")
+	fmt.Printf("  -> scanner.SelectCollection picks region 0x%x: %d entries (runner-up %d), sanity band [%d, %d] OK.\n",
+		sel.Addr, len(sel.Entries), sel.RunnerUpEntries, scanner.MinSaneCollection, scanner.MaxSaneCollection)
+	fmt.Println("  -> If users still see scan failures on this MTGA build, the defect is NOT region selection —")
+	fmt.Println("     check the installed helper binary version, socket path, and daemon-side logs.")
 }
