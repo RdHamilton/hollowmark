@@ -26,7 +26,7 @@ BEGIN
         );
         INSERT INTO collection_old (card_id, quantity, updated_at)
         SELECT card_id, quantity, updated_at FROM collection;
-        DROP TABLE collection;
+        DROP TABLE IF EXISTS collection CASCADE;
         ALTER TABLE collection_old RENAME TO collection;
     END IF;
 END
@@ -56,4 +56,8 @@ ALTER TABLE IF EXISTS matches DROP COLUMN IF EXISTS account_id;
 -- Drop accounts table
 DROP INDEX IF EXISTS idx_accounts_is_default;
 DROP INDEX IF EXISTS idx_accounts_default;
-DROP TABLE IF EXISTS accounts;
+-- CASCADE guards against incomplete later downs and dirty states. On a correct
+-- sequential down, dependents are already gone before this migration runs;
+-- CASCADE is a safety net for partial failures and future FK additions that
+-- lack a corresponding down update.
+DROP TABLE IF EXISTS accounts CASCADE;

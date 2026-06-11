@@ -6,5 +6,9 @@
 -- added citext columns exist before running this down migration in a production
 -- rollback scenario. In a round-trip / full-down context, all tables are gone
 -- at this point and the DROP EXTENSION is safe.
-DROP TABLE IF EXISTS waitlist_entries;
+-- CASCADE guards against incomplete later downs and dirty states. On a correct
+-- sequential down, dependents are already gone before this migration runs;
+-- CASCADE is a safety net for partial failures and future FK additions that
+-- lack a corresponding down update.
+DROP TABLE IF EXISTS waitlist_entries CASCADE;
 DROP EXTENSION IF EXISTS citext;

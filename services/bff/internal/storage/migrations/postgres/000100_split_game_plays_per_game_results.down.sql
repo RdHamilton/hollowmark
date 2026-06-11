@@ -41,4 +41,8 @@ CREATE INDEX IF NOT EXISTS idx_life_change_tracking_game_play
     ON life_change_tracking (game_play_id);
 
 -- Drop the new per-game table.
+-- CASCADE guards against incomplete later downs and dirty states. On a correct
+-- sequential down, dependents are already gone before this migration runs;
+-- CASCADE is a safety net for partial failures and future FK additions that
+-- lack a corresponding down update.
 DROP TABLE IF EXISTS match_game_results CASCADE;

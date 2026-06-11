@@ -10,8 +10,11 @@
 -- Rolling back the schema without rolling back the dependents will hard-break
 -- the BFF. See PR description "Rollback story" section.
 
-DROP TABLE IF EXISTS daemon_api_keys;
-
+-- CASCADE guards against incomplete later downs and dirty states. On a correct
+-- sequential down, dependents are already gone before this migration runs;
+-- CASCADE is a safety net for partial failures and future FK additions that
+-- lack a corresponding down update.
+DROP TABLE IF EXISTS daemon_api_keys CASCADE;
 CREATE TABLE IF NOT EXISTS daemon_api_keys (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id  TEXT        NOT NULL,
