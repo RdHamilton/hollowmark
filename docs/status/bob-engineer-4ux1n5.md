@@ -1,7 +1,7 @@
 # Bob — Task Status (engineer, 4ux1n5)
 **Updated**: 2026-06-10
 **Task**: #105 fix broken down-migrations + round-trip harness; #104 CASCADE audit
-**Status**: In Progress — PR #105 open (https://github.com/RdHamilton/hollowmark/pull/3135), working on #104
+**Status**: In Progress
 
 ## Progress
 - [ ] Read shared files + verdict comments
