@@ -64,19 +64,33 @@ type Status int
 
 const (
 	StatusStarting Status = iota
+	// StatusConnected is the healthy ingest state. The label renders as
+	// "● Tracking" (Prof UX sign-off, #1234) — the constant name is unchanged
+	// to avoid blast-radius across callers; only the visible label changed.
 	StatusConnected
 	StatusWaitingForArena
 	StatusError
 	StatusKeychainError
 	StatusSetupRequired
+	// StatusSyncIssues indicates Arena is detected but consecutive BFF ingest
+	// failures have reached dispatchDegradedThreshold. The ingest-health axis
+	// (Connected ↔ SyncIssues) is orthogonal to all other status values —
+	// this state is set only from SetSyncDegraded and only when the current
+	// status is StatusConnected. It never clobbers StatusError, StatusKeychainError,
+	// StatusSetupRequired, StatusStarting, or StatusWaitingForArena. (#1234)
+	StatusSyncIssues
 )
 
 func (s Status) label() string {
 	switch s {
 	case StatusConnected:
-		return "● Connected"
+		// Label changed to "Tracking" per Prof UX sign-off (#1234).
+		// The constant name stays StatusConnected to avoid caller blast-radius.
+		return "● Tracking"
 	case StatusWaitingForArena:
 		return "◌ Waiting for Arena..."
+	case StatusSyncIssues:
+		return "⚠ Sync issues — games may not be saving"
 	case StatusError:
 		return "✕ Error — check logs"
 	case StatusKeychainError:
@@ -99,8 +113,22 @@ type App struct {
 	openURL  func(string) error
 	onQuit   func()
 
-	// protected by single-goroutine access after setup()
-	status          Status
+	// statusMu guards status and syncDegraded. These fields are written from the
+	// dispatcher callback goroutine (SetSyncDegraded, called by recordBFFFailure /
+	// clearBFFFailureCounter) and read/written from the idle-loop goroutine
+	// (SetWaitingForArena) — a genuine cross-goroutine data race without the lock.
+	// SetStatus acquires statusMu; callers that already hold statusMu call
+	// setStatusLocked. (#1234 Ray amendment §5)
+	statusMu sync.Mutex
+	// status is the current tray status. Guard with statusMu.
+	status Status
+	// syncDegraded is true when the ingest-health axis is degraded
+	// (consecutiveBFFFailures >= dispatchDegradedThreshold). It is the
+	// persistent ingest-health state that SetWaitingForArena consults when
+	// restoring the tray after Arena re-opens, so the two axes never clobber
+	// each other. Guard with statusMu. (#1234)
+	syncDegraded bool
+	// lastSync and helperInstalled are single-goroutine (loop) only after setup().
 	lastSync        time.Time
 	helperInstalled bool
 
@@ -110,11 +138,15 @@ type App struct {
 	miUpdateAvailable *systray.MenuItem
 	miLastSync        *systray.MenuItem
 	miSyncNow         *systray.MenuItem
-	miGrantAccess     *systray.MenuItem
-	miTryAgain        *systray.MenuItem
-	miRetrySetup      *systray.MenuItem
-	miOpenApp         *systray.MenuItem
-	miQuit            *systray.MenuItem
+	// miSyncIssues is a disabled informational item shown below miStatus when
+	// the tray is in StatusSyncIssues. It displays the last-saved timestamp so
+	// the player can see how long events have been failing. (#1234)
+	miSyncIssues  *systray.MenuItem
+	miGrantAccess *systray.MenuItem
+	miTryAgain    *systray.MenuItem
+	miRetrySetup  *systray.MenuItem
+	miOpenApp     *systray.MenuItem
+	miQuit        *systray.MenuItem
 
 	// syncMu guards syncInFlight.
 	syncMu sync.Mutex
@@ -198,6 +230,13 @@ func (a *App) Quit() {
 
 // SetStatus updates the status label in the menu. Safe to call from any goroutine.
 func (a *App) SetStatus(s Status) {
+	a.statusMu.Lock()
+	a.setStatusLocked(s)
+	a.statusMu.Unlock()
+}
+
+// setStatusLocked applies a status update. Must be called with statusMu held.
+func (a *App) setStatusLocked(s Status) {
 	a.status = s
 	if a.miStatus != nil {
 		a.miStatus.SetTitle(s.label())
@@ -268,13 +307,59 @@ func (a *App) NotifyUpdateAvailable(version, _ string) {
 }
 
 // SetWaitingForArena switches the tray status to StatusWaitingForArena (waiting=true)
-// or StatusConnected (waiting=false). Called by the daemon idle loop when MTGA is not
-// installed and the daemon is polling for Player.log.
+// or restores the correct ingest-health state (waiting=false). When the ingest axis
+// is degraded (syncDegraded=true), restoring from WaitingForArena shows SyncIssues
+// rather than Connected, so the two axes never clobber each other. (#1234)
+// Safe to call from any goroutine.
 func (a *App) SetWaitingForArena(waiting bool) {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
 	if waiting {
-		a.SetStatus(StatusWaitingForArena)
+		a.setStatusLocked(StatusWaitingForArena)
+	} else if a.syncDegraded {
+		a.setStatusLocked(StatusSyncIssues)
 	} else {
-		a.SetStatus(StatusConnected)
+		a.setStatusLocked(StatusConnected)
+	}
+}
+
+// SetSyncDegraded updates the ingest-health axis of the tray (Connected ↔ SyncIssues).
+// When degraded=true and Arena is running (status == StatusConnected), transitions to
+// StatusSyncIssues and shows the miSyncIssues informational item. When degraded=false
+// and the tray is currently showing StatusSyncIssues, transitions back to StatusConnected.
+//
+// Orthogonality rule (Ray amendment §2, #1234): this method ONLY toggles
+// StatusConnected ↔ StatusSyncIssues. It never clobbers StatusError,
+// StatusKeychainError, StatusSetupRequired, StatusStarting, or StatusWaitingForArena.
+// When Arena is not running (status == StatusWaitingForArena), the syncDegraded field
+// is updated but the visible tray status is left unchanged; SetWaitingForArena(false)
+// will restore the correct health state when Arena re-opens.
+//
+// Safe to call from any goroutine.
+func (a *App) SetSyncDegraded(degraded bool) {
+	a.statusMu.Lock()
+	a.syncDegraded = degraded
+	currentStatus := a.status
+	a.statusMu.Unlock()
+
+	switch {
+	case degraded && currentStatus == StatusConnected:
+		a.statusMu.Lock()
+		a.setStatusLocked(StatusSyncIssues)
+		a.statusMu.Unlock()
+		if a.miSyncIssues != nil {
+			a.miSyncIssues.Show()
+		}
+	case !degraded && currentStatus == StatusSyncIssues:
+		a.statusMu.Lock()
+		a.setStatusLocked(StatusConnected)
+		a.statusMu.Unlock()
+		if a.miSyncIssues != nil {
+			a.miSyncIssues.Hide()
+		}
+		// All other statuses (WaitingForArena, Error, KeychainError, SetupRequired,
+		// Starting) are not touched — syncDegraded field is already updated above
+		// and will be consulted by SetWaitingForArena on Arena re-open.
 	}
 }
 
@@ -286,6 +371,14 @@ func (a *App) SetLastSync(t time.Time) {
 			a.miLastSync.SetTitle("Collection: never synced")
 		} else {
 			a.miLastSync.SetTitle(fmt.Sprintf("Collection: synced %s", t.Format("3:04 PM")))
+		}
+	}
+	// Keep the sync-issues informational item current when degraded.
+	if a.miSyncIssues != nil {
+		if t.IsZero() {
+			a.miSyncIssues.SetTitle("Last saved: —")
+		} else {
+			a.miSyncIssues.SetTitle(fmt.Sprintf("Last saved: %s", t.Format("3:04 PM")))
 		}
 	}
 }
@@ -336,6 +429,13 @@ func (a *App) setup() {
 
 	a.miStatus = systray.AddMenuItem(a.status.label(), "Daemon status")
 	a.miStatus.Disable()
+
+	// miSyncIssues shows the last-saved timestamp while the tray is in
+	// StatusSyncIssues, so the player can see how stale their data is.
+	// Hidden until SetSyncDegraded(true) fires. (#1234)
+	a.miSyncIssues = systray.AddMenuItem("Last saved: —", "")
+	a.miSyncIssues.Disable()
+	a.miSyncIssues.Hide()
 
 	systray.AddSeparator()
 
