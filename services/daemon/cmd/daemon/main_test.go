@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -948,22 +950,40 @@ func TestHeadlessDetection_EnvVars(t *testing.T) {
 
 // TestHeadlessExitFatalLogLine guards the canonical FATAL log message string
 // for the headless keychain-unavailable exit path (REV-2, #2136 AC6). Any
-// change to the log line breaks the string comparison used in launchd log
-// monitoring runbooks and the E2E test fixtures that grep for this pattern.
-// If this test fails, update the runbook at vault-mtg-docs/engineering/runbooks/
-// AND grep for the old string in all .sh and test fixtures before changing it.
+// change to the log line in main.go breaks the string comparison used in
+// launchd log monitoring runbooks and E2E test fixtures that grep for this
+// pattern.
+//
+// If this test fails, update the runbook at engineering/runbooks/ AND grep for
+// the old string in all .sh and test fixtures before changing it.
+//
+// The test drives logAndExitHeadlessKeychain — the real production function —
+// with a buffer-backed logger and a no-op exit func so it can assert the exact
+// output without forking a subprocess or killing the test process. Both the
+// production call site and this test share headlessKeychainFatalLog, so any
+// divergence between the constant and the log call in main.go is a
+// compile-or-behavior error caught immediately.
 func TestHeadlessExitFatalLogLine(t *testing.T) {
-	const wantLine = "[daemon] FATAL: keychain unavailable after retries — exiting"
-	// Confirmed: this is the exact string logged by the headless-exit path in
-	// main.go (the `log.Println(wantLine)` call in the REV-2 headless branch).
-	// Do not change either the constant here or the log line in main.go without
-	// updating the runbook and monitoring grep patterns.
-	assert.Equal(
-		t,
-		"[daemon] FATAL: keychain unavailable after retries — exiting",
-		wantLine,
-		"FATAL log line must match the canonical string expected by monitoring scripts",
-	)
+	var buf bytes.Buffer
+
+	// Build a logger that writes to our buffer with no timestamp prefix so we
+	// can assert the exact message text.
+	testLogger := log.New(&buf, "", 0)
+
+	var exitCalled bool
+	noopExit := func(code int) {
+		exitCalled = true
+		assert.Equal(t, 1, code, "headless exit must use exit code 1")
+	}
+
+	// Drive the real production function.
+	logAndExitHeadlessKeychain(testLogger, noopExit)
+
+	assert.True(t, exitCalled, "logAndExitHeadlessKeychain must call exitFn")
+	assert.Contains(t, buf.String(), headlessKeychainFatalLog,
+		"headless-exit log output must contain the canonical FATAL string; "+
+			"if this fails, update the launchd runbook and grep for the old string "+
+			"in all .sh and test fixtures")
 }
 
 // ---------------------------------------------------------------------------
