@@ -73,6 +73,15 @@ var matchPairings = []matchPair{
 		apiExpected:        "", // no separate api-expected for empty-format variant
 		formatIsNormalized: true,
 	},
+	{
+		// Brawl corpus fixture (ADR-062 / ticket #917): asserts format="Brawl"
+		// propagates consistently through daemon-emit → db-expected → api-expected.
+		// format_class="commander" and opponent_commander_id will be asserted once
+		// the ADR-062 DB migrations (#913, #914, #915) land.
+		daemonEmit:  "daemon-emit/match-completed-brawl.json",
+		dbExpected:  "db-expected/match-completed-brawl.json",
+		apiExpected: "api-expected/match-history-brawl-response.json",
+	},
 	// daemon-emit/match-completed-missing-id.json intentionally has no pair:
 	// the projection worker dead-letters events with no match_id and writes
 	// nothing to the match table. There is nothing to assert consistency against.
