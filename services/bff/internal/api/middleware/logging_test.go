@@ -397,6 +397,66 @@ func TestNewDefaultLogger_AcceptsValidLevels(t *testing.T) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Sensitive header absence (#2412)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// TestStructuredLogger_SensitiveHeadersNotLogged verifies that the logging
+// middleware never writes Authorization or Cookie header values to the log
+// output, even when both are present on the request.
+//
+// Ray's verdict (4676319462) requires using the parseLogLine helper so that the
+// absence assertions run against the same parsed log entry that proves a real
+// request log entry was captured — buf.Len() > 0 alone does not guarantee that.
+// Asserting that "method" and "path" are present in the same entry proves the
+// middleware fired and produced an entry for this exact request before we claim
+// the sensitive values are absent.
+func TestStructuredLogger_SensitiveHeadersNotLogged(t *testing.T) {
+	const (
+		authHeaderValue   = "Bearer super-secret-token-abc123"
+		cookieHeaderValue = "session=very-secret-session-xyz"
+	)
+
+	logger, buf := newBufLogger(t)
+	middl := bffmiddleware.NewStructuredLogger(logger)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/collection", nil)
+	req.Header.Set("Authorization", authHeaderValue)
+	req.Header.Set("Cookie", cookieHeaderValue)
+	rr := httptest.NewRecorder()
+	middl(handler).ServeHTTP(rr, req)
+
+	// parseLogLine proves a real request entry was captured (not just any bytes).
+	// If no entry was written this call fatals the test.
+	m := parseLogLine(t, buf)
+
+	// The log entry must be for this request — method and path must be present
+	// in the same entry. This is Ray's required negative-control: without these
+	// assertions, absence of Authorization/Cookie could simply mean no entry
+	// was written at all rather than that the middleware actively omitted them.
+	if got := m["method"]; got != http.MethodGet {
+		t.Errorf("log entry method = %q, want %q — entry may not be for this request", got, http.MethodGet)
+	}
+	if got := m["path"]; got != "/api/v1/collection" {
+		t.Errorf("log entry path = %q, want /api/v1/collection — entry may not be for this request", got)
+	}
+
+	// Now assert that neither sensitive header value appears anywhere in the
+	// raw log output for this entry. We use the raw buffer string so we catch
+	// any serialisation path (field value, nested JSON, error message, etc.).
+	rawEntry := buf.String()
+	if strings.Contains(rawEntry, authHeaderValue) {
+		t.Errorf("Authorization header value must not appear in log output; raw entry: %s", rawEntry)
+	}
+	if strings.Contains(rawEntry, cookieHeaderValue) {
+		t.Errorf("Cookie header value must not appear in log output; raw entry: %s", rawEntry)
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
