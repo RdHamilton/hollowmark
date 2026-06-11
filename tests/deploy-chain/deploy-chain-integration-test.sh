@@ -538,6 +538,7 @@ chmod +x "$STUB_AWS"
 # real run-migrations.sh execution — to confirm the prefix gate fires.
 #
 # AC1 (prefix validation) and AC2 (suffix / empty validation) are both covered.
+# Execution transcript verified locally — see PR #3203 Local Verification.
 # ---------------------------------------------------------------------------
 info "Phase 3 sub-test: session-name prefix validation..."
 
