@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -139,8 +140,12 @@ func TestCollectionRepository_ListCollection_WithMetadata(t *testing.T) {
 	if item.Rarity != "uncommon" {
 		t.Errorf("Rarity: got %q, want uncommon", item.Rarity)
 	}
-	if item.PriceUSD == nil || *item.PriceUSD != 1.23 {
-		t.Errorf("PriceUSD: got %v, want 1.23", item.PriceUSD)
+	// price_usd is a PostgreSQL real (float32) column: values round-trip through
+	// float32 precision (~7 decimal digits), so a strict float64 equality check
+	// fails (1.23 stored as float32 scans back as ≈1.2300000190734863). Use an
+	// epsilon comparison appropriate for single-precision.
+	if item.PriceUSD == nil || math.Abs(*item.PriceUSD-1.23) > 0.001 {
+		t.Errorf("PriceUSD: got %v, want ≈1.23 (within 0.001)", item.PriceUSD)
 	}
 	if item.PricesUpdated == nil {
 		t.Error("PricesUpdated should be non-nil")
