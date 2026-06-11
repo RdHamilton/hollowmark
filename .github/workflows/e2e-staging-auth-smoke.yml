@@ -19,7 +19,19 @@ name: E2E Staging Auth Smoke (vmt-t#678)
 # as ci.yml frontend-e2e). Chromium is pre-baked — no browser download needed.
 # The configure-aws-credentials OIDC action does NOT propagate env vars into
 # container steps; GitHub Actions secrets injected via `env:` DO propagate.
-# This is why CLERK_STAGING_SECRET_KEY uses a GHA secret instead of SSM runtime read.
+# This is why DAEMON_CI_SMOKE_API_KEY and CLERK_STAGING_SECRET_KEY use GHA
+# secrets instead of runtime SSM reads. Both are provisioned from SSM at
+# environment setup time:
+#   CLERK_STAGING_SECRET_KEY  — SSM /vaultmtg/app/staging/CLERK_SECRET_KEY
+#   DAEMON_CI_SMOKE_API_KEY   — SSM /vaultmtg/app/staging/daemon-ci-smoke-api-key
+# tickets#796: DAEMON_CI_SMOKE_API_KEY is the pre-minted daemon API key for the
+# ci-smoke account. Wiring it here unblocks draft-ratings-2963-verify.spec.ts
+# (INJECT_KEY was previously unset so runInject() returned -1 and the spec no-op'd).
+#
+# daemon-draft-inject binary: built in the `build-daemon-inject` job (bare
+# ubuntu-latest, no container) and passed to the staging-auth-smoke job via a
+# GitHub Actions artifact. Go is not available in the Playwright container, so
+# the binary is compiled in a separate job before the container job runs.
 #
 # Surfaces exercised (authenticated):
 #   SPA: /home, /match-history, /quests, /draft, /draft-analytics, /decks,
@@ -27,6 +39,7 @@ name: E2E Staging Auth Smoke (vmt-t#678)
 #        /api-keys
 #   BFF: GET /api/v1/matches, GET /api/v1/events (SSE), GET /healthz
 #   WildcardAdvisorPanel: authenticated panel screenshots for visual PLAYER_VERDICT
+#   Draft inject: /draft/live live pack-grid + grade columns (tickets#796)
 #
 # Verdict interpretation:
 #   PASS     = all authenticated surfaces exercised without error
@@ -67,16 +80,53 @@ permissions:
   contents: read
 
 jobs:
+  # ── Build daemon-draft-inject binary ──────────────────────────────────────
+  # Runs on a bare ubuntu-latest runner (no container) so Go toolchain is
+  # available. The compiled binary is uploaded as an artifact and downloaded
+  # by staging-auth-smoke before the draft-inject step.
+  #
+  # Separation is required because the Playwright container (jammy) does not
+  # include Go, and OIDC env vars do not propagate into container steps so an
+  # in-container `go install` cannot authenticate to the private module proxy.
+  build-daemon-inject:
+    name: Build daemon-draft-inject binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: services/daemon/go.mod
+          cache-dependency-path: services/daemon/go.sum
+
+      - name: Build daemon-draft-inject
+        run: |
+          go build -o /tmp/daemon-draft-inject \
+            ./services/daemon/cmd/daemon-draft-inject/
+        env:
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+
+      - name: Upload daemon-draft-inject binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-draft-inject
+          path: /tmp/daemon-draft-inject
+          retention-days: 1
+
   staging-auth-smoke:
     name: Staging Authenticated E2E Smoke
+    needs: [build-daemon-inject]
     runs-on: ubuntu-latest
     # Playwright container: Chromium + all system deps pre-installed.
     # Matches the container used in ci.yml frontend-e2e (tag = @playwright/test version).
     container:
       image: mcr.microsoft.com/playwright:v1.56.1-jammy
     environment: staging
-    # 20 min: SPA routes (17 × ~20s) + wildcard panel screenshots + BFF smoke.
-    timeout-minutes: 20
+    # 30 min: SPA routes + wildcard panel screenshots + BFF smoke + draft inject.
+    timeout-minutes: 30
 
     steps:
       - name: Checkout vault-mtg
@@ -92,6 +142,18 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+
+      # ── daemon-draft-inject binary ─────────────────────────────────────────
+      # Download the binary compiled by build-daemon-inject and make it
+      # executable. INJECT_BIN points to this path in the draft-inject step.
+      - name: Download daemon-draft-inject binary
+        uses: actions/download-artifact@v4
+        with:
+          name: daemon-draft-inject
+          path: /tmp/inject-bin
+
+      - name: Make daemon-draft-inject executable
+        run: chmod +x /tmp/inject-bin/daemon-draft-inject
 
       # ── SPA authenticated smoke ────────────────────────────────────────────
       # Exercises every protected SPA route via Clerk testing token injection.
@@ -130,6 +192,66 @@ jobs:
           # the former STAGING_SMOKE_TOKEN (blocked on prod-type Clerk instances).
           CLERK_SECRET_KEY: ${{ secrets.CLERK_STAGING_SECRET_KEY }}
           CI_SMOKE_USER_ID: user_3EmtmrSgZrtd0yRRdisTIIFYnnF
+
+      # ── Draft inject smoke (tickets#796) ──────────────────────────────────
+      # Drives a live draft inject on /draft/live to verify the pack-grid renders
+      # real card names + advisor grades end-to-end. Previously no-op'd because
+      # INJECT_KEY was unset (runInject returned -1 and the test skipped assertions).
+      #
+      # INJECT_KEY is the pre-minted daemon API key for the ci-smoke account, stored
+      # as the DAEMON_CI_SMOKE_API_KEY GitHub Actions secret (provisioned from SSM
+      # /vaultmtg/app/staging/daemon-ci-smoke-api-key). GHA secrets propagate into
+      # container steps (unlike OIDC env vars — same pattern as CLERK_STAGING_SECRET_KEY).
+      #
+      # ::add-mask:: is set in the spec preamble (console.log masks the key).
+      # The key is never echoed in step output.
+      #
+      # INJECT_LOG points to the SOS premier-draft-pack corpus fixture checked into the
+      # repo. This provides the draft.pack events the injector replays over SSE.
+      # Note: SOS cards may render em-dash grades if SOS ratings are absent on staging;
+      # the spec asserts inject exit-code 0 (INJECT_KEY is active) regardless of
+      # whether ratings are present for the injected set.
+      - name: Create draft-inject screenshot directory
+        run: mkdir -p /tmp/draft-2963-screenshots
+
+      - name: Run draft inject smoke (draft-ratings-2963-verify.spec.ts)
+        working-directory: frontend
+        run: |
+          npx playwright test \
+            tests/e2e/staging/draft-ratings-2963-verify.spec.ts \
+            --config=playwright.staging-spa.config.ts \
+            --reporter=list
+        env:
+          CI: true
+          STAGING_SPA_URL: ${{ inputs.staging_spa_url }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_STAGING_SECRET_KEY }}
+          CLERK_FAPI_URL: https://clerk.stg-app.hollowmark.app
+          CI_SMOKE_USER_ID: user_3EmtmrSgZrtd0yRRdisTIIFYnnF
+          INJECT_BIN: /tmp/inject-bin/daemon-draft-inject
+          # Corpus fixture: SOS premier-draft-pack log checked into the repo.
+          # Provides draft.pack events for the injector. See tickets#796 for
+          # the DSK/FDN ratings note (SOS cards render em-dash when SOS ratings
+          # are absent on staging — inject exit-code assertion still passes).
+          # github.workspace is used to form an absolute path because the spec
+          # runs with working-directory: frontend and a bare relative path would
+          # not resolve correctly from that CWD.
+          INJECT_LOG: ${{ github.workspace }}/services/daemon/testdata/corpus/player-log/premier-draft-pack.log
+          SCREENSHOT_DIR: /tmp/draft-2963-screenshots
+          # INJECT_KEY: pre-minted daemon API key for ci-smoke account.
+          # Sourced from SSM /vaultmtg/app/staging/daemon-ci-smoke-api-key.
+          # Stored as DAEMON_CI_SMOKE_API_KEY in the staging GitHub Actions environment.
+          # tickets#796: wiring this env var is the primary fix — INJECT_KEY was
+          # previously absent, causing runInject() to return {code: -1} (no-op guard).
+          INJECT_KEY: ${{ secrets.DAEMON_CI_SMOKE_API_KEY }}
+
+      - name: Upload draft-inject screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: draft-inject-staging-screenshots
+          path: /tmp/draft-2963-screenshots/
+          retention-days: 14
+          if-no-files-found: warn
 
       # ── WildcardAdvisorPanel visual screenshot capture ───────────────────
       # Captures authenticated screenshots of the WildcardAdvisorPanel for
