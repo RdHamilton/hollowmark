@@ -101,6 +101,15 @@ type Service struct {
 	// deck to an event. This field is attached to the next match.completed
 	// payload so the BFF can link the match row to the correct deck.
 	// Empty until a course.deck_submitted event has been processed.
+	//
+	// Goroutine-safety: no mutex is needed. This field is only ever read and
+	// written inside handleEntry, which is called exclusively from the single
+	// event-loop goroutine (the `case entry, ok := <-updates` branch of the
+	// Run select loop). The invariant that must hold: ALL reads and writes to
+	// lastDeckID must occur on that same goroutine. If you ever access this
+	// field from a second goroutine — e.g., a new background handler, a tray
+	// callback, or a concurrent log-replay path — you MUST add a mutex or
+	// replace the field with an atomic/channel before doing so.
 	lastDeckID string
 
 	// lastCollectionHash is the content hash (sorted arena_id:count) of the most
