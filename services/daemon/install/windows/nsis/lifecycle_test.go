@@ -211,15 +211,34 @@ func TestWindowsNSISDaemonEvent(t *testing.T) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			var evt contract.DaemonEvent
-			if err := json.Unmarshal(body, &evt); err != nil {
-				// Unmarshal failure — still accept; log and record raw.
-				t.Logf("stub BFF: unmarshal error for body %q: %v", string(body), err)
+			// Mirror the real BFF's dual-shape detection (ADR-053 §5):
+			// a body starting with '[' is a JSON array of DaemonEvents (batch);
+			// anything else is treated as a single DaemonEvent object.
+			// The daemon routes all handleEntry events through BatchBuffer.Add →
+			// SendBatch since #788, so the stub must accept both shapes.
+			trimmed := bytes.TrimSpace(body)
+			if len(trimmed) == 0 {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			var evts []contract.DaemonEvent
+			if trimmed[0] == '[' {
+				if err := json.Unmarshal(body, &evts); err != nil {
+					t.Logf("stub BFF: unmarshal array error for body %q: %v", string(body), err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+			} else {
+				var evt contract.DaemonEvent
+				if err := json.Unmarshal(body, &evt); err != nil {
+					t.Logf("stub BFF: unmarshal object error for body %q: %v", string(body), err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				evts = []contract.DaemonEvent{evt}
+			}
 			bffMu.Lock()
-			received = append(received, evt)
+			received = append(received, evts...)
 			bffMu.Unlock()
 			w.WriteHeader(http.StatusAccepted)
 
