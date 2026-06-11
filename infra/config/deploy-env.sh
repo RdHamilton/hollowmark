@@ -216,6 +216,13 @@ SSM_STAGING_ANALYTICS_PII_SALT="/vaultmtg/app/staging/analytics-pii-salt"
 # SecureString. Provisioned by infra#345 alongside the prod param.
 SSM_STAGING_INTERNAL_SVC_SECRET="/vaultmtg/app/staging/internal-svc-secret"
 
+# CI-smoke daemon API key -- pre-minted static daemon API key for the ci-smoke
+# test account. Used by e2e-staging-auth-smoke.yml to inject draft events via
+# daemon-draft-inject without a live PKCE OAuth flow (tickets#796).
+# SecureString. Consumed only by the staging CI runner; never written to the
+# BFF env file.
+SSM_STAGING_DAEMON_CI_SMOKE_API_KEY="/vaultmtg/app/staging/daemon-ci-smoke-api-key"
+
 # Daemon version metadata — staging mirror (see production block above).
 SSM_STAGING_BFF_DAEMON_LATEST_VERSION="/vaultmtg/app/staging/BFF_DAEMON_LATEST_VERSION"
 SSM_STAGING_BFF_DAEMON_RELEASED_AT="/vaultmtg/app/staging/BFF_DAEMON_RELEASED_AT"
