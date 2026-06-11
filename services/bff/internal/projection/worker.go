@@ -119,14 +119,6 @@ type cardPlayStore interface {
 	InsertCardPlays(ctx context.Context, accountID int64, gameID int64, matchID string, entries []contract.CardPlayEntry, occurredAt time.Time) error
 }
 
-// gameIDResolver looks up games.id for a (account_id, match_id, game_number)
-// triple.  The account_id filter enforces cross-account isolation (ticket #669).
-// The match.game_ended projection uses this to resolve the FK before writing
-// per-turn card plays to game_plays.
-type gameIDResolver interface {
-	GameIDByMatchAndNumber(ctx context.Context, accountID int64, matchID string, gameNumber int) (int64, error)
-}
-
 // gameRowWriter creates the games anchor row required by game_plays.game_id FK.
 // UpsertGameRow is idempotent: ON CONFLICT (match_id, game_number) returns the
 // existing id so replaying the same event never produces duplicate rows.
@@ -185,7 +177,6 @@ type Worker struct {
 	decks      deckStore
 	gamePlays  gamePlayStore
 	cardPlays  cardPlayStore
-	gameIDs    gameIDResolver
 	gameRows   gameRowWriter
 	counters   counterStore
 	dlq        dlqStore
@@ -215,7 +206,6 @@ func NewWorker(
 		decks:      decks,
 		gamePlays:  gamePlays,
 		cardPlays:  nil, // optional; wired via WithCardPlayStore
-		gameIDs:    nil, // optional; wired via WithGameIDResolver
 		counters:   nil, // optional; wired via WithCounterStore
 		dlq:        nil, // optional; wired via WithDLQ
 		analytics:  analytics.NewClient(analytics.NoopEnqueuer{}, analytics.NewNoopHaltChecker()),
@@ -225,12 +215,6 @@ func NewWorker(
 // WithCardPlayStore wires the per-turn card play store into w and returns w.
 func (w *Worker) WithCardPlayStore(store cardPlayStore) *Worker {
 	w.cardPlays = store
-	return w
-}
-
-// WithGameIDResolver wires the games.id resolver into w and returns w.
-func (w *Worker) WithGameIDResolver(resolver gameIDResolver) *Worker {
-	w.gameIDs = resolver
 	return w
 }
 
@@ -1213,16 +1197,6 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 			gameID, upsertErr = w.gameRows.UpsertGameRow(ctx, p.MatchID, p.GameNumber, gameResult)
 			if upsertErr != nil {
 				return fmt.Errorf("UpsertGameRow: %w", upsertErr)
-			}
-		} else if w.gameIDs != nil {
-			// Fallback: read-only resolver (backward-compat; wired instances
-			// should always prefer WithGameRowWriter).
-			var resolveErr error
-			gameID, resolveErr = w.gameIDs.GameIDByMatchAndNumber(ctx, accountID, p.MatchID, p.GameNumber)
-			if resolveErr != nil {
-				log.Printf("[projection] projectGamePlayEvent id=%d: could not resolve games.id for match_id=%q game_number=%d — skipping card play writes: %v",
-					row.ID, p.MatchID, p.GameNumber, resolveErr)
-				gameID = 0
 			}
 		}
 

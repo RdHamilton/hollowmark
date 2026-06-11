@@ -207,8 +207,7 @@ func buildWorker(db *sql.DB) *projection.Worker {
 		events, accounts, matches, drafts, collection, inventory, quests, decks, gamePlays,
 	).WithDLQ(dlq).
 		WithCardPlayStore(gamePlays).
-		WithGameRowWriter(gamePlays).
-		WithGameIDResolver(gamePlays)
+		WithGameRowWriter(gamePlays)
 }
 
 // resolveAccountID calls GetOrCreateByClientID to materialise an accounts row
