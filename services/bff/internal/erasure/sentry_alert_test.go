@@ -183,6 +183,8 @@ func TestRunErasureCascade_SentryStepTagMatchesEachFailingStep(t *testing.T) {
 		{"step4c", "step4c"},
 		{"step4d", "step4d"},
 		{"step4e", "step4e"},
+		{"step4explicit", "step4explicit"},
+		{"step4sweep", "step4sweep"},
 		{"step8", "step8"},
 	}
 

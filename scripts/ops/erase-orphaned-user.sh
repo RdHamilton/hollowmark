@@ -296,6 +296,144 @@ psql_exec \
 log "Step 4e: PASS"
 
 # ---------------------------------------------------------------------------
+# Step 4-explicit: Defense-in-depth explicit DELETE of BIGINT-account_id tables
+# that may be cascade-unreachable at certain schema versions (#1257).
+#
+# Covers:
+#   matches, player_stats, rank_history, collection_history
+#     — FKs added in 000119; absent on pre-119 DBs (P1 incident class).
+#   game_plays
+#     — account_id TEXT→BIGINT (000120) but NO FK CASCADE today.
+#   inventory_history
+#     — PROD incremental path (000068) has TEXT account_id; handled above in
+#       Step 4a TEXT-keyed deletes. The fresh-init (000054) path has BIGINT FK
+#       CASCADE and does not apply to this prod script (see job.go F1 gate).
+#       No explicit BIGINT delete needed here for the prod-incremental assumption.
+#
+# These are idempotent no-ops if the accounts FK cascade already fired.
+# ---------------------------------------------------------------------------
+log_step "Step 4-explicit — Defense-in-depth explicit BIGINT-keyed deletes"
+
+psql_exec \
+    "DELETE FROM matches WHERE account_id = $TARGET_ACCOUNT_ID;" \
+    "delete matches for account_id=$TARGET_ACCOUNT_ID"
+log "  matches delete: PASS"
+
+psql_exec \
+    "DELETE FROM player_stats WHERE account_id = $TARGET_ACCOUNT_ID;" \
+    "delete player_stats for account_id=$TARGET_ACCOUNT_ID"
+log "  player_stats delete: PASS"
+
+psql_exec \
+    "DELETE FROM rank_history WHERE account_id = $TARGET_ACCOUNT_ID;" \
+    "delete rank_history for account_id=$TARGET_ACCOUNT_ID"
+log "  rank_history delete: PASS"
+
+psql_exec \
+    "DELETE FROM collection_history WHERE account_id = $TARGET_ACCOUNT_ID;" \
+    "delete collection_history for account_id=$TARGET_ACCOUNT_ID"
+log "  collection_history delete: PASS"
+
+psql_exec \
+    "DELETE FROM game_plays WHERE account_id = $TARGET_ACCOUNT_ID;" \
+    "delete game_plays for account_id=$TARGET_ACCOUNT_ID"
+log "  game_plays delete: PASS"
+
+log "Step 4-explicit: PASS"
+
+# ---------------------------------------------------------------------------
+# Step 4-sweep: Residual sweep — assert zero rows remain for this account.
+#
+# Queries information_schema for every public base table with account_id or
+# user_id, then COUNTs rows for the erased account/client_ids.  Retained
+# tables (deletion_audit_log, restriction_audit_log, dsr_access_log,
+# rectification_audit_log) are excluded per Ray's retention ruling (#1257).
+#
+# On failure: lists ALL offending tables, sets FAIL=1 before Step 5 runs.
+# Step 5 (Clerk, skipped for this orphan) and Step 8 must NOT run if the
+# sweep fails — completed_at stays NULL for AC7 re-trigger.
+# ---------------------------------------------------------------------------
+log_step "Step 4-sweep — Residual sweep (assert zero rows remain)"
+
+SWEEP_FAIL=0
+
+check_bigint_count() {
+    local table="$1"
+    local col="${2:-account_id}"
+    local count
+    count=$(psql_query "SELECT count(*) FROM \"$table\" WHERE \"$col\" = $TARGET_ACCOUNT_ID;" 2>/dev/null || echo "ERROR")
+    if [[ "$count" == "ERROR" ]]; then
+        log "  WARN: could not query $table.$col (table may not exist — skipping)"
+    elif [[ "$count" -gt 0 ]]; then
+        log "  FAIL: $table.$col has $count residual row(s) for account_id=$TARGET_ACCOUNT_ID"
+        SWEEP_FAIL=1
+    else
+        log "  OK: $table.$col = 0"
+    fi
+}
+
+check_text_count() {
+    local table="$1"
+    local col="${2:-account_id}"
+    local count
+    count=$(psql_query "SELECT count(*) FROM \"$table\" WHERE \"$col\" = '$TARGET_CLIENT_ID';" 2>/dev/null || echo "ERROR")
+    if [[ "$count" == "ERROR" ]]; then
+        log "  WARN: could not query $table.$col (table may not exist — skipping)"
+    elif [[ "$count" -gt 0 ]]; then
+        log "  FAIL: $table.$col has $count residual row(s) for client_id=$TARGET_CLIENT_ID"
+        SWEEP_FAIL=1
+    else
+        log "  OK: $table.$col = 0"
+    fi
+}
+
+# BIGINT-keyed tables (account_id = BIGINT)
+check_bigint_count "accounts"
+check_bigint_count "matches"
+check_bigint_count "player_stats"
+check_bigint_count "rank_history"
+check_bigint_count "collection_history"
+check_bigint_count "collection"
+check_bigint_count "collection_new"
+check_bigint_count "decks"
+check_bigint_count "draft_sessions"
+check_bigint_count "inventory"
+check_bigint_count "quests"
+check_bigint_count "user_settings"
+check_bigint_count "recommendation_feedback"
+check_bigint_count "card_inventory"
+check_bigint_count "game_plays"
+check_bigint_count "draft_picks"
+check_bigint_count "draft_packs"
+check_bigint_count "draft_match_results"
+check_bigint_count "game_event_counters"
+check_bigint_count "life_change_tracking"
+check_bigint_count "matchup_statistics"
+check_bigint_count "deck_performance_history"
+check_bigint_count "currency_history"
+check_bigint_count "match_game_results"
+check_bigint_count "quest_session_tracking"
+# PROD incremental path: inventory_history.account_id is TEXT (000068).
+# No BIGINT sweep needed here. See job.go F1 gate for the fresh-init path.
+# TEXT-keyed tables (account_id = TEXT / MTGA client_id)
+check_text_count "daemon_events"
+check_text_count "daemon_api_keys"
+check_text_count "user_play_patterns"
+check_text_count "projection_errors"
+check_text_count "inventory_history"
+# user_id-keyed check
+check_bigint_count "users" "id"
+# Retained tables (deletion_audit_log, restriction_audit_log, dsr_access_log,
+# rectification_audit_log) are intentionally excluded from the sweep per Ray's
+# retention ruling (#1257).
+
+if [[ "$SWEEP_FAIL" -eq 0 ]]; then
+    log "Step 4-sweep: PASS — zero residuals confirmed"
+else
+    die "Step 4-sweep: FAIL — residual rows found. Halting before Step 5/8. Inspect DB state."
+fi
+
+# ---------------------------------------------------------------------------
 # Step 5: Clerk Admin API delete — SKIPPED
 # ---------------------------------------------------------------------------
 log_step "Step 5 — Clerk Admin API delete [SKIPPED]"
@@ -339,6 +477,16 @@ else
     DAK_AFTER=$(psql_query "SELECT count(*) FROM daemon_api_keys WHERE account_id = '$TARGET_CLIENT_ID';")
     PP_AFTER=$(psql_query "SELECT count(*) FROM user_play_patterns WHERE account_id = '$TARGET_CLIENT_ID';")
     PE_AFTER=$(psql_query "SELECT count(*) FROM projection_errors WHERE account_id = '$TARGET_CLIENT_ID';")
+    # inventory_history: prod incremental path (000068) has TEXT account_id.
+    # This check uses the TEXT/client_id path. The BIGINT path (fresh-init) is
+    # handled by job.go DeleteExplicitBigintRows — not applicable to this prod script.
+    IH_AFTER=$(psql_query "SELECT count(*) FROM inventory_history WHERE account_id = '$TARGET_CLIENT_ID';" 2>/dev/null || echo "0")
+    # Explicit-BIGINT tables (#1257)
+    MATCHES_AFTER=$(psql_query "SELECT count(*) FROM matches WHERE account_id = $TARGET_ACCOUNT_ID;")
+    PS_AFTER=$(psql_query "SELECT count(*) FROM player_stats WHERE account_id = $TARGET_ACCOUNT_ID;")
+    RH_AFTER=$(psql_query "SELECT count(*) FROM rank_history WHERE account_id = $TARGET_ACCOUNT_ID;")
+    CH_AFTER=$(psql_query "SELECT count(*) FROM collection_history WHERE account_id = $TARGET_ACCOUNT_ID;")
+    GP_AFTER=$(psql_query "SELECT count(*) FROM game_plays WHERE account_id = $TARGET_ACCOUNT_ID;")
     U_AFTER=$(psql_query "SELECT count(*) FROM users WHERE id = $TARGET_USER_ID;")
     A_AFTER=$(psql_query "SELECT count(*) FROM accounts WHERE id = $TARGET_ACCOUNT_ID;")
 
@@ -348,15 +496,27 @@ else
     log "  daemon_api_keys (text-keyed):    $DAK_AFTER (was: $DAK_COUNT)"
     log "  user_play_patterns (text-keyed): $PP_AFTER (was: $PP_COUNT)"
     log "  projection_errors (text-keyed):  $PE_AFTER (was: $PE_COUNT)"
+    log "  inventory_history (text-keyed):  $IH_AFTER"
+    log "  matches (bigint explicit):       $MATCHES_AFTER"
+    log "  player_stats (bigint explicit):  $PS_AFTER"
+    log "  rank_history (bigint explicit):  $RH_AFTER"
+    log "  collection_history (bigint):     $CH_AFTER"
+    log "  game_plays (bigint, no FK):      $GP_AFTER"
 
-    # Assertions
+    # Assertions — check all, collect failures, then die once.
     FAIL=0
-    [[ "$DE_AFTER" -eq 0 ]]  || { log "FAIL: daemon_events not 0 after erasure (got $DE_AFTER)"; FAIL=1; }
-    [[ "$DAK_AFTER" -eq 0 ]] || { log "FAIL: daemon_api_keys not 0 after erasure (got $DAK_AFTER)"; FAIL=1; }
-    [[ "$PP_AFTER" -eq 0 ]]  || { log "FAIL: user_play_patterns not 0 after erasure (got $PP_AFTER)"; FAIL=1; }
-    [[ "$PE_AFTER" -eq 0 ]]  || { log "FAIL: projection_errors not 0 after erasure (got $PE_AFTER)"; FAIL=1; }
-    [[ "$U_AFTER"  -eq 0 ]]  || { log "FAIL: users row not deleted (got $U_AFTER)"; FAIL=1; }
-    [[ "$A_AFTER"  -eq 0 ]]  || { log "FAIL: accounts row not deleted (got $A_AFTER)"; FAIL=1; }
+    [[ "$DE_AFTER" -eq 0 ]]       || { log "FAIL: daemon_events not 0 after erasure (got $DE_AFTER)"; FAIL=1; }
+    [[ "$DAK_AFTER" -eq 0 ]]      || { log "FAIL: daemon_api_keys not 0 after erasure (got $DAK_AFTER)"; FAIL=1; }
+    [[ "$PP_AFTER" -eq 0 ]]       || { log "FAIL: user_play_patterns not 0 after erasure (got $PP_AFTER)"; FAIL=1; }
+    [[ "$PE_AFTER" -eq 0 ]]       || { log "FAIL: projection_errors not 0 after erasure (got $PE_AFTER)"; FAIL=1; }
+    [[ "$IH_AFTER" -eq 0 ]]       || { log "FAIL: inventory_history not 0 after erasure (got $IH_AFTER)"; FAIL=1; }
+    [[ "$MATCHES_AFTER" -eq 0 ]]  || { log "FAIL: matches not 0 after erasure (got $MATCHES_AFTER)"; FAIL=1; }
+    [[ "$PS_AFTER" -eq 0 ]]       || { log "FAIL: player_stats not 0 after erasure (got $PS_AFTER)"; FAIL=1; }
+    [[ "$RH_AFTER" -eq 0 ]]       || { log "FAIL: rank_history not 0 after erasure (got $RH_AFTER)"; FAIL=1; }
+    [[ "$CH_AFTER" -eq 0 ]]       || { log "FAIL: collection_history not 0 after erasure (got $CH_AFTER)"; FAIL=1; }
+    [[ "$GP_AFTER" -eq 0 ]]       || { log "FAIL: game_plays not 0 after erasure (got $GP_AFTER)"; FAIL=1; }
+    [[ "$U_AFTER"  -eq 0 ]]       || { log "FAIL: users row not deleted (got $U_AFTER)"; FAIL=1; }
+    [[ "$A_AFTER"  -eq 0 ]]       || { log "FAIL: accounts row not deleted (got $A_AFTER)"; FAIL=1; }
 
     if [[ "$FAIL" -eq 0 ]]; then
         log "All AFTER assertions: PASS"

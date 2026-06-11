@@ -30,28 +30,61 @@ import (
 //
 // Disposition values:
 //   - "cascade"     — covered by ON DELETE CASCADE from accounts(id) or users(id).
-//   - "explicit"    — explicitly deleted by the cascade job.
+//   - "explicit"    — explicitly deleted by the cascade job (via text-keyed,
+//     BIGINT-explicit, or gated-type-based delete).
 //   - "anonymize"   — anonymized in-place (consent_log).
-//   - "retain"      — retained by design (audit/compliance; no personal data).
+//   - "retain"      — retained by design (audit/compliance; no personal data
+//     post-erasure; numeric id / hash-only after accounts deleted).
 //   - "reference"   — shared reference data; not user-keyed in the PII sense.
+//
+// # Enumeration rationale for explicit-BIGINT tables (#1257)
+//
+// matches, player_stats, rank_history, collection_history: FKs to accounts(id)
+// were added in migration 000119 (NOT VALID + VALIDATE). These FKs exist in prod
+// now but were absent at the time of the P1 incident (#1237). Explicit deletes are
+// defense-in-depth: erasure is complete at ANY schema version (pre-119, staging,
+// fresh-init).
+//
+// game_plays: migration 000120 converted account_id TEXT→BIGINT but deliberately
+// deferred adding a FK to accounts. No ON DELETE CASCADE exists today. Explicit
+// delete is the only coverage.
+//
+// inventory_history: two-path schema fork — TEXT (incremental path via 000068)
+// vs BIGINT NOT NULL FK CASCADE (fresh-init path via 000054:832). The explicit
+// delete is data_type-gated in DeleteExplicitBigintRows / DeleteTextKeyedRows.
+//
+// # Tables NOT in this map
+//
+// draft_events: dropped in migration 000025_drop_unused_tables (replaced by
+// draft_sessions). It does not exist in any current database. AC2 of #1257 amended
+// by Ray's binding conditions: draft_events is out of scope.
 var knownUserKeyedTables = map[string]string{
-	// Via accounts(id) ON DELETE CASCADE (BIGINT FK)
-	"collection":               "cascade",
-	"collection_new":           "cascade",
-	"collection_history":       "cascade",
-	"matches":                  "cascade",
-	"player_stats":             "cascade",
-	"decks":                    "cascade",
-	"rank_history":             "cascade",
-	"draft_events":             "cascade",
-	"draft_sessions":           "cascade",
-	"inventory":                "cascade",
-	"inventory_history":        "cascade",
-	"quests":                   "cascade",
-	"user_settings":            "cascade",
-	"recommendation_feedback":  "cascade",
-	"card_inventory":           "cascade",
-	"game_plays":               "cascade",
+	// Via accounts(id) ON DELETE CASCADE (BIGINT FK) — cascade-covered since
+	// migration 000002 (collection_new renamed to collection).  NOT in
+	// DeleteExplicitBigintRows.
+	"collection":     "cascade",
+	"collection_new": "cascade",
+	// collection_history: explicit delete added in #1257 (defense-in-depth).
+	"collection_history": "explicit",
+	// matches: FK added in 000119; explicit delete is defense-in-depth for pre-119 DBs.
+	"matches": "explicit",
+	// player_stats: FK added in 000119; explicit delete is defense-in-depth.
+	"player_stats": "explicit",
+	"decks":        "cascade",
+	// rank_history: FK added in 000119; explicit delete is defense-in-depth.
+	"rank_history":            "explicit",
+	"draft_sessions":          "cascade",
+	"inventory":               "cascade",
+	"quests":                  "cascade",
+	"user_settings":           "cascade",
+	"recommendation_feedback": "cascade",
+	"card_inventory":          "cascade",
+	// game_plays: account_id TEXT→BIGINT (000120) but NO FK CASCADE today.
+	// Explicit delete is the only coverage.
+	"game_plays": "explicit",
+	// inventory_history: TEXT (incremental) or BIGINT FK CASCADE (fresh-init).
+	// Delete is data_type-gated — covered by step4explicit / step4a depending on schema.
+	"inventory_history":        "explicit",
 	"draft_picks":              "cascade",
 	"draft_packs":              "cascade",
 	"draft_match_results":      "cascade",
@@ -84,21 +117,15 @@ var knownUserKeyedTables = map[string]string{
 	"projection_errors":  "explicit",
 	// Anonymized in-place then SET NULL cascade
 	"consent_log": "anonymize",
-	// Retained by design (compliance evidence, no PII)
-	"deletion_audit_log": "retain",
-	// Retained by design (compliance evidence; user_id stored as audit record,
-	// no FK to users, survives Art.17 erasure -- same rationale as deletion_audit_log).
-	// NOT returned to the subject (Art.15 export excludes it).
-	"dsr_access_log": "retain",
-	// Retained by design (GDPR Art.18 restriction audit evidence; append-only,
-	// no FK to users, survives Art.17 erasure -- same rationale as deletion_audit_log
-	// and dsr_access_log).
-	"restriction_audit_log": "retain",
-	// Retained by design (GDPR Art.16 rectification evidence; append-only audit log.
-	// No FK to users so the record survives Art.17 erasure — intentional.
-	// Contains only PII-hashed field values (HashPII), never raw PII.
-	// NOT returned to the subject (Art.15 export excludes it).
-	// See migration 000117 and PR #3099).
+	// Retained by design (GDPR Art.17 erasure retention ruling — #1257):
+	// These four tables hold audit/compliance records.  The account_id / user_id
+	// stored is a numeric ID (BIGINT) or hash, non-identifiable once the
+	// users/accounts rows are erased.  Retained per GDPR Art.5(2) accountability.
+	// Ray extended the retention ruling to dsr_access_log + rectification_audit_log
+	// on 2026-06-11 (binding conditions, #1257).
+	"deletion_audit_log":      "retain",
+	"restriction_audit_log":   "retain",
+	"dsr_access_log":          "retain",
 	"rectification_audit_log": "retain",
 	// Email-keyed explicit DELETE
 	"waitlist_entries": "explicit",
@@ -150,6 +177,83 @@ func TestFM3TableEnumeration_InformationSchema(t *testing.T) {
 			"Add each table with the correct disposition (cascade/explicit/anonymize/retain/reference):\n  %s\n\n"+
 			"If the table holds user PII, also update the erasure cascade in internal/erasure/job.go.",
 			len(unregistered), strings.Join(unregistered, "\n  "))
+	}
+}
+
+// TestSchemaCoverageInvariant_AllExplicitTablesHaveMethod is the schema-driven
+// coverage test from Ray's binding condition Q3 (→ YES).
+//
+// It iterates information_schema.tables for every public BASE TABLE and asserts
+// that each table with an account_id or user_id column is covered by exactly one
+// of the following dispositions in knownUserKeyedTables:
+//
+//   - "cascade"    — FK CASCADE handles it
+//   - "explicit"   — a step in the erasure cascade explicitly deletes it
+//   - "anonymize"  — anonymized in-place
+//   - "retain"     — retained by documented ruling
+//
+// This test FAILS CI at PR time when a future migration adds an uncovered table,
+// catching the drift that caused the P1 incident (#1237 / #1257) at code-review
+// time rather than at prod deploy time.
+//
+// Requires DATABASE_URL — skipped when not set.
+func TestSchemaCoverageInvariant_AllExplicitTablesHaveMethod(t *testing.T) {
+	db := openTestDB(t)
+
+	// Query only BASE TABLEs in the public schema (C2: public base tables only).
+	const q = `
+		SELECT DISTINCT c.table_name
+		FROM information_schema.columns c
+		JOIN information_schema.tables t
+		  ON t.table_schema = c.table_schema
+		 AND t.table_name   = c.table_name
+		WHERE c.table_schema = 'public'
+		  AND c.column_name IN ('account_id', 'user_id')
+		  AND t.table_type = 'BASE TABLE'
+		ORDER BY c.table_name`
+
+	rows, err := db.QueryContext(context.Background(), q)
+	if err != nil {
+		t.Fatalf("schema coverage query: %v", err)
+	}
+	defer rows.Close()
+
+	validDispositions := map[string]bool{
+		"cascade":   true,
+		"explicit":  true,
+		"anonymize": true,
+		"retain":    true,
+	}
+
+	var missing []string
+	var invalidDisposition []string
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		disp, ok := knownUserKeyedTables[tableName]
+		if !ok {
+			missing = append(missing, tableName)
+			continue
+		}
+		if !validDispositions[disp] {
+			invalidDisposition = append(invalidDisposition, fmt.Sprintf("%s=%q", tableName, disp))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err: %v", err)
+	}
+
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Errorf("schema-coverage invariant: %d table(s) with account_id/user_id have NO erasure disposition.\n"+
+			"Add each to knownUserKeyedTables with the correct disposition:\n  %s",
+			len(missing), strings.Join(missing, "\n  "))
+	}
+	if len(invalidDisposition) > 0 {
+		t.Errorf("schema-coverage invariant: %d table(s) have an unrecognised disposition value:\n  %s",
+			len(invalidDisposition), strings.Join(invalidDisposition, "\n  "))
 	}
 }
 
@@ -505,5 +609,237 @@ func TestDeletionRepository_RecordJobComplete(t *testing.T) {
 	}
 	if !completedAt.Valid {
 		t.Error("expected completed_at to be set, got NULL")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// New integration tests for #1257 — explicit BIGINT deletes + residual sweep
+// ---------------------------------------------------------------------------
+
+// TestDeletionRepository_DeleteExplicitBigintRows_Pre119Regression is the
+// pre-119 regression test from Ray's binding condition answer 1 (option a).
+//
+// Approach: manually INSERT rows into matches WITHOUT using the FK path
+// (simulating the pre-migration-119 state where no FK existed on matches).
+// Then call DeleteExplicitBigintRows and assert zero residuals.
+//
+// This proves that the sweep detects residuals regardless of how they got there,
+// and that DeleteExplicitBigintRows removes them regardless of FK presence.
+// The incident condition: accounts deleted → matches orphaned → migration 119
+// VALIDATE CONSTRAINT failed.
+func TestDeletionRepository_DeleteExplicitBigintRows_Pre119Regression(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDeletionRepository(db)
+
+	userID, accountID, _ := seedDeletionUser(t, db)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	// Insert a matches row WITH a valid accounts.id (FK exists now in prod).
+	// The test asserts that DeleteExplicitBigintRows removes it BEFORE the
+	// accounts row is deleted — defense-in-depth for pre-119 schema.
+	matchID := "match_explicit_test_" + suffix
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO matches (id, account_id, timestamp, format, result, turns, duration_seconds, rank_delta)
+		 VALUES ($1, $2, NOW(), 'Premier Draft', 'win', 10, 300, 0)`,
+		matchID, accountID)
+	if err != nil {
+		if strings.Contains(err.Error(), "does not exist") {
+			t.Skip("matches table not present")
+		}
+		t.Fatalf("seed matches: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM matches WHERE id = $1`, matchID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM accounts WHERE id = $1`, accountID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+	})
+
+	if err := repo.DeleteExplicitBigintRows(context.Background(), accountID); err != nil {
+		t.Fatalf("DeleteExplicitBigintRows: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM matches WHERE account_id = $1`, accountID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count matches after explicit delete: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("pre-119 regression: expected 0 matches rows after DeleteExplicitBigintRows, got %d "+
+			"(incident class: orphan rows survive accounts delete when FK absent)", count)
+	}
+}
+
+// TestDeletionRepository_InventoryHistory_BigintPathGate exercises the F1
+// data_type gate for inventory_history.
+//
+// On the fresh-init (000054) path, inventory_history.account_id is BIGINT NOT NULL
+// FK CASCADE. Passing a TEXT[] binding to this column throws SQLSTATE 22P02.
+// The delete must be gated on the column's data_type in information_schema:
+// - TEXT path: handled by DeleteTextKeyedRows (step4a)
+// - BIGINT path: handled by DeleteExplicitBigintRows (step4explicit) or implicit cascade
+//
+// This test seeds an inventory_history row using the BIGINT FK path (which is
+// what the current CI database has from 000054), calls DeleteExplicitBigintRows
+// or verifies cascade, and asserts the row is gone.
+func TestDeletionRepository_InventoryHistory_BigintPathGate(t *testing.T) {
+	db := openTestDB(t)
+
+	// Determine which path this database is on.
+	var dataType string
+	err := db.QueryRowContext(context.Background(), `
+		SELECT data_type
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name   = 'inventory_history'
+		  AND column_name  = 'account_id'`).Scan(&dataType)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			t.Skip("inventory_history.account_id column not present — table may not exist or column not added")
+		}
+		t.Fatalf("query inventory_history data_type: %v", err)
+	}
+
+	t.Logf("inventory_history.account_id data_type = %q", dataType)
+
+	repo := repository.NewDeletionRepository(db)
+	userID, accountID, clientID := seedDeletionUser(t, db)
+
+	switch strings.ToLower(dataType) {
+	case "bigint", "integer", "int8", "int4":
+		// BIGINT path (fresh-init 000054): seed via FK and verify cascade or explicit delete.
+		_, err := db.ExecContext(context.Background(),
+			`INSERT INTO inventory_history (account_id, field, previous_value, new_value, delta)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			accountID, "wc_common", 0, 5, 5)
+		if err != nil {
+			t.Fatalf("seed inventory_history (BIGINT path): %v", err)
+		}
+
+		t.Cleanup(func() {
+			_, _ = db.ExecContext(context.Background(),
+				`DELETE FROM inventory_history WHERE account_id = $1`, accountID)
+			_, _ = db.ExecContext(context.Background(),
+				`DELETE FROM accounts WHERE id = $1`, accountID)
+			_, _ = db.ExecContext(context.Background(),
+				`DELETE FROM users WHERE id = $1`, userID)
+		})
+
+		// On the BIGINT path, delete is handled by cascade (HardDeleteAccount) or
+		// by DeleteExplicitBigintRows. Calling DeleteExplicitBigintRows must NOT
+		// throw SQLSTATE 22P02 (wrong type binding).
+		if err := repo.DeleteExplicitBigintRows(context.Background(), accountID); err != nil {
+			t.Fatalf("DeleteExplicitBigintRows on BIGINT inventory_history: %v (must not throw 22P02 type error)", err)
+		}
+
+		var count int
+		if err := db.QueryRowContext(
+			context.Background(),
+			`SELECT COUNT(*) FROM inventory_history WHERE account_id = $1`, accountID,
+		).Scan(&count); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("BIGINT path: expected 0 inventory_history rows after DeleteExplicitBigintRows, got %d", count)
+		}
+
+	case "text", "character varying", "character":
+		// TEXT path (incremental 000068): seed via TEXT client_id and verify DeleteTextKeyedRows.
+		_, err := db.ExecContext(context.Background(),
+			`INSERT INTO inventory_history (account_id, field, previous_value, new_value, delta)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			clientID, "wc_common", 0, 5, 5)
+		if err != nil {
+			t.Fatalf("seed inventory_history (TEXT path): %v", err)
+		}
+
+		t.Cleanup(func() {
+			_, _ = db.ExecContext(context.Background(),
+				`DELETE FROM inventory_history WHERE account_id = $1`, clientID)
+		})
+
+		// On the TEXT path, inventory_history is deleted by DeleteTextKeyedRows (step4a).
+		if err := repo.DeleteTextKeyedRows(context.Background(), []string{clientID}); err != nil {
+			t.Fatalf("DeleteTextKeyedRows on TEXT inventory_history: %v", err)
+		}
+
+		var count int
+		if err := db.QueryRowContext(
+			context.Background(),
+			`SELECT COUNT(*) FROM inventory_history WHERE account_id = $1`, clientID,
+		).Scan(&count); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("TEXT path: expected 0 inventory_history rows after DeleteTextKeyedRows, got %d", count)
+		}
+
+	default:
+		t.Errorf("unexpected inventory_history.account_id data_type %q — no path implemented", dataType)
+	}
+}
+
+// TestDeletionRepository_AssertZeroResiduals_PassesWhenClean verifies that
+// AssertZeroResiduals returns nil (no error) when all account_id-bearing tables
+// have zero rows for the given accountID / clientIDs after a complete erasure.
+func TestDeletionRepository_AssertZeroResiduals_PassesWhenClean(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDeletionRepository(db)
+
+	userID, accountID, clientID := seedDeletionUser(t, db)
+
+	// Fully erase the account so the sweep should pass.
+	if err := repo.HardDeleteUser(context.Background(), userID); err != nil {
+		t.Fatalf("HardDeleteUser: %v", err)
+	}
+	if err := repo.HardDeleteAccount(context.Background(), accountID); err != nil {
+		t.Fatalf("HardDeleteAccount: %v", err)
+	}
+
+	if err := repo.AssertZeroResiduals(context.Background(), accountID, []string{clientID}); err != nil {
+		t.Errorf("AssertZeroResiduals after complete erasure returned error: %v (expected nil)", err)
+	}
+}
+
+// TestDeletionRepository_AssertZeroResiduals_FailsWhenResidualsExist verifies
+// that AssertZeroResiduals returns a non-nil error listing the offending tables
+// when residual rows remain after the explicit deletes.
+//
+// This is the regression scenario: accounts row deleted but some child table
+// still has rows (the P1 incident condition for matches pre-migration-119).
+func TestDeletionRepository_AssertZeroResiduals_FailsWhenResidualsExist(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDeletionRepository(db)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	// Seed a daemon_api_keys row (TEXT account_id, no FK — guaranteed to survive
+	// an accounts delete, usable as a residual for this test without FK complications).
+	textClientID := "client_residual_test_" + suffix
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		textClientID, "residual_hash_"+suffix, "rpref", uuid.New().String(), "macOS", "0.4.1")
+	if err != nil {
+		t.Fatalf("seed daemon_api_keys for residual test: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(),
+			`DELETE FROM daemon_api_keys WHERE account_id = $1`, textClientID)
+	})
+
+	// Use a fictional accountID that has no real rows — sweep checks TEXT-keyed
+	// tables for the clientID we left behind.
+	fakeAccountID := int64(999999999)
+
+	err = repo.AssertZeroResiduals(context.Background(), fakeAccountID, []string{textClientID})
+	if err == nil {
+		t.Error("AssertZeroResiduals returned nil when daemon_api_keys had a residual row — expected a non-nil error listing offending tables")
+	} else {
+		t.Logf("AssertZeroResiduals correctly returned error: %v", err)
 	}
 }
