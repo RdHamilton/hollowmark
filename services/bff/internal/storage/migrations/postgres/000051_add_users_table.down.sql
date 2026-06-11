@@ -1,5 +1,8 @@
-ALTER TABLE accounts DROP COLUMN IF EXISTS user_id;
+ALTER TABLE IF EXISTS accounts DROP COLUMN IF EXISTS user_id;
 
-DROP TABLE IF EXISTS users;
-
+-- CASCADE guards against incomplete later downs and dirty states. On a correct
+-- sequential down, dependents are already gone before this migration runs;
+-- CASCADE is a safety net for partial failures and future FK additions that
+-- lack a corresponding down update.
+DROP TABLE IF EXISTS users CASCADE;
 DROP EXTENSION IF EXISTS pgcrypto;

@@ -1,8 +1,14 @@
 -- Rollback migration 000086: drop waitlist_entries table.
 --
--- The citext extension is intentionally NOT dropped here: it may be in use by
--- other tables (e.g. accounts.email), and DROP EXTENSION is destructive.
--- If citext was added solely by this migration and must be removed, do so
--- manually with coordination from the DBA.
-
-DROP TABLE IF EXISTS waitlist_entries;
+-- citext is dropped here because it is only ever added by this migration
+-- (no other migration adds it, and no column uses citext type in any other table).
+-- On a partial rollback (rolling back only migration 86), verify that no manually
+-- added citext columns exist before running this down migration in a production
+-- rollback scenario. In a round-trip / full-down context, all tables are gone
+-- at this point and the DROP EXTENSION is safe.
+-- CASCADE guards against incomplete later downs and dirty states. On a correct
+-- sequential down, dependents are already gone before this migration runs;
+-- CASCADE is a safety net for partial failures and future FK additions that
+-- lack a corresponding down update.
+DROP TABLE IF EXISTS waitlist_entries CASCADE;
+DROP EXTENSION IF EXISTS citext;

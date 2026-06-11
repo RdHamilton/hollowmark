@@ -385,3 +385,65 @@ test.describe('Staging smoke: /internal/ deny wall returns 403 (tickets#953)', (
     ).not.toMatch(/^\s*\{/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 6. PATCH /api/v1/account/profile — BFF endpoint reachability and auth (tickets#1183)
+//
+// AC1 (tickets#1183) — staging-gated: the BFF PATCH endpoint for profile sync
+// must be reachable with a valid Clerk session JWT. These tests verify:
+//   a) Unauthenticated PATCH returns 401 (auth guard active)
+//   b) Authenticated PATCH with a valid body returns 2xx or 4xx (not 401/5xx)
+//      The ci-smoke account may not have a profile row — 404 is also acceptable.
+//      5xx indicates a BFF regression; 401 indicates the Clerk middleware is broken.
+//
+// Note: the email-change validation (real Clerk rejecting an invalid email format)
+// is not testable at the BFF level — Clerk validation happens on the frontend
+// before the BFF sync call is made. The BFF PATCH receives only post-Clerk data.
+// ---------------------------------------------------------------------------
+
+test.describe('Staging smoke: PATCH /api/v1/account/profile reachability (tickets#1183)', () => {
+  let sessionToken: string;
+
+  test.beforeAll(async () => {
+    requireAuthOrFail('PATCH /api/v1/account/profile (profile sync endpoint)');
+    sessionToken = await obtainClerkSessionToken();
+  });
+
+  test('PATCH /api/v1/account/profile without Authorization returns 401', async ({ request }) => {
+    const res = await request.patch(`${STAGING_API}/api/v1/account/profile`, {
+      data: { email: 'ci-smoke@example.com' },
+    });
+    expect(
+      res.status(),
+      `PATCH /api/v1/account/profile returned ${res.status()} without auth — expected 401`,
+    ).toBe(401);
+  });
+
+  test('PATCH /api/v1/account/profile with real Clerk session is accepted by BFF auth middleware (tickets#1183)', async ({ request }) => {
+    requireAuthOrFail('PATCH /api/v1/account/profile (authenticated)');
+
+    // Send a minimal valid body — the BFF may return 200/204 (success) or 404
+    // (no profile row for ci-smoke account). Either is acceptable — what matters
+    // is that the Clerk session JWT is accepted (not 401) and the BFF does not
+    // return 5xx (not a server regression).
+    const res = await request.patch(`${STAGING_API}/api/v1/account/profile`, {
+      headers: {
+        Authorization: `Bearer ${sessionToken}`,
+        'Content-Type': 'application/json',
+      },
+      data: { email: 'ci-smoke-1183@vaultmtg.test' },
+    });
+
+    expect(
+      res.status(),
+      `PATCH /api/v1/account/profile returned 401 — session JWT rejected by Clerk middleware. ` +
+      `Staging BFF Clerk middleware misconfigured or sessionToken stale?`,
+    ).not.toBe(401);
+
+    expect(
+      res.status(),
+      `PATCH /api/v1/account/profile returned ${res.status()} — BFF may be unhealthy (expected < 500)`,
+    ).toBeLessThan(500);
+  });
+});
+

@@ -1,5 +1,7 @@
 -- Revert CFB limited_rating from REAL back to TEXT (PostgreSQL)
-ALTER TABLE cfb_ratings
+-- Guard: cfb_ratings is dropped by 000054.down, which runs before this migration
+-- in descending order. Skip if the table is absent.
+ALTER TABLE IF EXISTS cfb_ratings
     ALTER COLUMN limited_rating TYPE TEXT
     USING CASE
         WHEN limited_rating IS NULL   THEN NULL

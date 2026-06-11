@@ -3,6 +3,10 @@
 -- Order respects FK dependencies (children first).
 
 -- Account-scoped / tenant tables (reverse creation order)
+-- CASCADE guards against incomplete later downs and dirty states. On a correct
+-- sequential down, dependents are already gone before this migration runs;
+-- CASCADE is a safety net for partial failures and future FK additions that
+-- lack a corresponding down update.
 DROP TABLE IF EXISTS matchup_statistics CASCADE;
 DROP TABLE IF EXISTS opponent_deck_profiles CASCADE;
 DROP TABLE IF EXISTS draft_pattern_analysis CASCADE;

@@ -8,6 +8,10 @@ DROP INDEX IF EXISTS idx_daemon_api_keys_account_id;
 -- 2. Remove deletion_audit_log table and its indexes.
 DROP INDEX IF EXISTS idx_deletion_audit_log_active_per_account;
 DROP INDEX IF EXISTS idx_deletion_audit_log_completed_at;
+-- CASCADE guards against incomplete later downs and dirty states. On a correct
+-- sequential down, dependents are already gone before this migration runs;
+-- CASCADE is a safety net for partial failures and future FK additions that
+-- lack a corresponding down update.
 DROP TABLE IF EXISTS deletion_audit_log CASCADE;
 
 -- 1. Remove soft-delete gate column from users.

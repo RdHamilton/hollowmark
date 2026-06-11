@@ -344,3 +344,112 @@ test.describe('@smoke Profile page — email-change flow (AC6 — #888)', () => 
     await expect(page.locator('[data-testid="profile-edit-email-button"]')).toBeVisible();
   });
 });
+
+// ---------------------------------------------------------------------------
+// BFF PATCH error handling — tickets#1183 (AC2 — local mocked BFF)
+//
+// The email-change flow ends with a non-blocking BFF sync call:
+//   patchAccountProfile({ email }).catch(() => undefined)
+//
+// Per AC5 in PR #3100, Clerk is authoritative — BFF failures are silently
+// swallowed and the success banner still displays. These tests verify that
+// contract in E2E via Playwright route interception: even when the BFF returns
+// 4xx or 5xx, the user sees the success state and no error message is surfaced.
+//
+// The complete 3-step Clerk mock flow (createEmailAddress → prepareVerification
+// → attemptVerification → user.update) runs through the Clerk test mock which
+// resolves immediately; only the final non-blocking BFF sync call is intercepted.
+// ---------------------------------------------------------------------------
+
+test.describe('@smoke Profile page — email-change BFF PATCH error handling (#1183)', () => {
+  /**
+   * Drives the component through the full 3-step Clerk mock email-change flow:
+   *   pending → verifying → complete (OTP submit).
+   * The BFF PATCH route must be set up by the caller BEFORE page.goto().
+   */
+  async function runFullEmailChangeFlow(page: Page): Promise<void> {
+    await page.click('[data-testid="profile-edit-email-button"]');
+    await page.fill('[data-testid="profile-email-input"]', 'newemail@e2e.test');
+    await page.click('[data-testid="profile-email-submit-button"]');
+    await expect(page.locator('[data-testid="profile-email-code-input"]')).toBeVisible();
+    await page.fill('[data-testid="profile-email-code-input"]', '123456');
+    await page.click('[data-testid="profile-email-verify-button"]');
+  }
+
+  test('BFF PATCH 422 does NOT surface an error — success banner shown (non-blocking AC5) @smoke', async ({ page }) => {
+    // AC2 (tickets#1183) — BFF returns validation/conflict error; Clerk succeeded,
+    // so the component swallows the BFF failure and shows success to the user.
+    await setClerkSignedIn(page, {
+      firstName: 'Planeswalker', lastName: 'Mock', email: 'planeswalker@vaultmtg.test',
+    });
+
+    // Simulate BFF returning 422 (e.g. email_taken or validation failure)
+    await page.route('**/api/v1/account/profile', (route) => route.fulfill({
+      status: 422,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'email_taken' }),
+    }));
+
+    await page.goto('/profile');
+    await expect(page.locator('[data-testid="profile-page"]')).toBeVisible();
+    await runFullEmailChangeFlow(page);
+
+    // BFF error must be swallowed — success banner visible (Clerk is authoritative)
+    await expect(page.locator('[data-testid="profile-email-success"]')).toBeVisible();
+    // No error alert rendered to the user
+    await expect(page.locator('[data-testid="profile-email-error"]')).not.toBeVisible();
+    // Flow returned to idle
+    await expect(page.locator('[data-testid="profile-edit-email-button"]')).toBeVisible();
+  });
+
+  test('BFF PATCH 500 does NOT surface an error — success banner shown (non-blocking AC5) @smoke', async ({ page }) => {
+    // AC2 (tickets#1183) — BFF is offline / internal error; the non-blocking
+    // catch swallows this too. User experience is unchanged from the happy path.
+    await setClerkSignedIn(page, {
+      firstName: 'Planeswalker', lastName: 'Mock', email: 'planeswalker@vaultmtg.test',
+    });
+
+    // Simulate BFF returning 500 (e.g. BFF service unavailable)
+    await page.route('**/api/v1/account/profile', (route) => route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'internal_server_error' }),
+    }));
+
+    await page.goto('/profile');
+    await expect(page.locator('[data-testid="profile-page"]')).toBeVisible();
+    await runFullEmailChangeFlow(page);
+
+    // BFF 500 silently swallowed — success still shown
+    await expect(page.locator('[data-testid="profile-email-success"]')).toBeVisible();
+    await expect(page.locator('[data-testid="profile-email-error"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="profile-edit-email-button"]')).toBeVisible();
+  });
+
+  test('BFF PATCH is NOT called when user cancels before completing the Clerk flow @smoke', async ({ page }) => {
+    // Regression guard: cancelling in the pending step must not trigger the BFF
+    // sync at all — the route handler records whether it was hit.
+    await setClerkSignedIn(page, {
+      firstName: 'Planeswalker', lastName: 'Mock', email: 'planeswalker@vaultmtg.test',
+    });
+
+    let bffPatchHit = false;
+    await page.route('**/api/v1/account/profile', (route) => {
+      bffPatchHit = true;
+      return route.fulfill({ status: 204, body: '' });
+    });
+
+    await page.goto('/profile');
+    await expect(page.locator('[data-testid="profile-page"]')).toBeVisible();
+
+    // Open edit form, fill email, then cancel — never reach the verification step
+    await page.click('[data-testid="profile-edit-email-button"]');
+    await page.fill('[data-testid="profile-email-input"]', 'newemail@e2e.test');
+    await page.click('[data-testid="profile-email-cancel-button"]');
+
+    // Flow cancelled — returns to idle, BFF not called
+    await expect(page.locator('[data-testid="profile-edit-email-button"]')).toBeVisible();
+    await expect(page.locator('[data-testid="profile-email-input"]')).not.toBeVisible();
+    expect(bffPatchHit).toBe(false);
+  });
+});

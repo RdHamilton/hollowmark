@@ -41,8 +41,11 @@ var ErrDisabled = errors.New("sentry disabled: empty DSN")
 // ErrDisabled and the SDK is left uninitialised — all subsequent sentry.* calls
 // become safe no-ops per the sentry-go contract.
 //
-// release is the daemon Version string and is sent as the Sentry release tag
-// so events correlate to a deployed daemon build.
+// release is the daemon Version string (e.g. "v0.4.1" from ldflags). A leading
+// "v" is stripped before being set on sentry.ClientOptions.Release so that
+// daemon events correlate with BFF and SPA events under the same bare-semver
+// release name (e.g. "0.4.1"). The binary's user-visible version string
+// (main.Version, printed by -version and logged at startup) is unaffected.
 //
 // cloudAPIURL is used to derive the Sentry environment ("production",
 // "staging", "development").
@@ -53,7 +56,7 @@ func Init(dsn, release, cloudAPIURL string) error {
 	env := environmentFromCloudAPIURL(cloudAPIURL)
 	return sentry.Init(sentry.ClientOptions{
 		Dsn:              dsn,
-		Release:          release,
+		Release:          strings.TrimPrefix(release, "v"),
 		Environment:      env,
 		ServerName:       "redacted", // suppress hostname leakage
 		AttachStacktrace: true,
