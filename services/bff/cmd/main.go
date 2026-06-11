@@ -1030,6 +1030,16 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 		r.Post("/api/v1/waitlist", deps.WaitlistHandler.Join)
 	}
 
+	// POST /api/v1/boot-signal — config-failure beacon receiver (ADR-077, ticket #1212).
+	// Intentionally public (no Clerk auth — fires before config inits). CORS-simple
+	// (sendBeacon with text/plain Blob — no preflight). Rate limited at 20 req/min per IP.
+	// Returns 204 on all valid and over-limit paths; 400 on oversize body or invalid schema.
+	// Never returns 429 (silent drop policy — fire-and-forget must not surface errors to
+	// a booting SPA). Sink: structured CloudWatch log line only. No DB writes. See AC4–AC7.
+	// Constructed inline — no external dependencies (no DB, no Mailchimp, no Clerk).
+	bootSignalHandler := handlers.NewBootSignalHandler(cfg.AnalyticsPIISalt)
+	r.Post("/api/v1/boot-signal", bootSignalHandler.Handle)
+
 	// POST /api/v1/daemon/register — daemon PKCE registration (Clerk OAuth token required).
 	// The daemon calls this immediately after completing the PKCE browser flow,
 	// sending the Clerk OAuth access token as the Bearer token.  The handler
