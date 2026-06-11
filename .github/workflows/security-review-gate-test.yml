@@ -1326,7 +1326,7 @@ jobs:
             echo "LAST_PUSH_TIMESTAMP=2026-06-10T20:05:00Z"
             echo "PARENT_COUNT=2"
             echo "PARENT0_SHA=b50cc4c4fake000000000000000000000000dead"
-            echo "PARENT0_SHA=df9a7ba4fake000000000000000000000000dead"
+            echo "PARENT1_SHA=df9a7ba4fake000000000000000000000000dead"
             printf 'COMMIT_FILES<<EOF\n'
             printf '.github/workflows/daemon-release.yml\n'
             printf 'services/bff/internal/hooks/sentry.go\n'
@@ -1459,7 +1459,7 @@ jobs:
             echo "LAST_PUSH_TIMESTAMP=2026-06-10T20:10:00Z"
             echo "PARENT_COUNT=1"
             echo "PARENT0_SHA="
-            echo "PARENT0_SHA="
+            echo "PARENT1_SHA="
             printf 'COMMIT_FILES<<EOF\n'
             printf '.github/workflows/daemon-release.yml\n'
             printf 'EOF\n'
