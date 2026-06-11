@@ -21,8 +21,12 @@ name: Schema-000054-Compat
 #
 # SCOPE
 # -----
-# - Required check on PRs that touch services/bff/internal/storage/repository/
-#   or services/bff/internal/storage/migrations/ (path-filtered below).
+# - REQUIRED status check — registered in branch protection (hollowmark-tickets#359).
+#   Job context: "Schema-000054-compat — repository tests on consolidated schema".
+#   Applies to PRs touching services/bff/internal/storage/repository/ or
+#   services/bff/internal/storage/migrations/ (path-filtered below).
+#   GitHub treats path-filtered required checks that did not run (no matching
+#   paths changed) as satisfied, so this does not block PRs outside the paths.
 # - Runs repository-level tests only (not the full integration suite) to keep
 #   the job fast.
 # - Does NOT replace the existing incremental-path integration test job in
