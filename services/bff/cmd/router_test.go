@@ -798,7 +798,7 @@ func (s *stubWaitlistRouterRepo) UpdateMailchimpStatus(_ context.Context, _, _ s
 // without any authentication token and routes to WaitlistHandler.Join.
 func TestRouter_Waitlist_IsPublic(t *testing.T) {
 	deps := depsNoAuth(t)
-	deps.WaitlistHandler = handlers.NewWaitlistHandler(&stubWaitlistRouterRepo{}, nil)
+	deps.WaitlistHandler = handlers.NewWaitlistHandler(&stubWaitlistRouterRepo{}, nil, "")
 
 	r := BuildRouter(minimalConfig(), deps)
 
