@@ -1513,3 +1513,41 @@ func runKeychainMigration(t *testing.T, bffURL, accountID, version string) {
 	defer cancel()
 	_ = d.SendOrBuffer(ctx, evt)
 }
+
+// ---------------------------------------------------------------------------
+// #1017 — dispatchKeychainMigrated: skip dispatch on empty API key
+// ---------------------------------------------------------------------------
+
+// TestDispatchKeychainMigrated_SkipsOnEmptyKey verifies AC1 + AC2:
+// When cfg.Keychain is true but keychain.GetForService() returns empty (the
+// OS keychain holds no entry for the service — e.g. reinstall scenario), no
+// outbound BFF ingest request must be made.
+//
+// The copy-forward migration may have succeeded; this test exercises only the
+// post-migration telemetry-dispatch guard, which is the scope of #1017.
+func TestDispatchKeychainMigrated_SkipsOnEmptyKey(t *testing.T) {
+	useMemoryKeyring(t)
+	// Keyring is empty — GetForService will return ("", ErrNotFound).
+
+	// BFF stub: records any ingest hit so we can assert zero calls.
+	ingestHits := 0
+	bffSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "ingest") {
+			ingestHits++
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer bffSrv.Close()
+
+	cfg := &config.Config{
+		CloudAPIURL: bffSrv.URL,
+		AccountID:   "acc_test_empty_key",
+		Keychain:    true,
+		// APIKey intentionally empty — Keychain:true means we read from keyring.
+	}
+
+	dispatchKeychainMigrated(cfg, "0.4.3-test")
+
+	assert.Equal(t, 0, ingestHits,
+		"dispatchKeychainMigrated must not issue a BFF request when keychain.GetForService returns empty")
+}
