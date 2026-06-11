@@ -195,9 +195,10 @@ func TestDraftsRepository_ListSessions_TrophyAt7Wins(t *testing.T) {
 	}
 }
 
-// TestDraftsRepository_DistinctSets_HappyPath verifies that DistinctSets returns
-// the distinct set codes for sessions belonging to the queried account.
-func TestDraftsRepository_DistinctSets_HappyPath(t *testing.T) {
+// TestDraftsRepository_DistinctSets_Integration_HappyPath verifies that DistinctSets
+// returns the distinct set codes for sessions belonging to the queried account.
+// Named *_Integration_* so that "go test -run Integration" picks it up in integration.yml.
+func TestDraftsRepository_DistinctSets_Integration_HappyPath(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewDraftsRepository(db)
 
@@ -226,9 +227,10 @@ func TestDraftsRepository_DistinctSets_HappyPath(t *testing.T) {
 	}
 }
 
-// TestDraftsRepository_DistinctSets_EmptyAccount verifies that DistinctSets
+// TestDraftsRepository_DistinctSets_Integration_EmptyAccount verifies that DistinctSets
 // returns an empty slice (not an error) when the account has no draft sessions.
-func TestDraftsRepository_DistinctSets_EmptyAccount(t *testing.T) {
+// Named *_Integration_* so that "go test -run Integration" picks it up in integration.yml.
+func TestDraftsRepository_DistinctSets_Integration_EmptyAccount(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewDraftsRepository(db)
 
@@ -243,10 +245,11 @@ func TestDraftsRepository_DistinctSets_EmptyAccount(t *testing.T) {
 	}
 }
 
-// TestDraftsRepository_DistinctSets_BlankSetCodeExcluded verifies that a
-// draft_sessions row with set_code=” is not returned by DistinctSets
+// TestDraftsRepository_DistinctSets_Integration_BlankSetCodeExcluded verifies
+// that a draft_sessions row with set_code=” is not returned by DistinctSets
 // (the WHERE set_code <> ” guard must hold).
-func TestDraftsRepository_DistinctSets_BlankSetCodeExcluded(t *testing.T) {
+// Named *_Integration_* so that "go test -run Integration" picks it up in integration.yml.
+func TestDraftsRepository_DistinctSets_Integration_BlankSetCodeExcluded(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewDraftsRepository(db)
 
