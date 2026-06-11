@@ -5,8 +5,8 @@ name: Layer-5 Replay Reconcile (ADR-052 Mode A)
 # replays it through the real daemon→BFF→projection pipeline, and asserts the
 # projected BFF API responses against the expected-truth manifest.
 #
-# RULE-INFRA-01 (ADR-052): starts continue-on-error: true.
-# Flip to continue-on-error: false after two consecutive clean runs.
+# RULE-INFRA-01 (ADR-052): flipped to continue-on-error: false (hard-fail)
+# on 2026-06-11 after green runs 27315107720 + 27315215200 (#695).
 #
 # Local run:
 #   export DATABASE_URL="postgres://mtga:mtga@localhost:5432/mtga_test?sslmode=disable"
@@ -28,8 +28,10 @@ jobs:
   layer5-api-reconcile:
     name: Layer-5 API Reconciliation
     runs-on: ubuntu-latest
-    # RULE-INFRA-01: start continue-on-error until two consecutive clean runs.
-    continue-on-error: true
+    # RULE-INFRA-01: flipped to hard-fail after two consecutive green main runs.
+    # Flip date: 2026-06-11. Green run IDs: 27315107720, 27315215200.
+    # Ticket: RdHamilton/hollowmark-tickets#695.
+    continue-on-error: false
     # AC5 (#695): hard cap prevents a hung reconciliation job from consuming a
     # runner for the default 6-hour GHA job timeout.
     timeout-minutes: 10

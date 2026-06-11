@@ -64,7 +64,18 @@ var l5TestDBURL string
 func TestMain(m *testing.M) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
-		fmt.Fprintln(os.Stderr, "[layer5] DATABASE_URL not set — skipping layer5 suite")
+		// In CI (CI=true) a missing DATABASE_URL is a configuration error, not a
+		// skip-worthy condition — the workflow always provisions a postgres service
+		// container. Exiting 0 (skip) here would make the required check green
+		// while exercising nothing, defeating the entire gate (#695).
+		//
+		// Outside CI (local dev), exit 0 so developers without a local DB are not
+		// blocked when running the default `go test ./...` without -tags layer5.
+		if os.Getenv("CI") == "true" {
+			fmt.Fprintln(os.Stderr, "[layer5] FATAL: CI=true but DATABASE_URL not set — bff-layer5.yml must provide a postgres service container")
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "[layer5] DATABASE_URL not set — skipping layer5 suite (set DATABASE_URL to run locally)")
 		os.Exit(0)
 	}
 	if err := storage.RunMigrations(dbURL); err != nil {
