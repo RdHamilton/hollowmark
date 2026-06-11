@@ -1,0 +1,107 @@
+name: Schema-Parity Gate
+
+# ---------------------------------------------------------------------------
+# hollowmark-tickets#1192 — Standing incremental-path schema-parity harness
+#
+# WHY THIS JOB EXISTS
+# -------------------
+# The incremental migration path (000001 → HEAD applied one-by-one) and the
+# consolidated fresh-start path (migrate force 53 → up, starting from
+# 000054_initial_schema) can silently diverge. This class of defect hit twice:
+#   - #2545 scope correction: incremental left a stale artifact
+#   - #1185 game_plays TEXT/BIGINT: pgx encode-plan failure caught in prod
+# Both times the divergence was caught late — by a production failure or deep
+# PR review, never by automated CI. Ray's verdict on PR #1185 authorized this
+# standing harness as the class fix.
+#
+# TWO-PHASE MODEL
+# ---------------
+# Phase A — FRESH PATH:
+#   Empty DB → `migrate force 53` (sets tracker to version 53, no SQL run) →
+#   `migrate up` (applies 000054_initial_schema onward). Reproduces production
+#   init: a DB that was never walked through 000001–000053.
+#
+# Phase B — INCREMENTAL PATH:
+#   Empty DB → `migrate up` from 000001 to HEAD. This is the path used by the
+#   standard integration test suite.
+#
+# Both schemas are dumped with `pg_dump --schema-only`, normalized, and diffed.
+# Any divergence fails the job with the diff in the log so a developer can
+# immediately identify which table/column diverged.
+#
+# Implementation: scripts/schema-parity-check.sh
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'services/bff/internal/storage/migrations/**'
+      - 'scripts/schema-parity-check.sh'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'services/bff/internal/storage/migrations/**'
+      - 'scripts/schema-parity-check.sh'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  schema-parity:
+    name: Schema-parity — fresh vs incremental path diff
+    runs-on: ubuntu-latest
+    # Target: under 2 minutes for both migration runs + dump + diff.
+    timeout-minutes: 10
+    # RULE-INFRA-01: continue-on-error=true against the existing codebase while
+    # pre-existing divergences are resolved (tracked in hollowmark-tickets#1192
+    # out-of-scope note: "Fixing any existing schema divergence is a separate
+    # ticket"). Flip to false once the companion fix ticket is merged and this
+    # check is consistently green on main.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Cache migrate CLI binary
+        id: cache-migrate
+        uses: actions/cache@v5
+        with:
+          path: ~/go/bin/migrate
+          key: migrate-cli-${{ runner.os }}-v4.18.3
+
+      - name: Install golang-migrate CLI
+        if: steps.cache-migrate.outputs.cache-hit != 'true'
+        env:
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.3
+
+      - name: Install PostgreSQL client (pg_dump)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      # ---------------------------------------------------------------------------
+      # Run the two-phase parity harness.
+      #
+      # The script spins up two ephemeral pgvector/pgvector:pg16 containers,
+      # runs Phase A (fresh path: force 53 → up from 000054) and Phase B
+      # (incremental: 000001 → HEAD), dumps both schemas, normalizes them, and
+      # diffs. Exits 1 with a human-readable diff if any divergence is found.
+      # ---------------------------------------------------------------------------
+      - name: Run schema-parity check (two-phase)
+        env:
+          PG_PORT_FRESH: "15442"
+          PG_PORT_INCR: "15443"
+        run: bash scripts/schema-parity-check.sh
