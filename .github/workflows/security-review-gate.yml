@@ -128,6 +128,9 @@
 # preserving gate integrity for real security changes (including evil merges).
 #
 # Ticket #231 (vault-mtg-tickets) is the canonical implementation ticket.
+# Ticket #1120 (hollowmark-tickets) fixes the COMMITS_AFTER delta query: gh api --jq
+#   does not accept --arg; the old form silently returned empty, so COMMITS_AFTER was
+#   always "", and every verdict was carried forward as fresh regardless of what was pushed.
 # Ticket #1134 (hollowmark-tickets) adds the A' guarded-skip predicate.
 # Ticket #1224 (hollowmark-tickets) fixes the A' compare base: parent[0] not parent[1].
 # Runbook: §1D of infra-security-review-gate.md.

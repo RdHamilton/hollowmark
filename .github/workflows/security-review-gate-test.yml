@@ -7,7 +7,7 @@
 # Verifies the critical properties of the SHA-delta staleness check and the
 # check-run conclusion decision logic in security-review-gate.yml.
 #
-# Test cases (RdHamilton/hollowmark-tickets#1134, #1224 + vault-mtg-tickets#231, #2420):
+# Test cases (RdHamilton/hollowmark-tickets#1120, #1134, #1224 + vault-mtg-tickets#231, #2420):
 #
 # AC-1134-A (re-keyed): A prime guarded skip -- single-parent commit with §1A file in
 #   COMMIT_FILES but EMPTY MERGE_CONTRIB (impossible in real single-parent flow,
@@ -71,6 +71,11 @@
 # AC5:  Gate required + fresh matching verdict -> conclusion = "success".
 # AC6:  Gate required + no verdict found after retry exhaustion -> conclusion = "failure".
 # AC7:  Gate required + verdict exists but §1A commit after verdict -> conclusion = "failure".
+#   Verifies the end-to-end chain INCLUDING the jq filter that populates COMMITS_AFTER
+#   (the path that carried bug #1120). Tests the fixed jq expression against synthetic JSON
+#   to prove the filter correctly emits post-verdict SHAs before the file-match logic fires.
+#   AC7 would have FAILED against the buggy code (jq error -> COMMITS_AFTER="" ->
+#   delta-no-commits -> success, not failure).
 #
 # HOW IT WORKS
 # ------------
@@ -91,7 +96,7 @@
 #   (OQ-4 resolution -- RdHamilton/hollowmark-tickets#1134.)
 #
 # Runbook: hollowmark-docs/engineering/runbooks/infra-security-review-gate.md
-# Ticket:  RdHamilton/hollowmark-tickets#1134, vault-mtg-tickets#231, #2420
+# Ticket:  RdHamilton/hollowmark-tickets#1120, #1134, #1224, vault-mtg-tickets#231, #2420
 
 name: S-07 Gate Logic Tests
 
@@ -1025,6 +1030,24 @@ jobs:
 
       # -----------------------------------------------------------------------
       # AC7: Gate required + verdict staled by post-verdict §1A commit (jq filter)
+      #
+      # Verifies the end-to-end chain INCLUDING the jq filter that populates
+      # COMMITS_AFTER (the path that carried bug #1120). Tests the fixed jq
+      # expression against synthetic JSON to prove the filter correctly emits
+      # post-verdict SHAs before the file-match logic fires.
+      #
+      # Bug #1120: the old COMMITS_AFTER assignment used:
+      #   gh api ... --jq --arg ts "${COMMENT_TIMESTAMP}" '.[] | select(... | . > $ts) | .sha'
+      # gh api consumed --arg as the jq program string (not a flag), so jq never saw
+      # --arg and $ts was undefined. With || echo "" the invocation silently returned
+      # empty -> COMMITS_AFTER="" -> delta-no-commits branch -> treat as fresh, defeating
+      # the staleness check entirely.
+      #
+      # Fix: embed timestamp via shell interpolation into a single jq program string:
+      #   --jq ".[] | select(.commit.committer.date > \"${COMMENT_TIMESTAMP}\") | .sha"
+      #
+      # This test WOULD HAVE FAILED against the buggy code:
+      #   jq error (undefined $ts) -> COMMITS_AFTER="" -> delta-no-commits -> success ≠ failure
       # -----------------------------------------------------------------------
       - name: "AC7 setup: gate required, verdict staled by post-verdict 1A commit"
         run: |
@@ -1586,4 +1609,4 @@ jobs:
           echo "AC7      : Gate required + staled verdict -> conclusion=failure      PASS"
           echo ""
           echo "Gate integrity and A prime guarded-skip property verified."
-          echo "Tickets: RdHamilton/hollowmark-tickets#1134, #1224, vault-mtg-tickets#231, #2420"
+          echo "Tickets: RdHamilton/hollowmark-tickets#1120, #1134, #1224, vault-mtg-tickets#231, #2420"
