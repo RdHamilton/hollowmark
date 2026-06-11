@@ -9,11 +9,18 @@
 # because VITE_CLERK_PUBLISHABLE_KEY is baked at Vite build time and ADR-072 requires separate
 # per-env Clerk instances.
 #
+# ADR-077 (Accepted 2026-06-10): per-env runtime values moved to config.json sidecar written
+# at deploy time from SSM. The hashed Vite bundle (dist/assets/*) is now environment-neutral;
+# only config.json carries per-env values. Closes ADR-075 §IV-3 byte-identity caveat (resolution a).
+# Implements hollowmark-tickets#1209.
+#
 # Env-varying values resolved from the `environment` input:
 #   - S3 bucket name:             /vaultmtg/{env}/spa-bucket-name
 #   - CloudFront distribution ID: /vaultmtg/{env}/spa-distribution-id
 #   - Sentry SPA DSN:             /vaultmtg/{env}/sentry-*-dsn  (see SSM step for full paths)
 #   - Clerk publishable key:      /vaultmtg/{env}/CLERK_PUBLISHABLE_KEY  (String -- public)
+#   - PostHog API key:            /vaultmtg/app/{env}/posthog-api-key (SecureString)
+#   - PostHog host:               /vaultmtg/app/{env}/posthog-host (String)
 #   - CI smoke token (staging):   /vaultmtg/staging/ci-smoke-token
 #   - Clerk secret key (staging): /vaultmtg/app/staging/CLERK_SECRET_KEY (SecureString)
 #
@@ -25,14 +32,25 @@
 #   TODO(#1072 follow-on): once D4 namespace-symmetry work migrates spa-* params to
 #   /vaultmtg/app/production/, update the prod SSM reads here accordingly.
 #
+# Cache-Control split (ADR-077 / Lee constraint 3):
+#   dist/assets/* (hashed):  public, max-age=31536000, immutable
+#   index.html + config.json: no-store, no-cache (uploaded via s3 cp, not s3 sync)
+#
+# Step order within the deploy job (ADR-077 R1 ruling):
+#   build -> FF-10 -> sync assets -> sync root (--exclude config.json) ->
+#   index.html cp (no-cache) -> Write config.json (no-cache) ->
+#   Invalidate CloudFront -> FF-11 -> smoke
+#
 # Job graph:
-#   deploy (builds SPA, syncs to S3, invalidates CloudFront, unauthenticated smoke)
+#   deploy (builds SPA, syncs to S3, writes config.json, invalidates CloudFront, gates, smoke)
 #   +-- staging-smoke (staging only: authed Playwright + BFF API smoke suites)
 #
 # Callers:
 #   release.yml:        uses: ./.github/workflows/deploy-spa.yml  with: environment: production
 #   staging-deploy.yml: uses: ./.github/workflows/deploy-spa.yml  with: environment: staging
 #   daemon-release.yml: gh workflow run deploy-spa.yml --field environment=staging
+#   Note: daemon-release.yml:1270-1292 VITE_DAEMON_VERSION producer is out of scope here;
+#   tracked by hollowmark-tickets#1219 (Coupled-With: #1209).
 
 name: Deploy SPA (unified)
 
@@ -144,6 +162,10 @@ jobs:
       #   Prod:    /vaultmtg/app/production/sentry-dsn-spa (SecureString)
       #   Staging: /vaultmtg/staging/sentry-spa-dsn        (SecureString)
       #
+      # PostHog (ADR-077 -- config.json class members):
+      #   Prod:    /vaultmtg/app/production/posthog-api-key (SecureString), /vaultmtg/app/production/posthog-host (String)
+      #   Staging: /vaultmtg/app/staging/posthog-api-key   (SecureString), /vaultmtg/app/staging/posthog-host   (String)
+      #
       # spa-bucket-name / spa-distribution-id:
       #   Prod:    /vaultmtg/production/spa-*    (legacy namespace, see TODO in file header)
       #   Staging: /vaultmtg/staging/spa-*
@@ -173,6 +195,12 @@ jobs:
             CLERK_PUBLISHABLE_KEY=$(aws ssm get-parameter \
               --name /vaultmtg/app/production/CLERK_PUBLISHABLE_KEY \
               --region us-east-1 --query Parameter.Value --output text)
+            POSTHOG_KEY=$(aws ssm get-parameter \
+              --name /vaultmtg/app/production/posthog-api-key \
+              --region us-east-1 --with-decryption --query Parameter.Value --output text)
+            POSTHOG_HOST=$(aws ssm get-parameter \
+              --name /vaultmtg/app/production/posthog-host \
+              --region us-east-1 --query Parameter.Value --output text)
           else
             # staging
             BUCKET=$(aws ssm get-parameter \
@@ -190,58 +218,345 @@ jobs:
             CLERK_PUBLISHABLE_KEY=$(aws ssm get-parameter \
               --name /vaultmtg/staging/CLERK_PUBLISHABLE_KEY \
               --region us-east-1 --query Parameter.Value --output text)
+            POSTHOG_KEY=$(aws ssm get-parameter \
+              --name /vaultmtg/app/staging/posthog-api-key \
+              --region us-east-1 --with-decryption --query Parameter.Value --output text)
+            POSTHOG_HOST=$(aws ssm get-parameter \
+              --name /vaultmtg/app/staging/posthog-host \
+              --region us-east-1 --query Parameter.Value --output text)
           fi
 
-          # Mask the Sentry DSN immediately so it never appears in log output.
+          # Mask secrets immediately so they never appear in log output (R5).
+          # SENTRY_DSN: SecureString -- masked before any log line that could contain it.
+          # POSTHOG_KEY: SecureString -- masked immediately after read (::add-mask:: before first use).
+          # CLERK_PUBLISHABLE_KEY: public pk_* String -- no masking required.
           echo "::add-mask::${SENTRY_DSN}"
+          echo "::add-mask::${POSTHOG_KEY}"
           {
             echo "bucket=$BUCKET"
             echo "dist_id=$DIST_ID"
             echo "sentry_dsn=$SENTRY_DSN"
             echo "clerk_publishable_key=$CLERK_PUBLISHABLE_KEY"
+            echo "posthog_key=$POSTHOG_KEY"
+            echo "posthog_host=$POSTHOG_HOST"
           } >> "$GITHUB_OUTPUT"
 
-      # Build the React SPA with environment-resolved config.
-      # AC3 + AC7 (D5/#975 class closed): VITE_CLERK_PUBLISHABLE_KEY comes exclusively from SSM
-      # via steps.ssm.outputs.clerk_publishable_key -- never from vars.VITE_CLERK_PUBLISHABLE_KEY.
-      # The "staging SPA built with the prod key" failure is now structurally unrepresentable.
+      # Build the React SPA.
+      # ADR-077: per-env runtime values are no longer baked into the bundle.
+      # VITE_CLERK_PUBLISHABLE_KEY, VITE_BFF_URL, VITE_SENTRY_DSN, VITE_POSTHOG_KEY,
+      # VITE_POSTHOG_HOST, VITE_DAEMON_URL are all moved to config.json (written post-build).
+      # VITE_APP_VERSION stays baked -- it is artifact identity, not environment config (ADR-077 G1).
+      # VITE_SENTRY_ENV stays baked for the Sentry source-map release tie (vite.config.ts:11-20).
+      # AC3: VITE_DAEMON_VERSION removed (no runtime consumer; ADR-077 G1 confirms vestigial).
+      # Note: daemon-release.yml:1270-1292 second producer tracked by hollowmark-tickets#1219.
       - name: Build React SPA
         working-directory: frontend
         run: npm run build
         env:
-          VITE_BFF_URL: ${{ vars.VITE_BFF_URL }}
-          # AC3: Clerk publishable key always from SSM, never from vars.*
-          VITE_CLERK_PUBLISHABLE_KEY: ${{ steps.ssm.outputs.clerk_publishable_key }}
-          VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
-          # #818: pin PostHog ingest host explicitly. Falls back to app.posthog.com
-          # if the repo var is not yet set (safe -- the redirect still works).
-          VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST || 'https://app.posthog.com' }}
-          VITE_SENTRY_DSN: ${{ steps.ssm.outputs.sentry_dsn }}
           VITE_APP_VERSION: ${{ steps.version.outputs.version }}
           VITE_SENTRY_ENV: ${{ steps.version.outputs.sentry_env }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-          # Staging: daemon binds port 9011 (stable=9001). Without this the env-aware SPA
-          # client falls back to 9001 and the staging install cannot reach its daemon.
-          # Value is a loopback port only -- not a secret. Coupled to #667.
-          # Production: unset so the SPA uses the stable default port 9001.
-          VITE_DAEMON_URL: ${{ steps.resolve-env.outputs.env == 'staging' && (vars.VITE_DAEMON_URL || 'http://localhost:9011/api/v1') || '' }}
-          # Staging: pins daemon downloads to the latest signed pre-release build.
-          # Updated automatically by daemon-release.yml. Production omits this var.
-          VITE_DAEMON_VERSION: ${{ steps.resolve-env.outputs.env == 'staging' && vars.VITE_DAEMON_VERSION || '' }}
 
-      - name: Sync build output to S3
+      # FF-10: Assert no per-env value baked into the built bundle (ADR-077).
+      # Self-activates via marker-file guard: if frontend/src/config/runtimeConfig.ts
+      # exists in the deployed ref, the gate is live (R3 -- #1208 creates this file).
+      # On refs without the file, exits 0 as dormant (no false failures pre-#1208).
+      # Placement: AFTER build, BEFORE sync -- fail fast before any S3 write.
+      #
+      # B1 (binding condition from Ray's approval 4676295614):
+      #   (a) glob-expansion assert: ls frontend/dist/assets/*.js must match >=1 file,
+      #       else exit 1 "FF-10: no bundle JS found" (empty build -> vacuous PASS prevented).
+      #   (b) non-empty asserts on each SSM-fetched value before grep (empty value ->
+      #       grep -qF "" matches everything -> spurious failure prevented).
+      #   (c) 2>/dev/null dropped after glob assert -- with glob confirmed, stderr suppression
+      #       only hides real errors.
+      #
+      # R2: grep exact runtime values (fixed-string -qF), not regex (Clerk SDK ships
+      # its own pk_live_/pk_test_ literals -> permanent false positive with regex).
+      # Values enter via env: block, never inline ${{ }} interpolation (R5).
+      # Failure messages name the value CLASS only, never the value.
+      - name: FF-10 -- Assert no per-env value in built bundle
+        env:
+          CLERK_PK: ${{ steps.ssm.outputs.clerk_publishable_key }}
+          SENTRY_DSN: ${{ steps.ssm.outputs.sentry_dsn }}
+          POSTHOG_KEY: ${{ steps.ssm.outputs.posthog_key }}
+          ENV: ${{ steps.resolve-env.outputs.env }}
         run: |
-          aws s3 sync frontend/dist/ "s3://${{ steps.ssm.outputs.bucket }}" \
+          # Marker-file guard (R3): self-activate when #1208's runtimeConfig.ts is present.
+          # On refs without the file, the gate is dormant -- no false failures pre-#1208.
+          if [ ! -f frontend/src/config/runtimeConfig.ts ]; then
+            echo "FF-10: dormant -- runtime-config boot (#1208) not yet in this ref."
+            exit 0
+          fi
+
+          if [ "$ENV" = "production" ]; then
+            BFF_URL="https://api.vaultmtg.app/api/v1"
+          else
+            BFF_URL="https://staging-api.hollowmark.app/api/v1"
+          fi
+
+          # B1(a): assert the built bundle contains at least one JS file.
+          # An empty/missing build would make every grep exit non-zero and the gate
+          # would pass vacuously. Fail loud instead.
+          if ! ls frontend/dist/assets/*.js > /dev/null 2>&1; then
+            echo "FAIL: FF-10 -- no bundle JS found in frontend/dist/assets/. Build may have failed."
+            exit 1
+          fi
+
+          # B1(b): assert each checked value is non-empty before grepping.
+          # An empty value passed to grep -qF "" matches every line, producing spurious FAILs
+          # that misattribute the cause (SSM read failure, not a real bundle leak).
+          if [ -z "$CLERK_PK" ]; then
+            echo "FAIL: FF-10 -- Clerk publishable key is empty -- SSM read problem."
+            exit 1
+          fi
+          if [ -z "$SENTRY_DSN" ]; then
+            echo "FAIL: FF-10 -- Sentry DSN is empty -- SSM read problem."
+            exit 1
+          fi
+          if [ -z "$POSTHOG_KEY" ]; then
+            echo "FAIL: FF-10 -- PostHog API key is empty -- SSM read problem."
+            exit 1
+          fi
+          if [ -z "$BFF_URL" ]; then
+            echo "FAIL: FF-10 -- BFF URL is empty -- logic error."
+            exit 1
+          fi
+
+          echo "FF-10: checking built bundle for per-env values..."
+          FAIL=0
+
+          # Check exact Clerk publishable key (R2: fixed-string, not pk_(live|test)_ regex).
+          # CLERK_PK is a public pk_* String; naming the match class is safe.
+          if grep -rqF "$CLERK_PK" frontend/dist/assets/*.js; then
+            echo "FAIL: FF-10 -- Clerk publishable key found in bundle JS files."
+            FAIL=1
+          fi
+
+          # Check exact Sentry DSN. SENTRY_DSN is masked; on a match, name the class only.
+          if grep -rqF "$SENTRY_DSN" frontend/dist/assets/*.js; then
+            echo "FAIL: FF-10 -- Sentry DSN found in bundle JS files."
+            FAIL=1
+          fi
+
+          # Check exact PostHog key. POSTHOG_KEY is masked; on a match, name the class only.
+          if grep -rqF "$POSTHOG_KEY" frontend/dist/assets/*.js; then
+            echo "FAIL: FF-10 -- PostHog API key found in bundle JS files."
+            FAIL=1
+          fi
+
+          # Check exact per-env bffUrl constant.
+          if grep -rqF "$BFF_URL" frontend/dist/assets/*.js; then
+            echo "FAIL: FF-10 -- BFF URL found in bundle JS files."
+            FAIL=1
+          fi
+
+          if [ "$FAIL" -eq 1 ]; then
+            echo "FF-10: FAIL -- one or more per-env values found in built bundle. See FAIL lines above."
+            exit 1
+          fi
+
+          echo "FF-10: PASS -- no per-env values found in built bundle."
+
+      # Sync build output to S3 (split cache headers -- ADR-077 / Lee constraint 3).
+      # Three-part split:
+      #   1. dist/assets/ (hashed JS/CSS): long-lived immutable cache (content-hash guarantees freshness).
+      #   2. dist/ root remainder (fonts, icons, manifest, etc.): short-lived cache.
+      #      --exclude "assets/*": handled in step 1.
+      #      --exclude "index.html": uploaded separately in step 3 with no-cache.
+      #      --exclude "config.json": defense-in-depth (R1) -- protects the separately-written
+      #        sidecar from accidental deletion even if step order ever regresses.
+      #   3. index.html: no-cache (Lee constraint 3 / AC2 -- same PR as config.json no-cache).
+      - name: Sync build output to S3
+        env:
+          BUCKET: ${{ steps.ssm.outputs.bucket }}
+        run: |
+          # 1. Sync hashed assets (JS/CSS) with long-lived immutable cache.
+          aws s3 sync frontend/dist/assets/ \
+            "s3://${BUCKET}/assets/" \
             --delete \
+            --cache-control "public, max-age=31536000, immutable" \
             --region us-east-1
 
-      - name: Invalidate CloudFront cache
+          # 2. Sync remaining non-asset, non-index, non-config files.
+          aws s3 sync frontend/dist/ \
+            "s3://${BUCKET}" \
+            --delete \
+            --exclude "assets/*" \
+            --exclude "index.html" \
+            --exclude "config.json" \
+            --cache-control "public, max-age=60" \
+            --region us-east-1
+
+          # 3. index.html: no-cache so browsers always fetch the latest entrypoint.
+          aws s3 cp frontend/dist/index.html \
+            "s3://${BUCKET}/index.html" \
+            --cache-control "no-store, no-cache" \
+            --region us-east-1
+
+      # Write config.json to S3 (ADR-077 / AC1 / AC2).
+      # Step order (R1 ruling): AFTER bundle sync, BEFORE CloudFront invalidation.
+      # Writing after sync eliminates any race with --delete. The --exclude "config.json"
+      # on the sync above is defense-in-depth; this ordering is the primary protection.
+      #
+      # jq --arg reads values from shell env vars (R5 -- no inline ${{ }} in script body).
+      # SENTRY_DSN and POSTHOG_KEY are GHA-masked; they enter via env: block only.
+      # jq --arg handles special characters (quotes, newlines in DSNs) without shell injection.
+      #
+      # Staging bffUrl flip (R7 declared change): staging uses staging-api.hollowmark.app/api/v1
+      # (canonical domain direction per BROADCAST anchor 2026-06-10). Prod stays api.vaultmtg.app
+      # (I-57 -- no prod hostname change in this ticket). Rollback: re-upload config.json with
+      # the prior bffUrl + CloudFront invalidation (no rebuild required -- ADR-077 sidecar benefit).
+      - name: Write config.json to S3
+        env:
+          SENTRY_DSN: ${{ steps.ssm.outputs.sentry_dsn }}
+          POSTHOG_KEY: ${{ steps.ssm.outputs.posthog_key }}
+          CLERK_PK: ${{ steps.ssm.outputs.clerk_publishable_key }}
+          POSTHOG_HOST: ${{ steps.ssm.outputs.posthog_host }}
+          BUCKET: ${{ steps.ssm.outputs.bucket }}
+          ENV: ${{ steps.resolve-env.outputs.env }}
+          SENTRY_ENV: ${{ steps.version.outputs.sentry_env }}
         run: |
-          aws cloudfront create-invalidation \
-            --distribution-id "${{ steps.ssm.outputs.dist_id }}" \
-            --paths "/*"
+          if [ "$ENV" = "production" ]; then
+            BFF_URL="https://api.vaultmtg.app/api/v1"
+            DAEMON_URL="http://localhost:9001/api/v1"
+          else
+            BFF_URL="https://staging-api.hollowmark.app/api/v1"
+            DAEMON_URL="http://localhost:9011/api/v1"
+          fi
+
+          # jq --arg reads from shell variables set in env: block above.
+          # Secret values (SENTRY_DSN, POSTHOG_KEY) never appear as literal text
+          # in this script body -- they are passed via env: (R5).
+          jq -n \
+            --arg clerkPublishableKey "$CLERK_PK" \
+            --arg bffUrl "$BFF_URL" \
+            --arg sentryDsn "$SENTRY_DSN" \
+            --arg sentryEnv "$SENTRY_ENV" \
+            --arg posthogKey "$POSTHOG_KEY" \
+            --arg posthogHost "$POSTHOG_HOST" \
+            --arg envLabel "$ENV" \
+            --arg daemonUrl "$DAEMON_URL" \
+            '{
+              clerkPublishableKey: $clerkPublishableKey,
+              bffUrl: $bffUrl,
+              sentryDsn: $sentryDsn,
+              sentryEnv: $sentryEnv,
+              posthogKey: $posthogKey,
+              posthogHost: $posthogHost,
+              envLabel: $envLabel,
+              daemonUrl: $daemonUrl
+            }' > config.json
+
+          aws s3 cp config.json \
+            "s3://${BUCKET}/config.json" \
+            --cache-control "no-store, no-cache" \
+            --region us-east-1
+
+          echo "config.json written to s3://${BUCKET}/config.json"
+
+      # Invalidate CloudFront cache.
+      # Captures Invalidation.Id for FF-11's deterministic wait (R4 fix -- no fire-and-forget).
+      - name: Invalidate CloudFront cache
+        id: invalidate
+        env:
+          DIST_ID: ${{ steps.ssm.outputs.dist_id }}
+        run: |
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id "$DIST_ID" \
+            --paths "/*" \
+            --query "Invalidation.Id" \
+            --output text)
+          echo "invalidation_id=${INVALIDATION_ID}" >> "$GITHUB_OUTPUT"
+          echo "CloudFront invalidation ${INVALIDATION_ID} created."
+
+      # FF-11: Post-deploy config.json SSM-truth assertion (ADR-077 / AC5).
+      # R4 corrections applied:
+      #   (1) Cache-Control header assert (no-cache on the served response).
+      #   (2) Full-schema jq -e over 6 required fields (present and non-empty).
+      #   (3) aws cloudfront wait invalidation-completed before fetch (deterministic, not sleep).
+      #   (4) Retry-loop exhaustion: explicit exit 1; curl stderr separate from parsed body.
+      #
+      # EXPECTED_PK (Clerk PK, public pk_*) is safe to compare; not logged.
+      # DIST_ID / INVALIDATION_ID are infrastructure identifiers, not secrets.
+      # B2 (binding condition): body-preview in schema-failure message is acceptable --
+      #   the served object is public by design; sentryDsn/posthogKey are GHA-masked
+      #   so log redaction applies (Ray approval 4676295614 §B2).
+      - name: FF-11 -- Post-deploy config.json SSM-truth assertion
+        env:
+          DIST_ID: ${{ steps.ssm.outputs.dist_id }}
+          INVALIDATION_ID: ${{ steps.invalidate.outputs.invalidation_id }}
+          EXPECTED_PK: ${{ steps.ssm.outputs.clerk_publishable_key }}
+          ENV: ${{ steps.resolve-env.outputs.env }}
+        run: |
+          # Wait for invalidation to complete (R4: deterministic, not sleep-based).
+          echo "FF-11: waiting for CloudFront invalidation ${INVALIDATION_ID} to complete..."
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$DIST_ID" \
+            --id "$INVALIDATION_ID"
+          echo "FF-11: invalidation completed."
+
+          if [ "$ENV" = "staging" ]; then
+            CDN_URL="https://stg-app.hollowmark.app/config.json"
+          else
+            CDN_URL="https://app.vaultmtg.app/config.json"
+          fi
+
+          # Fetch config.json. Retry up to 3 times as backstop for edge propagation lag
+          # beyond the invalidation wait (rare, but possible during regional edge-node flush).
+          # R4 fix: no 2>&1 -- stderr stays separate from the parsed body.
+          RESPONSE=""
+          for i in $(seq 1 3); do
+            RESPONSE=$(curl -sf \
+              -H "Cache-Control: no-cache" \
+              -H "Pragma: no-cache" \
+              -D /tmp/ff11_headers.txt \
+              --max-time 15 \
+              "$CDN_URL") && break
+            echo "FF-11: attempt $i/3 failed; waiting 10s..."
+            sleep 10
+          done
+
+          # R4 fix: explicit failure on retry exhaustion.
+          if [ -z "$RESPONSE" ]; then
+            echo "FAIL: FF-11 -- could not fetch ${CDN_URL} after 3 attempts."
+            exit 1
+          fi
+
+          # R4 (1): assert Cache-Control header contains no-cache.
+          if ! grep -qi "Cache-Control:.*no-cache" /tmp/ff11_headers.txt 2>/dev/null; then
+            echo "FAIL: FF-11 -- Cache-Control header does not contain no-cache."
+            echo "Response headers:"
+            cat /tmp/ff11_headers.txt
+            exit 1
+          fi
+
+          # R4 (2): assert all six required schema fields are present and non-empty.
+          if ! echo "$RESPONSE" | jq -e '
+            .clerkPublishableKey and (.clerkPublishableKey | length > 0) and
+            .bffUrl and (.bffUrl | length > 0) and
+            .sentryEnv and (.sentryEnv | length > 0) and
+            .envLabel and (.envLabel | length > 0) and
+            .daemonUrl and (.daemonUrl | length > 0) and
+            .posthogHost and (.posthogHost | length > 0)
+          ' > /dev/null 2>&1; then
+            echo "FAIL: FF-11 -- config.json missing required fields or not valid JSON."
+            echo "Body preview (first 300 chars): $(echo "$RESPONSE" | head -c 300)"
+            exit 1
+          fi
+
+          # Assert clerkPublishableKey matches SSM truth for this environment.
+          # EXPECTED_PK is the Clerk PK (public pk_* string -- safe to compare; not logged).
+          SERVED_PK=$(echo "$RESPONSE" | jq -r '.clerkPublishableKey')
+          if [ "$SERVED_PK" != "$EXPECTED_PK" ]; then
+            echo "FAIL: FF-11 -- served clerkPublishableKey does not match SSM value for ${ENV}."
+            echo "This indicates a cross-env key swap or stale config.json -- investigate immediately."
+            exit 1
+          fi
+
+          echo "FF-11: PASS -- config.json served from ${CDN_URL} passes all assertions (schema, Cache-Control, PK match) for ${ENV}."
 
       # Post-deploy unauthenticated smoke check.
       # Staging: checks stg-app.hollowmark.app
