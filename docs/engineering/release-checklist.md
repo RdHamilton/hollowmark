@@ -28,9 +28,9 @@ All of these must be green before you tag.
 
 - [ ] GitHub Actions shows all checks passing on the release branch
 - [ ] No open PRs in state "BLOCKED" that touch this release
-- [ ] Infra repo (`mtga-companion-infra`) required status checks are all enabled — verify with:
+- [ ] Infra repo (`hollowmark-infra`) required status checks are all enabled — verify with:
   ```bash
-  gh api repos/RdHamilton/mtga-companion-infra/branches/main/protection/required_status_checks \
+  gh api repos/RdHamilton/hollowmark-infra/branches/main/protection/required_status_checks \
     --jq '.contexts[]'
   # Expected: all four gates present
   # - Changeset gate — replacement check
@@ -151,7 +151,7 @@ curl -s -o /dev/null -w "%{http_code}" https://<production-bff-url>/api/v1/decks
 
 Perform this manually with MTGA open:
 
-1. Start the daemon: `./mtga-companion service start`
+1. Verify the daemon is running (see §3.5 below for how to check per platform)
 2. Open a draft event in MTGA
 3. Open the production app in a browser
 4. Navigate to the Draft tab
@@ -164,8 +164,58 @@ Perform this manually with MTGA open:
 
 ### 3.5 Daemon Connects to Production App
 
-1. Install fresh release daemon binary (do not reuse dev binary)
-2. `./mtga-companion service install && ./mtga-companion service start`
+The daemon is managed by the packaged installer — there is no `./mtga-companion service start` command.
+Use the platform-appropriate lifecycle commands to verify it is running with the release binary.
+
+**macOS (launchd)**
+
+The installer registers a LaunchAgent under the label `com.vaultmtg.daemon` at
+`~/Library/LaunchAgents/com.vaultmtg.daemon.plist` (source: `services/daemon/install/macos/install.sh`).
+
+```bash
+# Check whether the daemon job is loaded and running
+launchctl list com.vaultmtg.daemon
+# Non-zero PID in the first column means running; exit code 0 = job exists.
+
+# Stop the daemon
+launchctl unload -w ~/Library/LaunchAgents/com.vaultmtg.daemon.plist
+
+# Start the daemon
+launchctl load -w ~/Library/LaunchAgents/com.vaultmtg.daemon.plist
+
+# View logs
+tail -f ~/Library/Logs/vaultmtg-daemon.log
+```
+
+**Windows (Task Scheduler)**
+
+The installer registers a task named `VaultMTG-Daemon` via Task Scheduler
+(source: `services/daemon/install/windows/install.ps1`).
+
+```powershell
+# Check status
+Get-ScheduledTask -TaskName 'VaultMTG-Daemon' | Select-Object State, LastRunTime
+
+# Stop the daemon process
+Stop-ScheduledTask -TaskName 'VaultMTG-Daemon'
+
+# Start the daemon
+Start-ScheduledTask -TaskName 'VaultMTG-Daemon'
+```
+
+**Linux (systemd user service)**
+
+Linux users manage the daemon via a systemd user unit `vaultmtg-daemon.service`
+(source: `services/daemon/install/README.md`).
+
+```bash
+systemctl --user status vaultmtg-daemon
+systemctl --user restart vaultmtg-daemon
+journalctl --user -u vaultmtg-daemon -f
+```
+
+1. Install the fresh release daemon via the `.dmg`/`.exe` installer (or installer script for Linux)
+2. Confirm the daemon is running using the platform commands above
 3. Open production app → Settings → Daemon Connection
 
 - [ ] Status shows Connected
