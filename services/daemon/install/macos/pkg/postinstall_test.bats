@@ -784,3 +784,109 @@ print('PASS: api_key and sync_enabled unchanged on same-env reinstall')
 
   echo "PASS: staging channel install landed staging identity"
 }
+
+# ---------------------------------------------------------------------------
+# collection-agent-helper install in postinstall (R4 — hollowmark-tickets#1286)
+#
+# postinstall now calls install-helper.sh (sourced from SHARE_DIR) after
+# bootstrapping the daemon LaunchAgent.  Key constraints:
+#
+#   R4: The install-helper.sh call is NON-FATAL.  An error from install-helper.sh
+#       must NOT roll back the entire .pkg install (the #334/Code=112 failure
+#       class).  postinstall must log a WARNING and continue.
+#
+#   R6: postinstall logs the installed helper version after a successful install.
+#       The version is embedded as HelperVersion in the binary at build time.
+#
+# Tests use SHARE_DIR override so they can write under BATS_TEST_TMPDIR.
+# ---------------------------------------------------------------------------
+
+# 18. Helper install is non-fatal: postinstall exits 0 even when install-helper.sh fails
+@test "helper install: postinstall exits 0 even when install-helper.sh returns non-zero (R4)" {
+  # Produce a test postinstall and add a SHARE_DIR with a failing install-helper.sh.
+  local test_dir="${BATS_TEST_TMPDIR}/r4-nonfatal-$$"
+  mkdir -p "${test_dir}"
+  local tmp_script="${BATS_TEST_TMPDIR}/postinstall-r4-$$"
+  _make_test_script "${tmp_script}" "${test_dir}"
+
+  # Create a SHARE_DIR with an install-helper.sh that always fails.
+  local fake_share="${BATS_TEST_TMPDIR}/share-r4-$$"
+  mkdir -p "${fake_share}/install"
+  cat > "${fake_share}/install/install-helper.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "stub install-helper: simulating failure" >&2
+exit 1
+EOF
+  chmod +x "${fake_share}/install/install-helper.sh"
+  # Place a fake helper binary so the install attempt finds one to pass.
+  echo "fake helper" > "${fake_share}/collection-helper"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    SHARE_DIR="${fake_share}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${tmp_script}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  # postinstall must exit 0 — helper failure is non-fatal.
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"WARNING"* ]] || [[ "${output}" == *"warning"* ]]
+}
+
+# 19. Helper install is attempted when SHARE_DIR/collection-helper exists
+@test "helper install: install-helper.sh is called when helper binary is present in SHARE_DIR" {
+  local test_dir="${BATS_TEST_TMPDIR}/r4-called-$$"
+  mkdir -p "${test_dir}"
+  local tmp_script="${BATS_TEST_TMPDIR}/postinstall-r4called-$$"
+  _make_test_script "${tmp_script}" "${test_dir}"
+
+  local fake_share="${BATS_TEST_TMPDIR}/share-r4called-$$"
+  mkdir -p "${fake_share}/install"
+  local install_called="${BATS_TEST_TMPDIR}/install_helper_called"
+  cat > "${fake_share}/install/install-helper.sh" <<EOF
+#!/usr/bin/env bash
+echo "stub install-helper: called with args: \$*" >&2
+touch "${install_called}"
+exit 0
+EOF
+  chmod +x "${fake_share}/install/install-helper.sh"
+  echo "fake helper" > "${fake_share}/collection-helper"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    SHARE_DIR="${fake_share}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${tmp_script}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  [ -f "${install_called}" ]
+}
+
+# 20. Helper install is skipped (non-fatal) when SHARE_DIR/collection-helper is absent
+@test "helper install: skipped gracefully when SHARE_DIR/collection-helper is absent" {
+  local test_dir="${BATS_TEST_TMPDIR}/r4-absent-$$"
+  mkdir -p "${test_dir}"
+  local tmp_script="${BATS_TEST_TMPDIR}/postinstall-r4absent-$$"
+  _make_test_script "${tmp_script}" "${test_dir}"
+
+  # SHARE_DIR exists but has no collection-helper binary.
+  local fake_share="${BATS_TEST_TMPDIR}/share-r4absent-$$"
+  mkdir -p "${fake_share}"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    SHARE_DIR="${fake_share}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${tmp_script}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  # Must not fail — helper absent is not an error.
+  [ "${status}" -eq 0 ]
+}

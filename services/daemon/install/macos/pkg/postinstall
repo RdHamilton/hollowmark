@@ -27,10 +27,9 @@ set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
-# Share directory constant — must match SHARE_DIR in build-pkg.sh.
-# The uninstall script is installed here by build-pkg.sh; we echo the path to
-# the user at the end of postinstall so they know how to remove the daemon.
-SHARE_DIR="/usr/local/share/vaultmtg"
+# Share directory — must match SHARE_DIR in build-pkg.sh and helperShareDir
+# in collection.go.  Use env override in tests; production path is the default.
+SHARE_DIR="${SHARE_DIR:-/usr/local/share/vaultmtg}"
 
 # Resolve the real (non-root) user so all files under $HOME are created with
 # correct ownership. postinstall runs as root; $SUDO_USER names the invoking
@@ -425,6 +424,39 @@ else
   echo "[postinstall] The daemon will start automatically at next login (RunAtLoad=true)." >&2
   echo "[postinstall] Check logs at: ${LOG_FILE}" >&2
   # Non-fatal — binary and LaunchAgent are present; do NOT exit 1 here.
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Install the collection-agent-helper (hollowmark-tickets#1286, R4).
+#
+# The helper binary and its install/ directory are staged at SHARE_DIR by the
+# .pkg payload so locateHelperFiles() can find them.  This call is unconditional
+# on every .pkg install/upgrade — install-helper.sh handles bootout + bootstrap
+# itself, making this idempotent.
+#
+# R4 constraint: this call MUST be non-fatal.  A failure here (e.g. TCC denial
+# or launchd not available) must not roll back the entire .pkg (the #334 /
+# PackageKit Code=112 class).  The tray "Grant Access" is the user repair path.
+#
+# R6: log the helper version (HelperVersion ldflag embedded at build time) so
+# operators can correlate helper versions from logs without a socket query.
+# ---------------------------------------------------------------------------
+HELPER_BINARY_PATH="${SHARE_DIR}/collection-helper"
+HELPER_INSTALL_SH="${SHARE_DIR}/install/install-helper.sh"
+
+if [[ -f "${HELPER_BINARY_PATH}" && -f "${HELPER_INSTALL_SH}" ]]; then
+  echo "[postinstall] installing collection-agent-helper via ${HELPER_INSTALL_SH}"
+  if bash "${HELPER_INSTALL_SH}" "${HELPER_BINARY_PATH}" 2>&1; then
+    echo "[postinstall] collection-agent-helper installed"
+    # Log helper version for traceability (R6).
+    HELPER_VERSION=$("${HELPER_BINARY_PATH}" --version 2>/dev/null || echo "unknown")
+    echo "[postinstall] helper_version=${HELPER_VERSION}"
+  else
+    echo "[postinstall] WARNING: collection-agent-helper install returned non-zero." >&2
+    echo "[postinstall] WARNING: Daemon installed successfully. Use 'Grant Access' in the tray to install the helper." >&2
+  fi
+else
+  echo "[postinstall] collection-agent-helper not staged at ${HELPER_BINARY_PATH} — skipping."
 fi
 
 echo "[postinstall] done"

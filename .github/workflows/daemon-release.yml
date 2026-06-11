@@ -845,13 +845,50 @@ jobs:
             -o /tmp/vaultmtg-daemon-amd64 \
             ./cmd/daemon
 
-      - name: Merge into universal binary with lipo
+      - name: Build collection-agent-helper darwin/arm64 (CGO_ENABLED=1)
+        # hollowmark-tickets#1286: build the helper for arm64 so it can be lipo'd
+        # into a universal binary and shipped in the .pkg payload.
+        # The helper uses CGO (task_for_pid via Mach traps — mem_darwin.go,
+        # dump_darwin.go) so CGO_ENABLED=1 is required, same as the daemon.
+        working-directory: services/collection-agent-helper
+        env:
+          CGO_ENABLED: "1"
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOOS: darwin
+          GOARCH: arm64
+        run: |
+          go build \
+            -ldflags "-s -w -X main.HelperVersion=${{ steps.semver.outputs.tag }}" \
+            -o /tmp/collection-helper-arm64 \
+            .
+
+      - name: Build collection-agent-helper darwin/amd64 (CGO_ENABLED=1)
+        working-directory: services/collection-agent-helper
+        env:
+          CGO_ENABLED: "1"
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOOS: darwin
+          GOARCH: amd64
+        run: |
+          go build \
+            -ldflags "-s -w -X main.HelperVersion=${{ steps.semver.outputs.tag }}" \
+            -o /tmp/collection-helper-amd64 \
+            .
+
+      - name: Merge daemon + helper into universal binaries with lipo
         run: |
           lipo -create \
             /tmp/vaultmtg-daemon-arm64 \
             /tmp/vaultmtg-daemon-amd64 \
             -output /tmp/vaultmtg-daemon
           lipo -info /tmp/vaultmtg-daemon
+          lipo -create \
+            /tmp/collection-helper-arm64 \
+            /tmp/collection-helper-amd64 \
+            -output /tmp/collection-helper
+          lipo -info /tmp/collection-helper
 
       - name: Verify CGO linkage (Cocoa + systray symbols)
         # What this catches: CGO_ENABLED flipped to 0 or build tag misrouting → stub ships — see ADR-041 G1/P0-2
@@ -882,6 +919,15 @@ jobs:
         with:
           name: vaultmtg-daemon-darwin-universal
           path: /tmp/vaultmtg-daemon
+          if-no-files-found: error
+
+      - name: Upload collection-helper universal binary for sign-macos
+        # hollowmark-tickets#1286: the helper is signed separately in sign-macos
+        # before being embedded in the .pkg payload.
+        uses: actions/upload-artifact@v6
+        with:
+          name: collection-helper-darwin-universal
+          path: /tmp/collection-helper
           if-no-files-found: error
 
   sign-macos:
@@ -921,6 +967,14 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: vaultmtg-daemon-darwin-universal
+          path: bin/
+
+      - name: Download collection-helper universal binary artifact
+        # hollowmark-tickets#1286: download the helper so it can be codesigned
+        # and embedded in the .pkg payload (R1 + R2).
+        uses: actions/download-artifact@v8
+        with:
+          name: collection-helper-darwin-universal
           path: bin/
 
       - name: Import Developer ID Application certificate
@@ -974,6 +1028,32 @@ jobs:
             --timestamp \
             bin/${{ env.BINARY }}
           codesign --verify --verbose bin/${{ env.BINARY }}
+
+      - name: Sign collection-agent-helper binary (R1 — hollowmark-tickets#1286)
+        # The helper must be signed with Developer ID Application + hardened runtime
+        # BEFORE pkgbuild embeds it in the .pkg payload.  Gatekeeper requires the
+        # hardened runtime flag on binaries executed as root by launchd.
+        #
+        # Same flags as the daemon (--force --options runtime --timestamp).
+        # The existing .pkg notarytool submission covers all payload binaries —
+        # no separate notarization call is needed for the helper.
+        #
+        # R1 manual gate (cannot be verified statically): after install on a test
+        # machine, confirm the hardened-runtime-signed helper completes a real
+        # task_for_pid scan via launchd.  Document this in the PR as a manual
+        # reviewer/Ramone verification step.
+        env:
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          chmod +x bin/collection-helper
+          codesign \
+            --force \
+            --options runtime \
+            --sign "$SIGNING_IDENTITY" \
+            --timestamp \
+            bin/collection-helper
+          codesign --verify --verbose bin/collection-helper
+          echo "PASS: collection-helper signed with hardened runtime."
 
       - name: Resolve cloud API URL for this build
         id: cloud_url
@@ -1052,6 +1132,19 @@ jobs:
           # Install the binary under its channel-distinct name so the staging
           # binary does not overwrite the prod binary at /usr/local/bin.
           cp bin/${{ env.BINARY }} "pkg-root/usr/local/bin/${DAEMON_BINARY_NAME}"
+
+          # Install collection-agent-helper to SHARE_DIR (hollowmark-tickets#1286, R2).
+          # The helper is channel-agnostic (R5) — same binary for stable + staging.
+          # SHARE_DIR must match helperShareDir constant in collection.go and
+          # SHARE_DIR in build-pkg.sh.
+          SHARE_DIR_ROOT="pkg-root/usr/local/share/vaultmtg"
+          mkdir -p "${SHARE_DIR_ROOT}/install"
+          cp bin/collection-helper "${SHARE_DIR_ROOT}/collection-helper"
+          chmod 755 "${SHARE_DIR_ROOT}/collection-helper"
+          cp services/collection-agent-helper/install/install-helper.sh "${SHARE_DIR_ROOT}/install/install-helper.sh"
+          cp services/collection-agent-helper/install/com.vaultmtg.collection-helper.plist "${SHARE_DIR_ROOT}/install/com.vaultmtg.collection-helper.plist"
+          chmod 755 "${SHARE_DIR_ROOT}/install/install-helper.sh"
+          echo "[sign-macos] helper staged at ${SHARE_DIR_ROOT}/ and ${SHARE_DIR_ROOT}/install/"
 
           # pkgbuild does not propagate env vars to the installed postinstall.
           # Substitute placeholders in a copy of the script BEFORE bundling.

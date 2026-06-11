@@ -28,7 +28,21 @@ import (
 	"strconv"
 )
 
+// HelperVersion is injected at build time via -X main.HelperVersion=<tag>.
+// It is the daemon release tag (e.g. "0.4.3") under which this binary was
+// built.  Postinstall logs the value immediately after installation so the
+// version is visible in the install log without launching the daemon.
+// The socket VersionRequest / skew-check is a separate follow-on
+// (hollowmark-tickets#1286, R6).
+var HelperVersion = "dev"
+
 func main() {
+	// --version: print the build-time version and exit (R6 — postinstall logs it).
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println(HelperVersion)
+		return
+	}
+
 	if os.Getuid() != 0 {
 		fmt.Fprintln(os.Stderr, "collection-helper must run as root")
 		os.Exit(1)
