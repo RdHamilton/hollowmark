@@ -63,7 +63,8 @@ func TestMountGate_AllNoop_Production(t *testing.T) {
 		erasure.NoopPostHogDeleter{},
 		erasure.NoopMailchimpDeleter{},
 		erasure.NoopClerkDeleter{},
-		nil, // no DB
+		nil, // no email sender
+		nil, // no root ctx
 		nil, // no repo
 		new(sync.WaitGroup),
 	)
@@ -81,6 +82,7 @@ func TestMountGate_AllNoop_Staging(t *testing.T) {
 		erasure.NoopPostHogDeleter{},
 		erasure.NoopMailchimpDeleter{},
 		erasure.NoopClerkDeleter{},
+		nil, // no email sender
 		nil,
 		nil,
 		new(sync.WaitGroup),
@@ -121,6 +123,7 @@ func TestMountGate_RealClients_Production(t *testing.T) {
 		&stubPostHogDeleter{},
 		&stubMailchimpDeleter{},
 		&stubClerkDeleter{},
+		nil, // no email sender
 		nil,
 		nil,
 		new(sync.WaitGroup),
@@ -151,6 +154,7 @@ func TestMountGate_RealClients_Dev(t *testing.T) {
 		erasure.NoopPostHogDeleter{},
 		erasure.NoopMailchimpDeleter{},
 		erasure.NoopClerkDeleter{},
+		nil, // no email sender
 		context.Background(),
 		nil,
 		new(sync.WaitGroup),
@@ -175,6 +179,7 @@ func TestMountGate_PartialNoop_Staging(t *testing.T) {
 		erasure.NoopPostHogDeleter{}, // ← Noop
 		&stubMailchimpDeleter{},      // ← real
 		&stubClerkDeleter{},          // ← real
+		nil,                          // no email sender
 		nil,
 		nil,
 		new(sync.WaitGroup),
