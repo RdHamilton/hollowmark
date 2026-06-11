@@ -60,7 +60,8 @@ name: Board Status Automation
 #
 # TICKETS
 # -------
-# Fix #1087 -- board-agnostic board-status-automation (Ben, 2026-06-07)
+# Chore #849  -- make board number configurable / guard NoneType (parent, Ben, 2026-06-11)
+# Fix #1087   -- board-agnostic board-status-automation (Ben, 2026-06-07)
 # Refactor #1088 -- extract PYEOF blocks to composite action (Ben, 2026-06-11)
 # ---------------------------------------------------------------------------
 
