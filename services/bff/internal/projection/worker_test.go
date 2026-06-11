@@ -45,8 +45,10 @@ func (f *fakeAccountStore) GetOrCreateByClientID(_ context.Context, _ string, _ 
 }
 
 type fakeMatchStore struct {
-	upserts []repository.MatchUpsert
-	err     error
+	upserts      []repository.MatchUpsert
+	err          error
+	playerTeamID int
+	teamErr      error
 }
 
 func (f *fakeMatchStore) UpsertMatch(_ context.Context, m repository.MatchUpsert) error {
@@ -55,6 +57,10 @@ func (f *fakeMatchStore) UpsertMatch(_ context.Context, m repository.MatchUpsert
 	}
 	f.upserts = append(f.upserts, m)
 	return nil
+}
+
+func (f *fakeMatchStore) GetPlayerTeamIDForMatch(_ context.Context, _ int64, _ string) (int, error) {
+	return f.playerTeamID, f.teamErr
 }
 
 type fakeDraftStore struct {
@@ -2420,19 +2426,21 @@ type fakeGameRowWriter struct {
 	upserts []struct {
 		matchID    string
 		gameNumber int
+		result     string
 	}
 	nextID int64
 	err    error
 }
 
-func (f *fakeGameRowWriter) UpsertGameRow(_ context.Context, matchID string, gameNumber int) (int64, error) {
+func (f *fakeGameRowWriter) UpsertGameRow(_ context.Context, matchID string, gameNumber int, result string) (int64, error) {
 	if f.err != nil {
 		return 0, f.err
 	}
 	f.upserts = append(f.upserts, struct {
 		matchID    string
 		gameNumber int
-	}{matchID, gameNumber})
+		result     string
+	}{matchID, gameNumber, result})
 	f.nextID++
 	return f.nextID, nil
 }
@@ -2637,6 +2645,147 @@ func TestRunOnce_GamePlayEvent_CardPlays_NoCardPlays_GameRowNotUpserted(t *testi
 
 	if len(events.projected) != 1 || events.projected[0] != 902 {
 		t.Errorf("expected row 902 marked projected, got %v", events.projected)
+	}
+}
+
+// ─── Ticket #748: UpsertGameRow result threading ────────────────────────────
+
+// TestRunOnce_GamePlayEvent_UpsertGameRow_PassesLossResult verifies that
+// when the event payload carries a winning_team_id that does NOT match the
+// player's team id, the projection worker derives "loss" and passes it to
+// UpsertGameRow — not the hardcoded 'win' placeholder (ticket #748).
+func TestRunOnce_GamePlayEvent_UpsertGameRow_PassesLossResult(t *testing.T) {
+	now := time.Now().UTC()
+	// winning_team_id=2 means team 2 won. Player is on team 1 → player lost.
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":        "match-748-loss-001",
+		"game_number":     1,
+		"winning_team_id": 2,
+		"turn_count":      10,
+		"duration_secs":   300,
+		"partial":         false,
+		"life_changes":    []map[string]interface{}{},
+		"card_plays": []map[string]interface{}{
+			{"game_number": 1, "turn_number": 1, "phase": "main1", "arena_id": 80001, "player_type": "player", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	grw := &fakeGameRowWriter{}
+	cp := &fakeCardPlayStoreCapturing{}
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 748, UserID: 1, AccountID: "acct-748-loss", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 80}
+	// playerTeamID=1: WinningTeamID=2 ≠ PlayerTeamID=1 → derived result is "loss".
+	matches := &fakeMatchStore{playerTeamID: 1}
+
+	w := NewWorker(events, accounts, matches, &fakeDraftStore{}, &fakeCollectionStore{}, &fakeInventoryStore{}, &fakeQuestStore{}, &fakeDeckStore{}, gp)
+	w.WithGameRowWriter(grw)
+	w.WithCardPlayStore(cp)
+
+	w.RunOnce(context.Background())
+
+	if len(grw.upserts) != 1 {
+		t.Fatalf("expected 1 UpsertGameRow call, got %d", len(grw.upserts))
+	}
+	if grw.upserts[0].result != "loss" {
+		t.Errorf("UpsertGameRow result: want %q (player lost), got %q — placeholder still written", "loss", grw.upserts[0].result)
+	}
+}
+
+// TestRunOnce_GamePlayEvent_UpsertGameRow_PassesWinResult verifies that
+// when winning_team_id matches the player's team id, result="win" is passed.
+func TestRunOnce_GamePlayEvent_UpsertGameRow_PassesWinResult(t *testing.T) {
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":        "match-748-win-001",
+		"game_number":     1,
+		"winning_team_id": 1,
+		"turn_count":      8,
+		"duration_secs":   240,
+		"partial":         false,
+		"life_changes":    []map[string]interface{}{},
+		"card_plays": []map[string]interface{}{
+			{"game_number": 1, "turn_number": 1, "phase": "main1", "arena_id": 80001, "player_type": "player", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	grw := &fakeGameRowWriter{}
+	cp := &fakeCardPlayStoreCapturing{}
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 749, UserID: 1, AccountID: "acct-748-win", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 81}
+	matches := &fakeMatchStore{playerTeamID: 1}
+
+	w := NewWorker(events, accounts, matches, &fakeDraftStore{}, &fakeCollectionStore{}, &fakeInventoryStore{}, &fakeQuestStore{}, &fakeDeckStore{}, gp)
+	w.WithGameRowWriter(grw)
+	w.WithCardPlayStore(cp)
+
+	w.RunOnce(context.Background())
+
+	if len(grw.upserts) != 1 {
+		t.Fatalf("expected 1 UpsertGameRow call, got %d", len(grw.upserts))
+	}
+	if grw.upserts[0].result != "win" {
+		t.Errorf("UpsertGameRow result: want %q, got %q", "win", grw.upserts[0].result)
+	}
+}
+
+// TestRunOnce_GamePlayEvent_UpsertGameRow_FallbackWhenMatchNotProjected verifies
+// that when the match row does not yet exist (match.completed not projected),
+// GetPlayerTeamIDForMatch returns 0 and the worker falls back to "win" rather
+// than failing or writing an invalid result value.
+func TestRunOnce_GamePlayEvent_UpsertGameRow_FallbackWhenMatchNotProjected(t *testing.T) {
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":        "match-748-fallback-001",
+		"game_number":     1,
+		"winning_team_id": 2,
+		"turn_count":      6,
+		"partial":         false,
+		"life_changes":    []map[string]interface{}{},
+		"card_plays": []map[string]interface{}{
+			{"game_number": 1, "turn_number": 1, "phase": "main1", "arena_id": 80001, "player_type": "player", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	grw := &fakeGameRowWriter{}
+	cp := &fakeCardPlayStoreCapturing{}
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 750, UserID: 1, AccountID: "acct-748-fallback", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 82}
+	// playerTeamID=0 simulates match.completed not yet projected.
+	matches := &fakeMatchStore{playerTeamID: 0}
+
+	w := NewWorker(events, accounts, matches, &fakeDraftStore{}, &fakeCollectionStore{}, &fakeInventoryStore{}, &fakeQuestStore{}, &fakeDeckStore{}, gp)
+	w.WithGameRowWriter(grw)
+	w.WithCardPlayStore(cp)
+
+	w.RunOnce(context.Background())
+
+	if len(grw.upserts) != 1 {
+		t.Fatalf("expected 1 UpsertGameRow call, got %d", len(grw.upserts))
+	}
+	// Fallback: 'win' when player_team_id is indeterminate (0 = match not yet projected).
+	if grw.upserts[0].result != "win" {
+		t.Errorf("UpsertGameRow result fallback: want %q, got %q", "win", grw.upserts[0].result)
+	}
+	if len(events.projected) != 1 || events.projected[0] != 750 {
+		t.Errorf("expected row 750 marked projected, got %v", events.projected)
 	}
 }
 
