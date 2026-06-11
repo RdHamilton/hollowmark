@@ -26,6 +26,9 @@ type MailchimpErasureClient struct {
 	listID     string
 	datacenter string
 	httpClient *http.Client
+	// baseURL overrides the Mailchimp API base URL. Zero value uses the real
+	// Mailchimp URL constructed from datacenter. Set only in tests via export_test.go.
+	baseURL string
 }
 
 // NewMailchimpErasureClient constructs a client from an API key
@@ -57,8 +60,12 @@ type mailchimpErasureBody struct{}
 // invoke this after all other steps succeed.
 func (c *MailchimpErasureClient) DeletePermanent(ctx context.Context, email string) error {
 	hash := mailchimpSubscriberHash(email)
-	url := fmt.Sprintf("https://%s.api.mailchimp.com/3.0/lists/%s/members/%s/actions/delete-permanent",
-		c.datacenter, c.listID, hash)
+	base := c.baseURL
+	if base == "" {
+		base = fmt.Sprintf("https://%s.api.mailchimp.com", c.datacenter)
+	}
+	url := fmt.Sprintf("%s/3.0/lists/%s/members/%s/actions/delete-permanent",
+		base, c.listID, hash)
 
 	body, err := json.Marshal(mailchimpErasureBody{})
 	if err != nil {
@@ -84,7 +91,7 @@ func (c *MailchimpErasureClient) DeletePermanent(ctx context.Context, email stri
 		return nil
 	}
 	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("mailchimp delete-permanent: unexpected status %d for email hash %s", resp.StatusCode, hash)
+		return fmt.Errorf("mailchimp delete-permanent: unexpected status %d", resp.StatusCode)
 	}
 	return nil
 }

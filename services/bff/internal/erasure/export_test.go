@@ -20,6 +20,22 @@ func ResetClerkUserIDFromContextFn() {
 	clerkUserIDFromContextFn.Store(nil)
 }
 
+// NewMailchimpErasureClientAtURL constructs a real MailchimpErasureClient that
+// targets the given base URL instead of the live Mailchimp API. Used by tests
+// to route the production DeletePermanent code path through an httptest.Server.
+func NewMailchimpErasureClientAtURL(baseURL, listID string, httpClient *http.Client) *MailchimpErasureClient {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return &MailchimpErasureClient{
+		apiKey:     "testkey-us1",
+		listID:     listID,
+		datacenter: "us1",
+		httpClient: httpClient,
+		baseURL:    baseURL,
+	}
+}
+
 // MailchimpErasureClientForTest is a test-double version of MailchimpErasureClient
 // that accepts an arbitrary base URL instead of constructing one from an API key.
 // Used by mailchimp_client_test.go to point the client at an httptest.Server.
