@@ -106,6 +106,29 @@ var DefaultSPAURL = "https://app.vaultmtg.app"
 // Used by handleMissingConfig and the retry-setup loop. Issue #637.
 var DefaultSetupURL = "https://vaultmtg.app/setup"
 
+// headlessKeychainFatalLog is the canonical FATAL log line emitted when the
+// daemon exits in headless mode because the keychain is unavailable after all
+// retries (#2136 AC6, REV-2). Extracted as a named constant so the launchd
+// runbook grep pattern, any test fixtures that match this string, and the log
+// call itself all share the same definition — a rename here is a single-place
+// change that propagates to every consumer.
+//
+// Do NOT change this string without updating:
+//   - engineering/runbooks/ (launchd log monitoring)
+//   - any .sh or E2E fixtures that grep for this pattern
+const headlessKeychainFatalLog = "[daemon] FATAL: keychain unavailable after retries — exiting"
+
+// logAndExitHeadlessKeychain logs the canonical FATAL line via l and then
+// calls exitFn(1) so the supervisor (launchd / systemd) will respawn the
+// daemon. exitFn defaults to os.Exit in production; tests supply a no-op so
+// the function is drivable without killing the test process. Extracting the
+// log call lets TestHeadlessExitFatalLogLine assert that the *real* code path
+// emits headlessKeychainFatalLog to whichever logger is active.
+func logAndExitHeadlessKeychain(l *log.Logger, exitFn func(int)) {
+	l.Println(headlessKeychainFatalLog)
+	exitFn(1)
+}
+
 func main() {
 	// ADR-049 Ticket 2: resolve the channel-scoped identity once at startup.
 	// All OS-level identifiers (keychain service, plist label, config dir) are
@@ -444,8 +467,7 @@ func main() {
 					// Headless path — log the canonical FATAL line and exit
 					// non-zero so the supervisor (launchd / systemd) respawns.
 					// NeedsFirstRunAuth will trigger PKCE on the next boot.
-					log.Println("[daemon] FATAL: keychain unavailable after retries — exiting")
-					os.Exit(1)
+					logAndExitHeadlessKeychain(log.Default(), os.Exit)
 				}
 				log.Printf("[mtga-daemon] fatal: %v", err)
 				app.Quit()
