@@ -108,11 +108,14 @@ func TestDBHaltChecker_IsHalted_WhenRestricted(t *testing.T) {
 	}
 
 	// Seed an account row with a known account_id_hash.
+	// is_default is omitted (defaults to false): idx_accounts_default only allows
+	// one is_default=true row globally, and this test only exercises IsHalted which
+	// joins on account_id_hash — the default flag is irrelevant here.
 	const testHash = "abcdef1234567890"
 	var accountID int64
 	err = db.QueryRowContext(context.Background(), `
-		INSERT INTO accounts (user_id, name, account_id_hash, is_default)
-		VALUES ($1, 'test halt set', $2, true)
+		INSERT INTO accounts (user_id, name, account_id_hash)
+		VALUES ($1, 'test halt set', $2)
 		RETURNING id
 	`, u.ID, testHash).Scan(&accountID)
 	if err != nil {
@@ -154,11 +157,13 @@ func TestDBHaltChecker_IsHalted_WhenNotRestricted(t *testing.T) {
 		t.Fatalf("UpsertByClerkUserID: %v", err)
 	}
 
+	// is_default omitted (defaults false) — idx_accounts_default only allows one
+	// is_default=true row globally; this test does not exercise default logic.
 	const testHash = "fedcba9876543210"
 	var accountID int64
 	err = db.QueryRowContext(context.Background(), `
-		INSERT INTO accounts (user_id, name, account_id_hash, is_default)
-		VALUES ($1, 'test', $2, true)
+		INSERT INTO accounts (user_id, name, account_id_hash)
+		VALUES ($1, 'test', $2)
 		RETURNING id
 	`, u.ID, testHash).Scan(&accountID)
 	if err != nil {
@@ -195,10 +200,12 @@ func TestRestrictionAuditLog_RowOnSet(t *testing.T) {
 		t.Fatalf("UpsertByClerkUserID: %v", err)
 	}
 
+	// is_default omitted (defaults false) — idx_accounts_default only allows one
+	// is_default=true row globally; this test does not exercise default logic.
 	var accountID int64
 	err = db.QueryRowContext(context.Background(), `
-		INSERT INTO accounts (user_id, name, account_id_hash, is_default)
-		VALUES ($1, 'test', 'aaaa1111bbbb2222', true)
+		INSERT INTO accounts (user_id, name, account_id_hash)
+		VALUES ($1, 'test', 'aaaa1111bbbb2222')
 		RETURNING id
 	`, u.ID).Scan(&accountID)
 	if err != nil {
@@ -251,10 +258,12 @@ func TestRestrictionAuditLog_RowOnClear(t *testing.T) {
 		t.Fatalf("UpsertByClerkUserID: %v", err)
 	}
 
+	// is_default omitted (defaults false) — idx_accounts_default only allows one
+	// is_default=true row globally; this test does not exercise default logic.
 	var accountID int64
 	err = db.QueryRowContext(context.Background(), `
-		INSERT INTO accounts (user_id, name, account_id_hash, is_default)
-		VALUES ($1, 'test', 'cccc3333dddd4444', true)
+		INSERT INTO accounts (user_id, name, account_id_hash)
+		VALUES ($1, 'test', 'cccc3333dddd4444')
 		RETURNING id
 	`, u.ID).Scan(&accountID)
 	if err != nil {
@@ -307,10 +316,12 @@ func TestRestrictionAuditLog_AdminActor(t *testing.T) {
 		t.Fatalf("UpsertByClerkUserID: %v", err)
 	}
 
+	// is_default omitted (defaults false) — idx_accounts_default only allows one
+	// is_default=true row globally; this test does not exercise default logic.
 	var accountID int64
 	err = db.QueryRowContext(context.Background(), `
-		INSERT INTO accounts (user_id, name, account_id_hash, is_default)
-		VALUES ($1, 'test', 'eeee5555ffff6666', true)
+		INSERT INTO accounts (user_id, name, account_id_hash)
+		VALUES ($1, 'test', 'eeee5555ffff6666')
 		RETURNING id
 	`, u.ID).Scan(&accountID)
 	if err != nil {

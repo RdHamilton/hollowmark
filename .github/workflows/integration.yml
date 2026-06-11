@@ -80,6 +80,21 @@ jobs:
         GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
       run: go test -v -tags integration -run TestSyncIntegration -coverprofile=coverage-integration-sync.out -covermode=atomic ./...
 
+    - name: Run repository package integration tests
+      # Fixes RdHamilton/hollowmark-tickets#1177: the existing "-run Integration"
+      # step name-filters to ~3 tests in this package; the remaining ~350
+      # TestXxxRepository_* tests all call openTestDB (which t.Skip when
+      # DATABASE_URL is absent) but are silently excluded by the name filter
+      # before the skip guard fires. This step runs the package directly with no
+      # name filter so every DB-backed test executes. TestMain (main_test.go)
+      # in this package calls RunMigrations before m.Run so the schema is ready.
+      working-directory: services/bff
+      env:
+        DATABASE_URL: postgres://mtga:mtga@localhost:5432/mtga_test?sslmode=disable
+        GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+      run: go test -v -count=1 -coverprofile=coverage-integration-repo.out -covermode=atomic ./internal/storage/repository/...
+
     - name: Upload integration coverage to Codecov
       uses: codecov/codecov-action@v7
       with:
