@@ -67,6 +67,11 @@ on:
         required: false
         default: ''
         type: string
+      app_version:
+        description: 'Bare semver string for VITE_APP_VERSION (e.g. "0.4.2"). Passed by release.yml from resolve-ref outputs.version. Avoids git describe on shallow SHA checkouts. Leave empty for staging or manual non-release deploys.'
+        required: false
+        default: ''
+        type: string
   workflow_dispatch:
     inputs:
       environment:
@@ -76,6 +81,11 @@ on:
         type: string
       ref:
         description: 'Git ref/SHA to deploy. Empty = workflow source ref.'
+        required: false
+        default: ''
+        type: string
+      app_version:
+        description: 'Bare semver string for VITE_APP_VERSION (e.g. "0.4.2"). Leave empty for non-release manual deploys.'
         required: false
         default: ''
         type: string
@@ -130,7 +140,16 @@ jobs:
           echo "env=$ENV" >> "$GITHUB_OUTPUT"
 
       # Resolve SPA version and Sentry environment tag.
-      # Production: strips the app/v* tag prefix (e.g. app/v0.4.1 -> 0.4.1); falls back to empty.
+      #
+      # Production: uses the explicit `app_version` input passed by release.yml
+      # (e.g. "0.4.2" — already stripped of the "app/v" prefix by release.yml's resolve-ref job).
+      # This avoids relying on `git describe --tags` which fails when the checkout ref is a bare
+      # commit SHA with fetch-depth:1 (tag refs are not fetched on a shallow SHA checkout).
+      # The value matches the BFF Sentry release name so SPA and BFF errors unify under the same
+      # release in the Sentry dashboard. For manual/non-release workflow_dispatch runs where
+      # app_version is empty, the Sentry plugin falls back to the commit SHA — acceptable for
+      # non-release deploys where release-correlation in Sentry is not expected.
+      #
       # Staging: always uses the full git SHA so every merge to main is uniquely traceable in Sentry.
       - name: Resolve SPA version
         id: version
@@ -140,8 +159,9 @@ jobs:
             echo "version=staging-${{ github.sha }}" >> "$GITHUB_OUTPUT"
             echo "sentry_env=staging" >> "$GITHUB_OUTPUT"
           else
-            RAW=$(git describe --tags --match 'app/v*' --abbrev=0 2>/dev/null || echo '')
-            echo "version=${RAW#app/v}" >> "$GITHUB_OUTPUT"
+            # app_version is the bare semver string (e.g. "0.4.2") passed from release.yml's
+            # resolve-ref job output. No prefix stripping needed here.
+            echo "version=${{ inputs.app_version }}" >> "$GITHUB_OUTPUT"
             echo "sentry_env=production" >> "$GITHUB_OUTPUT"
           fi
 

@@ -342,4 +342,10 @@ jobs:
     with:
       environment: production
       ref: ${{ needs.resolve-ref.outputs.sha }}
+      # Pass the bare semver version string (e.g. "0.4.2") already resolved by resolve-ref,
+      # so deploy-spa.yml can set VITE_APP_VERSION directly without relying on git describe
+      # (which fails on shallow SHA checkouts where tag refs are not fetched).
+      # On workflow_dispatch the resolve-ref job produces "manual-<sha>" (the RELEASE_TAG with
+      # "app/v" stripped is a no-op), giving deploy-spa a sane non-empty fallback.
+      app_version: ${{ needs.resolve-ref.outputs.version }}
     secrets: inherit
