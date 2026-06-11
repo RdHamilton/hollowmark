@@ -61,6 +61,14 @@ describe('ConfigErrorScreen', () => {
       await user.click(screen.getByTestId('config-error-screen-retry'));
       expect(onRetry).toHaveBeenCalledOnce();
     });
+
+    it('retry button has class "config-error-retry" for focus-visible ring (spec §6.3)', () => {
+      // The :focus-visible box-shadow rule targets .config-error-retry in the scoped
+      // <style> block. This assertion pins the class-to-style wiring so a future
+      // refactor cannot silently drop the focus ring by removing the class.
+      render(<ConfigErrorScreen branch="network" onRetry={vi.fn()} />);
+      expect(screen.getByTestId('config-error-screen-retry')).toHaveClass('config-error-retry');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -195,7 +203,7 @@ describe('ConfigErrorScreen', () => {
   // data-testid completeness (Tim spec §7)
   // -------------------------------------------------------------------------
   describe('data-testid completeness', () => {
-    it('all seven data-testids are present for network branch with all props', () => {
+    it('all six data-testids are present for network branch with all props', () => {
       render(
         <ConfigErrorScreen
           branch="network"

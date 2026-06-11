@@ -94,6 +94,19 @@ export default function ConfigErrorScreen({
   const Icon = branch === 'network' ? SignalSlashIcon : WrenchScrewdriverIcon;
 
   return (
+    <>
+      {/* Scoped focus-ring rule for the retry button.
+          Inline styles cannot express :focus-visible pseudo-class, so the rule
+          lives in a <style> element scoped to this component. The --shadow-amber
+          token (spec §6.3 / §8) is not yet in index.css, so the literal value is
+          inlined here as the fallback. Once the token is added globally this style
+          can be simplified to `var(--shadow-amber)`. */}
+      <style>{`
+        .config-error-retry:focus-visible {
+          outline: none;
+          box-shadow: var(--shadow-amber, 0 0 0 1px rgba(245,166,35,0.2), 0 4px 12px rgba(245,166,35,0.1));
+        }
+      `}</style>
     <div
       role="alert"
       aria-live="assertive"
@@ -173,6 +186,7 @@ export default function ConfigErrorScreen({
         {showRetry && (
           <button
             type="button"
+            className="config-error-retry"
             data-testid="config-error-screen-retry"
             onClick={onRetry}
             style={{
@@ -211,5 +225,6 @@ export default function ConfigErrorScreen({
         )}
       </div>
     </div>
+    </>
   );
 }
