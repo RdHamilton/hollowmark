@@ -210,6 +210,30 @@ func main() {
 		phEnqueuer = analytics.NoopEnqueuer{}
 		log.Println("POSTHOG_API_KEY not set — PostHog disabled (development mode only).")
 	}
+	// PII HASHING RULE — read before adding any new analytics property.
+	//
+	// Any property passed to analytics.Capture that contains human-identifiable
+	// data (email address, display_name, mtga_screen_name, IP address, or similar)
+	// MUST be hashed with identityhash.HashPII BEFORE being passed to Capture:
+	//
+	//   hashed := identityhash.HashPII(cfg.AnalyticsPIISalt, rawValue)
+	//   ac.Capture(ctx, distinctID, eventName, map[string]any{"email_hash": hashed}, opts)
+	//
+	// DO NOT pass the raw value. The salt (cfg.AnalyticsPIISalt) is sourced from
+	// SSM /vaultmtg/{env}/analytics-pii-salt (SecureString). Critical constraints:
+	//   - Never log the salt value — it must stay in memory only.
+	//   - Rotating the salt invalidates all existing hashes (PostHog person records
+	//     will deduplicate differently against historical events). Rotation requires a
+	//     coordinated PostHog person-merge or a clean break.
+	//   - Use HashAccountID (not HashPII) for internal numeric account IDs — those
+	//     are not human-identifiable and do not require a salt.
+	//   - See services/bff/internal/identityhash/hash.go for the canonical implementation.
+	//
+	// Current HashPII call sites: boot_signal.go (ip_hash), account_profile.go (email, display_name).
+	// No PII properties are emitted to PostHog today via analytics.Capture — when the first
+	// one lands, add it to the list above and add a test verifying the raw value is never in
+	// the captured properties.
+	//
 	// analyticsClient is finalised after the DB pool opens so DBHaltChecker
 	// can be wired. Until then it uses NoopHaltChecker as a safe default.
 	analyticsClient := analytics.NewClient(phEnqueuer, analytics.NewNoopHaltChecker())
@@ -504,6 +528,7 @@ func main() {
 		} else {
 			log.Println("MAILCHIMP_API_KEY or MAILCHIMP_LIST_ID not set — Mailchimp disabled for waitlist.")
 		}
+		// Any future PII property on the waitlist funnel event (e.g. email) is subject to the PII HASHING RULE above.
 		waitlistHandler = handlers.NewWaitlistHandler(waitlistRepo, mailchimpClient).WithAnalyticsClient(analyticsClient)
 
 		// WildcardRecommendationsHandler — ADR-045 full implementation (ticket #420).
