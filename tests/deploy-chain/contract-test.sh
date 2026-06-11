@@ -64,8 +64,19 @@
 #       directly via `. /tmp/deploy-env.sh` or via the local-path
 #       fallback used by infra/scripts).
 #
-# Exit code:  0 if all HARD contracts (C1-C7, C9) hold; non-zero on any
-#             violation, with a clear list of failures printed to stderr.
+#   C11 Source->upload->fetch triangle (#1148): every file sourced via
+#       `. /tmp/<f>` (POSIX dot) or `source /tmp/<f>` (bash keyword) in a
+#       provision script MUST (a) exist under scripts/deploy/ (the
+#       directory that `aws s3 sync` uploads) AND (b) appear as an
+#       explicit `aws s3 cp` fetch in the relevant PROVISION_CMD block in
+#       deploy-bff.yml.  Root cause of #3081:
+#       provision-staging-env.sh sourced provision-lib.sh and
+#       ssm-key-manifest.sh but neither had an s3 cp fetch in the
+#       staging PROVISION_CMD -- files were in S3 but never copied to
+#       /tmp/ on EC2 before the provision script ran.
+#
+# Exit code:  0 if all HARD contracts (C1-C7, C9, C11) hold; non-zero on
+#             any violation, with a clear list of failures printed to stderr.
 
 set -uo pipefail
 
@@ -602,6 +613,129 @@ for f in "$DEPLOY_SCRIPTS_DIR"/restart-bff.sh "$DEPLOY_SCRIPTS_DIR"/restart-bff-
   fi
 done
 [[ "$c10_ok" -eq 1 ]] && pass "restart-bff.sh and restart-bff-staging.sh both contain the migration-skew guard"
+echo
+
+# ---- C11: source→upload→fetch triangle (#1148) ----------------------------
+# Asserts the three-way contract that caused the #3081 staging regression:
+#   (a) UPLOAD: every file sourced (`. /tmp/<f>` or `source /tmp/<f>`) by
+#       a provision script MUST exist under scripts/deploy/ -- that
+#       directory is what `aws s3 sync scripts/deploy/ s3://.../scripts/`
+#       uploads.
+#   (b) FETCH: every such file MUST appear as an explicit `aws s3 cp`
+#       fetch in the corresponding PROVISION_CMD sequence in deploy-bff.yml
+#       -- without the fetch, the file is in S3 but never on the EC2 /tmp/.
+#
+# Scope: scripts/deploy/provision-staging-env.sh and the production
+# provision scripts (provision-env.sh, provision-db-url.sh).  These are
+# the scripts that run ON EC2 and may source helper files.  The stage-binary,
+# restart, and healthcheck scripts are included if they source any /tmp/ file
+# beyond deploy-env.sh (which C9 already covers).
+#
+# deploy-env.sh itself is excluded from the upload/fetch assertions because
+# it is uploaded via a dedicated `aws s3 cp` command (not via the sync) and
+# fetched by every command via the $FETCH_CONFIG preamble -- C9 + C6 already
+# guard it.
+echo '== C11: source->upload->fetch triangle (every sourced helper is uploaded and fetched) =='
+
+DEPLOY_BFF_WORKFLOW="${WORKFLOWS_DIR}/deploy-bff.yml"
+c11_ok=1
+
+if [[ ! -f "$DEPLOY_BFF_WORKFLOW" ]]; then
+  fail "C11: deploy-bff.yml not found at $DEPLOY_BFF_WORKFLOW"
+  c11_ok=0
+fi
+
+if [[ "$c11_ok" -eq 1 ]]; then
+  # The full list of provision scripts to scan.  infra/scripts are excluded --
+  # they source deploy-env.sh only (already covered by C9) and are uploaded
+  # to the infra-scripts/ S3 prefix, not scripts/.
+  PROVISION_SCRIPTS=(
+    "${DEPLOY_SCRIPTS_DIR}/provision-staging-env.sh"
+    "${DEPLOY_SCRIPTS_DIR}/provision-env.sh"
+    "${DEPLOY_SCRIPTS_DIR}/provision-db-url.sh"
+    "${DEPLOY_SCRIPTS_DIR}/stage-binary.sh"
+    "${DEPLOY_SCRIPTS_DIR}/stage-binary-staging.sh"
+    "${DEPLOY_SCRIPTS_DIR}/restart-bff.sh"
+    "${DEPLOY_SCRIPTS_DIR}/restart-bff-staging.sh"
+    "${DEPLOY_SCRIPTS_DIR}/healthcheck-bff.sh"
+    "${DEPLOY_SCRIPTS_DIR}/healthcheck-bff-staging.sh"
+  )
+
+  # Extract the staging PROVISION_CMD block and the production PROVISION_CMD block
+  # from deploy-bff.yml as flat strings for pattern matching.
+  # We read the whole file and pull the two PROVISION_CMD= assignments.
+  STAGING_PROVISION_CMD=""
+  PROD_PROVISION_CMD=""
+  in_provision_block=0
+  current_env=""
+  while IFS= read -r wfline; do
+    # Detect which branch we are parsing based on environment check lines.
+    if echo "$wfline" | grep -q '"staging"'; then
+      current_env="staging"
+    elif echo "$wfline" | grep -q '"production"\|else'; then
+      if [[ "$current_env" = "staging" ]]; then
+        current_env="prod"
+      fi
+    fi
+    # Capture PROVISION_CMD= assignment lines.
+    if echo "$wfline" | grep -q 'PROVISION_CMD='; then
+      if [[ "$current_env" = "staging" ]]; then
+        STAGING_PROVISION_CMD="$wfline"
+      else
+        PROD_PROVISION_CMD="$wfline"
+      fi
+    fi
+  done < "$DEPLOY_BFF_WORKFLOW"
+
+  for script in "${PROVISION_SCRIPTS[@]}"; do
+    [[ -f "$script" ]] || continue
+    script_base=$(basename "$script")
+
+    # Collect all sourced helpers via `. /tmp/<f>` (POSIX dot) OR
+    # `source /tmp/<f>` (bash keyword).  Both forms are used on EC2.
+    # Skip deploy-env.sh -- C9 guards it.
+    sourced_files=()
+    while IFS= read -r srcline; do
+      # Group 1 = keyword (. or source); group 2 = filename.
+      fname=$(echo "$srcline" | sed -E 's/^[[:space:]]*(\.|source)[[:space:]]+\/tmp\/([^[:space:];]+).*/\2/')
+      [[ "$fname" = "$srcline" ]] && continue  # no match -- sed returned full line
+      [[ "$fname" = "deploy-env.sh" ]] && continue  # covered by C9
+      [[ -z "$fname" ]] && continue
+      sourced_files+=("$fname")
+    done < <(grep -E '^[[:space:]]*(\.|source)[[:space:]]+/tmp/' "$script" 2>/dev/null)
+
+    [[ ${#sourced_files[@]} -eq 0 ]] && continue  # script sources nothing beyond deploy-env.sh
+
+    # Determine which PROVISION_CMD block to check against.
+    # Scripts with "staging" in the name use the staging block; others use prod.
+    case "$script_base" in
+      *staging*) check_cmd="$STAGING_PROVISION_CMD" ; env_label="staging" ;;
+      *)         check_cmd="$PROD_PROVISION_CMD"     ; env_label="production" ;;
+    esac
+
+    for helper in "${sourced_files[@]}"; do
+      # (a) UPLOAD check: the helper must exist under scripts/deploy/
+      if [[ ! -f "${DEPLOY_SCRIPTS_DIR}/${helper}" ]]; then
+        fail "C11 UPLOAD: ${script_base} sources /tmp/${helper} but ${helper} does not exist under scripts/deploy/ -- it will NOT be uploaded to S3"
+        c11_ok=0
+      else
+        pass "C11 UPLOAD: ${helper} exists under scripts/deploy/ (sourced by ${script_base})"
+      fi
+
+      # (b) FETCH check: the helper must appear as an explicit s3 cp fetch
+      #     in the relevant PROVISION_CMD block.
+      # Pattern: `aws s3 cp s3://.../<helper>` or `scripts/<helper>` anywhere in the cmd.
+      if [[ -n "$check_cmd" ]] && echo "$check_cmd" | grep -qF "${helper}"; then
+        pass "C11 FETCH (${env_label}): ${helper} is explicitly fetched in PROVISION_CMD (sourced by ${script_base})"
+      else
+        fail "C11 FETCH (${env_label}): ${script_base} sources /tmp/${helper} but '${helper}' does not appear as an explicit s3 cp fetch in the ${env_label} PROVISION_CMD in deploy-bff.yml -- it will be in S3 but never fetched to /tmp/ on EC2"
+        c11_ok=0
+      fi
+    done
+  done
+fi
+
+[[ "$c11_ok" -eq 1 ]] && pass "C11: source->upload->fetch triangle holds for all provision script helpers"
 echo
 
 # ---- summary ---------------------------------------------------------------
