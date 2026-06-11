@@ -1,23 +1,22 @@
 /**
  * MSW handlers for integration testing.
  * These handlers return realistic API responses matching the actual backend.
+ *
+ * ADR-077 / C1: DAEMON_BASE is derived at factory-invocation time (inside
+ * createHandlers()) so that importing this module before loadConfig() completes
+ * does NOT throw "loadConfig() has not completed". The MSW server is created
+ * with no default handlers (setupServer() with no args); test suites call
+ * server.use(...createHandlers()) in beforeEach after setRuntimeConfig().
+ *
+ * Named exports (nullCollectionHandler, etc.) use a hardcoded BFF_BASE literal
+ * so they remain usable as standalone server.use() overrides outside the factory.
  */
 import { http, HttpResponse } from 'msw';
-import { daemonApiBaseUrl } from '../../services/daemonConfig';
+import { getDaemonApiBaseUrl } from '../../services/daemonConfig';
 
-// Routes still served by the daemon localapi (Phase 2 hasn't migrated them
-// yet) live under DAEMON_BASE; routes that have been migrated to the BFF
-// (matches, collection) live under BFF_BASE. Per-test handler overrides
-// must use the matching base so MSW intercepts correctly.
-// Derive DAEMON_BASE from the same source-of-truth the daemon client uses
-// (services/daemonConfig — normalizes the host to 127.0.0.1) so the mock URL
-// can never drift from the URL the client actually requests.
-const DAEMON_BASE = daemonApiBaseUrl;
+// BFF_BASE is a hardcoded literal — the BFF URL is not served from runtimeConfig
+// in tests; integration tests target the in-process MSW intercept at localhost:8080.
 const BFF_BASE = 'http://localhost:8080/api/v1';
-
-// API_BASE retained as the daemon-side alias so older mocks keep working
-// without touching every route. New BFF mocks should use BFF_BASE explicitly.
-const API_BASE = DAEMON_BASE;
 
 /**
  * Create a standard API success response wrapper.
@@ -117,10 +116,18 @@ export function createMockSetInfo(overrides: Partial<{
 }
 
 /**
- * Default handlers for common API endpoints.
- * These return realistic response structures matching the actual backend.
+ * Factory that creates the default handler set. DAEMON_BASE is derived at
+ * factory-invocation time (after setRuntimeConfig()) — never at module load.
+ *
+ * Call server.use(...createHandlers()) in beforeEach after setRuntimeConfig().
  */
-export const handlers = [
+export function createHandlers() {
+  // ADR-077 C1: derived at factory-invocation time, not module load.
+  const DAEMON_BASE = getDaemonApiBaseUrl();
+  // API_BASE is the daemon-side alias used by older route mocks.
+  const API_BASE = DAEMON_BASE;
+
+  return [
   // Collection endpoint - returns CollectionResponse with cards array.
   // BFF-served (Phase 2 PR #2) so the URL prefix is BFF_BASE.
   http.post(`${BFF_BASE}/collection`, () => {
@@ -793,7 +800,8 @@ export const handlers = [
     }
     return new HttpResponse(null, { status: 201 });
   }),
-];
+  ]; // end createHandlers return
+} // end createHandlers factory
 
 /**
  * Handler that returns null collection (for testing null handling).

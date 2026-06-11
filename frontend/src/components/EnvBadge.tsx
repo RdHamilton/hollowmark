@@ -1,24 +1,33 @@
 import './EnvBadge.css';
+import { getRuntimeConfig, isRuntimeConfigLoaded } from '../config/runtimeConfig';
 
 /**
  * EnvBadge — renders a small environment chip in non-production builds.
  *
- * Visible when: import.meta.env.MODE !== 'production'
- * Hidden in:    production (app.vaultmtg.app)
+ * ADR-077: envLabel now comes from runtimeConfig.envLabel (runtime value from
+ * config.json) instead of VITE_ENV_LABEL (build-time baked). Falls back to
+ * import.meta.env.MODE in DEV when runtimeConfig has not yet been loaded
+ * (e.g. Storybook, test renders without a full boot sequence).
  *
- * The label shown is either VITE_ENV_LABEL (if set) or the Vite MODE value.
- * On Vercel preview deployments MODE is 'preview'; on local dev it is
- * 'development'. A custom label like "staging" can be set via VITE_ENV_LABEL.
+ * Hidden when envLabel is 'production' (matches the value written by the
+ * production deploy workflow into config.json).
  */
 const EnvBadge = () => {
-  const mode = import.meta.env.MODE as string;
-
-  if (mode === 'production') {
+  // ADR-077: read envLabel from runtimeConfig at render time.
+  // In DEV (Storybook / test renders before loadConfig()), fall back to MODE.
+  let label: string;
+  if (isRuntimeConfigLoaded()) {
+    label = getRuntimeConfig().envLabel;
+  } else if (import.meta.env.DEV) {
+    label = (import.meta.env.VITE_ENV_LABEL as string | undefined) ?? import.meta.env.MODE;
+  } else {
+    // Production build, config not yet loaded — hide badge (boot in progress).
     return null;
   }
 
-  const label: string =
-    (import.meta.env.VITE_ENV_LABEL as string | undefined) ?? mode;
+  if (label === 'production') {
+    return null;
+  }
 
   return (
     <span className={`env-badge env-badge--${label}`} data-testid="env-badge">

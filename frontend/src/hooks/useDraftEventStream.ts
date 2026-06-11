@@ -26,6 +26,7 @@
 
 import { useAuth } from '@clerk/react';
 import { useEffect, useRef, useState } from 'react';
+import { getRuntimeConfig } from '../config/runtimeConfig';
 
 /** Status of the underlying SSE connection. */
 export type DraftEventStreamStatus = 'connecting' | 'open' | 'closed' | 'error' | 'waiting-for-auth';
@@ -48,12 +49,6 @@ export interface UseDraftEventStreamReturn {
   /** Current SSE connection status. */
   status: DraftEventStreamStatus;
 }
-
-const BFF_BASE_URL =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_BFF_URL) ||
-  'http://localhost:8080/api/v1';
-
-const SSE_URL = `${BFF_BASE_URL}/events`;
 
 /** Prefix for draft-related event types. */
 const DRAFT_EVENT_PREFIX = 'draft.';
@@ -121,13 +116,17 @@ export function useDraftEventStream(): UseDraftEventStreamReturn {
 
       setStatusLocal('connecting');
 
+      // ADR-077: derive SSE URL at connect time from runtimeConfig so this
+      // hook never captures the BFF URL at module-load time.
+      const sseUrl = `${getRuntimeConfig().bffUrl}/events`;
+
       // Fresh JWT every (re)connect so a rotated Clerk session picks up on
       // the next backoff cycle.
-      let url = SSE_URL;
+      let url = sseUrl;
       try {
         const token = await getTokenRef.current();
         if (token) {
-          const u = new URL(SSE_URL);
+          const u = new URL(sseUrl);
           u.searchParams.set('token', token);
           url = u.toString();
         }

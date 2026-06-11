@@ -3,20 +3,33 @@ import { get, post } from '../daemonClient';
 
 // We need the real getApiKey/setApiKey from apiClient for the auth header tests
 import { setApiKey } from '../apiClient';
+import { setRuntimeConfig, _resetRuntimeConfig } from '../../config/runtimeConfig';
 
 // Mock fetch globally
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
+// ADR-077: daemonClient.getDaemonConfig() calls getRuntimeConfig().daemonUrl at request time.
+const testRuntimeConfig = {
+  clerkPublishableKey: 'pk_test_dGVzdA',
+  bffUrl: 'http://localhost:8080/api/v1',
+  sentryEnv: 'test',
+  envLabel: 'test',
+  daemonUrl: 'http://localhost:9001/api/v1',
+  posthogHost: 'https://app.posthog.com',
+};
+
 describe('daemonClient', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    setRuntimeConfig(testRuntimeConfig);
   });
 
   afterEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    _resetRuntimeConfig();
   });
 
   // ---------------------------------------------------------------------------

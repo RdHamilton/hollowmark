@@ -1,9 +1,7 @@
 import { useState } from 'react';
 import LoadingButton from '../../LoadingButton';
 import { showToast } from '../../ToastContainer';
-import { daemonApiBaseUrl } from '../../../services/daemonConfig';
-
-const DIAGNOSTICS_URL = `${daemonApiBaseUrl}/system/diagnostics`;
+import { getDaemonApiBaseUrl } from '../../../services/daemonConfig';
 
 /**
  * Minimal typed shape of the daemon diagnostics response
@@ -77,7 +75,10 @@ export function CopyDiagnosticsSection({
     setError(null);
 
     try {
-      const response = await fetchFn(DIAGNOSTICS_URL);
+      // ADR-077: derive URL at call time so this component can be imported
+      // before loadConfig() completes without throwing.
+      const diagnosticsUrl = `${getDaemonApiBaseUrl()}/system/diagnostics`;
+      const response = await fetchFn(diagnosticsUrl);
 
       if (!response.ok) {
         throw new Error(`Daemon returned ${response.status}`);

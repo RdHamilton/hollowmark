@@ -1,0 +1,25 @@
+{
+  "_comment": "ADR-077 SPA runtime config sidecar. This file is fetched from the same CloudFront origin as the SPA bundle at boot time. Copy to config.json for local development.",
+  "_doc": "See hollowmark-docs/engineering/architecture/ADRs/ADR-077.md for schema and deploy instructions.",
+
+  "clerkPublishableKey": "pk_test_REPLACE_ME",
+  "bffUrl": "http://localhost:8080/api/v1",
+  "sentryDsn": "",
+  "sentryEnv": "development",
+  "posthogKey": "",
+  "posthogHost": "https://app.posthog.com",
+  "envLabel": "development",
+  "daemonUrl": "http://localhost:9001/api/v1",
+
+  "_notes": {
+    "clerkPublishableKey": "Format: pk_(live|test)_[A-Za-z0-9]+. Use pk_live_* for production, pk_test_* for staging/dev.",
+    "bffUrl": "Must include /api/v1 suffix. Production: https://api.vaultmtg.app/api/v1",
+    "sentryDsn": "Optional. Leave empty to disable Sentry (dev/test). Never leave empty in production.",
+    "sentryEnv": "Values: production | staging | development. Used by Sentry and the beacon payload.",
+    "posthogKey": "Optional. Leave empty to disable PostHog analytics (dev/test).",
+    "posthogHost": "PostHog ingest host. Default: https://app.posthog.com",
+    "envLabel": "Human-readable label shown in EnvBadge. 'production' hides the badge entirely.",
+    "daemonUrl": "Daemon local API base URL with /api/v1 suffix. Stable channel: port 9001, staging channel: port 9011.",
+    "VITE_APP_VERSION_note": "VITE_APP_VERSION and VITE_GA4_MEASUREMENT_ID are NOT in config.json — they stay baked at build time (ADR-075 §IV-3 byte-identity: these are artifact identity constants, not per-env runtime values)."
+  }
+}

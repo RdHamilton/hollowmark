@@ -37,8 +37,12 @@ type ConnectionStateCallback = (connected: boolean) => void;
 // Module-level state
 // ---------------------------------------------------------------------------
 
+// ADR-077: URL placeholder — overridden at boot by configureWebSocket() in
+// main.tsx after loadConfig() populates runtimeConfig. The placeholder
+// 'http://localhost:8080/api/v1/events' is only ever used in local dev when
+// config.json is unavailable and the DEV fallback path is active.
 let config: WebSocketConfig = {
-  url: `${import.meta.env.VITE_BFF_URL ?? 'http://localhost:8080/api/v1'}/events`,
+  url: `${import.meta.env.DEV ? (import.meta.env.VITE_BFF_URL ?? 'http://localhost:8080/api/v1') : 'http://localhost:8080/api/v1'}/events`,
   reconnectInterval: 3000,
   maxReconnectAttempts: 10,
 };

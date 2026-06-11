@@ -23,6 +23,8 @@
  *   crowd the first page at high release volume.
  */
 
+import { getRuntimeConfig } from '../config/runtimeConfig';
+
 const GITHUB_REPO = 'RdHamilton/hollowmark';
 const RELEASES_BASE = `https://github.com/${GITHUB_REPO}/releases/download`;
 const LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases`;
@@ -34,15 +36,16 @@ const PER_PAGE = 100;
 const MAX_PAGES = 5;
 
 /**
- * Returns true only when the build was produced by deploy-spa-staging.yml.
- * Any value other than "staging" (including undefined / "production") is treated
+ * Returns true only when the runtime environment is "staging".
+ * Any value other than "staging" (including "production") is treated
  * as prod-safe: exclude prereleases.
  *
- * Evaluated at call time (not module load time) so that vi.stubEnv() works
- * correctly in unit tests without requiring module re-imports.
+ * ADR-077: reads sentryEnv from runtimeConfig at call time instead of
+ * VITE_SENTRY_ENV (build-time baked). Evaluated at call time so test
+ * isolation via setRuntimeConfig() works without module re-imports.
  */
 function isStaging(): boolean {
-  return import.meta.env.VITE_SENTRY_ENV === 'staging';
+  return getRuntimeConfig().sentryEnv === 'staging';
 }
 
 /**

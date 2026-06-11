@@ -24,6 +24,8 @@
     "test:staging": "playwright test --config=playwright.staging.config.ts",
     "test:e2e:staging-spa": "playwright test --config=playwright.staging-spa.config.ts",
     "test:e2e:r17-smoke": "playwright test --config=playwright.r17-smoke.config.ts",
+    "test:e2e:config-error": "playwright test --config=playwright.config-error.ts",
+    "build:test": "VITE_USE_REST_API=true VITE_CLERK_TEST_MODE=true VITE_BFF_URL=http://localhost:8080/api/v1 npm run build",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build --stats-json"
   },

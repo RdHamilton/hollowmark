@@ -9,6 +9,18 @@ import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom';
 import Setup from './Setup';
 import { isDesktopApp } from '@/lib/runtimeContext';
+import { setRuntimeConfig, _resetRuntimeConfig } from '@/config/runtimeConfig';
+
+// ADR-077: getDaemonHealthUrl() reads from runtimeConfig at call time.
+// All tests that render <Setup> must set runtimeConfig in beforeEach.
+const testRuntimeConfig = {
+  clerkPublishableKey: 'pk_test_dGVzdA',
+  bffUrl: 'http://localhost:8080/api/v1',
+  sentryEnv: 'test',
+  envLabel: 'test',
+  daemonUrl: 'http://localhost:9001/api/v1',
+  posthogHost: 'https://app.posthog.com',
+};
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -42,6 +54,19 @@ function setNavigatorPlatform(platform: string, ua: string) {
   Object.defineProperty(navigator, 'platform', { value: platform, configurable: true });
   Object.defineProperty(navigator, 'userAgent', { value: ua, configurable: true });
 }
+
+// ---------------------------------------------------------------------------
+// Global runtimeConfig setup — required for getDaemonHealthUrl() call-time reads.
+// ADR-077: Setup renders <Setup> which calls getDaemonHealthUrl() inside
+// fetchDaemonHealth(). That calls getRuntimeConfig() which throws if not set.
+// ---------------------------------------------------------------------------
+beforeEach(() => {
+  setRuntimeConfig(testRuntimeConfig);
+});
+
+afterEach(() => {
+  _resetRuntimeConfig();
+});
 
 // ---------------------------------------------------------------------------
 // Suites

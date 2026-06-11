@@ -29,9 +29,8 @@ export interface CreateAPIKeyResponse {
 // ---------------------------------------------------------------------------
 
 function bffBaseUrl(): string {
-  if (import.meta.env.VITE_BFF_URL) {
-    return import.meta.env.VITE_BFF_URL as string;
-  }
+  // ADR-077: always read from getApiConfig() — VITE_BFF_URL is no longer the
+  // runtime source. configureApi() is called in main.tsx after loadConfig().
   const { baseUrl } = getApiConfig();
   return baseUrl.replace(/\/api\/v1$/, '');
 }

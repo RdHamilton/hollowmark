@@ -1,6 +1,17 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CopyDiagnosticsSection } from './CopyDiagnosticsSection';
+import { setRuntimeConfig, _resetRuntimeConfig } from '../../../config/runtimeConfig';
+
+// ADR-077: getDaemonApiBaseUrl() calls getRuntimeConfig() at call time.
+const testRuntimeConfig = {
+  clerkPublishableKey: 'pk_test_dGVzdA',
+  bffUrl: 'http://localhost:8080/api/v1',
+  sentryEnv: 'test',
+  envLabel: 'test',
+  daemonUrl: 'http://localhost:9001/api/v1',
+  posthogHost: 'https://app.posthog.com',
+};
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -46,6 +57,11 @@ describe('CopyDiagnosticsSection', () => {
 
   beforeEach(() => {
     clipboardWriteFn = vi.fn().mockResolvedValue(undefined);
+    setRuntimeConfig(testRuntimeConfig);
+  });
+
+  afterEach(() => {
+    _resetRuntimeConfig();
   });
 
   // ── AC5a: button render ──────────────────────────────────────────────────
