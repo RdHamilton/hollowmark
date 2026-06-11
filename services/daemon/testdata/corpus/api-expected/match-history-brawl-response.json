@@ -1,0 +1,15 @@
+{
+  "Matches": [
+    {
+      "ID": "11111111-0000-4000-8000-000000000200",
+      "Format": "Brawl",
+      "Result": "win",
+      "PlayerWins": 1,
+      "OpponentWins": 0
+    }
+  ],
+  "HasMore": false,
+  "NextCursorTS": "",
+  "NextCursorID": "",
+  "Limit": 20
+}

@@ -24,6 +24,7 @@ const corpusDir = "."
 // must be non-empty single-line JSON.
 var expectedPlayerLog = []string{
 	"player-log/match-completed.log",
+	"player-log/match-completed-brawl.log",
 	"player-log/quest-progress.log",
 	"player-log/draft-pack.log",
 	"player-log/draft-pick.log",
@@ -39,6 +40,7 @@ var expectedDaemonEmit = []string{
 	"daemon-emit/match-completed.json",
 	"daemon-emit/match-completed-empty-format.json",
 	"daemon-emit/match-completed-missing-id.json",
+	"daemon-emit/match-completed-brawl.json",
 	"daemon-emit/quest-progress.json",
 	"daemon-emit/quest-progress-duplicate.json",
 	"daemon-emit/draft-pack.json",
@@ -53,6 +55,7 @@ var expectedDaemonEmit = []string{
 var expectedDBExpected = []string{
 	"db-expected/match-completed.json",
 	"db-expected/match-completed-empty-format.json",
+	"db-expected/match-completed-brawl.json",
 	"db-expected/quest-progress.json",
 	"db-expected/quest-upsert-result.json",
 	"db-expected/deck-updated.json",
@@ -62,6 +65,7 @@ var expectedDBExpected = []string{
 // and parse as valid JSON objects.
 var expectedAPIExpected = []string{
 	"api-expected/match-history-response.json",
+	"api-expected/match-history-brawl-response.json",
 	"api-expected/quest-history-response.json",
 	"api-expected/deck-response.json",
 	"api-expected/meta-archetypes-response.json",
