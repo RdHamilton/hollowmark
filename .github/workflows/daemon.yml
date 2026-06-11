@@ -214,7 +214,11 @@ jobs:
         env:
           GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
-        run: govulncheck ./...
+        # -scan symbol: call-graph analysis — only flags vulns whose vulnerable
+        # symbols are actually reachable from our code. Symbol is the default
+        # in govulncheck >=v1.1.0, pinned explicitly for clarity and to guard
+        # against a future upgrade silently downgrading the scan level.
+        run: govulncheck -scan symbol ./...
 
   integration-smoke:
     name: Daemon Binary Smoke Test
