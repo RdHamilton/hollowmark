@@ -343,6 +343,13 @@ func withCORS(next http.Handler) http.Handler {
 // is also acceptable for non-credentialed loopback traffic.
 func isAllowedOrigin(origin string) bool {
 	allow := []string{
+		// Canonical hollowmark.app origins (v0.4.0 quiet cutover; parity with
+		// the BFF ALLOWED_ORIGINS set — incident hollowmark-tickets#1231).
+		"https://app.hollowmark.app",
+		"https://stg-app.hollowmark.app",
+		"https://hollowmark.app",
+		"https://www.hollowmark.app",
+		// Legacy vaultmtg.app origins (kept until the public reveal cutover, I-57/D16).
 		"https://app.vaultmtg.app",
 		"https://stg-app.vaultmtg.app",
 		"https://vaultmtg.app",
