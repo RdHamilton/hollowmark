@@ -59,6 +59,12 @@ type TrayHooks struct {
 	// StatusConnected (false). Called by idleUntilMTGADetected when MTGA is not
 	// installed and the daemon is polling for Player.log.
 	SetWaitingForArena func(bool)
+	// SetSyncDegraded updates the ingest-health axis of the tray.
+	// Call with true when consecutiveBFFFailures reaches dispatchDegradedThreshold;
+	// call with false when clearBFFFailureCounter runs from the degraded state.
+	// This hook is nil-safe and is only called on the transition edge (not on
+	// every success or failure). (#1234)
+	SetSyncDegraded func(bool)
 	// NotifySyncResult is called after a Sync Now operation completes. A nil
 	// error indicates success; a non-nil error indicates failure. The tray
 	// updates the "Sync Now" label briefly (AC2 / AC3) then resets to "Sync Now"

@@ -350,6 +350,7 @@ func main() {
 		SetKeychainError:      app.SetKeychainError,
 		SetSetupRequired:      app.SetSetupRequired,
 		SetWaitingForArena:    app.SetWaitingForArena,
+		SetSyncDegraded:       app.SetSyncDegraded, // ingest-health axis (#1234)
 		NotifySyncResult:      app.NotifySyncResult,
 		NotifyUpdateAvailable: app.NotifyUpdateAvailable,
 	})

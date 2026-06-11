@@ -17,8 +17,11 @@ func TestStatusLabel(t *testing.T) {
 		want string
 	}{
 		{StatusStarting, "◌ Starting..."},
-		{StatusConnected, "● Connected"},
+		// Label changed to "Tracking" per Prof UX sign-off (#1234).
+		{StatusConnected, "● Tracking"},
 		{StatusWaitingForArena, "◌ Waiting for Arena..."},
+		// New status added for ingest-health truthfulness (#1234).
+		{StatusSyncIssues, "⚠ Sync issues — games may not be saving"},
 		{StatusError, "✕ Error — check logs"},
 		{StatusKeychainError, "Keychain unavailable — unlock to continue"},
 		{StatusSetupRequired, "⚠ Setup required — auth failed"},
@@ -213,4 +216,98 @@ func TestAppNotifyUpdateAvailable_Noop(t *testing.T) {
 	assert.NotPanics(t, func() {
 		a.NotifyUpdateAvailable("0.3.7", "https://github.com/RdHamilton/hollowmark/releases/download/daemon%2Fv0.3.7/vaultmtg-daemon-darwin-universal.pkg")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// StatusSyncIssues — ingest-health truthfulness (#1234)
+// ---------------------------------------------------------------------------
+
+// TestStatusLabel_Tracking verifies that StatusConnected now renders "● Tracking"
+// (Prof UX sign-off, #1234) rather than the old "● Connected" label.
+func TestStatusLabel_Tracking(t *testing.T) {
+	assert.Equal(t, "● Tracking", StatusConnected.label())
+}
+
+// TestStatusLabel_SyncIssues verifies the new StatusSyncIssues label copy exactly
+// matches the Prof-approved wording (#1234).
+func TestStatusLabel_SyncIssues(t *testing.T) {
+	assert.Equal(t, "⚠ Sync issues — games may not be saving", StatusSyncIssues.label())
+}
+
+// TestSetSyncDegraded_WhenArenaRunning verifies that calling SetSyncDegraded(true)
+// while Arena is running (status == StatusConnected) transitions to StatusSyncIssues.
+func TestSetSyncDegraded_WhenArenaRunning(t *testing.T) {
+	a := newTestApp()
+	a.status = StatusConnected
+	a.SetSyncDegraded(true)
+	assert.Equal(t, StatusSyncIssues, a.status)
+	assert.True(t, a.syncDegraded)
+}
+
+// TestSetSyncDegraded_Recovery verifies that calling SetSyncDegraded(false) while
+// degraded and Arena running transitions back to StatusConnected.
+func TestSetSyncDegraded_Recovery(t *testing.T) {
+	a := newTestApp()
+	a.status = StatusSyncIssues
+	a.syncDegraded = true
+	a.SetSyncDegraded(false)
+	assert.Equal(t, StatusConnected, a.status)
+	assert.False(t, a.syncDegraded)
+}
+
+// TestSetWaitingForArena_RestoresDegraded verifies the two-axis orthogonality:
+// when syncDegraded=true, SetWaitingForArena(false) restores StatusSyncIssues,
+// not StatusConnected.
+func TestSetWaitingForArena_RestoresDegraded(t *testing.T) {
+	a := newTestApp()
+	a.syncDegraded = true
+	a.SetWaitingForArena(true)
+	assert.Equal(t, StatusWaitingForArena, a.status)
+	a.SetWaitingForArena(false)
+	assert.Equal(t, StatusSyncIssues, a.status)
+}
+
+// TestSetWaitingForArena_RestoresHealthy verifies that when syncDegraded=false,
+// SetWaitingForArena(false) restores StatusConnected as before.
+func TestSetWaitingForArena_RestoresHealthy(t *testing.T) {
+	a := newTestApp()
+	a.syncDegraded = false
+	a.SetWaitingForArena(true)
+	assert.Equal(t, StatusWaitingForArena, a.status)
+	a.SetWaitingForArena(false)
+	assert.Equal(t, StatusConnected, a.status)
+}
+
+// TestSetSyncDegraded_SkipsWhenWaitingForArena verifies the guard: when Arena is
+// not running (StatusWaitingForArena), SetSyncDegraded(true) records the field
+// but does NOT override the visible tray status (WaitingForArena wins visually).
+func TestSetSyncDegraded_SkipsWhenWaitingForArena(t *testing.T) {
+	a := newTestApp()
+	a.status = StatusWaitingForArena
+	a.SetSyncDegraded(true)
+	assert.Equal(t, StatusWaitingForArena, a.status, "WaitingForArena must not be overridden by SetSyncDegraded(true)")
+	assert.True(t, a.syncDegraded, "syncDegraded field must be set even when status is not updated")
+}
+
+// TestSetSyncDegraded_NoopOnNonIngestStatuses verifies the orthogonality rule
+// (Ray amendment §2): SetSyncDegraded must ONLY toggle Connected ↔ SyncIssues
+// and must not clobber StatusError, StatusKeychainError, StatusSetupRequired,
+// or StatusStarting.
+func TestSetSyncDegraded_NoopOnNonIngestStatuses(t *testing.T) {
+	noopStatuses := []Status{
+		StatusError,
+		StatusKeychainError,
+		StatusSetupRequired,
+		StatusStarting,
+	}
+	for _, s := range noopStatuses {
+		a := newTestApp()
+		a.status = s
+		// SetSyncDegraded(true) must not clobber these states.
+		a.SetSyncDegraded(true)
+		assert.Equal(t, s, a.status, "SetSyncDegraded(true) must not clobber %v", s)
+		// SetSyncDegraded(false) must also not clobber these states.
+		a.SetSyncDegraded(false)
+		assert.Equal(t, s, a.status, "SetSyncDegraded(false) must not clobber %v", s)
+	}
 }
