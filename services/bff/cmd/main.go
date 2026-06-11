@@ -2021,6 +2021,7 @@ func buildAccountDeletionHandler(
 	}
 
 	deps := erasure.Deps{
+		DB:        db,
 		PostHog:   ph,
 		Mailchimp: mc,
 		Clerk:     ck,
