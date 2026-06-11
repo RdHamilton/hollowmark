@@ -470,6 +470,10 @@ if [[ "\$1" == "sts" && "\$2" == "assume-role" ]]; then
         echo "STUB(phase3): sts assume-role missing --role-session-name" >&2
         exit 1
     fi
+    if [[ "\$SESSION" != run-migrations-* ]]; then
+        echo "STUB(phase3): sts assume-role session-name '\$SESSION' does not start with 'run-migrations-'; got unexpected prefix (expected pattern: run-migrations-<epoch>)" >&2
+        exit 1
+    fi
     printf '%s' "\$SESSION" > "${STUB_AWS_STATE_DIR}/last_session_name"
     printf 'ASIA_STUB_ACCESS_KEY_ID_XXXXXXXX\tstub_secret_access_key_value_XXXXXXXXXXXXXXXXXXXX\tstub_session_token_value_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n'
     exit 0
@@ -522,6 +526,62 @@ echo "STUB(phase3): unhandled aws command: \$*" >&2
 exit 1
 AWSSTUB_PHASE3
 chmod +x "$STUB_AWS"
+
+# ---------------------------------------------------------------------------
+# Phase 3 sub-test: session-name prefix validation
+#
+# The sts assume-role handler in the Phase 3 stub MUST reject any
+# --role-session-name that does not begin with "run-migrations-". A bug in
+# run-migrations.sh that generates a wrong prefix (wrong env, wrong service,
+# wrong script) would otherwise pass the stub silently and reach staging or
+# prod undetected. These sub-tests exercise the stub directly — before the
+# real run-migrations.sh execution — to confirm the prefix gate fires.
+#
+# AC1 (prefix validation) and AC2 (suffix / empty validation) are both covered.
+# ---------------------------------------------------------------------------
+info "Phase 3 sub-test: session-name prefix validation..."
+
+# Sub-test A: stub MUST reject a session-name with a wrong prefix.
+BAD_PREFIX_EXIT=0
+"$STUB_AWS" sts assume-role \
+    --role-arn "arn:aws:iam::901347789205:role/vaultmtg-staging-deploy-provisioner" \
+    --role-session-name "wrong-prefix-$(date +%s)" \
+    --duration-seconds 900 \
+    --region us-east-1 \
+    --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+    --output text >/dev/null 2>&1 || BAD_PREFIX_EXIT=$?
+if [[ "$BAD_PREFIX_EXIT" -eq 0 ]]; then
+    fail "Phase 3 sub-test A — stub ACCEPTED a session-name with wrong prefix (expected exit 1); prefix validation is missing"
+fi
+pass "Phase 3 sub-test A — stub correctly rejected a session-name with wrong prefix (exit ${BAD_PREFIX_EXIT})"
+
+# Sub-test B: stub MUST accept the canonical run-migrations- prefix.
+GOOD_PREFIX_EXIT=0
+"$STUB_AWS" sts assume-role \
+    --role-arn "arn:aws:iam::901347789205:role/vaultmtg-staging-deploy-provisioner" \
+    --role-session-name "run-migrations-$(date +%s)" \
+    --duration-seconds 900 \
+    --region us-east-1 \
+    --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+    --output text >/dev/null 2>&1 || GOOD_PREFIX_EXIT=$?
+if [[ "$GOOD_PREFIX_EXIT" -ne 0 ]]; then
+    fail "Phase 3 sub-test B — stub REJECTED the canonical run-migrations- prefix (exit ${GOOD_PREFIX_EXIT}); must accept it"
+fi
+pass "Phase 3 sub-test B — stub correctly accepted the canonical run-migrations- session-name prefix"
+
+# Sub-test C (AC2 regression guard): empty session-name must still be rejected.
+EMPTY_EXIT=0
+"$STUB_AWS" sts assume-role \
+    --role-arn "arn:aws:iam::901347789205:role/vaultmtg-staging-deploy-provisioner" \
+    --role-session-name "" \
+    --duration-seconds 900 \
+    --region us-east-1 \
+    --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+    --output text >/dev/null 2>&1 || EMPTY_EXIT=$?
+if [[ "$EMPTY_EXIT" -eq 0 ]]; then
+    fail "Phase 3 sub-test C — stub ACCEPTED an empty session-name (AC2 regression: empty-session guard must remain)"
+fi
+pass "Phase 3 sub-test C — stub correctly rejected an empty session-name (AC2 preserved)"
 
 # Patch run-migrations.sh for local test execution:
 #   - BFF_ENV_FILE / DB_PORT / DB_SSL_MODE already redirected via the patched
