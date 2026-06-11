@@ -11,14 +11,25 @@ import { CMPStorageKey, EventConsentCategory } from './analytics-taxonomy.gen';
 
 // ── Initialization ────────────────────────────────────────────────────────────
 
-const POSTHOG_KEY = import.meta.env.VITE_POSTHOG_KEY as string | undefined;
-const POSTHOG_HOST =
-  (import.meta.env.VITE_POSTHOG_HOST as string | undefined) ||
-  'https://app.posthog.com';
-
 let initialized = false;
 
-export function initAnalytics(): void {
+/**
+ * Initialize PostHog analytics.
+ *
+ * ADR-077: key and host should be passed from main.tsx after loadConfig()
+ * populates runtimeConfig (production path). Parameters take precedence over
+ * VITE_* env vars. When parameters are absent, falls back to VITE_POSTHOG_KEY /
+ * VITE_POSTHOG_HOST so `vite dev` and existing unit tests work unchanged.
+ *
+ * If the resolved key is absent or empty, initialization is skipped (no-op).
+ *
+ * @param key  PostHog project API key (runtimeConfig.posthogKey)
+ * @param host PostHog ingest host (runtimeConfig.posthogHost)
+ */
+export function initAnalytics(key?: string, host?: string): void {
+  const POSTHOG_KEY = key ?? (import.meta.env.VITE_POSTHOG_KEY as string | undefined);
+  const POSTHOG_HOST =
+    (host || (import.meta.env.VITE_POSTHOG_HOST as string | undefined) || 'https://app.posthog.com');
   if (!POSTHOG_KEY) return;
   posthog.init(POSTHOG_KEY, {
     api_host: POSTHOG_HOST,

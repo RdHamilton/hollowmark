@@ -77,10 +77,27 @@ export function deriveDaemonUrls(rawUrl?: string | null): DaemonUrls {
 }
 
 /**
- * The resolved daemon URLs for this build, derived once from the single
- * coupling point. Import these everywhere instead of hardcoding a port.
+ * Call-time getters — ADR-077 capture-site fix.
+ *
+ * The daemon URL is now read from runtimeConfig (set during boot before any
+ * module import is exercised). These functions defer URL derivation to
+ * call time so that importing this module before loadConfig() completes does
+ * NOT throw "loadConfig() has not completed".
+ *
+ * For environments where runtimeConfig is not available (e.g. integration
+ * tests using MSW without full boot), callers should call setRuntimeConfig()
+ * in beforeEach before accessing these helpers.
  */
-export const daemonUrls: DaemonUrls = deriveDaemonUrls(import.meta.env.VITE_DAEMON_URL);
+import { getRuntimeConfig } from '../config/runtimeConfig';
 
-export const daemonApiBaseUrl = daemonUrls.apiBaseUrl;
-export const daemonHealthUrl = daemonUrls.healthUrl;
+export function getDaemonUrls(): DaemonUrls {
+  return deriveDaemonUrls(getRuntimeConfig().daemonUrl);
+}
+
+export function getDaemonApiBaseUrl(): string {
+  return getDaemonUrls().apiBaseUrl;
+}
+
+export function getDaemonHealthUrl(): string {
+  return getDaemonUrls().healthUrl;
+}

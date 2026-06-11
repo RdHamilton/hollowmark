@@ -25,7 +25,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { trackEvent, type Platform } from '@/services/analytics';
 import { isDesktopApp } from '@/lib/runtimeContext';
-import { daemonHealthUrl } from '@/services/daemonConfig';
+import { getDaemonHealthUrl } from '@/services/daemonConfig';
 import './Setup.css';
 
 function detectPlatform(): Platform {
@@ -41,7 +41,6 @@ function detectPlatform(): Platform {
 // Daemon health polling
 // ---------------------------------------------------------------------------
 
-const DAEMON_HEALTH_URL = daemonHealthUrl;
 const POLL_INTERVAL_MS = 3_000;
 const TIMEOUT_MS = 60_000;
 
@@ -67,7 +66,9 @@ interface DaemonHealthResponse {
 }
 
 async function fetchDaemonHealth(): Promise<DaemonHealthResponse> {
-  const res = await fetch(DAEMON_HEALTH_URL, { mode: 'cors' });
+  // ADR-077: getDaemonHealthUrl() is called at request time, not module load,
+  // so this function can be safely imported before loadConfig() completes.
+  const res = await fetch(getDaemonHealthUrl(), { mode: 'cors' });
   if (!res.ok) throw new Error(`daemon health returned ${res.status}`);
   return res.json() as Promise<DaemonHealthResponse>;
 }

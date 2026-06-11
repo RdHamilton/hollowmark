@@ -18,6 +18,11 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
 
+  // Global setup: provisions dist/config.json from VITE_* env vars when running
+  // against the preview server (CI=true or PLAYWRIGHT_PREVIEW=true). No-op in
+  // local dev mode where the Vite dev server's DEV fallback handles bootstrapping.
+  globalSetup: './tests/e2e/global-setup.ts',
+
   // Maximum time one test can run for
   timeout: 30 * 1000,
 

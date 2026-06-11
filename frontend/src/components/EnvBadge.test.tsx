@@ -1,16 +1,37 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+/**
+ * EnvBadge component tests — ADR-077.
+ *
+ * ADR-077: EnvBadge now reads envLabel from runtimeConfig instead of
+ * VITE_ENV_LABEL (build-time baked). Tests use setRuntimeConfig() to control
+ * the label value.
+ */
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { screen } from '@testing-library/react';
 import { render } from '../test/utils/testUtils';
 import EnvBadge from './EnvBadge';
+import { setRuntimeConfig, _resetRuntimeConfig } from '../config/runtimeConfig';
+
+const baseConfig = {
+  clerkPublishableKey: 'pk_test_dGVzdA',
+  bffUrl: 'http://localhost:8080/api/v1',
+  sentryEnv: 'test',
+  envLabel: 'development',
+  daemonUrl: 'http://localhost:9001/api/v1',
+  posthogHost: 'https://app.posthog.com',
+};
 
 describe('EnvBadge', () => {
+  beforeEach(() => {
+    setRuntimeConfig(baseConfig);
+  });
+
   afterEach(() => {
-    vi.unstubAllEnvs();
+    _resetRuntimeConfig();
   });
 
   describe('non-production environments', () => {
     it('renders the badge in preview mode', () => {
-      vi.stubEnv('MODE', 'preview');
+      setRuntimeConfig({ ...baseConfig, envLabel: 'preview' });
 
       render(<EnvBadge />);
 
@@ -20,7 +41,7 @@ describe('EnvBadge', () => {
     });
 
     it('renders the badge in development mode', () => {
-      vi.stubEnv('MODE', 'development');
+      setRuntimeConfig({ ...baseConfig, envLabel: 'development' });
 
       render(<EnvBadge />);
 
@@ -29,9 +50,8 @@ describe('EnvBadge', () => {
       expect(badge).toHaveTextContent('development');
     });
 
-    it('renders a custom VITE_ENV_LABEL when provided', () => {
-      vi.stubEnv('MODE', 'preview');
-      vi.stubEnv('VITE_ENV_LABEL', 'staging');
+    it('renders the badge with staging label', () => {
+      setRuntimeConfig({ ...baseConfig, envLabel: 'staging' });
 
       render(<EnvBadge />);
 
@@ -41,7 +61,7 @@ describe('EnvBadge', () => {
     });
 
     it('applies the correct CSS modifier class based on the label', () => {
-      vi.stubEnv('MODE', 'preview');
+      setRuntimeConfig({ ...baseConfig, envLabel: 'preview' });
 
       render(<EnvBadge />);
 
@@ -49,9 +69,8 @@ describe('EnvBadge', () => {
       expect(badge).toHaveClass('env-badge--preview');
     });
 
-    it('applies staging modifier class when VITE_ENV_LABEL is staging', () => {
-      vi.stubEnv('MODE', 'preview');
-      vi.stubEnv('VITE_ENV_LABEL', 'staging');
+    it('applies staging modifier class when envLabel is staging', () => {
+      setRuntimeConfig({ ...baseConfig, envLabel: 'staging' });
 
       render(<EnvBadge />);
 
@@ -62,16 +81,15 @@ describe('EnvBadge', () => {
 
   describe('production environment', () => {
     it('does not render the badge in production mode', () => {
-      vi.stubEnv('MODE', 'production');
+      setRuntimeConfig({ ...baseConfig, envLabel: 'production' });
 
       render(<EnvBadge />);
 
       expect(screen.queryByTestId('env-badge')).not.toBeInTheDocument();
     });
 
-    it('does not render even if VITE_ENV_LABEL is set in production', () => {
-      vi.stubEnv('MODE', 'production');
-      vi.stubEnv('VITE_ENV_LABEL', 'staging');
+    it('does not render even if envLabel is explicitly production', () => {
+      setRuntimeConfig({ ...baseConfig, envLabel: 'production' });
 
       render(<EnvBadge />);
 
