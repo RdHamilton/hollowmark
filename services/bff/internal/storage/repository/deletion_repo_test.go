@@ -59,9 +59,10 @@ import (
 // draft_sessions). It does not exist in any current database. AC2 of #1257 amended
 // by Ray's binding conditions: draft_events is out of scope.
 var knownUserKeyedTables = map[string]string{
-	// Via accounts(id) ON DELETE CASCADE (BIGINT FK) — defense-in-depth: also
-	// covered by step4explicit for schema-version safety (#1257).
-	"collection":     "explicit",
+	// Via accounts(id) ON DELETE CASCADE (BIGINT FK) — cascade-covered since
+	// migration 000002 (collection_new renamed to collection).  NOT in
+	// DeleteExplicitBigintRows.
+	"collection":     "cascade",
 	"collection_new": "cascade",
 	// collection_history: explicit delete added in #1257 (defense-in-depth).
 	"collection_history": "explicit",
