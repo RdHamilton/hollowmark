@@ -10,6 +10,38 @@ import { withClerkSession } from './decorators';
 // sheet plus whatever its component imports itself.
 import '../src/index.css';
 
+// ---------------------------------------------------------------------------
+// ADR-077 runtimeConfig bootstrap — seed the singleton for every story.
+//
+// Storybook runs the `storybook build` (production Vite build) for Chromatic,
+// which means import.meta.env.DEV === false and the DEV fallback in loadConfig()
+// is dead-code-eliminated. Any story whose render/mount path reaches a
+// call-time getter (getDaemonApiBaseUrl, isStaging, useDraftEventStream.connect,
+// etc.) will throw "loadConfig() has not completed" unless the singleton is
+// seeded here.
+//
+// This mirrors the `beforeEach(() => setRuntimeConfig(testDefaults))` pattern
+// used in Vitest integration tests — the same class of fix for the same problem
+// (third render context alongside app boot and Vitest).
+//
+// Values are Storybook-appropriate defaults: no real DSNs, no real keys.
+// The `clerkPublishableKey` and `bffUrl` match the test fixture so that any
+// story that renders a Clerk-wrapped or BFF-calling component gets consistent
+// default behaviour. daemonUrl matches the stable local daemon port.
+// ---------------------------------------------------------------------------
+import { setRuntimeConfig } from '../src/config/runtimeConfig';
+
+setRuntimeConfig({
+  clerkPublishableKey: 'pk_test_dGVzdA',
+  bffUrl: 'http://localhost:8080/api/v1',
+  sentryDsn: undefined,
+  sentryEnv: 'storybook',
+  posthogKey: undefined,
+  posthogHost: 'https://app.posthog.com',
+  envLabel: 'storybook',
+  daemonUrl: 'http://localhost:9001/api/v1',
+});
+
 // Initialize MSW. `onUnhandledRequest: 'bypass'` lets Storybook's own asset
 // requests (fonts, HMR, etc.) pass through without noisy console warnings.
 initialize({ onUnhandledRequest: 'bypass' });
