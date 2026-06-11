@@ -23,10 +23,18 @@ name: Schema-000054-Compat
 # -----
 # - REQUIRED status check — registered in branch protection (hollowmark-tickets#359).
 #   Job context: "Schema-000054-compat — repository tests on consolidated schema".
-#   Applies to PRs touching services/bff/internal/storage/repository/ or
-#   services/bff/internal/storage/migrations/ (path-filtered below).
-#   GitHub treats path-filtered required checks that did not run (no matching
-#   paths changed) as satisfied, so this does not block PRs outside the paths.
+# - ALWAYS-EMIT (two-job) pattern, same as bff-layer5.yml (#1216): a required
+#   context must produce a check run on EVERY PR head commit — a workflow-level
+#   `paths:` filter produces NO run on non-matching PRs, and GitHub blocks merge
+#   when a required check has zero runs ("Expected — waiting for status").
+#   A job skipped via `if:` DOES emit a run with conclusion 'skipped', which
+#   branch protection treats as satisfied. Reference:
+#   https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
+#   So: the cheap detect-changes job runs on every PR; the heavy test job (which
+#   needs a postgres service container — containers start before any steps, so
+#   an in-job early-exit cannot avoid the spin-up cost) only runs when
+#   services/bff/internal/storage/{repository,migrations}/ or this workflow
+#   file changed, and is skipped (= satisfied) otherwise.
 # - Runs repository-level tests only (not the full integration suite) to keep
 #   the job fast.
 # - Does NOT replace the existing incremental-path integration test job in
@@ -36,9 +44,9 @@ name: Schema-000054-Compat
 on:
   pull_request:
     branches: [ main ]
-    paths:
-      - 'services/bff/internal/storage/repository/**'
-      - 'services/bff/internal/storage/migrations/**'
+    # No path filter — the workflow must run on every PR so the required status
+    # check context is always emitted. Path filtering is done inside
+    # detect-changes below (two-job always-emit pattern, see SCOPE).
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -48,8 +56,52 @@ permissions:
   contents: read
 
 jobs:
+  detect-changes:
+    name: Detect schema-relevant file changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          # fetch-depth: 0 is REQUIRED: the base SHA from the PR event payload
+          # must be reachable for 'git diff "$BASE" "$HEAD"' to work. The default
+          # depth=1 clone has no parent commits, causing the diff to fail with
+          # exit 128 ("fatal: ambiguous argument"). Same pattern as bff-layer5.yml.
+          fetch-depth: 0
+
+      - name: Detect repository / migrations / workflow changes
+        id: filter
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+
+          # Fail-closed: if git diff itself errors (e.g. a fetch issue or
+          # unexpected git state), default to relevant=true so the suite runs
+          # rather than being silently skipped. Do NOT suppress stderr — a
+          # failing diff should be visible in the job log.
+          if ! CHANGED=$(git diff --name-only "$BASE" "$HEAD"); then
+            echo "::warning::git diff failed — defaulting to relevant=true (fail-closed)"
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -qE '^(services/bff/internal/storage/(repository|migrations)/|\.github/workflows/schema-000054-compat\.yml)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Schema-relevant files changed — will run consolidated-schema repository tests."
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No schema-relevant files changed — test job will be skipped (emits 'skipped', satisfies the required check)."
+          fi
+
   schema-000054-compat:
     name: Schema-000054-compat — repository tests on consolidated schema
+    needs: detect-changes
+    if: needs.detect-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
