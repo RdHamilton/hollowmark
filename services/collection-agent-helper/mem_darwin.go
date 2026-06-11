@@ -29,7 +29,10 @@ import "C"
 
 import (
 	"fmt"
+	"log"
 	"unsafe"
+
+	"github.com/RdHamilton/hollowmark/services/collection-agent-helper/internal/scanner"
 )
 
 func openTask(pid int) (C.mach_port_t, error) {
@@ -90,6 +93,27 @@ func readMemory(task C.mach_port_t, addr, size uint64) ([]byte, error) {
 // Bump this (and add a corresponding entry to knownSignatureVersions) whenever
 // re-deriving after an MTGA patch shifts the Unity heap layout.
 //
+// Derivation record for 20260611-001 (hollowmark-tickets#1285):
+//
+//	Tool:           collection-helper --dump-regions <MTGA PID> (read-only, as below)
+//	MTGA build:     2026.59.30 (4898.1279316)
+//	Dump directory: /tmp/mtga-dump — ~300 regions, 9.0 GB, manifest.json
+//	Offline analysis: go run ./cmd/analyze_dump /tmp/mtga-dump /tmp/mtga-dump/manifest.json
+//	Finding:        collection present — region 0x376940000, 19,263 entries @ 1.84% fill
+//	                (mirrors 0x39922c000=11,129 and 0x38b680000=9,149 share the same
+//	                low-grpId fingerprint [1016 1023 1047 ...]).
+//	                Offline replication of the production filter ACCEPTED this region —
+//	                the fixed minEntries/maxFillPct thresholds were NOT the rejection
+//	                mechanism this time, but they remain a per-build fragility class:
+//	                any MTGA update can shift the heap profile past a fixed threshold
+//	                and silently break extraction.
+//	Change:         region acceptance thresholds (minEntries=500, maxFillPct=3.0)
+//	                REMOVED. Selection is now adaptive: scanner.SelectCollection picks
+//	                the region with the most valid int→int entries (grpId-range keys),
+//	                then enforces a sanity band [MinSaneCollection, MaxSaneCollection].
+//	                Out-of-band results return a loud COLLECTION_SCAN_DRIFT error
+//	                instead of a silent empty export.
+//
 // Derivation record for 20260529-001:
 //
 //	Tool:           collection-helper --dump-regions <MTGA PID> (read-only; same task_for_pid +
@@ -141,9 +165,9 @@ func readMemory(task C.mach_port_t, addr, size uint64) ([]byte, error) {
 //     memory (PII: card collection IDs, account data). Never commit or transmit
 //     the dump. Example: rm -rf /tmp/collection-dump
 //
-//  3. If a region returns >= minEntries hits with the current heuristic → H1 (region filter
-//     too strict; adjust minEntries or maxFillPct). Record the region address range and
-//     adjusted constants in this comment.
+//  3. If a region returns a healthy entry count but production still drifts → H1 (selection
+//     or sanity-band defect; check scanner.SelectCollection and the MinSaneCollection /
+//     MaxSaneCollection band). Record the region address range and outcome in this comment.
 //
 //     If no region returns hits → H2 (Unity layout drift; inspect bytes around a known GRP ID
 //     in the .bin to determine whether the 16-byte [hashCode][next][key][value] stride is
@@ -159,17 +183,11 @@ func readMemory(task C.mach_port_t, addr, size uint64) ([]byte, error) {
 // the Mach exception port, suspending all threads, which triggers anti-debug logic.
 //
 // TODO(v0.3.5): detect MTGA build string via task port Info.plist lookup (ADR-040 §G4).
-const CollectionSignatureVersion = "20260529-001"
+const CollectionSignatureVersion = "20260611-001"
 
 const (
 	minRegionSize = 4 * 1024 * 1024
 	chunkSize     = 4 * 1024 * 1024
-	// minEntries and maxFillPct are the region-filter thresholds for the collection
-	// dictionary scan. Re-confirmed for the 2026-05-29 MTGA build (H1 derivation,
-	// vault-mtg-tickets#202): region 0x389c30000 returned 19114 entries at 1.82%
-	// fill with these constants — no adjustment required.
-	minEntries = 500
-	maxFillPct = 3.0
 )
 
 // scanProcess reads the collection from pid's memory. Must run as root.
@@ -182,12 +200,7 @@ func scanProcess(pid int) (map[int]int, error) {
 
 	regions := listReadableRegions(task, minRegionSize)
 
-	type candidate struct {
-		entries map[int]int
-		fillPct float64
-	}
-	var candidates []candidate
-
+	scans := make([]scanner.RegionScan, 0, len(regions))
 	for _, r := range regions {
 		entries := make(map[int]int)
 		var scanned uint64
@@ -208,22 +221,16 @@ func scanProcess(pid int) (map[int]int, error) {
 			}
 			scanned += chunk
 		}
-
-		fillPct := 100 * float64(len(entries)) / float64(r.size/16)
-		if len(entries) >= minEntries && fillPct <= maxFillPct {
-			candidates = append(candidates, candidate{entries, fillPct})
+		if len(entries) > 0 {
+			scans = append(scans, scanner.RegionScan{Addr: r.addr, Size: r.size, Entries: entries})
 		}
 	}
 
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no collection region found in PID %d", pid)
+	sel, err := scanner.SelectCollection(scans)
+	if err != nil {
+		return nil, fmt.Errorf("pid %d: %w", pid, err)
 	}
-
-	best := candidates[0]
-	for _, c := range candidates[1:] {
-		if len(c.entries) > len(best.entries) {
-			best = c
-		}
-	}
-	return best.entries, nil
+	log.Printf("[helper] selected collection region 0x%x: %d entries (runner-up %d) signature_version=%s",
+		sel.Addr, len(sel.Entries), sel.RunnerUpEntries, CollectionSignatureVersion)
+	return sel.Entries, nil
 }
