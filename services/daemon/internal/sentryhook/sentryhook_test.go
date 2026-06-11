@@ -165,11 +165,9 @@ func TestScrubEvent_RedactsAuthorizationHeader(t *testing.T) {
 // This is an integration-level test: it calls sentryhook.Init (not sentry.Init
 // directly) so the TrimPrefix logic under test is exercised end-to-end.
 func TestInit_ReleasePrefixStripped(t *testing.T) {
-	tr := &fakeTransport{}
 	if err := Init("https://test@test.ingest.sentry.io/99999", "v1.2.3", "http://localhost:8080/api/v1"); err != nil {
 		t.Fatalf("Init returned unexpected error: %v", err)
 	}
-	_ = tr // transport used only for type-check; Release is readable from Options
 	got := sentry.CurrentHub().Client().Options().Release
 	if got != "1.2.3" {
 		t.Errorf("sentry client Release = %q, want %q (v-prefix must be stripped by sentryhook.Init)", got, "1.2.3")
