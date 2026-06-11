@@ -50,9 +50,18 @@ name: Board Status Automation
 # board with no Status field, is a legitimate no-op. Every dict access is
 # guarded; no subscript on None. The job exits 0 with an informational log.
 #
-# TICKET
-# ------
+# COMPOSITE ACTION
+# ----------------
+# The field-resolution + mutation Python block is extracted to
+# .github/actions/board-status-move/action.yml and shared across all three
+# jobs. The GraphQL fetch (which differs per event type) stays inline.
+# The response JSON is base64-encoded before storing in GITHUB_OUTPUT to
+# avoid newline/special-char corruption.
+#
+# TICKETS
+# -------
 # Fix #1087 -- board-agnostic board-status-automation (Ben, 2026-06-07)
+# Refactor #1088 -- extract PYEOF blocks to composite action (Ben, 2026-06-11)
 # ---------------------------------------------------------------------------
 
 on:
@@ -92,7 +101,11 @@ jobs:
       github.event.pull_request.draft == false
 
     steps:
-      - name: Move linked board items to PR Review
+      - name: Checkout (required for local composite action)
+        uses: actions/checkout@v4
+
+      - name: Fetch linked closing issues and their board memberships
+        id: fetch
         env:
           GH_TOKEN: ${{ secrets.GH_PROJECT_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -133,129 +146,16 @@ jobs:
             -F pr="${PR_NUMBER}" 2>&1)
 
           echo "GraphQL response received."
+          echo "response_b64=$(echo "${RESPONSE}" | base64 -w 0)" >> "$GITHUB_OUTPUT"
 
-          python3 - "${RESPONSE}" << 'PYEOF'
-          import json, sys, subprocess, os
-
-          raw = sys.argv[1]
-          try:
-              data = json.loads(raw)
-          except json.JSONDecodeError as e:
-              print(f"ERROR: could not parse GraphQL response: {e}", file=sys.stderr)
-              sys.exit(1)
-
-          errors = data.get("errors")
-          if errors:
-              print(f"ERROR: GraphQL returned errors: {errors}", file=sys.stderr)
-              sys.exit(1)
-
-          repo_data = (data.get("data") or {}).get("repository") or {}
-          pr_node = repo_data.get("pullRequest")
-          if not pr_node:
-              print("No linked PR node found -- PR may not exist or token lacks read access.")
-              sys.exit(0)
-
-          issues = (pr_node.get("closingIssuesReferences") or {}).get("nodes") or []
-          if not issues:
-              print("No linked closing issues found -- nothing to update.")
-              sys.exit(0)
-
-          target_status = "PR Review"
-          total_updated = 0
-          total_failed = 0
-
-          for issue in issues:
-              issue_num = issue.get("number", "?")
-              issue_repo = ((issue.get("repository") or {}).get("owner") or {}).get("login", "?") + \
-                           "/" + (issue.get("repository") or {}).get("name", "?")
-              items = (issue.get("projectItems") or {}).get("nodes") or []
-              if not items:
-                  print(f"  Issue {issue_repo}#{issue_num}: no board memberships -- skipping.")
-                  continue
-
-              for item in items:
-                  item_id = item.get("id")
-                  project = item.get("project") or {}
-                  project_id = project.get("id")
-                  project_num = project.get("number", "?")
-                  project_title = project.get("title", "?")
-
-                  if not item_id or not project_id:
-                      print(f"  Issue {issue_repo}#{issue_num}: item or project id missing -- skipping.")
-                      continue
-
-                  print(f"  Issue {issue_repo}#{issue_num} on board #{project_num} ({project_title}):")
-                  print(f"    Item: {item_id}")
-
-                  # Resolve Status field for this specific board dynamically
-                  field_resp = subprocess.run(
-                      ["gh", "api", "graphql",
-                       "-f", f"query=query($pid: ID!) {{ node(id: $pid) {{ ... on ProjectV2 {{ field(name: \"Status\") {{ ... on ProjectV2SingleSelectField {{ id options {{ id name }} }} }} }} }} }}",
-                       "-f", f"pid={project_id}"],
-                      capture_output=True, text=True
-                  )
-                  try:
-                      field_data = json.loads(field_resp.stdout)
-                  except json.JSONDecodeError:
-                      print(f"    FAILED: could not parse field resolution response.", file=sys.stderr)
-                      total_failed += 1
-                      continue
-
-                  if field_data.get("errors"):
-                      print(f"    FAILED: field resolution returned errors: {field_data['errors']}", file=sys.stderr)
-                      total_failed += 1
-                      continue
-
-                  field_node = ((field_data.get("data") or {}).get("node") or {}).get("field")
-                  if not field_node:
-                      print(f"    Board #{project_num} has no 'Status' field -- skipping.")
-                      continue
-
-                  field_id = field_node.get("id")
-                  options = {o["name"]: o["id"] for o in (field_node.get("options") or [])}
-                  option_id = options.get(target_status)
-
-                  if not field_id or not option_id:
-                      print(f"    Board #{project_num}: Status field or '{target_status}' option not found -- skipping.")
-                      continue
-
-                  print(f"    Resolved field_id={field_id}, option_id={option_id} ({target_status})")
-
-                  # Perform the mutation
-                  mut_resp = subprocess.run(
-                      ["gh", "api", "graphql",
-                       "-f", "query=mutation($pid: ID!, $iid: ID!, $fid: ID!, $oid: String!) { updateProjectV2ItemFieldValue(input: { projectId: $pid itemId: $iid fieldId: $fid value: { singleSelectOptionId: $oid } }) { projectV2Item { id } } }",
-                       "-f", f"pid={project_id}",
-                       "-f", f"iid={item_id}",
-                       "-f", f"fid={field_id}",
-                       "-f", f"oid={option_id}"],
-                      capture_output=True, text=True
-                  )
-                  try:
-                      mut_data = json.loads(mut_resp.stdout)
-                  except json.JSONDecodeError:
-                      print(f"    FAILED: could not parse mutation response.", file=sys.stderr)
-                      total_failed += 1
-                      continue
-
-                  if mut_data.get("errors"):
-                      print(f"    FAILED: mutation returned errors: {mut_data['errors']}", file=sys.stderr)
-                      total_failed += 1
-                      continue
-
-                  updated_item = ((mut_data.get("data") or {}).get("updateProjectV2ItemFieldValue") or {}).get("projectV2Item") or {}
-                  updated_id = updated_item.get("id", "")
-                  if updated_id.startswith("PVTI_"):
-                      print(f"    OK: {item_id} -> {target_status} on board #{project_num}")
-                      total_updated += 1
-                  else:
-                      print(f"    FAILED: mutation succeeded but returned unexpected item id: {mut_resp.stdout}", file=sys.stderr)
-                      total_failed += 1
-
-          print(f"\nResult: {total_updated} updated, {total_failed} failed.")
-          if total_failed > 0:
-              sys.exit(1)
-          PYEOF
+      - name: Move linked board items to PR Review
+        if: steps.fetch.outputs.response_b64 != ''
+        uses: ./.github/actions/board-status-move
+        with:
+          response_b64: ${{ steps.fetch.outputs.response_b64 }}
+          node_type: pr
+          target_status: PR Review
+          gh_token: ${{ secrets.GH_PROJECT_PAT }}
 
   # -------------------------------------------------------------------------
   # Job: set-done-on-pr-merge
@@ -274,7 +174,11 @@ jobs:
       github.event.pull_request.merged == true
 
     steps:
-      - name: Move linked board items to Done
+      - name: Checkout (required for local composite action)
+        uses: actions/checkout@v4
+
+      - name: Fetch linked closing issues and their board memberships
+        id: fetch
         env:
           GH_TOKEN: ${{ secrets.GH_PROJECT_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -315,129 +219,16 @@ jobs:
             -F pr="${PR_NUMBER}" 2>&1)
 
           echo "GraphQL response received."
+          echo "response_b64=$(echo "${RESPONSE}" | base64 -w 0)" >> "$GITHUB_OUTPUT"
 
-          python3 - "${RESPONSE}" << 'PYEOF'
-          import json, sys, subprocess, os
-
-          raw = sys.argv[1]
-          try:
-              data = json.loads(raw)
-          except json.JSONDecodeError as e:
-              print(f"ERROR: could not parse GraphQL response: {e}", file=sys.stderr)
-              sys.exit(1)
-
-          errors = data.get("errors")
-          if errors:
-              print(f"ERROR: GraphQL returned errors: {errors}", file=sys.stderr)
-              sys.exit(1)
-
-          repo_data = (data.get("data") or {}).get("repository") or {}
-          pr_node = repo_data.get("pullRequest")
-          if not pr_node:
-              print("No linked PR node found -- PR may not exist or token lacks read access.")
-              sys.exit(0)
-
-          issues = (pr_node.get("closingIssuesReferences") or {}).get("nodes") or []
-          if not issues:
-              print("No linked closing issues found -- nothing to update.")
-              sys.exit(0)
-
-          target_status = "Done"
-          total_updated = 0
-          total_failed = 0
-
-          for issue in issues:
-              issue_num = issue.get("number", "?")
-              issue_repo = ((issue.get("repository") or {}).get("owner") or {}).get("login", "?") + \
-                           "/" + (issue.get("repository") or {}).get("name", "?")
-              items = (issue.get("projectItems") or {}).get("nodes") or []
-              if not items:
-                  print(f"  Issue {issue_repo}#{issue_num}: no board memberships -- skipping.")
-                  continue
-
-              for item in items:
-                  item_id = item.get("id")
-                  project = item.get("project") or {}
-                  project_id = project.get("id")
-                  project_num = project.get("number", "?")
-                  project_title = project.get("title", "?")
-
-                  if not item_id or not project_id:
-                      print(f"  Issue {issue_repo}#{issue_num}: item or project id missing -- skipping.")
-                      continue
-
-                  print(f"  Issue {issue_repo}#{issue_num} on board #{project_num} ({project_title}):")
-                  print(f"    Item: {item_id}")
-
-                  # Resolve Status field for this specific board dynamically
-                  field_resp = subprocess.run(
-                      ["gh", "api", "graphql",
-                       "-f", f"query=query($pid: ID!) {{ node(id: $pid) {{ ... on ProjectV2 {{ field(name: \"Status\") {{ ... on ProjectV2SingleSelectField {{ id options {{ id name }} }} }} }} }} }}",
-                       "-f", f"pid={project_id}"],
-                      capture_output=True, text=True
-                  )
-                  try:
-                      field_data = json.loads(field_resp.stdout)
-                  except json.JSONDecodeError:
-                      print(f"    FAILED: could not parse field resolution response.", file=sys.stderr)
-                      total_failed += 1
-                      continue
-
-                  if field_data.get("errors"):
-                      print(f"    FAILED: field resolution returned errors: {field_data['errors']}", file=sys.stderr)
-                      total_failed += 1
-                      continue
-
-                  field_node = ((field_data.get("data") or {}).get("node") or {}).get("field")
-                  if not field_node:
-                      print(f"    Board #{project_num} has no 'Status' field -- skipping.")
-                      continue
-
-                  field_id = field_node.get("id")
-                  options = {o["name"]: o["id"] for o in (field_node.get("options") or [])}
-                  option_id = options.get(target_status)
-
-                  if not field_id or not option_id:
-                      print(f"    Board #{project_num}: Status field or '{target_status}' option not found -- skipping.")
-                      continue
-
-                  print(f"    Resolved field_id={field_id}, option_id={option_id} ({target_status})")
-
-                  # Perform the mutation
-                  mut_resp = subprocess.run(
-                      ["gh", "api", "graphql",
-                       "-f", "query=mutation($pid: ID!, $iid: ID!, $fid: ID!, $oid: String!) { updateProjectV2ItemFieldValue(input: { projectId: $pid itemId: $iid fieldId: $fid value: { singleSelectOptionId: $oid } }) { projectV2Item { id } } }",
-                       "-f", f"pid={project_id}",
-                       "-f", f"iid={item_id}",
-                       "-f", f"fid={field_id}",
-                       "-f", f"oid={option_id}"],
-                      capture_output=True, text=True
-                  )
-                  try:
-                      mut_data = json.loads(mut_resp.stdout)
-                  except json.JSONDecodeError:
-                      print(f"    FAILED: could not parse mutation response.", file=sys.stderr)
-                      total_failed += 1
-                      continue
-
-                  if mut_data.get("errors"):
-                      print(f"    FAILED: mutation returned errors: {mut_data['errors']}", file=sys.stderr)
-                      total_failed += 1
-                      continue
-
-                  updated_item = ((mut_data.get("data") or {}).get("updateProjectV2ItemFieldValue") or {}).get("projectV2Item") or {}
-                  updated_id = updated_item.get("id", "")
-                  if updated_id.startswith("PVTI_"):
-                      print(f"    OK: {item_id} -> {target_status} on board #{project_num}")
-                      total_updated += 1
-                  else:
-                      print(f"    FAILED: mutation succeeded but returned unexpected item id: {mut_resp.stdout}", file=sys.stderr)
-                      total_failed += 1
-
-          print(f"\nResult: {total_updated} updated, {total_failed} failed.")
-          if total_failed > 0:
-              sys.exit(1)
-          PYEOF
+      - name: Move linked board items to Done
+        if: steps.fetch.outputs.response_b64 != ''
+        uses: ./.github/actions/board-status-move
+        with:
+          response_b64: ${{ steps.fetch.outputs.response_b64 }}
+          node_type: pr
+          target_status: Done
+          gh_token: ${{ secrets.GH_PROJECT_PAT }}
 
   # -------------------------------------------------------------------------
   # Job: set-done-on-issue-close
@@ -458,7 +249,11 @@ jobs:
     if: github.event_name == 'issues' && github.event.action == 'closed'
 
     steps:
-      - name: Move closed issue board items to Done
+      - name: Checkout (required for local composite action)
+        uses: actions/checkout@v4
+
+      - name: Fetch closed issue board memberships
+        id: fetch
         env:
           GH_TOKEN: ${{ secrets.GH_PROJECT_PAT }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
@@ -493,116 +288,15 @@ jobs:
             -F issue="${ISSUE_NUMBER}" 2>&1)
 
           echo "GraphQL response received."
+          echo "response_b64=$(echo "${RESPONSE}" | base64 -w 0)" >> "$GITHUB_OUTPUT"
+          echo "issue_number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
 
-          python3 - "${RESPONSE}" << 'PYEOF'
-          import json, sys, subprocess, os
-
-          raw = sys.argv[1]
-          try:
-              data = json.loads(raw)
-          except json.JSONDecodeError as e:
-              print(f"ERROR: could not parse GraphQL response: {e}", file=sys.stderr)
-              sys.exit(1)
-
-          errors = data.get("errors")
-          if errors:
-              print(f"ERROR: GraphQL returned errors: {errors}", file=sys.stderr)
-              sys.exit(1)
-
-          repo_data = (data.get("data") or {}).get("repository") or {}
-          issue_node = repo_data.get("issue")
-          if not issue_node:
-              print("No issue node found -- issue may not exist or token lacks read access.")
-              sys.exit(0)
-
-          items = (issue_node.get("projectItems") or {}).get("nodes") or []
-          if not items:
-              print(f"Issue #{os.environ.get('ISSUE_NUMBER','?')} has no board memberships -- nothing to update.")
-              sys.exit(0)
-
-          target_status = "Done"
-          total_updated = 0
-          total_failed = 0
-
-          for item in items:
-              item_id = item.get("id")
-              project = item.get("project") or {}
-              project_id = project.get("id")
-              project_num = project.get("number", "?")
-              project_title = project.get("title", "?")
-
-              if not item_id or not project_id:
-                  print(f"  Item or project id missing -- skipping.")
-                  continue
-
-              print(f"  Board #{project_num} ({project_title}): item {item_id}")
-
-              # Resolve Status field for this specific board dynamically
-              field_resp = subprocess.run(
-                  ["gh", "api", "graphql",
-                   "-f", f"query=query($pid: ID!) {{ node(id: $pid) {{ ... on ProjectV2 {{ field(name: \"Status\") {{ ... on ProjectV2SingleSelectField {{ id options {{ id name }} }} }} }} }} }}",
-                   "-f", f"pid={project_id}"],
-                  capture_output=True, text=True
-              )
-              try:
-                  field_data = json.loads(field_resp.stdout)
-              except json.JSONDecodeError:
-                  print(f"    FAILED: could not parse field resolution response.", file=sys.stderr)
-                  total_failed += 1
-                  continue
-
-              if field_data.get("errors"):
-                  print(f"    FAILED: field resolution returned errors: {field_data['errors']}", file=sys.stderr)
-                  total_failed += 1
-                  continue
-
-              field_node = ((field_data.get("data") or {}).get("node") or {}).get("field")
-              if not field_node:
-                  print(f"    Board #{project_num} has no 'Status' field -- skipping.")
-                  continue
-
-              field_id = field_node.get("id")
-              options = {o["name"]: o["id"] for o in (field_node.get("options") or [])}
-              option_id = options.get(target_status)
-
-              if not field_id or not option_id:
-                  print(f"    Board #{project_num}: Status field or '{target_status}' option not found -- skipping.")
-                  continue
-
-              print(f"    Resolved field_id={field_id}, option_id={option_id} ({target_status})")
-
-              # Perform the mutation
-              mut_resp = subprocess.run(
-                  ["gh", "api", "graphql",
-                   "-f", "query=mutation($pid: ID!, $iid: ID!, $fid: ID!, $oid: String!) { updateProjectV2ItemFieldValue(input: { projectId: $pid itemId: $iid fieldId: $fid value: { singleSelectOptionId: $oid } }) { projectV2Item { id } } }",
-                   "-f", f"pid={project_id}",
-                   "-f", f"iid={item_id}",
-                   "-f", f"fid={field_id}",
-                   "-f", f"oid={option_id}"],
-                  capture_output=True, text=True
-              )
-              try:
-                  mut_data = json.loads(mut_resp.stdout)
-              except json.JSONDecodeError:
-                  print(f"    FAILED: could not parse mutation response.", file=sys.stderr)
-                  total_failed += 1
-                  continue
-
-              if mut_data.get("errors"):
-                  print(f"    FAILED: mutation returned errors: {mut_data['errors']}", file=sys.stderr)
-                  total_failed += 1
-                  continue
-
-              updated_item = ((mut_data.get("data") or {}).get("updateProjectV2ItemFieldValue") or {}).get("projectV2Item") or {}
-              updated_id = updated_item.get("id", "")
-              if updated_id.startswith("PVTI_"):
-                  print(f"    OK: {item_id} -> {target_status} on board #{project_num}")
-                  total_updated += 1
-              else:
-                  print(f"    FAILED: mutation succeeded but returned unexpected item id: {mut_resp.stdout}", file=sys.stderr)
-                  total_failed += 1
-
-          print(f"\nResult: {total_updated} updated, {total_failed} failed.")
-          if total_failed > 0:
-              sys.exit(1)
-          PYEOF
+      - name: Move closed issue board items to Done
+        if: steps.fetch.outputs.response_b64 != ''
+        uses: ./.github/actions/board-status-move
+        with:
+          response_b64: ${{ steps.fetch.outputs.response_b64 }}
+          node_type: issue
+          target_status: Done
+          gh_token: ${{ secrets.GH_PROJECT_PAT }}
+          issue_number: ${{ steps.fetch.outputs.issue_number }}
