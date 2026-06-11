@@ -7,7 +7,7 @@
 # Verifies the critical properties of the SHA-delta staleness check and the
 # check-run conclusion decision logic in security-review-gate.yml.
 #
-# Test cases (RdHamilton/hollowmark-tickets#1134 + vault-mtg-tickets#231, #2420):
+# Test cases (RdHamilton/hollowmark-tickets#1134, #1224 + vault-mtg-tickets#231, #2420):
 #
 # AC-1134-A (re-keyed): A prime guarded skip -- single-parent commit with §1A file in
 #   COMMIT_FILES but EMPTY MERGE_CONTRIB (impossible in real single-parent flow,
@@ -34,8 +34,8 @@
 #   Explicitly distinct from AC-1134-A to prove A prime compare drives the decision.
 #
 # AC-1134-F (octopus fail-closed): commit with parents==3 (octopus merge).
-#   compare vs parent[1] includes a §1A path (MERGE_CONTRIB non-empty) ->
-#   verdict_valid=false. Pins the fail-closed direction: parent[1]-only extraction
+#   compare vs parent[0] includes a §1A path (MERGE_CONTRIB non-empty) ->
+#   verdict_valid=false. Pins the fail-closed direction: parent[0]-anchored compare
 #   is over-inclusive for >2-parent commits (over-stale, never under-stale).
 #   A future reader must NOT "optimize" this without a new ADR + Sarah review.
 #
@@ -47,6 +47,25 @@
 #   never silently skip. This test cannot simulate the shell-level API failure directly
 #   (the harness is a logic harness, not an integration harness) but directly exercises
 #   the fallback value that the `|| echo "${COMMIT_FILES}"` expression produces.
+#
+# AC-1224-A (§1A-self-touching PR + update-branch false-stale subclass -- tickets#1224):
+#   The remaining subclass after tickets#1134: a PR whose OWN diff IS a §1A file
+#   (e.g. daemon-release.yml deleted). With the parent[0] fix, compare(parent[0]...HEAD)
+#   returns only what main contributed (non-§1A in this scenario) -> verdict_valid=true.
+#   This test FAILS against the old parent[1] compare because compare(parent[1]...HEAD)
+#   returns the PR's own daemon-release.yml deletion -> §1A match -> false STALE.
+#   Fixture: PR #3137 (daemon-release.yml deletion). After update-branch merge commit:
+#     parent[0] = b50cc4c4 (prior PR tip / verdict SHA)
+#     parent[1] = df9a7ba4 (main tip)
+#   compare(parent[0]...merge) = main's contribution = sentry hook (non-§1A) -> FRESH.
+#
+# AC-1224-B (real §1A branch push still stales -- gate integrity preserved):
+#   Verifies the fix does not weaken the gate: if a branch genuinely pushes a new §1A
+#   single-parent commit after the verdict (not just an update-branch), that commit
+#   falls through to the raw COMMIT_FILES path (PARENT_COUNT=1) and correctly stales
+#   the verdict -> verdict_valid=false.
+#   This is identical in structure to AC-1134-C but uses daemon-release.yml as the
+#   §1A fixture to match the PR #3137 context, confirming both cases are handled.
 #
 # AC3b: Fast path -- verdict timestamp is newer than push timestamp; trivially fresh.
 # AC5:  Gate required + fresh matching verdict -> conclusion = "success".
@@ -95,8 +114,8 @@ jobs:
       # comments" step. The key predicate is:
       #
       #   For each commit after verdict:
-      #     if PARENT_COUNT >= 2 AND PARENT1_SHA is non-empty:
-      #       use MERGE_CONTRIB (compare result scoped to §1A paths)
+      #     if PARENT_COUNT >= 2 AND PARENT0_SHA is non-empty:
+      #       use MERGE_CONTRIB (compare(parent[0]...HEAD) result scoped to §1A paths)
       #       if MERGE_CONTRIB empty  -> skip (inert merge commit)
       #       if MERGE_CONTRIB non-empty -> S07_DELTA_FOUND=true (stale)
       #     else:
@@ -119,12 +138,12 @@ jobs:
       # -----------------------------------------------------------------------
       - name: "AC-1134-A setup: merge commit, §1A in COMMIT_FILES, MERGE_CONTRIB non-§1A"
         run: |
-          # MERGE_CONTRIB: A prime compare(parent1...sha) result -- non-§1A only
+          # MERGE_CONTRIB: A prime compare(parent0...sha) result -- non-§1A only
           {
             echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
             echo "PARENT_COUNT=2"
-            echo "PARENT1_SHA=eec627624009a349f9ee9c95bd93ac1ddee5304f"
+            echo "PARENT0_SHA=eec627624009a349f9ee9c95bd93ac1ddee5304f"
             printf 'COMMIT_FILES<<EOF\n'
             printf 'services/daemon/cmd/daemon-replay-check/main.go\n'
             printf 'services/daemon/cmd/daemon-replay-check/main_test.go\n'
@@ -142,7 +161,7 @@ jobs:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
           LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
           PARENT_COUNT:        ${{ env.PARENT_COUNT }}
-          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          PARENT0_SHA:         ${{ env.PARENT0_SHA }}
           COMMIT_FILES:        ${{ env.COMMIT_FILES }}
           MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
         run: |
@@ -182,8 +201,8 @@ jobs:
           S07_DELTA_FOUND=false
 
           # A prime guarded path: for merge commits (parents>=2 with non-empty
-          # parent[1] SHA), use MERGE_CONTRIB (compare result), not raw COMMIT_FILES.
-          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+          # parent[0] SHA), use MERGE_CONTRIB (compare result), not raw COMMIT_FILES.
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
             echo "Merge commit (parents=${PARENT_COUNT}). Using A prime MERGE_CONTRIB."
             while IFS= read -r FILE; do
               [ -z "${FILE}" ] && continue
@@ -245,7 +264,7 @@ jobs:
             echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
             echo "PARENT_COUNT=2"
-            echo "PARENT1_SHA=abc000000000000000000000000000000000dead"
+            echo "PARENT0_SHA=abc000000000000000000000000000000000dead"
             printf 'COMMIT_FILES<<EOF\n'
             printf 'services/bff/cmd/main.go\n'
             printf 'services/bff/cmd/router.go\n'
@@ -260,7 +279,7 @@ jobs:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
           LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
           PARENT_COUNT:        ${{ env.PARENT_COUNT }}
-          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          PARENT0_SHA:         ${{ env.PARENT0_SHA }}
           COMMIT_FILES:        ${{ env.COMMIT_FILES }}
           MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
         run: |
@@ -299,7 +318,7 @@ jobs:
 
           S07_DELTA_FOUND=false
 
-          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
             echo "Merge commit (parents=${PARENT_COUNT}). Using A prime MERGE_CONTRIB."
             while IFS= read -r FILE; do
               [ -z "${FILE}" ] && continue
@@ -346,7 +365,7 @@ jobs:
       # -----------------------------------------------------------------------
       # AC-1134-C: true-stale single-parent commit
       #
-      # Single-parent (PARENT_COUNT=1, PARENT1_SHA empty): falls to raw COMMIT_FILES
+      # Single-parent (PARENT_COUNT=1, PARENT0_SHA empty): falls to raw COMMIT_FILES
       # path -> §1A match -> S07_DELTA_FOUND=true -> verdict_valid=false.
       # Regression guard: genuine single-parent §1A pushes after verdict MUST stale.
       # -----------------------------------------------------------------------
@@ -356,7 +375,7 @@ jobs:
             echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:02:00Z"
             echo "PARENT_COUNT=1"
-            echo "PARENT1_SHA="
+            echo "PARENT0_SHA="
             printf 'COMMIT_FILES<<EOF\n'
             printf 'services/bff/cmd/main.go\n'
             printf 'EOF\n'
@@ -370,7 +389,7 @@ jobs:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
           LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
           PARENT_COUNT:        ${{ env.PARENT_COUNT }}
-          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          PARENT0_SHA:         ${{ env.PARENT0_SHA }}
           COMMIT_FILES:        ${{ env.COMMIT_FILES }}
           MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
         run: |
@@ -409,7 +428,7 @@ jobs:
 
           S07_DELTA_FOUND=false
 
-          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
             echo "Merge commit. Using A prime MERGE_CONTRIB."
             while IFS= read -r FILE; do
               [ -z "${FILE}" ] && continue
@@ -472,7 +491,7 @@ jobs:
             echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
             echo "PARENT_COUNT=2"
-            echo "PARENT1_SHA=abc111000000000000000000000000000000dead"
+            echo "PARENT0_SHA=abc111000000000000000000000000000000dead"
             printf 'COMMIT_FILES<<EOF\n'
             printf 'services/daemon/cmd/daemon-replay-check/main.go\n'
             printf 'services/daemon/cmd/daemon-replay-check/main_test.go\n'
@@ -489,7 +508,7 @@ jobs:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
           LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
           PARENT_COUNT:        ${{ env.PARENT_COUNT }}
-          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          PARENT0_SHA:         ${{ env.PARENT0_SHA }}
           COMMIT_FILES:        ${{ env.COMMIT_FILES }}
           MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
         run: |
@@ -528,7 +547,7 @@ jobs:
 
           S07_DELTA_FOUND=false
 
-          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
             echo "Merge commit (parents=${PARENT_COUNT}). Using A prime MERGE_CONTRIB."
             while IFS= read -r FILE; do
               [ -z "${FILE}" ] && continue
@@ -600,7 +619,7 @@ jobs:
             echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
             echo "PARENT_COUNT=2"
-            echo "PARENT1_SHA=eec627624009a349f9ee9c95bd93ac1ddee5304f"
+            echo "PARENT0_SHA=eec627624009a349f9ee9c95bd93ac1ddee5304f"
             printf 'COMMIT_FILES<<EOF\n'
             printf 'services/daemon/cmd/daemon-replay-check/main.go\n'
             printf 'services/daemon/cmd/daemon-replay-check/main_test.go\n'
@@ -618,7 +637,7 @@ jobs:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
           LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
           PARENT_COUNT:        ${{ env.PARENT_COUNT }}
-          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          PARENT0_SHA:         ${{ env.PARENT0_SHA }}
           COMMIT_FILES:        ${{ env.COMMIT_FILES }}
           MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
         run: |
@@ -657,7 +676,7 @@ jobs:
 
           S07_DELTA_FOUND=false
 
-          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
             echo "Merge commit (parents=${PARENT_COUNT}). A prime: checking MERGE_CONTRIB."
             echo "MERGE_CONTRIB: ${MERGE_CONTRIB}"
             while IFS= read -r FILE; do
@@ -711,16 +730,16 @@ jobs:
       # -----------------------------------------------------------------------
       # AC-1134-F: octopus merge fail-closed (parents==3)
       #
-      # Setup: PARENT_COUNT=3 (octopus merge). The A prime logic extracts parent[1]
-      # and uses MERGE_CONTRIB from compare(parent[1]...merge). For octopus commits,
-      # content unique to parent[2]+ appears in this compare as a diff vs parent[1],
+      # Setup: PARENT_COUNT=3 (octopus merge). The A prime logic extracts parent[0]
+      # and uses MERGE_CONTRIB from compare(parent[0]...merge). For octopus commits,
+      # content unique to parent[2]+ appears in this compare as a diff vs parent[0],
       # making it over-inclusive. That is intentionally fail-closed.
       #
       # Here: MERGE_CONTRIB contains a §1A path (content from parent[2]+ visible in
-      # compare vs parent[1]) -> verdict_valid=false.
+      # compare vs parent[0]) -> verdict_valid=false.
       #
       # FAIL-CLOSED property (DO NOT "OPTIMIZE"):
-      # For octopus merges (parents>=3), the parent[1]-only compare is over-inclusive:
+      # For octopus merges (parents>=3), the parent[0]-anchored compare is over-inclusive:
       # content arriving from parent[2]+ is counted as the merge's contribution
       # (over-stale), never under-stale. This is the safe direction. A future reader
       # must NOT change this to check all parents or use a merge-base algorithm
@@ -730,14 +749,14 @@ jobs:
       # -----------------------------------------------------------------------
       - name: "AC-1134-F setup: octopus merge (parents==3), MERGE_CONTRIB has §1A"
         run: |
-          # MERGE_CONTRIB: compare(parent[1]...octopus_merge) includes a §1A file
+          # MERGE_CONTRIB: compare(parent[0]...octopus_merge) includes a §1A file
           # because parent[2] introduced deploy-bff.yml content that differs from
-          # parent[1] -- over-inclusive but fail-closed.
+          # parent[0] -- over-inclusive but fail-closed.
           {
             echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
             echo "PARENT_COUNT=3"
-            echo "PARENT1_SHA=abc222000000000000000000000000000000dead"
+            echo "PARENT0_SHA=abc222000000000000000000000000000000dead"
             printf 'COMMIT_FILES<<EOF\n'
             printf 'services/daemon/cmd/main.go\n'
             printf 'services/bff/internal/handler/match.go\n'
@@ -755,15 +774,15 @@ jobs:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
           LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
           PARENT_COUNT:        ${{ env.PARENT_COUNT }}
-          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          PARENT0_SHA:         ${{ env.PARENT0_SHA }}
           COMMIT_FILES:        ${{ env.COMMIT_FILES }}
           MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
         run: |
           set -euo pipefail
 
           # OCTOPUS NOTE: for PARENT_COUNT>=3, the A prime compare is taken against
-          # parent[1] regardless of parent count. Content unique to parent[2]+ shows
-          # up in the compare as a diff vs parent[1] -- over-inclusive, never under-
+          # parent[0] regardless of parent count. Content unique to parent[2]+ shows
+          # up in the compare as a diff vs parent[0] -- over-inclusive, never under-
           # inclusive. This is intentionally fail-closed (over-stale is safe;
           # under-stale masks security content and is not). Do NOT optimize to check
           # all parents without a new ADR and Sarah review.
@@ -801,8 +820,8 @@ jobs:
 
           S07_DELTA_FOUND=false
 
-          # PARENT_COUNT=3 >= 2 and PARENT1_SHA non-empty -> A prime path applies.
-          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+          # PARENT_COUNT=3 >= 2 and PARENT0_SHA non-empty -> A prime path applies.
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
             echo "Merge commit (parents=${PARENT_COUNT}, octopus). Using A prime MERGE_CONTRIB."
             while IFS= read -r FILE; do
               [ -z "${FILE}" ] && continue
@@ -839,9 +858,9 @@ jobs:
           echo "AC-1134-F result: verdict_valid=${RESULT}"
           if [ "${RESULT}" != "false" ]; then
             echo "FAIL: AC-1134-F -- expected verdict_valid=false (octopus fail-closed)."
-            echo "      For PARENT_COUNT==3 (octopus merge), compare vs parent[1] is"
+            echo "      For PARENT_COUNT==3 (octopus merge), compare vs parent[0] is"
             echo "      over-inclusive: content unique to parent[2]+ shows up as diff"
-            echo "      vs parent[1] -> STALE. This is correct: over-stale is fail-closed."
+            echo "      vs parent[0] -> STALE. This is correct: over-stale is fail-closed."
             echo "      DO NOT optimize to check all parents without a new ADR."
             exit 1
           fi
@@ -1085,11 +1104,11 @@ jobs:
               if [ "${COMMIT_SHA}" = "abc123" ]; then
                 COMMIT_FILES="services/bff/cmd/main.go"
                 PARENT_COUNT=1
-                PARENT1_SHA=""
+                PARENT0_SHA=""
               else
                 COMMIT_FILES=""
                 PARENT_COUNT=1
-                PARENT1_SHA=""
+                PARENT0_SHA=""
               fi
 
               if [ -z "${COMMIT_FILES}" ]; then
@@ -1098,7 +1117,7 @@ jobs:
               fi
 
               # Apply A prime logic: single-parent uses raw COMMIT_FILES
-              if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+              if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
                 FILES_TO_CHECK="${MERGE_CONTRIB:-}"
               else
                 FILES_TO_CHECK="${COMMIT_FILES}"
@@ -1164,7 +1183,7 @@ jobs:
             echo "VERDICT_TIMESTAMP=2026-05-29T10:00:00Z"
             echo "LAST_PUSH_TIMESTAMP=2026-05-29T10:01:00Z"
             echo "PARENT_COUNT=2"
-            echo "PARENT1_SHA=dead000000000000000000000000000000000001"
+            echo "PARENT0_SHA=dead000000000000000000000000000000000001"
             printf 'COMMIT_FILES<<EOF\n'
             printf 'services/bff/cmd/main.go\n'
             printf 'services/bff/internal/handler/match.go\n'
@@ -1181,7 +1200,7 @@ jobs:
           VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
           LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
           PARENT_COUNT:        ${{ env.PARENT_COUNT }}
-          PARENT1_SHA:         ${{ env.PARENT1_SHA }}
+          PARENT0_SHA:         ${{ env.PARENT0_SHA }}
           COMMIT_FILES:        ${{ env.COMMIT_FILES }}
           MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
         run: |
@@ -1222,9 +1241,9 @@ jobs:
 
           # MERGE_CONTRIB == COMMIT_FILES: simulates the || echo "${COMMIT_FILES}"
           # fallback when the compare API call fails. The A prime path applies because
-          # PARENT_COUNT>=2 and PARENT1_SHA is non-empty, so MERGE_CONTRIB (which
+          # PARENT_COUNT>=2 and PARENT0_SHA is non-empty, so MERGE_CONTRIB (which
           # equals COMMIT_FILES here) is scanned for §1A paths -> STALE.
-          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT1_SHA}" ]; then
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
             echo "Merge commit (parents=${PARENT_COUNT}). Using A prime MERGE_CONTRIB (fallback=COMMIT_FILES)."
             while IFS= read -r FILE; do
               [ -z "${FILE}" ] && continue
@@ -1273,6 +1292,277 @@ jobs:
           echo "PASS: AC-1134-G -- compare-failure fallback to COMMIT_FILES yields STALE (fail-closed)."
 
       # -----------------------------------------------------------------------
+      # AC-1224-A: §1A-self-touching PR + update-branch -- false-stale subclass
+      #
+      # Root cause (hollowmark-tickets#1224): a PR whose OWN diff IS a §1A file
+      # (e.g. .github/workflows/daemon-release.yml deleted in PR #3137) re-stales
+      # on every update-branch because the old parent[1] compare includes the PR's
+      # own §1A content in its result.
+      #
+      # With the parent[0] fix: compare(parent[0]...merge_commit) returns ONLY what
+      # main contributed -- in this scenario a non-§1A sentry hook change from main.
+      # Zero §1A in MERGE_CONTRIB -> verdict stays fresh.
+      #
+      # Fixture mirrors PR #3137:
+      #   PR deletes .github/workflows/daemon-release.yml (§1A path).
+      #   Sarah approved at b50cc4c4 (prior PR tip, PARENT0_SHA in the merge commit).
+      #   update-branch merge commit: parent[0]=b50cc4c4 (verdict SHA), parent[1]=df9a7ba4 (main).
+      #   compare(parent[0]=b50cc4c4...merge) = main's contribution only:
+      #     services/bff/internal/hooks/sentry.go  (non-§1A -- from main's #3134 merge)
+      #   Gate sees MERGE_CONTRIB with zero §1A -> verdict_valid=true (correct).
+      #
+      # If this test fails: the gate is still using compare(parent[1]...HEAD) which
+      # returns the PR's own daemon-release.yml deletion -> §1A false-stale (the bug).
+      # -----------------------------------------------------------------------
+      - name: "AC-1224-A setup: §1A-self-touching PR (daemon-release.yml), update-branch with non-§1A main delta"
+        run: |
+          # COMMIT_FILES: what commits/{merge_sha}.files[] returns -- includes the PR's
+          # own daemon-release.yml deletion AND main's sentry hook addition (flat union).
+          # MERGE_CONTRIB: compare(parent[0]=b50cc4c4...merge_commit) result -- ONLY what
+          # main (parent[1]=df9a7ba4) contributed. The PR's own daemon-release.yml deletion
+          # is NOT here because it was already in parent[0] (the verdict-covered tip).
+          {
+            echo "VERDICT_TIMESTAMP=2026-06-10T20:00:00Z"
+            echo "LAST_PUSH_TIMESTAMP=2026-06-10T20:05:00Z"
+            echo "PARENT_COUNT=2"
+            echo "PARENT0_SHA=b50cc4c4fake000000000000000000000000dead"
+            echo "PARENT0_SHA=df9a7ba4fake000000000000000000000000dead"
+            printf 'COMMIT_FILES<<EOF\n'
+            printf '.github/workflows/daemon-release.yml\n'
+            printf 'services/bff/internal/hooks/sentry.go\n'
+            printf 'EOF\n'
+            printf 'MERGE_CONTRIB<<EOF\n'
+            printf 'services/bff/internal/hooks/sentry.go\n'
+            printf 'EOF\n'
+          } >> "$GITHUB_ENV"
+
+      - name: "AC-1224-A: run A prime delta check with parent[0] MERGE_CONTRIB -- expect verdict_valid=true"
+        id: ac_1224_a_check
+        env:
+          VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
+          LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
+          PARENT_COUNT:        ${{ env.PARENT_COUNT }}
+          PARENT0_SHA:         ${{ env.PARENT0_SHA }}
+          COMMIT_FILES:        ${{ env.COMMIT_FILES }}
+          MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
+        run: |
+          set -euo pipefail
+
+          TRIGGER_GLOBS=(
+            ".github/workflows/deploy-bff.yml"
+            ".github/workflows/deploy-spa.yml"
+            ".github/workflows/release.yml"
+            ".github/workflows/rollback.yml"
+            ".github/workflows/staging-deploy.yml"
+            ".github/workflows/daemon-release.yml"
+            ".github/workflows/frontend.yml"
+            ".github/workflows/security-review-gate.yml"
+            "services/bff/cmd/"
+            "services/daemon/cmd/"
+            "scripts/deploy/"
+          )
+
+          VERDICT_AFTER_PUSH=$(python3 -c "
+          from datetime import datetime, timezone
+          def p(t):
+              t = t.strip()
+              if t.endswith('Z'):
+                  t = t[:-1] + '+00:00'
+              return datetime.fromisoformat(t).astimezone(timezone.utc)
+          verdict = p('${VERDICT_TIMESTAMP}')
+          push   = p('${LAST_PUSH_TIMESTAMP}')
+          print('true' if verdict > push else 'false')
+          ")
+
+          if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          S07_DELTA_FOUND=false
+
+          # A prime guarded path: for merge commits (parents>=2 with non-empty
+          # PARENT0_SHA), use MERGE_CONTRIB which represents compare(parent[0]...HEAD).
+          # This is the parent[0] fix: MERGE_CONTRIB contains ONLY what main contributed,
+          # not the PR's own §1A work that was already in parent[0].
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
+            echo "Merge commit (parents=${PARENT_COUNT}). Using A prime MERGE_CONTRIB (compare parent[0]...HEAD)."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "A prime §1A path match in MERGE_CONTRIB: ${FILE}"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${MERGE_CONTRIB}"
+          else
+            echo "Single-parent commit (or PARENT0_SHA unavailable). Using raw COMMIT_FILES."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "§1A path match in COMMIT_FILES: ${FILE}"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${COMMIT_FILES}"
+          fi
+
+          if [ "${S07_DELTA_FOUND}" = "true" ]; then
+            echo "A prime delta check: STALE"
+            echo "verdict_valid=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "A prime delta check: FRESH (MERGE_CONTRIB has no §1A paths)"
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "AC-1224-A: assert verdict_valid=true (§1A-self-touching PR update-branch must not re-stale)"
+        env:
+          RESULT: ${{ steps.ac_1224_a_check.outputs.verdict_valid }}
+        run: |
+          echo "AC-1224-A result: verdict_valid=${RESULT}"
+          if [ "${RESULT}" != "true" ]; then
+            echo "FAIL: AC-1224-A -- expected verdict_valid=true."
+            echo "      PR #3137 fixture: PR deletes daemon-release.yml (§1A)."
+            echo "      After update-branch merge commit, compare(parent[0]...HEAD)"
+            echo "      returns ONLY main's contribution (non-§1A sentry hook)."
+            echo "      Zero §1A in MERGE_CONTRIB -- verdict MUST stay fresh."
+            echo ""
+            echo "      If this test fails, the gate is still using compare(parent[1]...HEAD),"
+            echo "      which returns the PR's OWN daemon-release.yml deletion -> false STALE."
+            echo "      Root cause: hollowmark-tickets#1224."
+            exit 1
+          fi
+          echo "PASS: AC-1224-A -- §1A-self-touching PR update-branch does not re-stale verdict."
+
+      # -----------------------------------------------------------------------
+      # AC-1224-B: Real §1A branch push still stales -- gate integrity preserved
+      #
+      # Verifies the parent[0] fix does NOT weaken the gate: a genuine single-parent
+      # §1A commit pushed to the branch after the verdict (not an update-branch)
+      # falls through to the raw COMMIT_FILES path (PARENT_COUNT=1, no PARENT0_SHA)
+      # and correctly stales -> verdict_valid=false.
+      #
+      # Complementary to AC-1224-A: confirms both sides of the invariant hold.
+      # Uses daemon-release.yml as the §1A path to match the #1224/#3137 context.
+      # -----------------------------------------------------------------------
+      - name: "AC-1224-B setup: genuine §1A single-parent branch push (daemon-release.yml modified)"
+        run: |
+          # A developer pushes a direct change to daemon-release.yml after Sarah approved.
+          # This is a SINGLE-PARENT commit (not an update-branch merge).
+          # PARENT_COUNT=1, PARENT0_SHA is empty -> falls to raw COMMIT_FILES scan -> STALE.
+          {
+            echo "VERDICT_TIMESTAMP=2026-06-10T20:00:00Z"
+            echo "LAST_PUSH_TIMESTAMP=2026-06-10T20:10:00Z"
+            echo "PARENT_COUNT=1"
+            echo "PARENT0_SHA="
+            echo "PARENT0_SHA="
+            printf 'COMMIT_FILES<<EOF\n'
+            printf '.github/workflows/daemon-release.yml\n'
+            printf 'EOF\n'
+            printf 'MERGE_CONTRIB<<EOF\n'
+            printf 'EOF\n'
+          } >> "$GITHUB_ENV"
+
+      - name: "AC-1224-B: run A prime delta check -- expect verdict_valid=false (genuine §1A push must stale)"
+        id: ac_1224_b_check
+        env:
+          VERDICT_TIMESTAMP:   ${{ env.VERDICT_TIMESTAMP }}
+          LAST_PUSH_TIMESTAMP: ${{ env.LAST_PUSH_TIMESTAMP }}
+          PARENT_COUNT:        ${{ env.PARENT_COUNT }}
+          PARENT0_SHA:         ${{ env.PARENT0_SHA }}
+          COMMIT_FILES:        ${{ env.COMMIT_FILES }}
+          MERGE_CONTRIB:       ${{ env.MERGE_CONTRIB }}
+        run: |
+          set -euo pipefail
+
+          TRIGGER_GLOBS=(
+            ".github/workflows/deploy-bff.yml"
+            ".github/workflows/deploy-spa.yml"
+            ".github/workflows/release.yml"
+            ".github/workflows/rollback.yml"
+            ".github/workflows/staging-deploy.yml"
+            ".github/workflows/daemon-release.yml"
+            ".github/workflows/frontend.yml"
+            ".github/workflows/security-review-gate.yml"
+            "services/bff/cmd/"
+            "services/daemon/cmd/"
+            "scripts/deploy/"
+          )
+
+          VERDICT_AFTER_PUSH=$(python3 -c "
+          from datetime import datetime, timezone
+          def p(t):
+              t = t.strip()
+              if t.endswith('Z'):
+                  t = t[:-1] + '+00:00'
+              return datetime.fromisoformat(t).astimezone(timezone.utc)
+          verdict = p('${VERDICT_TIMESTAMP}')
+          push   = p('${LAST_PUSH_TIMESTAMP}')
+          print('true' if verdict > push else 'false')
+          ")
+
+          if [ "${VERDICT_AFTER_PUSH}" = "true" ]; then
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          S07_DELTA_FOUND=false
+
+          # PARENT_COUNT=1: single-parent commit -> falls to raw COMMIT_FILES path.
+          # No A prime compare applies; COMMIT_FILES is scanned directly.
+          if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
+            echo "Merge commit. Using A prime MERGE_CONTRIB."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${MERGE_CONTRIB}"
+          else
+            echo "Single-parent commit (PARENT_COUNT=${PARENT_COUNT}). Using raw COMMIT_FILES."
+            while IFS= read -r FILE; do
+              [ -z "${FILE}" ] && continue
+              for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                if echo "${FILE}" | grep -qF "${GLOB}"; then
+                  echo "§1A path match in COMMIT_FILES: ${FILE}"
+                  S07_DELTA_FOUND=true
+                  break 2
+                fi
+              done
+            done <<< "${COMMIT_FILES}"
+          fi
+
+          if [ "${S07_DELTA_FOUND}" = "true" ]; then
+            echo "A prime delta check: STALE (genuine §1A branch push)"
+            echo "verdict_valid=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "A prime delta check: FRESH (should not reach here for this fixture)"
+            echo "verdict_valid=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "AC-1224-B: assert verdict_valid=false (genuine §1A branch push must stale -- gate not weakened)"
+        env:
+          RESULT: ${{ steps.ac_1224_b_check.outputs.verdict_valid }}
+        run: |
+          echo "AC-1224-B result: verdict_valid=${RESULT}"
+          if [ "${RESULT}" != "false" ]; then
+            echo "FAIL: AC-1224-B -- expected verdict_valid=false."
+            echo "      A genuine single-parent §1A branch push (daemon-release.yml modified)"
+            echo "      after verdict MUST invalidate the verdict. The parent[0] fix must"
+            echo "      not affect single-parent commits -- those still use raw COMMIT_FILES."
+            echo "      Gate integrity: real §1A changes always require Sarah re-review."
+            exit 1
+          fi
+          echo "PASS: AC-1224-B -- genuine §1A branch push correctly stales verdict (gate not weakened)."
+
+      # -----------------------------------------------------------------------
       # Summary
       # -----------------------------------------------------------------------
       - name: Test summary
@@ -1288,10 +1578,12 @@ jobs:
           echo "AC-1134-E: Real update-branch fixture (439d483a) -> gate green      PASS"
           echo "AC-1134-F: Octopus fail-closed (parents==3) -> stales verdict       PASS"
           echo "AC-1134-G: Compare-API-failure fallback -> COMMIT_FILES -> STALE    PASS"
+          echo "AC-1224-A: §1A-self-touching PR update-branch -> stays green        PASS"
+          echo "AC-1224-B: Genuine §1A branch push -> stales (gate not weakened)    PASS"
           echo "AC3b     : Fast path (verdict newer than head)                      PASS"
           echo "AC5      : Gate required + fresh verdict -> conclusion=success       PASS"
           echo "AC6      : Gate required + no verdict   -> conclusion=failure        PASS"
           echo "AC7      : Gate required + staled verdict -> conclusion=failure      PASS"
           echo ""
           echo "Gate integrity and A prime guarded-skip property verified."
-          echo "Tickets: RdHamilton/hollowmark-tickets#1134, vault-mtg-tickets#231, #2420"
+          echo "Tickets: RdHamilton/hollowmark-tickets#1134, #1224, vault-mtg-tickets#231, #2420"
