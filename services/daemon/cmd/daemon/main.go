@@ -591,6 +591,13 @@ func dispatchKeychainMigrated(cfg *config.Config, daemonVersion string) {
 	} else {
 		apiKey = cfg.APIKey
 	}
+	// Guard: if the API key resolved to empty (keychain entry absent or errored),
+	// skip the dispatch — an empty-key ingest call produces a spurious BFF 401
+	// with no benefit. The migration itself is unaffected. (#1017)
+	if cfg.Keychain && apiKey == "" {
+		log.Printf("[mtga-daemon] info: keychain.migrated telemetry skipped (keychain entry empty after migration)")
+		return
+	}
 	d := dispatch.New(cfg.CloudAPIURL, "/ingest/events", apiKey)
 	dispatchCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
