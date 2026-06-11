@@ -3,14 +3,17 @@
 #
 # Usage:
 #   BINARY_PATH=bin/vaultmtg-daemon \
+#   HELPER_BINARY_PATH=bin/collection-helper \
 #   VERSION=0.3.1 \
 #   TEAM_ID=<Apple Team ID> \
 #   bash services/daemon/install/macos/pkg/build-pkg.sh
 #
 # Required environment variables:
-#   BINARY_PATH   Path to the darwin universal binary (already codesigned).
-#   VERSION       Semver string (e.g. "0.3.1") — no leading "v".
-#   TEAM_ID       Apple Developer Team ID for signing (omit to skip signing).
+#   BINARY_PATH          Path to the darwin universal daemon binary (already codesigned).
+#   HELPER_BINARY_PATH   Path to the darwin universal collection-helper binary
+#                        (already codesigned, hollowmark-tickets#1286).
+#   VERSION              Semver string (e.g. "0.3.1") — no leading "v".
+#   TEAM_ID              Apple Developer Team ID for signing (omit to skip signing).
 #
 # Outputs (in the current directory):
 #   vaultmtg-daemon-darwin-universal.pkg
@@ -28,6 +31,7 @@ if [[ "${1:-}" == "--dry-run" ]]; then DRY_RUN=1; fi
 DRY_RUN="${DRY_RUN:-0}"
 
 BINARY_PATH="${BINARY_PATH:?BINARY_PATH is required}"
+HELPER_BINARY_PATH="${HELPER_BINARY_PATH:?HELPER_BINARY_PATH is required — path to codesigned collection-helper binary}"
 VERSION="${VERSION:?VERSION is required}"
 TEAM_ID="${TEAM_ID:-}"
 
@@ -88,6 +92,23 @@ chmod 755 "${PKG_ROOT}/usr/local/bin/${BINARY_NAME}"
 mkdir -p "${PKG_ROOT}${SHARE_DIR}"
 cp "${SCRIPT_DIR}/../uninstall.sh" "${PKG_ROOT}${SHARE_DIR}/uninstall.sh"
 chmod 755 "${PKG_ROOT}${SHARE_DIR}/uninstall.sh"
+
+# Install the collection-agent-helper binary and its install/ directory
+# (hollowmark-tickets#1286, R2).  postinstall calls install-helper.sh from
+# SHARE_DIR/install/ so the helper is bootstrapped on every .pkg install.
+# The helper binary must be codesigned before reaching this script (R1).
+cp "${HELPER_BINARY_PATH}" "${PKG_ROOT}${SHARE_DIR}/collection-helper"
+chmod 755 "${PKG_ROOT}${SHARE_DIR}/collection-helper"
+mkdir -p "${PKG_ROOT}${SHARE_DIR}/install"
+HELPER_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../../collection-agent-helper/install"
+if [[ ! -d "${HELPER_SRC_DIR}" ]]; then
+  echo "[build-pkg] ERROR: collection-agent-helper install/ directory not found at ${HELPER_SRC_DIR}" >&2
+  exit 1
+fi
+cp "${HELPER_SRC_DIR}/install-helper.sh" "${PKG_ROOT}${SHARE_DIR}/install/install-helper.sh"
+cp "${HELPER_SRC_DIR}/com.vaultmtg.collection-helper.plist" "${PKG_ROOT}${SHARE_DIR}/install/com.vaultmtg.collection-helper.plist"
+chmod 755 "${PKG_ROOT}${SHARE_DIR}/install/install-helper.sh"
+echo "[build-pkg] helper staged at ${SHARE_DIR}/collection-helper (and install/ subdirectory)"
 
 # ---------------------------------------------------------------------------
 # Build the VaultMTG.app launcher bundle (ADR-036 I-8, ticket #278).

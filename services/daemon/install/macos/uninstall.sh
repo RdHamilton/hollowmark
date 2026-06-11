@@ -25,7 +25,14 @@
 #   4. Removes the channel-appropriate binary from INSTALL_DIR.
 #   5. Removes the legacy binary (mtga-companion-daemon) if present (stable only).
 #   6. Removes the channel-appropriate .app bundle from /Applications.
-#   7. (--purge only) Deletes the API key from the macOS Keychain.
+#   7. Removes the collection-agent-helper (hollowmark-tickets#1286):
+#      - Boots out com.vaultmtg.collection-helper from system launchd (|| true).
+#      - Removes HELPER_LAUNCHDAEMONS_DIR/com.vaultmtg.collection-helper.plist.
+#      - Removes installed binary from HELPER_DEST_DIR/collection-helper.
+#      - Removes staged copies from SHARE_DIR (collection-helper + install/).
+#      The helper is channel-agnostic (ADR-049 §R5: one shared helper identity).
+#      All helper steps are non-fatal — helper may never have been installed.
+#   8. (--purge only) Deletes the API key from the macOS Keychain.
 
 set -euo pipefail
 
@@ -180,7 +187,64 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Keychain entry — service and account from common.sh (if sourced) or defaults.
+# 7. Remove the collection-agent-helper (hollowmark-tickets#1286, R3).
+#
+# The helper is a root system daemon (com.vaultmtg.collection-helper) installed
+# by the .pkg postinstall via install-helper.sh.  It is channel-agnostic — both
+# stable and staging plumb through the same system socket.  Every step here is
+# non-fatal (|| true) because the helper may never have been installed (e.g. the
+# user installed via a pre-#1286 .pkg, or clicked "Grant Access" was never shown).
+#
+# HELPER_LAUNCHDAEMONS_DIR defaults to /Library/LaunchDaemons; override in tests.
+# HELPER_DEST_DIR defaults to /Library/Application Support/VaultMTG; override in tests.
+# SHARE_DIR is already set above from common.sh or the fallback.
+# ---------------------------------------------------------------------------
+HELPER_LABEL="com.vaultmtg.collection-helper"
+HELPER_LAUNCHDAEMONS_DIR="${HELPER_LAUNCHDAEMONS_DIR:-/Library/LaunchDaemons}"
+HELPER_PLIST="${HELPER_LAUNCHDAEMONS_DIR}/${HELPER_LABEL}.plist"
+HELPER_DEST_DIR="${HELPER_DEST_DIR:-/Library/Application Support/VaultMTG}"
+HELPER_BINARY="${HELPER_DEST_DIR}/collection-helper"
+# SHARE_DIR is already set: /usr/local/share/vaultmtg (from common.sh or postinstall constant)
+SHARE_DIR="${SHARE_DIR:-/usr/local/share/vaultmtg}"
+
+# Boot out the helper system launchd job (requires root — uninstall.sh is
+# expected to run with sudo).  The helper runs in the system domain so the
+# target is system/<label>, not gui/<uid>/<label>.
+echo "Checking for collection-agent-helper launchd job (${HELPER_LABEL})..."
+launchctl bootout "system/${HELPER_LABEL}" 2>/dev/null || true
+
+# Remove helper plist from /Library/LaunchDaemons.
+if [[ -f "${HELPER_PLIST}" ]]; then
+  echo "Removing helper plist: ${HELPER_PLIST}"
+  rm -f "${HELPER_PLIST}" 2>/dev/null || true
+  echo "Helper plist removed (com.vaultmtg.collection-helper)."
+else
+  echo "Helper plist not found (${HELPER_PLIST}), skipping."
+fi
+
+# Remove the installed helper binary.
+if [[ -f "${HELPER_BINARY}" ]]; then
+  echo "Removing helper binary: ${HELPER_BINARY}"
+  rm -f "${HELPER_BINARY}" 2>/dev/null || true
+else
+  echo "Helper binary not found (${HELPER_BINARY}), skipping."
+fi
+
+# Remove staged helper copies from SHARE_DIR.  These were placed by the .pkg
+# postinstall (via install-helper.sh) so locateHelperFiles() can find them.
+if [[ -f "${SHARE_DIR}/collection-helper" ]]; then
+  rm -f "${SHARE_DIR}/collection-helper" 2>/dev/null || true
+  echo "Removed staged helper from ${SHARE_DIR}/collection-helper."
+fi
+if [[ -f "${SHARE_DIR}/install/install-helper.sh" ]]; then
+  rm -f "${SHARE_DIR}/install/install-helper.sh" 2>/dev/null || true
+fi
+if [[ -f "${SHARE_DIR}/install/com.vaultmtg.collection-helper.plist" ]]; then
+  rm -f "${SHARE_DIR}/install/com.vaultmtg.collection-helper.plist" 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Keychain entry — service and account from common.sh (if sourced) or defaults.
 # Default behaviour: RETAIN the entry for downgrade safety — a user who
 # reinstalls the daemon will not need to re-authenticate.
 # --purge: delete the entry via security(1) so no credential remains on disk.

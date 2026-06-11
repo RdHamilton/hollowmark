@@ -623,3 +623,155 @@ LCEOF
   # Script must emit a message referencing booting out or handling com.hollowmark.daemon.
   [[ "${output}" == *"com.hollowmark.daemon"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# collection-agent-helper uninstall (R3 — hollowmark-tickets#1286)
+#
+# The .pkg now owns the helper. On uninstall the script must:
+#   1. Boot out the system launchd job com.vaultmtg.collection-helper
+#   2. Remove /Library/LaunchDaemons/com.vaultmtg.collection-helper.plist
+#   3. Remove the installed binary at HELPER_DEST_DIR/collection-helper
+#   4. Remove staged copies in SHARE_DIR (collection-helper + install/ subdirectory)
+#
+# All steps use || true — helper may never have been installed; uninstall.sh
+# must remain non-fatal so daemon uninstall never fails due to helper absence.
+#
+# HELPER_LAUNCHDAEMONS_DIR and HELPER_DEST_DIR are env overrides so tests can
+# run without root (same pattern as INSTALL_DIR and APP_BUNDLE_PATH above).
+# ---------------------------------------------------------------------------
+
+# Helper: a launchctl stub that also accepts system-domain bootout (the helper
+# uses `launchctl bootout system/...`) and records all calls for assertion.
+_make_stub_dir_with_system_launchctl() {
+  local stub_dir
+  stub_dir="$(_make_stub_dir)"
+  # Replace launchctl stub with one that logs to launchctl_log
+  cat > "${stub_dir}/launchctl" <<'EOF'
+#!/usr/bin/env bash
+echo "stub-launchctl: $*" >&2
+if [[ -n "${BATS_TEST_TMPDIR:-}" ]]; then
+  echo "$*" >> "${BATS_TEST_TMPDIR}/launchctl_log"
+fi
+if [[ "$1" == "list" ]]; then
+  exit 1
+fi
+exit 0
+EOF
+  chmod +x "${stub_dir}/launchctl"
+  echo "${stub_dir}"
+}
+
+# 16. collection-helper plist removed from HELPER_LAUNCHDAEMONS_DIR on uninstall
+@test "helper uninstall: com.vaultmtg.collection-helper.plist removed from LaunchDaemons" {
+  local stub_dir; stub_dir="$(_make_stub_dir_with_system_launchctl)"
+  local install_dir; install_dir="$(mktemp -d)"
+  local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
+    no-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
+  local fake_launchdaemons; fake_launchdaemons="$(mktemp -d)"
+  local fake_helper_dest; fake_helper_dest="$(mktemp -d)/VaultMTG"
+
+  echo "<plist>helper</plist>" > \
+    "${fake_launchdaemons}/com.vaultmtg.collection-helper.plist"
+
+  run env \
+    PATH="${stub_dir}:${PATH}" \
+    HOME="${fake_home}" \
+    INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
+    HELPER_LAUNCHDAEMONS_DIR="${fake_launchdaemons}" \
+    HELPER_DEST_DIR="${fake_helper_dest}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${UNINSTALL_SH}"
+
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  [ ! -f "${fake_launchdaemons}/com.vaultmtg.collection-helper.plist" ]
+  [[ "${output}" == *"com.vaultmtg.collection-helper"* ]]
+}
+
+# 17. collection-helper binary removed from HELPER_DEST_DIR on uninstall
+@test "helper uninstall: collection-helper binary removed from HELPER_DEST_DIR" {
+  local stub_dir; stub_dir="$(_make_stub_dir_with_system_launchctl)"
+  local install_dir; install_dir="$(mktemp -d)"
+  local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
+    no-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
+  local fake_launchdaemons; fake_launchdaemons="$(mktemp -d)"
+  local fake_helper_dest; fake_helper_dest="$(mktemp -d)/VaultMTG"
+  mkdir -p "${fake_helper_dest}"
+  echo "fake helper binary" > "${fake_helper_dest}/collection-helper"
+  chmod +x "${fake_helper_dest}/collection-helper"
+
+  run env \
+    PATH="${stub_dir}:${PATH}" \
+    HOME="${fake_home}" \
+    INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
+    HELPER_LAUNCHDAEMONS_DIR="${fake_launchdaemons}" \
+    HELPER_DEST_DIR="${fake_helper_dest}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${UNINSTALL_SH}"
+
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  [ ! -f "${fake_helper_dest}/collection-helper" ]
+}
+
+# 18. staged helper files removed from SHARE_DIR on uninstall
+@test "helper uninstall: staged helper files removed from SHARE_DIR/collection-helper and SHARE_DIR/install/" {
+  local stub_dir; stub_dir="$(_make_stub_dir_with_system_launchctl)"
+  local install_dir; install_dir="$(mktemp -d)"
+  local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
+    no-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
+  local fake_launchdaemons; fake_launchdaemons="$(mktemp -d)"
+  local fake_helper_dest; fake_helper_dest="$(mktemp -d)/VaultMTG"
+
+  local fake_share; fake_share="$(mktemp -d)/vaultmtg"
+  mkdir -p "${fake_share}/install"
+  echo "helper binary" > "${fake_share}/collection-helper"
+  echo "install script" > "${fake_share}/install/install-helper.sh"
+  echo "<plist/>" > "${fake_share}/install/com.vaultmtg.collection-helper.plist"
+
+  run env \
+    PATH="${stub_dir}:${PATH}" \
+    HOME="${fake_home}" \
+    INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
+    HELPER_LAUNCHDAEMONS_DIR="${fake_launchdaemons}" \
+    HELPER_DEST_DIR="${fake_helper_dest}" \
+    SHARE_DIR="${fake_share}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${UNINSTALL_SH}"
+
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  [ ! -f "${fake_share}/collection-helper" ]
+  [ ! -f "${fake_share}/install/install-helper.sh" ]
+}
+
+# 19. helper uninstall is non-fatal when no helper artifacts are present
+@test "helper uninstall: exits 0 cleanly when no helper artifacts are installed" {
+  local stub_dir; stub_dir="$(_make_stub_dir_with_system_launchctl)"
+  local install_dir; install_dir="$(mktemp -d)"
+  local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
+    no-binary no-current-plist no-legacy-plist no-log no-config)"
+  local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
+  local fake_launchdaemons; fake_launchdaemons="$(mktemp -d)"
+  local fake_helper_dest; fake_helper_dest="$(mktemp -d)/VaultMTG"
+
+  run env \
+    PATH="${stub_dir}:${PATH}" \
+    HOME="${fake_home}" \
+    INSTALL_DIR="${install_dir}" \
+    APP_BUNDLE_PATH="${fake_app_dir}" \
+    HELPER_LAUNCHDAEMONS_DIR="${fake_launchdaemons}" \
+    HELPER_DEST_DIR="${fake_helper_dest}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${UNINSTALL_SH}"
+
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"VaultMTG daemon uninstalled"* ]]
+}

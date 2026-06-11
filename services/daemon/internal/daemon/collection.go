@@ -222,20 +222,28 @@ func (s *Service) installCollectionHelper() {
 	}
 }
 
+// helperShareDir is the production install location for the collection-helper
+// binary and its install/ directory.  This must match SHARE_DIR in
+// services/daemon/install/macos/pkg/build-pkg.sh and postinstall.
+// (hollowmark-tickets#1286, R7)
+const helperShareDir = "/usr/local/share/vaultmtg"
+
 // locateHelperFiles returns the path to the collection-helper binary and the
 // directory containing the install script.
 //
-// In production both files live alongside the daemon binary.
-// In development, set MTGA_COLLECTION_HELPER_DIR to the
-// services/collection-agent-helper directory so GoLand / go run can find them.
+// Resolution order (hollowmark-tickets#1286, R7):
+//  1. MTGA_COLLECTION_HELPER_DIR env var — used in development and tests.
+//  2. helperShareDir (/usr/local/share/vaultmtg) — the production install
+//     path where the .pkg places the helper binary and install/ directory.
+//
+// The pre-#1286 fallback (dirname of the running daemon executable) is
+// removed: production deployments now always ship the helper under SHARE_DIR,
+// and relying on the executable directory was the proximate cause of users
+// running a stale binary that was never refreshed on update.
 func locateHelperFiles() (helperBinary, scriptDir string, err error) {
 	dir := os.Getenv("MTGA_COLLECTION_HELPER_DIR")
 	if dir == "" {
-		exe, exeErr := os.Executable()
-		if exeErr != nil {
-			return "", "", exeErr
-		}
-		dir = filepath.Dir(exe)
+		dir = helperShareDir
 	}
 	helperBinary = filepath.Join(dir, "collection-helper")
 	scriptDir = filepath.Join(dir, "install")
