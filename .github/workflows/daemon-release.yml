@@ -1267,33 +1267,6 @@ jobs:
             --repo "${{ github.repository }}" \
             --clobber
 
-      - name: Update staging VITE_DAEMON_VERSION and redeploy
-        # Only auto-update staging for pre-release tags (rc, alpha, beta, pre).
-        # Stable releases (e.g. daemon/v0.3.1) go through a manual promotion so
-        # production download links are never updated without explicit intent.
-        if: |
-          contains(github.ref_name, '-rc') ||
-          contains(github.ref_name, '-alpha') ||
-          contains(github.ref_name, '-beta') ||
-          contains(github.ref_name, '-pre')
-        env:
-          # GH_VARIABLES_PAT must be a fine-grained PAT with
-          # "Variables: Read and write" permission for this repository.
-          # The default GITHUB_TOKEN cannot write environment variables.
-          GH_TOKEN: ${{ secrets.GH_VARIABLES_PAT }}
-        run: |
-          # Use the full daemon/v* tag so the frontend builds correct download URLs.
-          # The GitHub Release now lives at the daemon/v* tag, so VITE_DAEMON_VERSION
-          # must match that tag for release asset URLs to resolve.
-          gh variable set VITE_DAEMON_VERSION \
-            --env staging \
-            --body "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}"
-          gh workflow run deploy-spa.yml \
-            --ref main \
-            --field environment=staging \
-            --repo "${{ github.repository }}"
-
       - name: Update BFF_DAEMON_LATEST_VERSION + BFF_DAEMON_RELEASED_AT in SSM
         # Runs on every daemon/v* tag (stable and pre-release) so the BFF
         # GET /api/v1/daemon/version endpoint always reflects the latest published
