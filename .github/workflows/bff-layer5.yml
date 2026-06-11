@@ -1,12 +1,29 @@
 name: Layer-5 Replay Reconcile (ADR-052 Mode A)
 
-# Triggered on PRs touching the BFF, daemon, contract, or API service layer.
+# Pull requests: always run so the 'Layer-5 API Reconciliation' check is always
+# present as a required status. The path filter has been moved in-job (two-job
+# pattern) -- the cheap detect-changes job runs on every PR; the heavy
+# reconciliation job (which needs a postgres service container) only runs when
+# relevant files changed. Service containers start before any steps, so an
+# in-job skip CANNOT prevent container spin-up in a single-job design --
+# the two-job split is the correct pattern here.
+#
+# Skip mechanism: a job skipped via `if:` emits a 'skipped' conclusion to the
+# commit status API. GitHub branch protection treats 'skipped' as satisfying a
+# required status check (documented: "If a required status check is skipped
+# using paths filtering, the branch protection rule considers the status as
+# met"). The heavy job keeps the exact display name 'Layer-5 API Reconciliation'
+# so the required-check context is emitted on every PR, whether the job runs or
+# skips. Reference: https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks
+#
 # This is the Layer-5 Mode A gate: mines a corpus snapshot (when available),
 # replays it through the real daemon→BFF→projection pipeline, and asserts the
 # projected BFF API responses against the expected-truth manifest.
 #
 # RULE-INFRA-01 (ADR-052): flipped to continue-on-error: false (hard-fail)
 # on 2026-06-11 after green runs 27315107720 + 27315215200 (#695).
+# Always-emit conversion applied 2026-06-10 (#1216): PR path filter dropped,
+# in-job two-job gate added. continue-on-error: false is preserved.
 #
 # Local run:
 #   export DATABASE_URL="postgres://mtga:mtga@localhost:5432/mtga_test?sslmode=disable"
@@ -15,22 +32,74 @@ name: Layer-5 Replay Reconcile (ADR-052 Mode A)
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - 'services/bff/**'
-      - 'services/daemon/**'
-      - 'services/contract/**'
-      - 'frontend/src/services/api/**'
+    branches: [main]
+    # No path filter -- the job must always run on PRs so the required status
+    # check is always emitted (even when zero relevant files changed).
+    # Path filtering is done inside detect-changes below.
 
 permissions:
   contents: read
 
 jobs:
+  detect-changes:
+    name: Detect relevant file changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          # fetch-depth: 0 is REQUIRED: the base SHA from the PR event payload
+          # must be reachable for 'git diff "$BASE" "$HEAD"' to work. The default
+          # depth=1 clone has no parent commits, causing the diff to fail with
+          # exit 128 ("fatal: ambiguous argument"). Same pattern as chromatic.yml.
+          fetch-depth: 0
+
+      - name: Detect BFF / daemon / contract / api / workflow changes
+        id: filter
+        run: |
+          # On pull_request events, diff against the base branch merge-base.
+          # On workflow_dispatch, always run.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "workflow_dispatch: treating all files as relevant"
+            exit 0
+          fi
+
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+
+          # Fail-closed: if git diff itself errors (e.g. a fetch issue or
+          # unexpected git state), default to relevant=true so the suite runs
+          # rather than being silently skipped. Do NOT suppress stderr -- a
+          # failing diff should be visible in the job log.
+          if ! CHANGED=$(git diff --name-only "$BASE" "$HEAD"); then
+            echo "::warning::git diff failed -- defaulting to relevant=true (fail-closed)"
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -qE '^(services/bff/|services/daemon/|services/contract/|frontend/src/services/api/|\.github/workflows/bff-layer5\.yml)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Relevant files changed -- will run Layer-5 reconciliation."
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant files changed -- Layer-5 reconciliation will be skipped."
+          fi
+
   layer5-api-reconcile:
     name: Layer-5 API Reconciliation
+    needs: detect-changes
+    if: needs.detect-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     # RULE-INFRA-01: flipped to hard-fail after two consecutive green main runs.
     # Flip date: 2026-06-11. Green run IDs: 27315107720, 27315215200.
     # Ticket: RdHamilton/hollowmark-tickets#695.
+    # Always-emit: continue-on-error: false is preserved (#1216).
     continue-on-error: false
     # AC5 (#695): hard cap prevents a hung reconciliation job from consuming a
     # runner for the default 6-hour GHA job timeout.
