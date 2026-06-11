@@ -10,4 +10,5 @@
 -- sequential down, dependents are already gone before this migration runs;
 -- CASCADE is a safety net for partial failures and future FK additions that
 -- lack a corresponding down update.
-DROP TABLE IF EXISTS waitlist_entries CASCADE;DROP EXTENSION IF EXISTS citext;
+DROP TABLE IF EXISTS waitlist_entries CASCADE;
+DROP EXTENSION IF EXISTS citext;
