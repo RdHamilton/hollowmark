@@ -276,8 +276,8 @@ jobs:
           VITE_APP_VERSION: ${{ steps.version.outputs.version }}
           VITE_SENTRY_ENV: ${{ steps.version.outputs.sentry_env }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
 
       # FF-10: Assert no per-env value baked into the built bundle (ADR-077).
       # Self-activates via marker-file guard: if frontend/src/config/runtimeConfig.ts
