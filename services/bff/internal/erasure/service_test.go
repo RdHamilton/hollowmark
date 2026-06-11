@@ -84,6 +84,38 @@ func TestService_StartErasureJob_DispatchesGoroutineOnNewJob(t *testing.T) {
 	}
 }
 
+// TestService_StartErasureJob_ErrorsWhenClerkUserIDFnNotSet verifies AC1 and
+// AC3 from ticket #1162: when SetClerkUserIDFromContextFn has NOT been called,
+// StartErasureJob must return an error that names the missing setup and must
+// NOT call CreateAuditLogEntry (which would write an empty clerk_user_id to
+// deletion_audit_log).
+func TestService_StartErasureJob_ErrorsWhenClerkUserIDFnNotSet(t *testing.T) {
+	// Ensure the package-level fn is unset for this test.
+	erasure.ResetClerkUserIDFromContextFn()
+	t.Cleanup(func() { erasure.ResetClerkUserIDFromContextFn() })
+
+	db := newStubAuditDB()
+	var wg sync.WaitGroup
+	svc := erasure.NewService(context.Background(), db, erasure.Deps{
+		DB:        db.stubDB,
+		PostHog:   &stubPostHog{},
+		Clerk:     &stubClerk{},
+		Mailchimp: &stubMailchimp{},
+	}, &wg)
+
+	_, err := svc.StartErasureJob(context.Background(), 1, 10)
+	if err == nil {
+		t.Fatal("StartErasureJob: expected error when clerk user ID fn not set, got nil")
+	}
+
+	db.mu.Lock()
+	calls := db.createCalls
+	db.mu.Unlock()
+	if calls != 0 {
+		t.Errorf("CreateAuditLogEntry was called %d time(s) — must not be called when clerk user ID fn is unset (would write empty clerk_user_id to deletion_audit_log)", calls)
+	}
+}
+
 // TestService_StartErasureJob_ReturnsExistingJobOnConcurrentCall is the
 // idempotency regression test.  When CreateAuditLogEntry returns
 // alreadyActive=true, StartErasureJob MUST return the existing job_id and
