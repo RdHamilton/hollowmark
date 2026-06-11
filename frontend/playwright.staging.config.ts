@@ -48,6 +48,9 @@ export default defineConfig({
   //   prof-visual-capture — screenshot capture driven by prof-visual-capture.yml;
   //     requires CLERK_SECRET_KEY + SCREENSHOT_DIR.  Collected here by mistake
   //     since the spec was added after the original exclusion list was written.
+  //   wildcard-advisor-424 — rewired to Backend-API sign-in-token chain
+  //     (tickets#1190); CLERK_SECRET_KEY is injected by this step so it now runs
+  //     here alongside staging-smoke.spec.ts.
   testIgnore: [
     /visual-auth-smoke/,
     /visual-auth-data-verify/,
@@ -60,9 +63,6 @@ export default defineConfig({
     /multi-device-433/,
     // Requires CLERK_SECRET_KEY + SCREENSHOT_DIR — dedicated workflow step only.
     /prof-visual-capture/,
-    // Still uses STAGING_SMOKE_TOKEN (pre-existing, same root cause as tickets#759).
-    // Needs a separate rewire (same auth chain) before it can run here; exclude until fixed.
-    /wildcard-advisor-424/,
   ],
 
   // Individual test timeout — keep the suite well under 60 s total.
