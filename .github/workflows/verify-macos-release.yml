@@ -39,17 +39,21 @@ jobs:
       PKG: vaultmtg-daemon-darwin-universal.pkg
       # Inner binary name inside the .pkg payload.
       BINARY: vaultmtg-daemon
+      # S-07: route github context expressions through env vars rather than
+      # interpolating ${{ github.* }} directly in run: shell strings.
+      TAG: ${{ github.ref_name }}
+      REPO: ${{ github.repository }}
 
     steps:
       - name: Download macOS .pkg from GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download "${{ github.ref_name }}" \
+          gh release download "$TAG" \
             --pattern "${{ env.PKG }}" \
-            --repo "${{ github.repository }}"
+            --repo "$REPO"
           if [ ! -f "${{ env.PKG }}" ]; then
-            echo "ERROR: ${{ env.PKG }} not found in release ${{ github.ref_name }}" >&2
+            echo "ERROR: ${{ env.PKG }} not found in release $TAG" >&2
             exit 1
           fi
           echo "PASS: ${{ env.PKG }} downloaded ($(du -sh ${{ env.PKG }} | cut -f1))"
@@ -115,7 +119,7 @@ jobs:
         run: |
           echo "========================================"
           echo "macOS notarization smoke: ALL CHECKS PASS"
-          echo "  Release : ${{ github.ref_name }}"
+          echo "  Release : $TAG"
           echo "  Artifact: ${{ env.PKG }}"
           echo "  Checks  :"
           echo "    [PASS] Gatekeeper spctl accepted"
