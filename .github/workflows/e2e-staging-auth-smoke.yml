@@ -38,6 +38,7 @@ name: E2E Staging Auth Smoke (vmt-t#678)
 #        /collection, /meta, /charts/*, /settings, /history/drafts, /draft/live,
 #        /api-keys
 #   BFF: GET /api/v1/matches, GET /api/v1/events (SSE), GET /healthz
+#   Multi-device AC-9: GET/DELETE /api/v1/daemons — auth enforcement + shape (tickets#1150)
 #   WildcardAdvisorPanel: authenticated panel screenshots for visual PLAYER_VERDICT
 #   Draft inject: /draft/live live pack-grid + grade columns (tickets#796)
 #
@@ -190,6 +191,45 @@ jobs:
           STAGING_API_URL: ${{ inputs.staging_api_url }}
           # tickets#759: Backend-API sign-in-token chain — CLERK_SECRET_KEY replaces
           # the former STAGING_SMOKE_TOKEN (blocked on prod-type Clerk instances).
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_STAGING_SECRET_KEY }}
+          CI_SMOKE_USER_ID: user_3EmtmrSgZrtd0yRRdisTIIFYnnF
+
+      # ── Multi-device AC-9 authenticated smoke (tickets#1150) ─────────────
+      # Wires multi-device-433.spec.ts into CI so the AC-9 authenticated device-
+      # list and revoke assertions run against staging with real Clerk auth.
+      #
+      # Background: the spec existed but no CI step injected CLERK_SECRET_KEY,
+      # so the authenticated tests threw INCONCLUSIVE on every run (PR #3083
+      # excluded it from the wrong step to keep the suite green; this wires it
+      # into the correct step).
+      #
+      # Auth: uses the Backend-API sign-in-token chain (same as staging-smoke.spec.ts
+      # and BFF API smoke above) — CLERK_SECRET_KEY from CLERK_STAGING_SECRET_KEY GHA
+      # secret. The spec calls requireAuthOrFail() and throws INCONCLUSIVE if the
+      # key is absent, so a secrets misconfiguration surfaces as a hard FAIL, not a
+      # silent skip.
+      #
+      # The manual two-physical-device scenario (full PKCE pairing + ingest-401-after-
+      # revoke) remains INCONCLUSIVE in CI per the spec's section 4 documentation.
+      # That section emits a console.warn and always passes — it does not block CI.
+      #
+      # Config: playwright.staging.config.ts with the spec file passed explicitly
+      # (bypasses the testIgnore entry that excluded it from the generic BFF sweep).
+      # STAGING_API_URL and CI_SMOKE_USER_ID mirror the BFF smoke step above.
+      - name: Run multi-device AC-9 smoke (multi-device-433.spec.ts)
+        working-directory: frontend
+        run: |
+          npx playwright test \
+            tests/e2e/staging/multi-device-433.spec.ts \
+            --config=playwright.staging.config.ts \
+            --reporter=list
+        env:
+          CI: true
+          STAGING_API_URL: ${{ inputs.staging_api_url }}
+          # tickets#1150: CLERK_SECRET_KEY required for authenticated GET/DELETE assertions.
+          # Sourced from CLERK_STAGING_SECRET_KEY GHA secret (provisioned from
+          # /vaultmtg/app/staging/CLERK_SECRET_KEY). GHA secrets propagate into
+          # container steps (unlike OIDC env vars).
           CLERK_SECRET_KEY: ${{ secrets.CLERK_STAGING_SECRET_KEY }}
           CI_SMOKE_USER_ID: user_3EmtmrSgZrtd0yRRdisTIIFYnnF
 
