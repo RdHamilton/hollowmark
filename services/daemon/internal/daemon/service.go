@@ -102,24 +102,24 @@ type Service struct {
 	// payload so the BFF can link the match row to the correct deck.
 	// Empty until a course.deck_submitted event has been processed.
 	//
-	// Goroutine-safety: no mutex is needed. This field is only ever read and
-	// written inside handleEntry, which is called exclusively from the single
-	// event-loop goroutine (the `case entry, ok := <-updates` branch of the
-	// Run select loop). The invariant that must hold: ALL reads and writes to
-	// lastDeckID must occur on that same goroutine. If you ever access this
-	// field from a second goroutine — e.g., a new background handler, a tray
-	// callback, or a concurrent log-replay path — you MUST add a mutex or
-	// replace the field with an atomic/channel before doing so.
+	// Goroutine-safety: protected by handleEntryMu. handleEntry is called from
+	// two goroutines — the Run event-loop and an HTTP-spawned replay goroutine
+	// (localapi.handleReplay → go s.Replay).  handleEntryMu serializes both
+	// callers so writes and reads of lastDeckID are never concurrent.
 	lastDeckID string
 
 	// lastCollectionHash is the content hash (sorted arena_id:count) of the most
 	// recently DISPATCHED collection.updated snapshot from the log-reader path.
 	// handleEntry skips dispatch when an incoming snapshot hashes identically —
 	// this is the dedup guard that kills the rc3 idle emit-storm (Arena
-	// re-writing an unchanged GetPlayerCardsV3 line ~1-2/sec). Only ever
-	// read/written from the single run-loop goroutine via handleEntry; the
-	// user-triggered memory-scan path (performCollectionSync) is intentionally
-	// exempt and does not touch this field.
+	// re-writing an unchanged GetPlayerCardsV3 line ~1-2/sec).
+	//
+	// Goroutine-safety: protected by handleEntryMu. handleEntry is called from
+	// two goroutines — the Run event-loop and an HTTP-spawned replay goroutine
+	// (localapi.handleReplay → go s.Replay).  handleEntryMu serializes both
+	// callers so writes and reads of lastCollectionHash are never concurrent.
+	// The user-triggered memory-scan path (performCollectionSync) is
+	// intentionally exempt and does not touch this field.
 	lastCollectionHash string
 	// pendingBacklogCollection holds the latest collection snapshot observed
 	// during the historical-backlog drain on (re)install startup. Backlog
@@ -198,6 +198,17 @@ type Service struct {
 	// per ADR-053.  Forced flushes are triggered for match.game_ended and
 	// draft.pick boundary events.  Started by Run; drained by Close in shutdown.
 	batchBuffer *dispatch.BatchBuffer
+
+	// handleEntryMu serializes calls to handleEntry across the two callers that
+	// can invoke it concurrently:
+	//   1. The Run event-loop goroutine (case entry, ok := <-updates).
+	//   2. An HTTP-spawned replay goroutine (localapi.handleReplay → go s.Replay).
+	// Without this lock both goroutines race on lastDeckID and lastCollectionHash
+	// (and any other mutable state inside handleEntry).  The mutex is the
+	// minimal correct fix: it preserves the serial-entry-handling semantic that
+	// the code already assumes (replay.go § "intentionally single-threaded per
+	// session") while eliminating the data race (#732).
+	handleEntryMu sync.Mutex
 
 	// bffMu guards the two BFF-failure tracking fields below.
 	// recordBFFFailure and clearBFFFailureCounter acquire this lock.
@@ -1535,7 +1546,21 @@ func (s *Service) dispatchKeychainError(ctx context.Context, errorType string) {
 }
 
 // handleEntry classifies a log entry and dispatches it to the BFF.
+//
+// Concurrency: handleEntry is called from two goroutines:
+//  1. The Run event-loop goroutine (case entry, ok := <-updates).
+//  2. An HTTP-spawned replay goroutine (localapi.handleReplay → go s.Replay →
+//     iterates the log calling handleEntry on each entry).
+//
+// handleEntryMu serializes both callers so that mutable fields such as
+// lastDeckID and lastCollectionHash are accessed by exactly one goroutine at a
+// time.  This preserves the serial-entry-handling semantic that the surrounding
+// logic already requires (a course.deck_submitted write must be read atomically
+// by the next match.completed without interleaving from the other caller).
 func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) error {
+	s.handleEntryMu.Lock()
+	defer s.handleEntryMu.Unlock()
+
 	if entry == nil || !entry.IsJSON {
 		return nil
 	}
