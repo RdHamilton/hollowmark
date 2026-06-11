@@ -308,9 +308,20 @@ func (r *GamePlayRepository) CountCardPlaysByGame(ctx context.Context, gameID in
 }
 
 // UpsertGameRow inserts a games row for (match_id, game_number) and returns
-// the row's id. ON CONFLICT (match_id, game_number) updates the stored result
-// so that a replay with a corrected value (e.g. after match.completed is
-// projected) overwrites an earlier fallback.
+// the row's id. The DO UPDATE is guarded by WHERE games.result = 'win' so that
+// a corrective replay (fallback 'win' → real 'loss') is applied, but a
+// committed 'loss' is never overwritten by a subsequent fallback 'win'.
+//
+// Ordering matrix:
+//   - stored='win'  incoming='loss' → update fires (corrective replay)
+//   - stored='win'  incoming='win'  → update fires (idempotent, harmless)
+//   - stored='loss' incoming='win'  → WHERE is false; update skipped (protected)
+//   - stored='loss' incoming='loss' → WHERE is false; update skipped (already correct)
+//
+// When the WHERE predicate blocks the update Postgres returns no row, so
+// QueryRowContext yields sql.ErrNoRows. In that case the method falls back to a
+// SELECT to return the existing id — callers need it as an FK anchor for
+// InsertCardPlays regardless of whether an update was performed.
 //
 // The games table is the legacy per-game anchor that game_plays.game_id
 // references as a foreign key. It must exist before InsertCardPlays can write
@@ -325,12 +336,33 @@ func (r *GamePlayRepository) UpsertGameRow(ctx context.Context, matchID string, 
 		INSERT INTO games (match_id, game_number, result)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (match_id, game_number) DO UPDATE SET result = EXCLUDED.result
+		WHERE games.result = 'win'
 		RETURNING id`
 
 	var id int64
 	err := r.db.QueryRowContext(ctx, q, matchID, gameNumber, result).Scan(&id)
+	if err == sql.ErrNoRows {
+		// WHERE predicate was false: the stored result is a committed 'loss'
+		// and the incoming value is a fallback 'win' (or an idempotent 'loss'
+		// re-projection).  Fetch the existing id so callers retain the FK
+		// anchor for InsertCardPlays.
+		return r.getGameRowID(ctx, matchID, gameNumber)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("UpsertGameRow match_id=%q game_number=%d: %w", matchID, gameNumber, err)
+	}
+
+	return id, nil
+}
+
+// getGameRowID returns the id of an existing games row by (match_id, game_number).
+// Used as the fallback in UpsertGameRow when the WHERE predicate blocks the update.
+func (r *GamePlayRepository) getGameRowID(ctx context.Context, matchID string, gameNumber int) (int64, error) {
+	const q = `SELECT id FROM games WHERE match_id = $1 AND game_number = $2`
+
+	var id int64
+	if err := r.db.QueryRowContext(ctx, q, matchID, gameNumber).Scan(&id); err != nil {
+		return 0, fmt.Errorf("getGameRowID match_id=%q game_number=%d: %w", matchID, gameNumber, err)
 	}
 
 	return id, nil
