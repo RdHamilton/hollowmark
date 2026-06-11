@@ -175,7 +175,7 @@ type Config struct {
 	//
 	// This is DISTINCT from PostHogAPIKey (the project API key used for
 	// server-side event capture). The personal API key is required for the
-	// DELETE /api/projects/{pk}/persons/ endpoint.
+	// POST /api/projects/{pk}/persons/bulk_delete/ endpoint (person:write scope).
 	//
 	// Sourced from POSTHOG_PERSONAL_API_KEY (set by provision-staging-env.sh /
 	// deploy-bff.yml from SSM /vaultmtg/app/{env}/posthog-personal-api-key,
