@@ -703,3 +703,73 @@ func TestMatchesRepository_GetByID_OpponentNameAndPlayerOnPlay(t *testing.T) {
 		t.Errorf("PlayerOnPlay = true, want false (player was on draw)")
 	}
 }
+
+// ─── GetPlayerTeamIDForMatch integration tests (#748 fix-round) ──────────────
+
+// TestMatchesRepository_GetPlayerTeamIDForMatch_HappyPath verifies that
+// GetPlayerTeamIDForMatch returns the stored player_team_id for an existing row.
+func TestMatchesRepository_GetPlayerTeamIDForMatch_HappyPath(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "getteamid-happy")
+	matchID := fmt.Sprintf("match-gtid-happy-%d", accountID)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// insertTestMatch seeds player_team_id=1 by convention.
+	insertTestMatch(t, db, matchID, accountID, "Standard", now)
+
+	teamID, err := repo.GetPlayerTeamIDForMatch(ctx, accountID, matchID)
+	if err != nil {
+		t.Fatalf("GetPlayerTeamIDForMatch: unexpected error: %v", err)
+	}
+	if teamID != 1 {
+		t.Errorf("GetPlayerTeamIDForMatch: want player_team_id=1, got %d", teamID)
+	}
+}
+
+// TestMatchesRepository_GetPlayerTeamIDForMatch_NotFound verifies that
+// GetPlayerTeamIDForMatch returns (0, nil) — not an error — when the match row
+// does not exist.  Callers treat 0 as "indeterminate" and fall back gracefully.
+func TestMatchesRepository_GetPlayerTeamIDForMatch_NotFound(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "getteamid-notfound")
+
+	teamID, err := repo.GetPlayerTeamIDForMatch(ctx, accountID, "no-such-match-xyz-748")
+	if err != nil {
+		t.Fatalf("GetPlayerTeamIDForMatch not-found: want (0, nil), got err=%v", err)
+	}
+	if teamID != 0 {
+		t.Errorf("GetPlayerTeamIDForMatch not-found: want teamID=0, got %d", teamID)
+	}
+}
+
+// TestMatchesRepository_GetPlayerTeamIDForMatch_CrossTenantIsolation verifies
+// that GetPlayerTeamIDForMatch scopes to accountID: account A presenting account
+// B's match_id must receive (0, nil), not B's player_team_id.  This is the
+// cross-tenant security boundary on the query.
+func TestMatchesRepository_GetPlayerTeamIDForMatch_CrossTenantIsolation(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+	ctx := context.Background()
+
+	accountA := insertTestAccount(t, db, "getteamid-iso-a")
+	accountB := insertTestAccount(t, db, "getteamid-iso-b")
+
+	matchBID := fmt.Sprintf("match-gtid-iso-b-%d", accountB)
+	now := time.Now().UTC().Truncate(time.Second)
+	insertTestMatch(t, db, matchBID, accountB, "Standard", now)
+
+	// accountA must not be able to read accountB's player_team_id.
+	teamID, err := repo.GetPlayerTeamIDForMatch(ctx, accountA, matchBID)
+	if err != nil {
+		t.Fatalf("GetPlayerTeamIDForMatch cross-tenant: want (0, nil), got err=%v", err)
+	}
+	if teamID != 0 {
+		t.Errorf("GetPlayerTeamIDForMatch cross-tenant isolation failure: accountA read accountB's player_team_id=%d (expected 0)", teamID)
+	}
+}

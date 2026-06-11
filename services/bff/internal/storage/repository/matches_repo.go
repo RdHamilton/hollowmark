@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -359,6 +360,22 @@ func (r *MatchesRepository) GetByID(ctx context.Context, accountID int64, matchI
 }
 
 // DistinctFormats returns every distinct format the account has matches in,
+// GetPlayerTeamIDForMatch returns the player_team_id stored on the matches row
+// for (accountID, matchID). Returns (0, nil) when the match row does not exist
+// yet — the caller must treat 0 as "indeterminate" and fall back gracefully.
+// The accountID filter is the cross-tenant security boundary.
+func (r *MatchesRepository) GetPlayerTeamIDForMatch(ctx context.Context, accountID int64, matchID string) (int, error) {
+	const q = `SELECT player_team_id FROM matches WHERE account_id = $1 AND id = $2`
+	var teamID int
+	if err := r.db.QueryRowContext(ctx, q, accountID, matchID).Scan(&teamID); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("GetPlayerTeamIDForMatch account_id=%d match_id=%q: %w", accountID, matchID, err)
+	}
+	return teamID, nil
+}
+
 // sorted alphabetically. Used by the SPA's format-filter dropdown.
 func (r *MatchesRepository) DistinctFormats(ctx context.Context, accountID int64) ([]string, error) {
 	const q = `SELECT DISTINCT format

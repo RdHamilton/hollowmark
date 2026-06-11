@@ -924,7 +924,7 @@ func TestGamePlayRepository_UpsertGameRow_CreatesRow(t *testing.T) {
 	const matchID = "match-ugr-001"
 	insertTestMatchForCardPlays(t, db, matchID, accountID)
 
-	id, err := repo.UpsertGameRow(ctx, matchID, 1)
+	id, err := repo.UpsertGameRow(ctx, matchID, 1, "win")
 	if err != nil {
 		t.Fatalf("UpsertGameRow: %v", err)
 	}
@@ -946,6 +946,71 @@ func TestGamePlayRepository_UpsertGameRow_CreatesRow(t *testing.T) {
 	})
 }
 
+// TestGamePlayRepository_UpsertGameRow_PersistsLoss verifies that UpsertGameRow
+// stores result='loss' when the player lost the game — not the hardcoded 'win'
+// placeholder. This is the regression test for ticket #748.
+func TestGamePlayRepository_UpsertGameRow_PersistsLoss(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccountForGamePlay(t, db, "upsert-game-row-loss")
+	const matchID = "match-ugr-loss-001"
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+
+	id, err := repo.UpsertGameRow(ctx, matchID, 1, "loss")
+	if err != nil {
+		t.Fatalf("UpsertGameRow(loss): %v", err)
+	}
+	if id == 0 {
+		t.Fatal("UpsertGameRow returned id=0")
+	}
+
+	var stored string
+	if err := db.QueryRowContext(ctx, `SELECT result FROM games WHERE id = $1`, id).Scan(&stored); err != nil {
+		t.Fatalf("read games.result: %v", err)
+	}
+	if stored != "loss" {
+		t.Errorf("games.result: want %q, got %q — placeholder not replaced by real result", "loss", stored)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE id = $1`, id)
+	})
+}
+
+// TestGamePlayRepository_UpsertGameRow_PersistsWin verifies that UpsertGameRow
+// stores result='win' when the player won the game.
+func TestGamePlayRepository_UpsertGameRow_PersistsWin(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccountForGamePlay(t, db, "upsert-game-row-win")
+	const matchID = "match-ugr-win-001"
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+
+	id, err := repo.UpsertGameRow(ctx, matchID, 1, "win")
+	if err != nil {
+		t.Fatalf("UpsertGameRow(win): %v", err)
+	}
+	if id == 0 {
+		t.Fatal("UpsertGameRow returned id=0")
+	}
+
+	var stored string
+	if err := db.QueryRowContext(ctx, `SELECT result FROM games WHERE id = $1`, id).Scan(&stored); err != nil {
+		t.Fatalf("read games.result: %v", err)
+	}
+	if stored != "win" {
+		t.Errorf("games.result: want %q, got %q", "win", stored)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE id = $1`, id)
+	})
+}
+
 // TestGamePlayRepository_UpsertGameRow_Idempotent verifies that calling
 // UpsertGameRow twice for the same (match_id, game_number) returns the same id
 // and does not produce a duplicate row.
@@ -958,12 +1023,12 @@ func TestGamePlayRepository_UpsertGameRow_Idempotent(t *testing.T) {
 	const matchID = "match-ugr-idem-001"
 	insertTestMatchForCardPlays(t, db, matchID, accountID)
 
-	id1, err := repo.UpsertGameRow(ctx, matchID, 2)
+	id1, err := repo.UpsertGameRow(ctx, matchID, 2, "win")
 	if err != nil {
 		t.Fatalf("UpsertGameRow first: %v", err)
 	}
 
-	id2, err := repo.UpsertGameRow(ctx, matchID, 2)
+	id2, err := repo.UpsertGameRow(ctx, matchID, 2, "win")
 	if err != nil {
 		t.Fatalf("UpsertGameRow second: %v", err)
 	}
@@ -1002,7 +1067,7 @@ func TestGamePlayRepository_UpsertGameRow_ThenInsertCardPlays(t *testing.T) {
 	insertTestMatchForCardPlays(t, db, matchID, accountID)
 
 	// UpsertGameRow provides the FK anchor.
-	gameID, err := repo.UpsertGameRow(ctx, matchID, 1)
+	gameID, err := repo.UpsertGameRow(ctx, matchID, 1, "win")
 	if err != nil {
 		t.Fatalf("UpsertGameRow: %v", err)
 	}
@@ -1116,4 +1181,106 @@ func TestGameIDByMatchAndNumber_CrossAccountIsolation(t *testing.T) {
 	if !errors.Is(crossErr, sql.ErrNoRows) {
 		t.Errorf("GameIDByMatchAndNumber(accountA, matchB, 1): want sql.ErrNoRows, got %v", crossErr)
 	}
+}
+
+// ─── UpsertGameRow WHERE-predicate guard tests (Bianca fix-round) ──────────
+
+// TestGamePlayRepository_UpsertGameRow_LossProtectedFromFallbackWinClobber is
+// the regression gate for the silent clobber defect: a replay that delivers a
+// fallback 'win' (WinningTeamID=0, GRE buffer limit causing deriveGameResult
+// to return the 'win' fallback) must NOT overwrite a previously committed 'loss'.
+//
+// Without WHERE games.result = 'win' in the DO UPDATE clause the update fires
+// unconditionally, clobbering the correct result.
+//
+// RED (without WHERE): second UpsertGameRow silently overwrites 'loss' with 'win'.
+// GREEN (with WHERE): games.result stays 'loss'; a valid id is still returned.
+func TestGamePlayRepository_UpsertGameRow_LossProtectedFromFallbackWinClobber(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccountForGamePlay(t, db, "ugr-clobber-guard")
+	const matchID = "match-ugr-clobber-001"
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+
+	// Step 1: projection worker writes the correct 'loss' result.
+	id1, err := repo.UpsertGameRow(ctx, matchID, 1, "loss")
+	if err != nil {
+		t.Fatalf("UpsertGameRow(loss): %v", err)
+	}
+	if id1 == 0 {
+		t.Fatal("UpsertGameRow returned id=0 on first insert")
+	}
+
+	// Step 2: daemon reconnects and re-delivers the same event, but
+	// WinningTeamID=0 (GRE buffer limit) so deriveGameResult returns 'win'
+	// (the fallback).  This is the clobber scenario.
+	id2, err := repo.UpsertGameRow(ctx, matchID, 1, "win")
+	if err != nil {
+		t.Fatalf("UpsertGameRow(fallback win replay): %v", err)
+	}
+	// The call must still return the existing row's id — callers need the FK
+	// anchor for InsertCardPlays even when no update was performed.
+	if id2 == 0 {
+		t.Fatal("UpsertGameRow returned id=0 on replay — caller loses FK anchor")
+	}
+	if id2 != id1 {
+		t.Errorf("UpsertGameRow replay: expected same id=%d (no new row), got %d", id1, id2)
+	}
+
+	// Critical assertion: the stored result must still be 'loss', not 'win'.
+	var stored string
+	if err := db.QueryRowContext(ctx, `SELECT result FROM games WHERE id = $1`, id1).Scan(&stored); err != nil {
+		t.Fatalf("read games.result: %v", err)
+	}
+	if stored != "loss" {
+		t.Errorf("games.result after fallback-win replay: want %q (protected), got %q (clobbered) — WHERE predicate is missing", "loss", stored)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE id = $1`, id1)
+	})
+}
+
+// TestGamePlayRepository_UpsertGameRow_FallbackWinCorrectableByRealLoss verifies
+// the corrective-replay direction: a stale fallback 'win' row IS overwritten when
+// the correct 'loss' result arrives later.  The WHERE games.result = 'win'
+// predicate allows this update.
+func TestGamePlayRepository_UpsertGameRow_FallbackWinCorrectableByRealLoss(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewGamePlayRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccountForGamePlay(t, db, "ugr-corrective-replay")
+	const matchID = "match-ugr-correct-001"
+	insertTestMatchForCardPlays(t, db, matchID, accountID)
+
+	// Step 1: fallback 'win' written first (partial GRE event, WinningTeamID=0).
+	id1, err := repo.UpsertGameRow(ctx, matchID, 1, "win")
+	if err != nil {
+		t.Fatalf("UpsertGameRow(fallback win): %v", err)
+	}
+
+	// Step 2: match.completed arrives with the real result = 'loss'.
+	// WHERE games.result = 'win' is TRUE so the corrective update fires.
+	id2, err := repo.UpsertGameRow(ctx, matchID, 1, "loss")
+	if err != nil {
+		t.Fatalf("UpsertGameRow(correct loss): %v", err)
+	}
+	if id2 != id1 {
+		t.Errorf("UpsertGameRow corrective replay: expected same id=%d, got %d", id1, id2)
+	}
+
+	var stored string
+	if err := db.QueryRowContext(ctx, `SELECT result FROM games WHERE id = $1`, id1).Scan(&stored); err != nil {
+		t.Fatalf("read games.result: %v", err)
+	}
+	if stored != "loss" {
+		t.Errorf("games.result after corrective replay: want %q, got %q — corrective direction broken", "loss", stored)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM games WHERE id = $1`, id1)
+	})
 }

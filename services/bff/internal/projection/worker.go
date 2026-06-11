@@ -37,9 +37,15 @@ type accountStore interface {
 	GetOrCreateByClientID(ctx context.Context, clientID string, userID int64) (int64, error)
 }
 
-// matchStore writes to the matches table.
+// matchStore writes to the matches table and provides read-access for
+// fields needed by dependent projections.
 type matchStore interface {
 	UpsertMatch(ctx context.Context, m repository.MatchUpsert) error
+	// GetPlayerTeamIDForMatch returns the player_team_id stored on the matches
+	// row for (accountID, matchID). Returns (0, nil) when the match row does
+	// not exist yet — the match.completed event may not have been projected
+	// before match.game_ended arrives. The caller must treat 0 as indeterminate.
+	GetPlayerTeamIDForMatch(ctx context.Context, accountID int64, matchID string) (int, error)
 }
 
 // draftStore writes to the draft_sessions and draft_match_results tables.
@@ -124,8 +130,10 @@ type gameIDResolver interface {
 // gameRowWriter creates the games anchor row required by game_plays.game_id FK.
 // UpsertGameRow is idempotent: ON CONFLICT (match_id, game_number) returns the
 // existing id so replaying the same event never produces duplicate rows.
+// result must be "win" or "loss" — the projection worker derives this from the
+// event payload before calling.
 type gameRowWriter interface {
-	UpsertGameRow(ctx context.Context, matchID string, gameNumber int) (int64, error)
+	UpsertGameRow(ctx context.Context, matchID string, gameNumber int, result string) (int64, error)
 }
 
 // counterStore writes counter-change rows to game_event_counters.
@@ -1192,8 +1200,17 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 		var gameID int64
 
 		if w.gameRows != nil {
+			// Derive the per-game result from the event payload.
+			// p.WinningTeamID is the team that won this game (0 when indeterminate).
+			// matches.player_team_id identifies the local player's team.
+			// When match.completed has not been projected yet, player_team_id is 0
+			// and we fall back to 'win' with a log warning — the same value the
+			// previous placeholder wrote, so there is no regression; a subsequent
+			// replay when match.completed has projected will correct it via the
+			// ON CONFLICT UPDATE path.
+			gameResult := deriveGameResult(ctx, w.matches, accountID, p.MatchID, p.WinningTeamID, row.ID)
 			var upsertErr error
-			gameID, upsertErr = w.gameRows.UpsertGameRow(ctx, p.MatchID, p.GameNumber)
+			gameID, upsertErr = w.gameRows.UpsertGameRow(ctx, p.MatchID, p.GameNumber, gameResult)
 			if upsertErr != nil {
 				return fmt.Errorf("UpsertGameRow: %w", upsertErr)
 			}
@@ -1258,4 +1275,36 @@ func normaliseResult(s string) string {
 	default:
 		return ""
 	}
+}
+
+// deriveGameResult returns the per-game result ("win" or "loss") for a
+// match.game_ended event.
+//
+// It compares winningTeamID (from the event payload) against the
+// player_team_id stored in the matches row for (accountID, matchID).
+// When the match row does not yet exist (match.completed not yet projected),
+// player_team_id is 0 and the function falls back to "win" — the same value
+// the previous placeholder wrote — and logs a warning. A subsequent replay
+// after match.completed is projected will overwrite the stored value via the
+// ON CONFLICT UPDATE path.
+func deriveGameResult(ctx context.Context, matches matchStore, accountID int64, matchID string, winningTeamID int, eventID int64) string {
+	if winningTeamID <= 0 {
+		log.Printf("[projection] projectGamePlayEvent id=%d: winning_team_id=0 on match.game_ended — cannot derive per-game result, defaulting to 'win'", eventID)
+		return "win"
+	}
+
+	playerTeamID, err := matches.GetPlayerTeamIDForMatch(ctx, accountID, matchID)
+	if err != nil {
+		log.Printf("[projection] projectGamePlayEvent id=%d: GetPlayerTeamIDForMatch: %v — defaulting to 'win'", eventID, err)
+		return "win"
+	}
+	if playerTeamID <= 0 {
+		log.Printf("[projection] projectGamePlayEvent id=%d: match row not yet projected for match_id=%q — defaulting to 'win'", eventID, matchID)
+		return "win"
+	}
+
+	if winningTeamID == playerTeamID {
+		return "win"
+	}
+	return "loss"
 }
