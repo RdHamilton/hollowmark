@@ -145,12 +145,14 @@ func newWaitlistRequest(email, referrer string) *http.Request {
 	return req
 }
 
-func newWaitlistRequestWithUTM(email, utmSource, utmMedium, utmCampaign, referrer string) *http.Request {
+func newWaitlistRequestWithUTM(email, utmSource, utmMedium, utmCampaign, utmContent, utmTerm, referrer string) *http.Request {
 	body := map[string]string{
 		"email":        email,
 		"utm_source":   utmSource,
 		"utm_medium":   utmMedium,
 		"utm_campaign": utmCampaign,
+		"utm_content":  utmContent,
+		"utm_term":     utmTerm,
 		"referrer":     referrer,
 	}
 	b, _ := json.Marshal(body)
@@ -344,7 +346,7 @@ func TestWaitlist_PostHog_FiredOnNewEmail(t *testing.T) {
 	ph := newStubPostHogClient()
 	h := handlers.NewWaitlistHandler(repo, nil, "").WithPostHogClient(ph)
 
-	req := newWaitlistRequestWithUTM("ph@example.com", "twitter", "social", "beta-launch", "https://t.co/abc")
+	req := newWaitlistRequestWithUTM("ph@example.com", "twitter", "social", "beta-launch", "ad-variant-a", "mtg arena", "https://t.co/abc")
 	rr := httptest.NewRecorder()
 	h.Join(rr, req)
 
@@ -384,6 +386,8 @@ func TestWaitlist_PostHog_FiredOnNewEmail(t *testing.T) {
 	assertProp("utm_source", "twitter")
 	assertProp("utm_medium", "social")
 	assertProp("utm_campaign", "beta-launch")
+	assertProp("utm_content", "ad-variant-a")
+	assertProp("utm_term", "mtg arena")
 	assertProp("referrer", "https://t.co/abc")
 }
 
@@ -414,6 +418,44 @@ func TestWaitlist_PostHog_NotFiredOnConflict(t *testing.T) {
 	if len(caps) != 0 {
 		t.Errorf("expected 0 PostHog captures on conflict path, got %d", len(caps))
 	}
+}
+
+// TestWaitlist_PostHog_UTMAbsent_EmptyWhenNotProvided verifies that utm_content
+// and utm_term are present in the PostHog event payload as empty strings (not
+// absent or non-empty) when the request does not include those fields. This
+// prevents accidental default bleeding — a future code change that hardcodes a
+// default value for these fields would be caught here.
+func TestWaitlist_PostHog_UTMAbsent_EmptyWhenNotProvided(t *testing.T) {
+	repo := newStubWaitlistRepo("uuid-ph-absent", 2, true)
+	ph := newStubPostHogClient()
+	h := handlers.NewWaitlistHandler(repo, nil, "").WithPostHogClient(ph)
+
+	// Request with no utm_content or utm_term fields.
+	req := newWaitlistRequestWithUTM("absent@example.com", "google", "cpc", "spring-sale", "", "", "https://example.com")
+	rr := httptest.NewRecorder()
+	h.Join(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	<-ph.done
+
+	caps := ph.getCaptures()
+	if len(caps) != 1 {
+		t.Fatalf("expected 1 PostHog capture, got %d", len(caps))
+	}
+	c := caps[0]
+
+	assertPropAbsent := func(key string) {
+		t.Helper()
+		got, _ := c.Properties[key].(string)
+		if got != "" {
+			t.Errorf("property %q: want empty string when field absent, got %q (possible default bleeding)", key, got)
+		}
+	}
+	assertPropAbsent("utm_content")
+	assertPropAbsent("utm_term")
 }
 
 // ─── PR A hardening tests (TDD — written RED first, tickets #132/#133/#134/#135) ─
