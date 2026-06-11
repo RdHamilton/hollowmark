@@ -292,6 +292,120 @@ test.describe('Compendium Phase-1 — Status Strip presence @smoke', () => {
 });
 
 // ===========================================================================
+// Suite 1a: Status strip label-text assertions (#1063)
+//
+// Asserts the stable structural label texts inside [data-testid="status-strip"]
+// on /home (representative authenticated route). Uses scoped getByText() within
+// the strip container per selector-priority rules (no per-slot testids exist).
+//
+// Two tests:
+//   1. Baseline labels (Matches:, Win Rate:) — always render once the strip
+//      exits loading state, regardless of match data or daemon state.
+//   2. All 4 stable labels (adds Last Played:, Synced:) — uses a richer mock:
+//      - One match → lastMatch is non-empty → Last Played: renders
+//      - getDaemonHealth response uses { status: 'connected' } (no data envelope;
+//        bffHealth.getDaemonHealth calls response.json() directly, not the
+//        apiClient envelope-unwrapper) → daemonStatus=connected → isDaemonOffline=false
+//        → Synced: branch renders instead of "Daemon offline"
+//
+// Note: Streak: is conditional (count > 0 only) and is not asserted here — the
+// mock below produces a single win match which WILL render a streak, but the
+// assertion set is limited to the 4 labels named in the #1063 enrichment scope.
+// See status-strip.spec.ts for the existing streak-aware assertion.
+// ===========================================================================
+
+/**
+ * Mock StatusStrip BFF dependencies with a connected daemon + one match so
+ * all 4 stable labels render: Matches:, Win Rate:, Last Played:, Synced:.
+ *
+ * Key differences from mockStatusFooterEndpoints:
+ *   - /api/v1/health/daemon returns { status: 'connected' } — no data envelope,
+ *     because getDaemonHealth (bffHealth.ts) reads result.status from response.json()
+ *     directly rather than through the apiClient envelope-unwrapper. This makes
+ *     isDaemonOffline=false so the Synced: label branch renders.
+ *   - /api/v1/matches returns one match so lastMatch is non-empty → Last Played: renders.
+ *   - /api/v1/matches/stats returns TotalMatches=1 consistent with the match payload.
+ */
+async function mockStatusStripAllLabels(page: Page): Promise<void> {
+  await page.route('**/api/v1/matches/stats', (route) => {
+    void route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: { TotalMatches: 1, WinRate: 1.0, MatchesWon: 1, MatchesLost: 0 },
+      }),
+    });
+  });
+  await page.route('**/api/v1/matches', (route) => {
+    void route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          Matches: [
+            {
+              ID: 'test-match-1',
+              Result: 'win',
+              Timestamp: '2026-06-10T12:00:00Z',
+              OpponentName: 'TestOpponent',
+              DeckName: 'TestDeck',
+            },
+          ],
+          Total: 1,
+          Page: 1,
+          Limit: 50,
+        },
+      }),
+    });
+  });
+  // No data envelope — getDaemonHealth reads result.status directly from response.json()
+  await page.route('**/api/v1/health/daemon', (route) => {
+    void route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'connected' }),
+    });
+  });
+}
+
+test.describe('Compendium Phase-1 — Status Strip label-text assertions @smoke (#1063)', () => {
+  test.beforeEach(async ({ page }) => {
+    await setClerkSignedIn(page);
+    await mockHomeEndpoints(page);
+  });
+
+  test('@smoke status strip shows Matches: and Win Rate: labels on /home', async ({ page }) => {
+    // Baseline: these two labels always render once the strip exits loading state.
+    await mockStatusFooterEndpoints(page);
+    await page.goto('/home');
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+
+    const strip = page.locator('[data-testid="status-strip"]');
+    await expect(strip).toBeAttached();
+    // Wait for the strip to exit loading state before asserting labels
+    await expect(strip.getByText('Loading stats...')).not.toBeAttached({ timeout: 5000 }).catch(() => undefined);
+
+    await expect(strip.getByText('Matches:')).toBeVisible();
+    await expect(strip.getByText('Win Rate:')).toBeVisible();
+  });
+
+  test('@smoke status strip shows all 4 stable labels on /home (connected daemon + match data)', async ({ page }) => {
+    // Full label set: Matches:, Win Rate:, Last Played:, Synced:
+    await mockStatusStripAllLabels(page);
+    await page.goto('/home');
+    await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
+
+    const strip = page.locator('[data-testid="status-strip"]');
+    await expect(strip).toBeAttached();
+
+    await expect(strip.getByText('Matches:')).toBeVisible();
+    await expect(strip.getByText('Win Rate:')).toBeVisible();
+    await expect(strip.getByText('Last Played:')).toBeVisible();
+    await expect(strip.getByText('Synced:')).toBeVisible();
+  });
+});
+
+// ===========================================================================
 // Suite 2: Hollowmark logo + wordmark in nav (AC from design spec §keep)
 // ===========================================================================
 
