@@ -20,6 +20,7 @@ type WaitlistEntry struct {
 
 // waitlistDB is the minimal DB interface required by WaitlistRepository.
 type waitlistDB interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
@@ -81,5 +82,81 @@ func (r *WaitlistRepository) UpdateMailchimpStatus(ctx context.Context, id, stat
 		WHERE  id = $1`
 
 	_, err := r.db.ExecContext(ctx, q, id, status)
+	return err
+}
+
+// FailedWaitlistEntry is a minimal projection of waitlist_entries rows used
+// by the reconciler: it only needs the row ID and email address.
+type FailedWaitlistEntry struct {
+	ID    string
+	Email string
+}
+
+// ListFailedWaitlistEntries returns up to limit rows where
+// mailchimp_status = 'failed' AND mailchimp_attempts < maxAttempts (10),
+// ordered by created_at ASC so oldest signups are retried first.
+// The partial index on (mailchimp_status) WHERE mailchimp_status = 'failed'
+// (migration 000086) makes this query efficient.
+func (r *WaitlistRepository) ListFailedWaitlistEntries(ctx context.Context, limit int) ([]FailedWaitlistEntry, error) {
+	const q = `
+		SELECT id, email
+		FROM   waitlist_entries
+		WHERE  mailchimp_status = 'failed'
+		  AND  mailchimp_attempts < 10
+		ORDER  BY created_at ASC
+		LIMIT  $1`
+
+	rows, err := r.db.QueryContext(ctx, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []FailedWaitlistEntry
+	for rows.Next() {
+		var e FailedWaitlistEntry
+		if err := rows.Scan(&e.ID, &e.Email); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// MarkWaitlistSubscribed sets mailchimp_status = 'subscribed' and bumps
+// updated_at for the row with the given id.
+// Called by the reconciler after a successful AddMember call.
+func (r *WaitlistRepository) MarkWaitlistSubscribed(ctx context.Context, id string) error {
+	const q = `
+		UPDATE waitlist_entries
+		SET    mailchimp_status = 'subscribed', updated_at = now()
+		WHERE  id = $1`
+	_, err := r.db.ExecContext(ctx, q, id)
+	return err
+}
+
+// IncrementAttemptsAndMaybeTerminate atomically increments mailchimp_attempts
+// and, when the new value reaches or exceeds maxAttempts, sets
+// mailchimp_status = 'terminal'.
+//
+// A1 guard (Ray's binding amendment): the WHERE clause includes
+// mailchimp_status = 'failed' so a concurrent handler goroutine's success
+// (which flips status to 'subscribed') cannot be overwritten by the reconciler.
+// If the row is no longer 'failed' the UPDATE is silently a no-op.
+//
+// Manual recovery of a 'terminal' row requires resetting BOTH
+// mailchimp_status = 'failed' AND mailchimp_attempts = 0.
+func (r *WaitlistRepository) IncrementAttemptsAndMaybeTerminate(ctx context.Context, id string, maxAttempts int) error {
+	const q = `
+		UPDATE waitlist_entries
+		SET    mailchimp_attempts = mailchimp_attempts + 1,
+		       mailchimp_status   = CASE
+		                                WHEN mailchimp_attempts + 1 >= $2 THEN 'terminal'
+		                                ELSE mailchimp_status
+		                            END,
+		       updated_at         = now()
+		WHERE  id = $1
+		  AND  mailchimp_status = 'failed'`
+	_, err := r.db.ExecContext(ctx, q, id, maxAttempts)
 	return err
 }
