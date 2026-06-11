@@ -2,6 +2,7 @@ package pkce
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,7 +56,7 @@ func TestBuildAuthURL_HappyPath(t *testing.T) {
 		ClientID:         "pk_test_abc123",
 	}
 	redirectURI := fmt.Sprintf("http://localhost:%d%s", PrimaryPort, CallbackPath)
-	authURL, err := buildAuthURL(cfg, "challenge_abc", redirectURI)
+	authURL, err := buildAuthURL(cfg, "challenge_abc", redirectURI, "test-state-value")
 	require.NoError(t, err)
 
 	assert.Contains(t, authURL, "https://accounts.example.com/oauth/authorize")
@@ -69,7 +70,7 @@ func TestBuildAuthURL_HappyPath(t *testing.T) {
 // TestBuildAuthURL_MissingClerkFrontendAPI errors when ClerkFrontendAPI is empty.
 func TestBuildAuthURL_MissingClerkFrontendAPI(t *testing.T) {
 	cfg := Config{ClientID: "pk_test_abc"}
-	_, err := buildAuthURL(cfg, "ch", "http://localhost:51423/oauth/callback")
+	_, err := buildAuthURL(cfg, "ch", "http://localhost:51423/oauth/callback", "st")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ClerkFrontendAPI")
 }
@@ -77,7 +78,7 @@ func TestBuildAuthURL_MissingClerkFrontendAPI(t *testing.T) {
 // TestBuildAuthURL_MissingClientID errors when ClientID is empty.
 func TestBuildAuthURL_MissingClientID(t *testing.T) {
 	cfg := Config{ClerkFrontendAPI: "https://accounts.example.com"}
-	_, err := buildAuthURL(cfg, "ch", "http://localhost:51423/oauth/callback")
+	_, err := buildAuthURL(cfg, "ch", "http://localhost:51423/oauth/callback", "st")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ClientID")
 }
@@ -88,7 +89,7 @@ func TestBuildAuthURL_DefaultScopes(t *testing.T) {
 		ClerkFrontendAPI: "https://accounts.example.com",
 		ClientID:         "pk_test_abc",
 	}
-	authURL, err := buildAuthURL(cfg, "ch", "http://localhost:51423/oauth/callback")
+	authURL, err := buildAuthURL(cfg, "ch", "http://localhost:51423/oauth/callback", "st")
 	require.NoError(t, err)
 	assert.Contains(t, authURL, "scope=")
 	assert.True(t, strings.Contains(authURL, "profile") || strings.Contains(authURL, "email"))
@@ -229,7 +230,8 @@ func TestWaitForCode_HappyPath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	callbackURL := fmt.Sprintf("http://127.0.0.1:%d%s?code=mycode123", listenerPort(l), CallbackPath)
+	const testState = "happypath-state"
+	callbackURL := fmt.Sprintf("http://127.0.0.1:%d%s?code=mycode123&state=%s", listenerPort(l), CallbackPath, testState)
 
 	// resultCh carries the captured HTTP response from the goroutine.
 	resultCh := make(chan redirectResult, 1)
@@ -253,7 +255,7 @@ func TestWaitForCode_HappyPath(t *testing.T) {
 		}
 	}()
 
-	code, err := waitForCode(ctx, []net.Listener{l})
+	code, err := waitForCode(ctx, []net.Listener{l}, testState)
 	require.NoError(t, err)
 	assert.Equal(t, "mycode123", code)
 
@@ -277,8 +279,9 @@ func TestWaitForCode_NoConsentLoop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	const testState = "no-consent-loop-state"
 	port := listenerPort(l)
-	callbackURL := fmt.Sprintf("http://127.0.0.1:%d%s?code=firstcode", port, CallbackPath)
+	callbackURL := fmt.Sprintf("http://127.0.0.1:%d%s?code=firstcode&state=%s", port, CallbackPath, testState)
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
@@ -297,12 +300,13 @@ func TestWaitForCode_NoConsentLoop(t *testing.T) {
 		// that waitForCode returned after the first request, not the second.
 	}()
 
-	code, err := waitForCode(ctx, []net.Listener{l})
+	code, err := waitForCode(ctx, []net.Listener{l}, testState)
 	require.NoError(t, err)
 	assert.Equal(t, "firstcode", code, "only the first code must be returned")
 }
 
 // TestWaitForCode_ErrorParam returns error when callback contains error parameter.
+// The state parameter must match so the handler reaches the error-param check.
 func TestWaitForCode_ErrorParam(t *testing.T) {
 	l, err := startListener(t)
 	require.NoError(t, err)
@@ -310,8 +314,9 @@ func TestWaitForCode_ErrorParam(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	callbackURL := fmt.Sprintf("http://127.0.0.1:%d%s?error=access_denied&error_description=user+denied",
-		listenerPort(l), CallbackPath)
+	const testState = "error-param-state"
+	callbackURL := fmt.Sprintf("http://127.0.0.1:%d%s?error=access_denied&error_description=user+denied&state=%s",
+		listenerPort(l), CallbackPath, testState)
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		resp, getErr := http.Get(callbackURL) //nolint:noctx
@@ -320,7 +325,7 @@ func TestWaitForCode_ErrorParam(t *testing.T) {
 		}
 	}()
 
-	_, err = waitForCode(ctx, []net.Listener{l})
+	_, err = waitForCode(ctx, []net.Listener{l}, testState)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "access_denied")
 }
@@ -333,7 +338,7 @@ func TestWaitForCode_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err = waitForCode(ctx, []net.Listener{l})
+	_, err = waitForCode(ctx, []net.Listener{l}, "timeout-test-state")
 	require.Error(t, err)
 }
 
@@ -411,7 +416,8 @@ func TestWaitForCode_IPv6(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	callbackURL := fmt.Sprintf("http://[::1]:%d%s?code=ipv6testcode", port, CallbackPath)
+	const testState = "ipv6-test-state"
+	callbackURL := fmt.Sprintf("http://[::1]:%d%s?code=ipv6testcode&state=%s", port, CallbackPath, testState)
 
 	resultCh := make(chan redirectResult, 1)
 	go func() {
@@ -433,13 +439,178 @@ func TestWaitForCode_IPv6(t *testing.T) {
 		}
 	}()
 
-	code, err := waitForCode(ctx, []net.Listener{l6})
+	code, err := waitForCode(ctx, []net.Listener{l6}, testState)
 	require.NoError(t, err)
 	assert.Equal(t, "ipv6testcode", code)
 
 	result := <-resultCh
 	assert.Equal(t, http.StatusFound, result.statusCode, "IPv6 callback must respond with 302 redirect")
 	assert.Equal(t, SuccessRedirectURL, result.location, "redirect must point to SuccessRedirectURL")
+}
+
+// ─── state parameter tests (#113) ────────────────────────────────────────────
+
+// TestGenerateState_LengthAndEncoding verifies that generateState produces a
+// non-empty base64url string derived from at least 16 random bytes.
+// base64url(16 bytes) is always 22 characters (no padding).
+func TestGenerateState_LengthAndEncoding(t *testing.T) {
+	state, err := generateState()
+	require.NoError(t, err)
+
+	// Must be non-empty.
+	require.NotEmpty(t, state)
+
+	// Must be valid raw base64url (no padding characters).
+	decoded, err := base64.RawURLEncoding.DecodeString(state)
+	require.NoError(t, err, "state must be valid base64url: %q", state)
+
+	// 16 source bytes → 22 base64url chars (ceil(16*4/3) = 22).
+	assert.GreaterOrEqual(t, len(decoded), 16,
+		"state must encode at least 16 bytes; got %d bytes from %q", len(decoded), state)
+}
+
+// TestGenerateState_Uniqueness verifies that two consecutive calls produce
+// different values (probabilistic — collision chance < 2^-128).
+func TestGenerateState_Uniqueness(t *testing.T) {
+	s1, err := generateState()
+	require.NoError(t, err)
+	s2, err := generateState()
+	require.NoError(t, err)
+
+	assert.NotEqual(t, s1, s2, "two generateState calls must produce different values")
+}
+
+// TestBuildAuthURL_ContainsStateParam verifies that buildAuthURL embeds a
+// non-empty state query parameter in the authorization URL.
+func TestBuildAuthURL_ContainsStateParam(t *testing.T) {
+	cfg := Config{
+		ClerkFrontendAPI: "https://accounts.example.com",
+		ClientID:         "pk_test_abc123",
+	}
+	redirectURI := fmt.Sprintf("http://localhost:%d%s", PrimaryPort, CallbackPath)
+
+	state, err := generateState()
+	require.NoError(t, err)
+
+	authURL, err := buildAuthURL(cfg, "challenge_abc", redirectURI, state)
+	require.NoError(t, err)
+
+	assert.Contains(t, authURL, "state=", "authorization URL must contain a state parameter")
+	assert.Contains(t, authURL, state, "authorization URL must contain the generated state value")
+}
+
+// TestWaitForCode_StateRoundTrip verifies the happy path: a callback carrying
+// the correct state parameter is accepted and the code is returned.
+func TestWaitForCode_StateRoundTrip(t *testing.T) {
+	l, err := startListener(t)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const expectedState = "correct-state-value"
+	callbackURL := fmt.Sprintf("http://127.0.0.1:%d%s?code=mycode456&state=%s",
+		listenerPort(l), CallbackPath, expectedState)
+
+	resultCh := make(chan redirectResult, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		noFollow := &http.Client{
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+		resp, getErr := noFollow.Get(callbackURL) //nolint:noctx
+		if getErr == nil {
+			resultCh <- redirectResult{
+				statusCode: resp.StatusCode,
+				location:   resp.Header.Get("Location"),
+			}
+			_ = resp.Body.Close()
+		} else {
+			resultCh <- redirectResult{}
+		}
+	}()
+
+	code, err := waitForCode(ctx, []net.Listener{l}, expectedState)
+	require.NoError(t, err)
+	assert.Equal(t, "mycode456", code)
+
+	result := <-resultCh
+	assert.Equal(t, http.StatusFound, result.statusCode,
+		"matching state: callback must respond with 302 redirect")
+	assert.Equal(t, SuccessRedirectURL, result.location,
+		"matching state: redirect must point to SuccessRedirectURL")
+}
+
+// TestWaitForCode_StateMismatchRejectsCallback verifies that a callback carrying
+// a wrong state parameter is rejected with HTTP 400 and the PKCE flow is aborted
+// (no code is returned). Token exchange must never be attempted on a mismatch.
+func TestWaitForCode_StateMismatchRejectsCallback(t *testing.T) {
+	l, err := startListener(t)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const expectedState = "legit-state"
+	const attackerState = "forged-state"
+
+	callbackURL := fmt.Sprintf("http://127.0.0.1:%d%s?code=attackercode&state=%s",
+		listenerPort(l), CallbackPath, attackerState)
+
+	statusCh := make(chan int, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		resp, getErr := http.Get(callbackURL) //nolint:noctx
+		if getErr == nil {
+			statusCh <- resp.StatusCode
+			_ = resp.Body.Close()
+		} else {
+			statusCh <- 0
+		}
+	}()
+
+	_, err = waitForCode(ctx, []net.Listener{l}, expectedState)
+	require.Error(t, err, "state mismatch must return an error")
+	assert.Contains(t, err.Error(), "state", "error must mention state mismatch")
+
+	got := <-statusCh
+	assert.Equal(t, http.StatusBadRequest, got,
+		"forged state: callback server must respond with HTTP 400")
+}
+
+// TestWaitForCode_StateMissingRejectsCallback verifies that a callback with no
+// state parameter (omitted entirely) is also rejected with HTTP 400.
+func TestWaitForCode_StateMissingRejectsCallback(t *testing.T) {
+	l, err := startListener(t)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Callback URL has no state param at all.
+	callbackURL := fmt.Sprintf("http://127.0.0.1:%d%s?code=someCode",
+		listenerPort(l), CallbackPath)
+
+	statusCh := make(chan int, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		resp, getErr := http.Get(callbackURL) //nolint:noctx
+		if getErr == nil {
+			statusCh <- resp.StatusCode
+			_ = resp.Body.Close()
+		} else {
+			statusCh <- 0
+		}
+	}()
+
+	_, err = waitForCode(ctx, []net.Listener{l}, "expected-state-abc")
+	require.Error(t, err, "missing state must return an error")
+
+	got := <-statusCh
+	assert.Equal(t, http.StatusBadRequest, got,
+		"missing state: callback server must respond with HTTP 400")
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
