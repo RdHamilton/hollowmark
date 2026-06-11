@@ -289,6 +289,12 @@ func TestWildcardGapRepository_GetWildcardGapRows_EmptyWhenNoArchetypes(t *testi
 // TestWildcardGapRepository_GetWildcardGapRows_CrossTenantIsolation verifies
 // that account_id scoping is enforced: Account B's card ownership must not
 // appear in Account A's results.
+//
+// This test exercises the COALESCE(ci.count, 0) path only — no set_cards row
+// is seeded, so the card_inventory LEFT JOIN never fires and both accounts see
+// CopiesOwned=0. It confirms that two independent queries return the same
+// archetype rows and neither panics. The stronger ownership-value assertion is
+// in TestWildcardGapRepository_GetWildcardGapRows_CrossTenantIsolation_RealOwnership.
 func TestWildcardGapRepository_GetWildcardGapRows_CrossTenantIsolation(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewWildcardGapRepository(db)
@@ -302,17 +308,6 @@ func TestWildcardGapRepository_GetWildcardGapRows_CrossTenantIsolation(t *testin
 	archetypeID := insertRecentArchetype(t, db, "wc-gap-isolation-arch", "Standard", &tierS)
 	insertTestArchetypeCard(t, db, archetypeID, "wc-gap-isolation-card", "Creature", 4)
 
-	// Account A owns 2 copies; Account B owns 4.
-	// We do this via card_inventory using a known arena_id from set_cards if
-	// one exists, but since we can't guarantee a set_cards row for our test
-	// card_name, we rely on the COALESCE(ci.count, 0) path and just verify
-	// that the result rows only contain Account A's data (CopiesOwned from A,
-	// not B).
-	//
-	// Since the join goes through set_cards by name, and we don't seed a
-	// set_cards row, arena_id will be 0 and card_inventory join won't fire.
-	// The key thing we verify is that account_id=$1 is respected — Account A
-	// and Account B get separate result sets.
 	rowsA, err := repo.GetWildcardGapRows(ctx, accountA, "Standard")
 	if err != nil {
 		t.Fatalf("GetWildcardGapRows (account A): %v", err)
@@ -322,11 +317,6 @@ func TestWildcardGapRepository_GetWildcardGapRows_CrossTenantIsolation(t *testin
 		t.Fatalf("GetWildcardGapRows (account B): %v", err)
 	}
 
-	// Both queries must succeed and return the same archetype rows (since
-	// neither account has card_inventory seeded in this test — both will
-	// show CopiesOwned=0 via COALESCE).
-	// The isolation property is: rows are scoped to the passed accountID.
-	// Verify both results contain our archetype.
 	foundA := false
 	for _, r := range rowsA {
 		if r.ArchetypeID == archetypeID {
@@ -345,12 +335,96 @@ func TestWildcardGapRepository_GetWildcardGapRows_CrossTenantIsolation(t *testin
 	if !foundB {
 		t.Error("Account B result missing wc-gap-isolation-arch archetype")
 	}
+}
 
-	// Both queries run independently: no panic, no cross-account data bleed.
-	// A more thorough isolation test would seed card_inventory for each account
-	// with the same card_id and verify the CopiesOwned differs, but that
-	// requires a matching set_cards row — tested implicitly by the unit-layer
-	// handler test via stubs.
+// TestWildcardGapRepository_GetWildcardGapRows_CrossTenantIsolation_RealOwnership
+// is the strengthened form of the cross-tenant isolation test (ticket #843).
+//
+// It seeds a real set_cards row so the card_inventory LEFT JOIN fires via the
+// arena_id path. Account A is seeded with 2 copies of the test card; Account B
+// with 4 copies. The test then asserts:
+//   - rowsA contains CopiesOwned=2 for the test card (not 0, not 4).
+//   - rowsB contains CopiesOwned=4 for the test card (not 0, not 2).
+//   - Neither account's rows contain the other account's CopiesOwned value for
+//     the same card, proving the account_id=$1 scoping in the join is enforced.
+func TestWildcardGapRepository_GetWildcardGapRows_CrossTenantIsolation_RealOwnership(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewWildcardGapRepository(db)
+	ctx := context.Background()
+
+	// Use a high arena_id unlikely to collide with real data. The card name
+	// must match the archetype_cards row exactly (case-insensitive join).
+	const testArenaID = 88999
+	const testCardName = "wc-gap-isolation-owned-card"
+	const testSetCode = "WCT"
+
+	// Seed the set_cards row so the name→arena_id join fires.
+	insertTestSetCard(t, db, setCardSeed{
+		SetCode: testSetCode,
+		ArenaID: "88999",
+		Name:    testCardName,
+		Rarity:  "rare",
+	})
+
+	accountA := insertTestAccountForWildcard(t, db, "gap-isolation-owned-a")
+	accountB := insertTestAccountForWildcard(t, db, "gap-isolation-owned-b")
+
+	// Archetype requires 4 copies of the test card.
+	tierS := "S"
+	archetypeID := insertRecentArchetype(t, db, "wc-gap-isolation-owned-arch", "Standard", &tierS)
+	insertTestArchetypeCard(t, db, archetypeID, testCardName, "Creature", 4)
+
+	// Account A owns 2 copies; Account B owns 4.
+	insertTestCardInventory(t, db, accountA, testArenaID, 2)
+	insertTestCardInventory(t, db, accountB, testArenaID, 4)
+
+	rowsA, err := repo.GetWildcardGapRows(ctx, accountA, "Standard")
+	if err != nil {
+		t.Fatalf("GetWildcardGapRows (account A): %v", err)
+	}
+	rowsB, err := repo.GetWildcardGapRows(ctx, accountB, "Standard")
+	if err != nil {
+		t.Fatalf("GetWildcardGapRows (account B): %v", err)
+	}
+
+	// Find the test card row in Account A's results.
+	var ownedA, ownedB int
+	var foundInA, foundInB bool
+	for _, r := range rowsA {
+		if r.ArchetypeID == archetypeID && r.CardName == testCardName {
+			ownedA = r.CopiesOwned
+			foundInA = true
+		}
+	}
+	for _, r := range rowsB {
+		if r.ArchetypeID == archetypeID && r.CardName == testCardName {
+			ownedB = r.CopiesOwned
+			foundInB = true
+		}
+	}
+
+	if !foundInA {
+		t.Fatal("Account A result missing test card row for the seeded archetype")
+	}
+	if !foundInB {
+		t.Fatal("Account B result missing test card row for the seeded archetype")
+	}
+
+	// Core isolation assertion: each account sees only its own CopiesOwned.
+	if ownedA != 2 {
+		t.Errorf("Account A CopiesOwned: got %d, want 2 (Account B's value must not bleed through)", ownedA)
+	}
+	if ownedB != 4 {
+		t.Errorf("Account B CopiesOwned: got %d, want 4 (Account A's value must not bleed through)", ownedB)
+	}
+
+	// Sanity-check cross-bleed in the opposite direction.
+	if ownedA == 4 {
+		t.Error("Account A received Account B's CopiesOwned=4 — cross-tenant data bleed detected")
+	}
+	if ownedB == 2 {
+		t.Error("Account B received Account A's CopiesOwned=2 — cross-tenant data bleed detected")
+	}
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
