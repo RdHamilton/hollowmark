@@ -310,9 +310,9 @@ func main() {
 		daemonsRevokeHandler              *handlers.DaemonsRevokeHandler
 		adminFleetHealthHandler           *handlers.AdminFleetHealthHandler
 		adminProjectionErrorsCountHandler *handlers.AdminProjectionErrorsCountHandler
-		adminDataFreshnessHandler              *handlers.AdminDataFreshnessHandler
-		adminBackfillDraftSessionsHandler      *handlers.AdminBackfillDraftSessionsHandler
-		matchesHandler                         *handlers.MatchesHandler
+		adminDataFreshnessHandler         *handlers.AdminDataFreshnessHandler
+		adminBackfillDraftSessionsHandler *handlers.AdminBackfillDraftSessionsHandler
+		matchesHandler                    *handlers.MatchesHandler
 		collectionHandler                 *handlers.CollectionHandler
 		questsHandler                     *handlers.QuestsHandler
 		standardHandler                   *handlers.StandardHandler
@@ -782,9 +782,9 @@ func main() {
 		DaemonsRevokeHandler:              daemonsRevokeHandler,
 		AdminFleetHealthHandler:           adminFleetHealthHandler,
 		AdminProjectionErrorsCountHandler: adminProjectionErrorsCountHandler,
-		AdminDataFreshnessHandler:              adminDataFreshnessHandler,
-		AdminBackfillDraftSessionsHandler:      adminBackfillDraftSessionsHandler,
-		MatchesHandler:                         matchesHandler,
+		AdminDataFreshnessHandler:         adminDataFreshnessHandler,
+		AdminBackfillDraftSessionsHandler: adminBackfillDraftSessionsHandler,
+		MatchesHandler:                    matchesHandler,
 		CollectionHandler:                 collectionHandler,
 		QuestsHandler:                     questsHandler,
 		StandardHandler:                   standardHandler,
