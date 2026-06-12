@@ -1625,6 +1625,21 @@ func (s *Service) dispatchKeychainError(ctx context.Context, errorType string) {
 	}
 }
 
+// draftScenePayload is the enriched payload emitted for draft.started and
+// draft.completed events (#1344 PR-B). The BFF's projectDraftSession requires
+// session_id to be non-empty; without enrichment both scene-change events fall
+// through to raw entry.JSON (no session_id) and are permanently rejected.
+//
+// Fields match the BFF's draftPayload struct (worker.go) — ADDITIVE-ONLY,
+// no ADR-079 contract bump (payload fields are a superset of the existing
+// draftPayload contract; BFF already accepts all these fields).
+type draftScenePayload struct {
+	SessionID string `json:"session_id"`
+	EventName string `json:"event_name"` // CourseName, e.g. "QuickDraft_EOE_20260612"
+	SetCode   string `json:"set_code"`   // e.g. "EOE"
+	DraftType string `json:"draft_type"` // e.g. "QuickDraft"
+}
+
 // handleEntry classifies a log entry and dispatches it to the BFF.
 //
 // Concurrency: handleEntry is called from two goroutines:
@@ -1856,6 +1871,33 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 
 			payload = p
 		}
+	case "draft.started", "draft.completed":
+		// Enrich scene-change events with the active draftstate session so the
+		// BFF's projectDraftSession can identify the session (#1344 PR-B).
+		//
+		// Without enrichment both events fall through to entry.JSON
+		// ({fromSceneName, toSceneName, context} — no session_id) and
+		// projectDraftSession permanently rejects them. The practical result:
+		//   • draft.started  — session never opened via this event path.
+		//   • draft.completed — NO draft session ever transitions to
+		//     status=completed; all users see a perpetual ACTIVE DRAFT card.
+		//
+		// When no session is active (daemon restarted before any pack event),
+		// fall back to entry.JSON. The BFF will permanent-reject the entry
+		// (existing guard), which is correct — there is nothing to close.
+		if s.draftState != nil {
+			if sess, ok := s.draftState.Get("current"); ok {
+				payload = draftScenePayload{
+					SessionID: sess.ID,
+					EventName: sess.CourseName,
+					SetCode:   sess.SetCode,
+					DraftType: sess.Format,
+				}
+			}
+		}
+		if payload == nil {
+			payload = entry.JSON
+		}
 	case "greToClientEvent":
 		// GRE entries are never dispatched individually — they are buffered in
 		// the GRE session manager and flushed as a single "match.game_ended"
@@ -1880,9 +1922,12 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 
 	// Boundary events: force an immediate flush so the BFF receives the batch
 	// promptly without waiting for the next size or interval trigger.
-	// match.game_ended — game result just produced (player expects UI update).
-	// draft.pick       — pick made; grade-pick / win-probability must see it fast.
-	if eventType == "match.game_ended" || eventType == "draft.pick" {
+	// match.game_ended  — game result just produced (player expects UI update).
+	// draft.pick        — pick made; grade-pick / win-probability must see it fast.
+	// draft.started     — session opens; SPA draft panel must activate immediately.
+	// draft.completed   — session closes; Home ACTIVE DRAFT card must clear promptly.
+	switch eventType {
+	case "match.game_ended", "draft.pick", "draft.started", "draft.completed":
 		s.batchBuffer.FlushNow()
 	}
 
