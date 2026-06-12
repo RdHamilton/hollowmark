@@ -331,6 +331,24 @@ events:
         type: string
         pii_class: none
 
+  - name: daemon_account_id_mismatch
+    category: system
+    trigger_surface: bff
+    consent_category: necessary
+    properties:
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+      - name: event_account_id_hash
+        type: string
+        pii_class: pseudonymous
+      - name: key_bound_account_id_hash
+        type: string
+        pii_class: pseudonymous
+      - name: user_id
+        type: number
+        pii_class: none
+
   - name: get_deck
     category: feature_use
     trigger_surface: bff

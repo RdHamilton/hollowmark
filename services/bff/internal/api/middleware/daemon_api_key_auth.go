@@ -153,7 +153,12 @@ func DaemonAPIKeyAuth(keyRepo daemonKeyPrefixLookup, userRepo userResolver) func
 					}
 				}()
 
+				// Store both the resolved users.id (UserIDFromContext
+				// compatibility) and the raw Clerk account_id bound to the
+				// key.  The handler compares the latter against
+				// event.AccountID to detect stale-config daemons (#1336).
 				ctx := context.WithValue(r.Context(), ctxKeyUserID, u.ID)
+				ctx = context.WithValue(ctx, ctxKeyBoundAccountID, k.AccountID)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
