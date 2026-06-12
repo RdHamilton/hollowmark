@@ -593,3 +593,266 @@ func TestDecksRepository_ListDecks_MatchesPlayedZeroWithNoMatches(t *testing.T) 
 		t.Errorf("MatchesPlayed: got %d, want 0 for deck with no matches", found.MatchesPlayed)
 	}
 }
+
+// ─── #1359 draft-session match linkage read-path fix ────────────────────────
+
+// insertTestMatchWithDraftSession inserts a match row linked to a deck via
+// draft_session_id only (deck_id is NULL).  This is the write path for Arena
+// draft matches — the projection worker sets draft_session_id but not deck_id
+// (the deck_id FK on matches is only set for constructed decks).
+func insertTestMatchWithDraftSession(t *testing.T, db *sql.DB, matchID string, accountID int64, sessionID, result string, ts time.Time) {
+	t.Helper()
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO matches
+			(id, account_id, event_id, event_name, timestamp, player_wins, opponent_wins,
+			 player_team_id, format, result, draft_session_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		matchID, accountID,
+		"evt-"+matchID, "event-"+matchID,
+		ts, 2, 1, 1,
+		"QuickDraft", result,
+		sessionID,
+	)
+	if err != nil {
+		t.Fatalf("insertTestMatchWithDraftSession %q: %v", matchID, err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM matches WHERE id = $1`, matchID)
+	})
+}
+
+// insertTestDraftDeckWithSession inserts a draft deck row with the given
+// draft_session_id set (the linkage key for the draft path).
+func insertTestDraftDeckWithSession(t *testing.T, db *sql.DB, accountID int64, deckID, sessionID string) {
+	t.Helper()
+	now := time.Now().UTC()
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO decks
+			(id, account_id, name, format, source, draft_session_id,
+			 is_app_created, created_method, created_at, modified_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'draft_completion', $7, $8)`,
+		deckID, accountID, "Draft Deck "+deckID, "QuickDraft", "draft", sessionID, now, now,
+	)
+	if err != nil {
+		t.Fatalf("insertTestDraftDeckWithSession deck=%q session=%q: %v", deckID, sessionID, err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM decks WHERE id = $1`, deckID)
+	})
+}
+
+// TestDecksRepository_ListDecks_DraftSessionMatchLinkage is the primary
+// regression test for #1359.  A draft deck has its matches stored with
+// draft_session_id set (not deck_id).  The old single-JOIN query missed all
+// of them; Shape 3 adds a second LEFT JOIN on matches.draft_session_id =
+// decks.draft_session_id so all 5 draft matches surface.
+func TestDecksRepository_ListDecks_DraftSessionMatchLinkage(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "1359-draft-link")
+	sessionID := fmt.Sprintf("ds-1359-%d", accountID)
+	deckID := fmt.Sprintf("dk-1359-%d", accountID)
+
+	insertTestDraftSession(t, db, sessionID, accountID, "BLB", time.Now().UTC())
+	insertTestDraftDeckWithSession(t, db, accountID, deckID, sessionID)
+
+	now := time.Now().UTC()
+	results := []string{"win", "win", "win", "loss", "loss"}
+	for i, res := range results {
+		insertTestMatchWithDraftSession(t, db,
+			fmt.Sprintf("m-1359-%d-%d", accountID, i),
+			accountID, sessionID, res, now.Add(time.Duration(-i)*time.Minute))
+	}
+
+	rows, err := repo.ListDecks(ctx, accountID, repository.DeckListFilter{})
+	if err != nil {
+		t.Fatalf("ListDecks: %v", err)
+	}
+
+	var found *repository.DeckSummaryRow
+	for i := range rows {
+		if rows[i].ID == deckID {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("draft deck %q not returned by ListDecks", deckID)
+	}
+	if found.MatchesPlayed != 5 {
+		t.Errorf("MatchesPlayed: got %d, want 5 (draft-session path)", found.MatchesPlayed)
+	}
+	if found.MatchesWon != 3 {
+		t.Errorf("MatchesWon: got %d, want 3", found.MatchesWon)
+	}
+}
+
+// TestDecksRepository_GetDeck_DraftSessionMatchLinkage verifies that GetDeck
+// also reports live match counts via the draft_session_id path, not the stale
+// denormalized column.
+func TestDecksRepository_GetDeck_DraftSessionMatchLinkage(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "1359-getdeck-draft")
+	sessionID := fmt.Sprintf("ds-gd1359-%d", accountID)
+	deckID := fmt.Sprintf("dk-gd1359-%d", accountID)
+
+	insertTestDraftSession(t, db, sessionID, accountID, "BLB", time.Now().UTC())
+	insertTestDraftDeckWithSession(t, db, accountID, deckID, sessionID)
+
+	now := time.Now().UTC()
+	for i, res := range []string{"win", "loss", "win"} {
+		insertTestMatchWithDraftSession(t, db,
+			fmt.Sprintf("m-gd1359-%d-%d", accountID, i),
+			accountID, sessionID, res, now.Add(time.Duration(-i)*time.Minute))
+	}
+
+	detail, err := repo.GetDeck(ctx, accountID, deckID)
+	if err != nil {
+		t.Fatalf("GetDeck: %v", err)
+	}
+	if detail == nil {
+		t.Fatal("GetDeck returned nil — deck not found")
+	}
+	if detail.MatchesPlayed != 3 {
+		t.Errorf("MatchesPlayed: got %d, want 3 (draft-session path)", detail.MatchesPlayed)
+	}
+	if detail.MatchesWon != 2 {
+		t.Errorf("MatchesWon: got %d, want 2", detail.MatchesWon)
+	}
+}
+
+// TestDecksRepository_ListDecks_ConstructedDeckMatchLinkageUnchanged is the
+// constructed-deck regression guard: matches linked via deck_id (not
+// draft_session_id) must still count correctly after the Shape 3 rewrite.
+func TestDecksRepository_ListDecks_ConstructedDeckMatchLinkageUnchanged(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "1359-constructed-reg")
+	deckID := insertTestDeck(t, db, accountID, "1359-constructed")
+
+	now := time.Now().UTC()
+	insertTestMatchWithDeck(t, db, fmt.Sprintf("m-c1359-1-%d", accountID), accountID, "Standard", now, deckID, "win")
+	insertTestMatchWithDeck(t, db, fmt.Sprintf("m-c1359-2-%d", accountID), accountID, "Standard", now.Add(-time.Minute), deckID, "loss")
+
+	rows, err := repo.ListDecks(ctx, accountID, repository.DeckListFilter{})
+	if err != nil {
+		t.Fatalf("ListDecks: %v", err)
+	}
+
+	var found *repository.DeckSummaryRow
+	for i := range rows {
+		if rows[i].ID == deckID {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("constructed deck %q not returned by ListDecks", deckID)
+	}
+	if found.MatchesPlayed != 2 {
+		t.Errorf("MatchesPlayed: got %d, want 2 (deck_id path)", found.MatchesPlayed)
+	}
+	if found.MatchesWon != 1 {
+		t.Errorf("MatchesWon: got %d, want 1", found.MatchesWon)
+	}
+}
+
+// TestDecksRepository_ListDecks_NoDoubleCount verifies that a deck whose
+// matches carry BOTH deck_id and draft_session_id (edge case: same row
+// satisfies both join conditions) is not double-counted.  Ray's Shape 3
+// verdict requires COALESCE(deck_id_agg, 0) + COALESCE(draft_session_agg, 0)
+// with MUTUALLY EXCLUSIVE aggregates — this test enforces that invariant.
+func TestDecksRepository_ListDecks_NoDoubleCount(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "1359-no-double-count")
+	sessionID := fmt.Sprintf("ds-ndc1359-%d", accountID)
+	deckID := fmt.Sprintf("dk-ndc1359-%d", accountID)
+	matchID := fmt.Sprintf("m-ndc1359-%d", accountID)
+
+	insertTestDraftSession(t, db, sessionID, accountID, "BLB", time.Now().UTC())
+	insertTestDraftDeckWithSession(t, db, accountID, deckID, sessionID)
+
+	// Insert a match with BOTH deck_id and draft_session_id set.
+	// This is the pathological overlap case — must count as 1, not 2.
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO matches
+			(id, account_id, event_id, event_name, timestamp, player_wins, opponent_wins,
+			 player_team_id, format, result, deck_id, draft_session_id)
+		 VALUES ($1, $2, $3, $4, NOW(), 2, 1, 1, 'QuickDraft', 'win', $5, $6)`,
+		matchID, accountID,
+		"evt-"+matchID, "event-"+matchID,
+		deckID, sessionID,
+	)
+	if err != nil {
+		t.Fatalf("insert dual-path match: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM matches WHERE id = $1`, matchID)
+	})
+
+	rows, err := repo.ListDecks(ctx, accountID, repository.DeckListFilter{})
+	if err != nil {
+		t.Fatalf("ListDecks: %v", err)
+	}
+
+	var found *repository.DeckSummaryRow
+	for i := range rows {
+		if rows[i].ID == deckID {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("deck %q not returned by ListDecks", deckID)
+	}
+	if found.MatchesPlayed != 1 {
+		t.Errorf("MatchesPlayed: got %d, want 1 (no double-count)", found.MatchesPlayed)
+	}
+}
+
+// TestDecksRepository_DeckMatchesAggregate_DraftSessionPath verifies that
+// DeckMatchesAggregate also uses the draft_session_id join path to count
+// draft-linked matches.
+func TestDecksRepository_DeckMatchesAggregate_DraftSessionPath(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDecksRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "1359-dma-draft")
+	sessionID := fmt.Sprintf("ds-dma1359-%d", accountID)
+	deckID := fmt.Sprintf("dk-dma1359-%d", accountID)
+
+	insertTestDraftSession(t, db, sessionID, accountID, "BLB", time.Now().UTC())
+	insertTestDraftDeckWithSession(t, db, accountID, deckID, sessionID)
+
+	now := time.Now().UTC()
+	for i, res := range []string{"win", "win", "loss"} {
+		insertTestMatchWithDraftSession(t, db,
+			fmt.Sprintf("m-dma1359-%d-%d", accountID, i),
+			accountID, sessionID, res, now.Add(time.Duration(-i)*time.Minute))
+	}
+
+	agg, err := repo.DeckMatchesAggregate(ctx, accountID, deckID)
+	if err != nil {
+		t.Fatalf("DeckMatchesAggregate: %v", err)
+	}
+	if agg.TotalMatches != 3 {
+		t.Errorf("TotalMatches: got %d, want 3", agg.TotalMatches)
+	}
+	if agg.MatchesWon != 2 {
+		t.Errorf("MatchesWon: got %d, want 2", agg.MatchesWon)
+	}
+}

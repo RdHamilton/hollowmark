@@ -105,12 +105,18 @@ func (r *DecksRepository) ListDecks(ctx context.Context, accountID int64, f Deck
 		args = append(args, lowerSlice(f.Tags))
 	}
 	// matches_played and matches_won are derived by counting rows in the
-	// matches table keyed on deck_id. The denormalized decks.matches_played
-	// column is never incremented by the projection worker and is always 0;
-	// computing live counts fixes the /decks list returning matchesPlayed:0.
+	// matches table via two independent paths (Shape 3, #1359):
+	//   - mc_deck: constructed path — matches.deck_id = decks.id
+	//   - mc_sess: draft path     — matches.draft_session_id = decks.draft_session_id
+	// Each aggregate is keyed to a distinct join condition so a single deck row
+	// matches at most one LEFT JOIN arm.  COALESCE-SUM merges them without
+	// double-counting.  Both paths are index-covered by idx_matches_draft_session_id
+	// and idx_matches_account_id; no new index is required.
+	// The stale denormalized decks.matches_played column is intentionally ignored
+	// — it is never written by the projection worker.
 	q := `SELECT d.id, d.name, d.format, d.source, d.draft_session_id,
-	             COALESCE(mc.matches_played, 0),
-	             COALESCE(mc.matches_won, 0),
+	             COALESCE(mc_deck.matches_played, 0) + COALESCE(mc_sess.matches_played, 0),
+	             COALESCE(mc_deck.matches_won,   0) + COALESCE(mc_sess.matches_won,   0),
 	             d.games_played, d.games_won,
 	             d.is_app_created, d.created_at, d.modified_at, d.last_played,
 	             d.color_identity, d.description, d.created_method, d.seed_card_id,
@@ -126,9 +132,17 @@ func (r *DecksRepository) ListDecks(ctx context.Context, accountID int64, f Deck
 	                 COUNT(*)                                      AS matches_played,
 	                 COUNT(*) FILTER (WHERE lower(result) = 'win') AS matches_won
 	          FROM matches
-	          WHERE account_id = $1
+	          WHERE account_id = $1 AND deck_id IS NOT NULL
 	          GROUP BY deck_id
-	      ) mc ON mc.deck_id = d.id
+	      ) mc_deck ON mc_deck.deck_id = d.id
+	      LEFT JOIN (
+	          SELECT draft_session_id,
+	                 COUNT(*)                                      AS matches_played,
+	                 COUNT(*) FILTER (WHERE lower(result) = 'win') AS matches_won
+	          FROM matches
+	          WHERE account_id = $1 AND draft_session_id IS NOT NULL AND deck_id IS NULL
+	          GROUP BY draft_session_id
+	      ) mc_sess ON mc_sess.draft_session_id = d.draft_session_id
 	      WHERE ` + strings.Join(clauses, " AND ") + `
 	      ORDER BY d.modified_at DESC
 	      LIMIT 200`
@@ -169,13 +183,36 @@ func (r *DecksRepository) ListDecks(ctx context.Context, accountID int64, f Deck
 
 // GetDeck returns a single deck (with cards + tags) scoped to account.
 // Returns nil when not found / not owned.
+//
+// matches_played and matches_won are computed live using the same two-path
+// Shape 3 logic as ListDecks (#1359): deck_id path for constructed decks,
+// draft_session_id path for draft decks.  The stale denormalized
+// decks.matches_played column is intentionally not read.
 func (r *DecksRepository) GetDeck(ctx context.Context, accountID int64, deckID string) (*DeckDetailRow, error) {
 	const q = `SELECT d.id, d.name, d.format, d.source, d.draft_session_id,
-	                  d.matches_played, d.matches_won, d.games_played, d.games_won,
+	                  COALESCE(mc_deck.matches_played, 0) + COALESCE(mc_sess.matches_played, 0),
+	                  COALESCE(mc_deck.matches_won,   0) + COALESCE(mc_sess.matches_won,   0),
+	                  d.games_played, d.games_won,
 	                  d.is_app_created, d.created_at, d.modified_at, d.last_played,
 	                  d.color_identity, d.description, d.created_method, d.seed_card_id,
 	                  COALESCE((SELECT SUM(quantity) FROM deck_cards WHERE deck_id = d.id), 0) AS card_count
 	           FROM decks d
+	           LEFT JOIN (
+	               SELECT deck_id,
+	                      COUNT(*)                                      AS matches_played,
+	                      COUNT(*) FILTER (WHERE lower(result) = 'win') AS matches_won
+	               FROM matches
+	               WHERE account_id = $1 AND deck_id IS NOT NULL
+	               GROUP BY deck_id
+	           ) mc_deck ON mc_deck.deck_id = d.id
+	           LEFT JOIN (
+	               SELECT draft_session_id,
+	                      COUNT(*)                                      AS matches_played,
+	                      COUNT(*) FILTER (WHERE lower(result) = 'win') AS matches_won
+	               FROM matches
+	               WHERE account_id = $1 AND draft_session_id IS NOT NULL AND deck_id IS NULL
+	               GROUP BY draft_session_id
+	           ) mc_sess ON mc_sess.draft_session_id = d.draft_session_id
 	           WHERE d.account_id = $1 AND d.id = $2
 	           LIMIT 1`
 	var d DeckDetailRow
@@ -206,13 +243,33 @@ func (r *DecksRepository) GetDeck(ctx context.Context, accountID int64, deckID s
 }
 
 // GetDeckByDraftEvent returns the deck associated with a draft event id.
+// Match counts use the draft_session_id path (Shape 3, #1359) — this query
+// is draft-only so only the mc_sess arm will ever fire.
 func (r *DecksRepository) GetDeckByDraftEvent(ctx context.Context, accountID int64, draftEventID string) (*DeckDetailRow, error) {
 	const q = `SELECT d.id, d.name, d.format, d.source, d.draft_session_id,
-	                  d.matches_played, d.matches_won, d.games_played, d.games_won,
+	                  COALESCE(mc_deck.matches_played, 0) + COALESCE(mc_sess.matches_played, 0),
+	                  COALESCE(mc_deck.matches_won,   0) + COALESCE(mc_sess.matches_won,   0),
+	                  d.games_played, d.games_won,
 	                  d.is_app_created, d.created_at, d.modified_at, d.last_played,
 	                  d.color_identity, d.description, d.created_method, d.seed_card_id,
 	                  COALESCE((SELECT SUM(quantity) FROM deck_cards WHERE deck_id = d.id), 0) AS card_count
 	           FROM decks d
+	           LEFT JOIN (
+	               SELECT deck_id,
+	                      COUNT(*)                                      AS matches_played,
+	                      COUNT(*) FILTER (WHERE lower(result) = 'win') AS matches_won
+	               FROM matches
+	               WHERE account_id = $1 AND deck_id IS NOT NULL
+	               GROUP BY deck_id
+	           ) mc_deck ON mc_deck.deck_id = d.id
+	           LEFT JOIN (
+	               SELECT draft_session_id,
+	                      COUNT(*)                                      AS matches_played,
+	                      COUNT(*) FILTER (WHERE lower(result) = 'win') AS matches_won
+	               FROM matches
+	               WHERE account_id = $1 AND draft_session_id IS NOT NULL AND deck_id IS NULL
+	               GROUP BY draft_session_id
+	           ) mc_sess ON mc_sess.draft_session_id = d.draft_session_id
 	           WHERE d.account_id = $1 AND d.draft_session_id = $2
 	           ORDER BY d.modified_at DESC
 	           LIMIT 1`
@@ -620,15 +677,38 @@ type DeckMatchesAggregate struct {
 	GamesWon     int
 }
 
-// DeckMatchesAggregate returns per-deck performance counts joined to
-// matches.
+// DeckMatchesAggregate returns per-deck performance counts joined to matches.
+//
+// Uses the same Shape 3 two-path logic as ListDecks/GetDeck (#1359):
+// constructed decks link via deck_id; draft decks link via draft_session_id.
+// The deck's draft_session_id is resolved with a correlated sub-select so
+// the caller only needs to supply (accountID, deckID).  The deck_id IS NULL
+// guard on the draft path prevents double-counting the pathological overlap
+// case where a match carries both columns.
 func (r *DecksRepository) DeckMatchesAggregate(ctx context.Context, accountID int64, deckID string) (DeckMatchesAggregate, error) {
 	const q = `SELECT COUNT(*),
 	                  COUNT(*) FILTER (WHERE lower(result) = 'win'),
 	                  COALESCE(SUM(player_wins), 0) + COALESCE(SUM(opponent_wins), 0),
 	                  COALESCE(SUM(player_wins), 0)
-	           FROM matches
-	           WHERE account_id = $1 AND deck_id = $2`
+	           FROM (
+	               -- constructed path: match linked via deck_id
+	               SELECT result, player_wins, opponent_wins
+	               FROM matches
+	               WHERE account_id = $1 AND deck_id = $2
+	               UNION ALL
+	               -- draft path: match linked via draft_session_id (deck_id must be NULL
+	               -- to stay mutually exclusive with the constructed path above)
+	               SELECT m.result, m.player_wins, m.opponent_wins
+	               FROM matches m
+	               WHERE m.account_id = $1
+	                 AND m.deck_id IS NULL
+	                 AND m.draft_session_id = (
+	                     SELECT draft_session_id FROM decks
+	                     WHERE id = $2 AND account_id = $1
+	                     LIMIT 1
+	                 )
+	                 AND m.draft_session_id IS NOT NULL
+	           ) combined`
 	var a DeckMatchesAggregate
 	if err := r.db.QueryRowContext(ctx, q, accountID, deckID).Scan(
 		&a.TotalMatches, &a.MatchesWon, &a.GamesPlayed, &a.GamesWon,
