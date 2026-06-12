@@ -358,6 +358,12 @@ export function createRestApiClient(): Record<string, (...args: any[]) => Promis
     SuggestDecks: (draftEventId: string) => decksAdapter.suggestDecks(draftEventId),
 
     // Collection methods
+    // NOTE (#1339 AC5): GetCollection currently has zero call sites in the SPA.
+    // It carries page-1 semantics only — the filter mapping in collectionAdapter.getCollection()
+    // omits page/limit/search/sort fields, so callers would always receive the first page
+    // regardless of the filter passed. If this wrapper is wired to a component in the future,
+    // callers MUST be updated to pass full pagination params via getCollectionWithMetadata()
+    // directly (as Collection.tsx does), or the 5k-truncation regression will recur.
     GetCollection: (filter?: gui.CollectionFilter) => collectionAdapter.getCollection(filter),
     GetCollectionStats: () => collectionAdapter.getCollectionStats(),
     GetSetCompletion: () => collectionAdapter.getSetCompletion(),
