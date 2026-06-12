@@ -279,6 +279,59 @@ VALUES
 ON CONFLICT (account_id, date, format) DO NOTHING;
 
 -- ============================================================================
+-- GAME PLAYS (Layer 5 Mode B — Surface 1: match-detail-timeline.json)
+-- ============================================================================
+-- Seeds per-turn game_plays rows for match-001 games 1 and 3 (the two wins).
+-- These rows make the real BFF GET /api/v1/matches/{id}/plays/timeline return
+-- non-empty data so Mode B can assert game-timeline (not game-timeline-empty).
+--
+-- manifest: match-detail-timeline.json
+--   expected_empty: false, empty_element_must_not_render: true
+--   game_plays_count: 1128 (corpus; CI uses representative fixture rows below)
+--
+-- game_plays.game_id IS NOT NULL is required by PlaysByMatch's WHERE clause
+-- (gameplays_repo.go:73). game_id is resolved via a subquery on games(match_id,
+-- game_number) — no hard-coded BIGSERIAL IDs needed.
+--
+-- sequence_number uniqueness: the unique index idx_game_plays_unique on
+-- (game_id, sequence_number) guards against duplicate inserts.
+-- ON CONFLICT … DO NOTHING is safe for idempotent fixture seeding.
+
+INSERT INTO game_plays (
+    game_id, match_id, turn_number, phase, step,
+    player_type, action_type, card_id, card_name,
+    zone_from, zone_to, life_from, life_to,
+    timestamp, sequence_number
+)
+SELECT
+    g.id,
+    g.match_id,
+    plays.turn_number,
+    plays.phase,
+    plays.step,
+    plays.player_type,
+    plays.action_type,
+    plays.card_id,
+    plays.card_name,
+    plays.zone_from,
+    plays.zone_to,
+    plays.life_from,
+    plays.life_to,
+    plays.timestamp::TIMESTAMPTZ,
+    plays.sequence_number
+FROM games g
+JOIN (VALUES
+    -- match-001 game 1: a few representative play_card and attack actions
+    ('match-001', 1,  1, 'main1', NULL, 'player', 'play_card',  90002, 'Reluctant Role Model', 'hand', 'battlefield', 20, 20, '2024-10-20 18:30:10', 1),
+    ('match-001', 1,  2, 'combat', 'attackers', 'player', 'attack', 90002, 'Reluctant Role Model', 'battlefield', 'battlefield', 20, 20, '2024-10-20 18:30:25', 2),
+    ('match-001', 1,  3, 'main2', NULL, 'player', 'play_card', 90006, 'Vengeful Possession', 'hand', 'battlefield', 20, 20, '2024-10-20 18:30:40', 3),
+    -- match-001 game 3: one action to confirm multi-game timeline works
+    ('match-001', 3,  1, 'main1', NULL, 'player', 'play_card', 90009, 'Oblivion''s Hunger', 'hand', 'graveyard', 20, 18, '2024-10-20 18:32:05', 1)
+) AS plays(match_id, game_number, turn_number, phase, step, player_type, action_type, card_id, card_name, zone_from, zone_to, life_from, life_to, timestamp, sequence_number)
+    ON g.match_id = plays.match_id AND g.game_number = plays.game_number
+ON CONFLICT (game_id, sequence_number) DO NOTHING;
+
+-- ============================================================================
 -- DRAFT MATCH RESULTS (for Layer 5 grade-pill fixture draft-session-sos-003)
 -- ============================================================================
 -- 3W-3L record for draft-session-sos-003 — the source of the B- grade.
