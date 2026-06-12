@@ -17,7 +17,7 @@ import (
 )
 
 // shutdownReason is the tagged reason value for a daemon termination.
-// Values ∈ {sigterm, tray_quit, run_error} per SH-5.
+// Values ∈ {sigterm, tray_quit, run_error, auth_cap} per SH-5 / ADR-083.
 // The run_error variant is extended at the log-line level with ":<err_summary>".
 type shutdownReason string
 
@@ -35,6 +35,11 @@ const (
 	// ReasonRunError is emitted when svc.Run returns a non-nil error. The log
 	// line includes the error summary; the Sentry breadcrumb is LevelError.
 	ReasonRunError shutdownReason = "run_error"
+
+	// ReasonAuthCap is emitted when headless mode exhausts the PKCE auth
+	// attempt cap and exits so launchd KeepAlive=true can respawn the daemon
+	// into auth_paused=true idle state (ADR-083 SH-4).
+	ReasonAuthCap shutdownReason = "auth_cap"
 )
 
 // maxErrSummaryBytes is the maximum byte length of the error string appended to

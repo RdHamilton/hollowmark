@@ -131,6 +131,79 @@ func logAndExitHeadlessKeychain(l *log.Logger, exitFn func(int)) {
 	exitFn(1)
 }
 
+// stopLaunchAgentFn is the injectable wrapper around stopLaunchAgent (ADR-083
+// SH-1). All production call sites call stopLaunchAgentFn() instead of
+// stopLaunchAgent() directly — this allows tests to replace it with a spy to
+// verify that only the tray-Quit path triggers launchctl bootout. The
+// production value is assigned once at package init and never changed at
+// runtime.
+var stopLaunchAgentFn = stopLaunchAgent
+
+// shutdownLogger is the logger used by handleSignalShutdown and
+// trayQuitShutdown to emit reason-tagged shutdown lines (ADR-083 SH-5).
+// Tests replace it to capture output without forking a subprocess.
+var shutdownLogger = log.Default()
+
+// handleSignalShutdown is called by the signal-handler goroutine on
+// SIGTERM/SIGINT. It:
+//  1. Calls logShutdown(ReasonSIGTERM) — structured log line + Sentry breadcrumb (SH-5).
+//  2. Cancels the daemon context so the graceful drain fires (SH-2).
+//  3. Does NOT call stopLaunchAgentFn — launchd KeepAlive=true must respawn
+//     the daemon after a signal-induced stop (SH-1 / SH-2).
+func handleSignalShutdown(cancel context.CancelFunc) {
+	logShutdown(shutdownLogger, ReasonSIGTERM, nil)
+	cancel()
+}
+
+// trayQuitShutdown is called by the tray onQuit callback — the ONLY sanctioned
+// bootout site (ADR-083 SH-1). It:
+//  1. Calls logShutdown(ReasonTrayQuit) — structured log line + Sentry breadcrumb (SH-5).
+//  2. Calls stopLaunchAgentFn() — the one call site that runs launchctl bootout,
+//     fully unregistering the daemon so KeepAlive=true does NOT respawn it.
+//  3. Cancels the daemon context so the graceful drain fires.
+func trayQuitShutdown(cancel context.CancelFunc) {
+	logShutdown(shutdownLogger, ReasonTrayQuit, nil)
+	stopLaunchAgentFn()
+	cancel()
+}
+
+// headlessAuthCapExit is called when headless mode exhausts the PKCE auth
+// attempt cap. It calls logShutdown(ReasonAuthCap) then exits WITHOUT calling
+// stopLaunchAgentFn — the respawned process sees auth_paused=true and idles
+// rather than looping into another bootout (ADR-083 SH-4).
+// exitFn defaults to os.Exit in production; tests supply a no-op.
+func headlessAuthCapExit(exitFn func(int)) {
+	logShutdown(shutdownLogger, ReasonAuthCap, nil)
+	exitFn(1)
+}
+
+// recoverSignalHandler is the deferred panic-recovery helper for the
+// signal-handler goroutine. Unlike recovery.RecoverGoroutine (which swallows
+// the panic after logging), this helper captures the panic via the Sentry
+// capture function AND then re-panics — preventing silent signal loss (Sarah
+// P2 #3256).
+//
+// Usage:
+//
+//	defer recoverSignalHandler(recovery.CaptureFn(sentry.CurrentHub().CaptureException))
+func recoverSignalHandler(capture recovery.CaptureFunc) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	var err error
+	switch v := r.(type) {
+	case error:
+		err = v
+	default:
+		err = fmt.Errorf("%v", v)
+	}
+	if capture != nil {
+		capture(err)
+	}
+	panic(r) // re-panic so the signal is not silently lost
+}
+
 func main() {
 	// ADR-049 Ticket 2: resolve the channel-scoped identity once at startup.
 	// All OS-level identifiers (keychain service, plist label, config dir) are
@@ -314,8 +387,10 @@ func main() {
 						log.Printf("[mtga-daemon] warn: could not persist daemon-state.json after probe reauth: %v", saveErr)
 					}
 					if config.EnvWithFallback("VAULTMTG_DAEMON_HEADLESS", "MTGA_DAEMON_HEADLESS") == "1" {
-						stopLaunchAgent()
-						os.Exit(1)
+						// ADR-083 SH-4: exit WITHOUT bootout so launchd KeepAlive
+						// respawns the daemon. The respawned process sees
+						// auth_paused=true and idles — no respawn loop.
+						headlessAuthCapExit(os.Exit)
 					}
 				} else {
 					log.Printf("[mtga-daemon] startup probe: re-auth succeeded — fresh identity written to daemon.json")
@@ -364,11 +439,10 @@ func main() {
 			}
 
 			if config.EnvWithFallback("VAULTMTG_DAEMON_HEADLESS", "MTGA_DAEMON_HEADLESS") == "1" {
-				// Headless: signal launchd the exit is intentional so KeepAlive=true
-				// does not trigger a rapid respawn loop (ThrottleInterval). os.Exit
-				// bypasses defers, so stopLaunchAgent is called explicitly.
-				stopLaunchAgent()
-				os.Exit(1)
+				// ADR-083 SH-4: exit WITHOUT bootout so launchd KeepAlive respawns
+				// the daemon. The respawned process sees auth_paused=true and idles
+				// rather than entering a bootout→respawn loop.
+				headlessAuthCapExit(os.Exit)
 			}
 			// Non-headless: fall through — the tray onReady goroutine handles the
 			// retry flow via NeedsFirstRunAuth + RetrySetup channel (#2132).
@@ -416,18 +490,14 @@ func main() {
 	log.Printf("[mtga-daemon] starting, cloud_api=%s", cfg.CloudAPIURL)
 
 	// systray.Run must own the main OS thread (macOS Cocoa requirement).
-	// onReady starts the daemon service in a goroutine; onQuit cancels the context.
+	// onReady starts the daemon service in a goroutine; onQuit calls
+	// trayQuitShutdown — the ONLY sanctioned launchctl bootout site (ADR-083 SH-1).
 	app := tray.New(DefaultSPAURL, Version, pkce.OpenBrowser, func() {
-		// Tell launchd the stop was intentional so it does not immediately
-		// respawn the process per KeepAlive=true in the plist. On non-macOS
-		// platforms stopLaunchAgent is a no-op.
-		//
-		// SH-5 (ADR-083): tag the reason before unregistering from launchd.
-		// sentryhook.Flush is deferred in main(); the breadcrumb will be sent
-		// when the deferred flush fires after app.Run returns.
-		logShutdown(log.Default(), ReasonTrayQuit, nil)
-		stopLaunchAgent()
-		cancel()
+		// trayQuitShutdown is the ONLY sanctioned bootout site (ADR-083 SH-1).
+		// It logs reason=tray_quit (SH-5), calls stopLaunchAgentFn(), and cancels
+		// the context. The Sentry breadcrumb is flushed by the deferred
+		// sentryhook.Flush in main() when app.Run returns.
+		trayQuitShutdown(cancel)
 	})
 
 	svc.WithTray(daemon.TrayHooks{
@@ -446,16 +516,23 @@ func main() {
 		NotifyUpdateAvailable: app.NotifyUpdateAvailable,
 	})
 
-	// Handle OS signals: forward SIGTERM/SIGINT to systray so onQuit fires cleanly.
+	// Handle OS signals: on SIGTERM/SIGINT perform a graceful drain and exit
+	// WITHOUT calling launchctl bootout — launchd KeepAlive=true must respawn
+	// the daemon (ADR-083 SH-1 / SH-2). Only an explicit tray-Quit (above) runs
+	// bootout.
+	//
+	// Sarah P2 #3256: use recoverSignalHandler (capture-then-re-panic) instead
+	// of RecoverGoroutine (capture-then-swallow) so a panic in this goroutine is
+	// never silently lost.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		defer recovery.RecoverGoroutine("signal-handler", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
+		defer recoverSignalHandler(recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 		<-sigCh
-		// SH-5 (ADR-083): tag the signal reason before delegating to app.Quit.
-		// The breadcrumb is flushed by the deferred sentryhook.Flush in main().
-		logShutdown(log.Default(), ReasonSIGTERM, nil)
-		app.Quit()
+		// handleSignalShutdown logs reason=sigterm (SH-5), cancels the context
+		// so the graceful drain fires (SH-2), and does NOT call stopLaunchAgentFn
+		// — launchd KeepAlive=true must respawn the daemon (SH-1 / SH-2).
+		handleSignalShutdown(cancel)
 	}()
 
 	// headless is true when the daemon is running without a display / tray
@@ -571,11 +648,11 @@ func main() {
 
 			// ── Normal daemon run loop ─────────────────────────────────────────
 			if err := svc.Run(ctx); err != nil {
-				// SH-5 (ADR-083): tag the exit reason before any shutdown action.
-				// logShutdown does NOT call sentry.Flush — the headless path calls
-				// sentryhook.Flush explicitly below (os.Exit bypasses defers);
+				// SH-5 (ADR-083): structured log line + Sentry breadcrumb at the
+				// run_error exit path. logShutdown does NOT call sentry.Flush —
+				// the headless path flushes explicitly (os.Exit bypasses defers);
 				// the tray path relies on the deferred flush in main().
-				logShutdown(log.Default(), ReasonRunError, err)
+				logShutdown(shutdownLogger, ReasonRunError, err)
 				if headless {
 					// Headless path — flush Sentry before os.Exit so the SH-5
 					// breadcrumb is not dropped. defer in main() does not fire here
@@ -585,8 +662,10 @@ func main() {
 					// supervisor (launchd / systemd) respawns.
 					logAndExitHeadlessKeychain(log.Default(), os.Exit)
 				}
-				log.Printf("[mtga-daemon] fatal: %v", err)
-				app.Quit()
+				// ADR-083 SH-1: svc.Run errors do NOT call bootout.
+				// Cancel the context so the graceful drain fires; launchd
+				// KeepAlive=true will respawn the daemon.
+				cancel()
 			}
 		}()
 	})
