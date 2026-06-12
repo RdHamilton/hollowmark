@@ -46,6 +46,12 @@ type matchStore interface {
 	// not exist yet — the match.completed event may not have been projected
 	// before match.game_ended arrives. The caller must treat 0 as indeterminate.
 	GetPlayerTeamIDForMatch(ctx context.Context, accountID int64, matchID string) (int, error)
+	// GetResultForMatch returns the match-level result ("win", "loss", "draw")
+	// stored on the matches row for (accountID, matchID). Returns ("", nil) when
+	// the match row does not yet exist — the caller must treat "" as indeterminate
+	// and fall back gracefully. Used by deriveGameResult when the GRE payload
+	// carries WinningTeamID=0 (no final-win signal from GRE).
+	GetResultForMatch(ctx context.Context, accountID int64, matchID string) (string, error)
 }
 
 // draftStore writes to the draft_sessions and draft_match_results tables.
@@ -1254,31 +1260,51 @@ func normaliseResult(s string) string {
 // deriveGameResult returns the per-game result ("win" or "loss") for a
 // match.game_ended event.
 //
-// It compares winningTeamID (from the event payload) against the
-// player_team_id stored in the matches row for (accountID, matchID).
-// When the match row does not yet exist (match.completed not yet projected),
-// player_team_id is 0 and the function falls back to "win" — the same value
-// the previous placeholder wrote — and logs a warning. A subsequent replay
-// after match.completed is projected will overwrite the stored value via the
-// ON CONFLICT UPDATE path.
+// GRE payloads always carry WinningTeamID=0 (no final-win signal from GRE).
+// The function therefore always calls GetPlayerTeamIDForMatch first.
+//
+// When winningTeamID is non-zero (future-proofing / non-GRE sources): compare
+// winningTeamID directly against player_team_id to derive the result.
+//
+// When winningTeamID is zero (the common GRE case): call GetResultForMatch to
+// obtain the match-level result stored by the match.completed projector, and
+// return it directly. This cross-reference is the correct derivation path —
+// the GRE payload alone is insufficient.
+//
+// If the match row does not yet exist (match.completed not yet projected),
+// both lookups return zero/empty; the function falls back to "win" and logs a
+// warning. A subsequent replay after match.completed is projected will
+// overwrite the stored value via the ON CONFLICT UPDATE path.
 func deriveGameResult(ctx context.Context, matches matchStore, accountID int64, matchID string, winningTeamID int, eventID int64) string {
-	if winningTeamID <= 0 {
-		log.Printf("[projection] projectGamePlayEvent id=%d: winning_team_id=0 on match.game_ended — cannot derive per-game result, defaulting to 'win'", eventID)
-		return "win"
-	}
-
 	playerTeamID, err := matches.GetPlayerTeamIDForMatch(ctx, accountID, matchID)
 	if err != nil {
 		log.Printf("[projection] projectGamePlayEvent id=%d: GetPlayerTeamIDForMatch: %v — defaulting to 'win'", eventID, err)
 		return "win"
 	}
-	if playerTeamID <= 0 {
-		log.Printf("[projection] projectGamePlayEvent id=%d: match row not yet projected for match_id=%q — defaulting to 'win'", eventID, matchID)
-		return "win"
+
+	if winningTeamID > 0 {
+		// Non-zero winning team from payload: compare directly.
+		if playerTeamID <= 0 {
+			log.Printf("[projection] projectGamePlayEvent id=%d: match row not yet projected for match_id=%q — defaulting to 'win'", eventID, matchID)
+			return "win"
+		}
+		if winningTeamID == playerTeamID {
+			return "win"
+		}
+		return "loss"
 	}
 
-	if winningTeamID == playerTeamID {
+	// winningTeamID==0: GRE has no final-win signal. Cross-reference the
+	// match-level result recorded by the match.completed projector.
+	matchResult, err := matches.GetResultForMatch(ctx, accountID, matchID)
+	if err != nil {
+		log.Printf("[projection] projectGamePlayEvent id=%d: GetResultForMatch: %v — defaulting to 'win'", eventID, err)
 		return "win"
 	}
-	return "loss"
+	if matchResult == "win" || matchResult == "loss" {
+		return matchResult
+	}
+
+	log.Printf("[projection] projectGamePlayEvent id=%d: match row not yet projected for match_id=%q (winning_team_id=0) — defaulting to 'win'", eventID, matchID)
+	return "win"
 }

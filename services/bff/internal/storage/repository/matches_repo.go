@@ -376,6 +376,22 @@ func (r *MatchesRepository) GetPlayerTeamIDForMatch(ctx context.Context, account
 	return teamID, nil
 }
 
+// GetResultForMatch returns the match-level result ("win", "loss", "draw") stored
+// on the matches row for (accountID, matchID). Returns ("", nil) when the match
+// row does not yet exist — the caller must treat "" as indeterminate.
+// The accountID filter is the cross-tenant security boundary.
+func (r *MatchesRepository) GetResultForMatch(ctx context.Context, accountID int64, matchID string) (string, error) {
+	const q = `SELECT result FROM matches WHERE account_id = $1 AND id = $2`
+	var result string
+	if err := r.db.QueryRowContext(ctx, q, accountID, matchID).Scan(&result); err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", fmt.Errorf("GetResultForMatch account_id=%d match_id=%q: %w", accountID, matchID, err)
+	}
+	return result, nil
+}
+
 // sorted alphabetically. Used by the SPA's format-filter dropdown.
 func (r *MatchesRepository) DistinctFormats(ctx context.Context, accountID int64) ([]string, error) {
 	const q = `SELECT DISTINCT format
