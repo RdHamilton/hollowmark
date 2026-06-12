@@ -749,6 +749,15 @@ func main() {
 		log.Println("INTERNAL_SVC_SECRET not set — /internal/v1/* routes fail closed (development only).")
 	}
 
+	// Refuse to start if the ingest handler is wired but its auth middleware is
+	// not.  An unauthenticated ingest endpoint would allow event mis-attribution
+	// across accounts (ticket #1332, root-cause: duplicate-accounts P0).
+	// DaemonAPIKeyAuthMiddl is only non-nil when sqlDB is available, so this
+	// guard catches startup misconfigurations before any request is served.
+	if daemonAPIKeyAuthMiddl == nil {
+		log.Fatal("FATAL: DaemonAPIKeyAuthMiddl is nil — refusing to start without ingest auth guard (ticket #1332)")
+	}
+
 	r := BuildRouter(cfg, RouterDeps{
 		Broker:                            broker,
 		IngestHandler:                     ingestHandler,
@@ -1732,15 +1741,20 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 		}
 	}
 
-	// POST /api/v1/ingest/events — daemon api_key auth; falls back to unguarded
-	// in dev mode. Uses DaemonAPIKeyAuth (not the legacy APIKeyAuth) because the
+	// POST /api/v1/ingest/events — daemon api_key auth required.
+	// Uses DaemonAPIKeyAuth (not the legacy APIKeyAuth) because the
 	// PKCE-minted daemon api_key lives in daemon_api_keys, not api_keys.
 	// Mounted under /api/v1/ so nginx (which only forwards /api/v1/*) can reach it.
+	//
+	// Route is omitted entirely when DaemonAPIKeyAuthMiddl is nil — an
+	// unauthenticated ingest endpoint is never acceptable (ticket #1332).
+	// Startup validation in main() fatals before BuildRouter is reached, so
+	// the nil branch here is a defence-in-depth guard, not a runtime path.
 	if deps.IngestHandler != nil {
 		if deps.DaemonAPIKeyAuthMiddl != nil {
 			r.With(deps.DaemonAPIKeyAuthMiddl).Post("/api/v1/ingest/events", deps.IngestHandler.IngestEvent)
 		} else {
-			r.Post("/api/v1/ingest/events", deps.IngestHandler.IngestEvent)
+			log.Println("WARN: POST /api/v1/ingest/events disabled — DaemonAPIKeyAuthMiddl not initialised")
 		}
 	}
 
