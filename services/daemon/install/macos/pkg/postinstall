@@ -419,6 +419,48 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 6b. launchd registration liveness check (ADR-083 SH-2 / tickets#1355).
+#
+#     Verify that launchd has actually registered the service and spawned a
+#     process after the bootstrap call above.  The check uses:
+#       launchctl print gui/<uid>/<label>
+#     and looks for a "pid" field in the output — a non-zero PID means launchd
+#     has started the binary.  This is distinct from §7's HTTP /health poll:
+#     §6b confirms launchd registration (supervisor level); §7 confirms the
+#     daemon's HTTP listener is up (application level).
+#
+#     Retry policy (AC2):
+#       Attempt 1: run immediately after bootstrap.
+#       Attempt 2 (single retry): wait LAUNCHD_LIVENESS_RETRY_DELAY seconds.
+#       After both fail: log WARNING but exit 0 — a non-zero exit rolls back
+#       the entire .pkg install, which is worse than a slow start.
+#       RunAtLoad=true guarantees the daemon starts at next login.
+#
+#     This check is idempotent: re-running postinstall is safe because the
+#     print is read-only and the retry delay is short (≤2s total).
+# ---------------------------------------------------------------------------
+LAUNCHD_LIVENESS_RETRY_DELAY=2
+
+_check_launchd_pid() {
+  launchctl print "gui/${REAL_UID}/${PLIST_LABEL}" 2>/dev/null | grep -q 'pid'
+}
+
+echo "[postinstall] verifying launchd registration (ADR-083 §6b)..."
+if _check_launchd_pid; then
+  echo "[postinstall] launchd service live: ${PLIST_LABEL} registered with a running PID"
+else
+  echo "[postinstall] launchd PID not yet visible — retrying after ${LAUNCHD_LIVENESS_RETRY_DELAY}s..."
+  sleep "${LAUNCHD_LIVENESS_RETRY_DELAY}"
+  if _check_launchd_pid; then
+    echo "[postinstall] launchd service live (retry): ${PLIST_LABEL} registered with a running PID"
+  else
+    echo "[postinstall] WARNING: launchd did not report a PID for ${PLIST_LABEL} after bootstrap + retry." >&2
+    echo "[postinstall] WARNING: The binary and LaunchAgent are installed. The daemon will start at next login (RunAtLoad=true)." >&2
+    # Non-fatal — do NOT exit 1 here (would roll back the entire .pkg install).
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 7. Post-install process liveness check — poll /health until daemon is up.
 #
 #    Success criterion (fix for vault-mtg-tickets#334):
