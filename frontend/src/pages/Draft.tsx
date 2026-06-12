@@ -17,7 +17,7 @@ async function getDraftPacks(sessionId: string): Promise<models.DraftPackSession
   return drafts.getDraftPool(sessionId) as unknown as Promise<models.DraftPackSession[]>;
 }
 
-import { EventsOn } from '@/services/websocketClient';
+import { useReadModelUpdates } from '@/hooks/useReadModelUpdates';
 import { useDraftEventStream } from '@/hooks/useDraftEventStream';
 import TierList from '../components/TierList';
 import { DraftGrade } from '../components/DraftGrade';
@@ -111,6 +111,9 @@ const Draft: React.FC = () => {
     // Refs for deduplication and debouncing
     const loadingRef = useRef<boolean>(false);
     const debounceTimerRef = useRef<number | null>(null);
+    // Stable ref to debouncedLoadActiveDraft so useReadModelUpdates can call it
+    // before the function is declared in the component body.
+    const debouncedLoadActiveDraftRef = useRef<() => void>(() => { /* populated below */ });
 
     useEffect(() => {
         // Load active draft immediately
@@ -119,15 +122,7 @@ const Draft: React.FC = () => {
         // 2. Session status management should be handled by the daemon, not the frontend
         loadActiveDraft();
 
-        // Listen for draft updates from backend
-        const unsubscribe = EventsOn('draft:updated', () => {
-            // Debounce draft:updated events to prevent rapid-fire database queries
-            console.log('[Draft.tsx] Received draft:updated event, debouncing...');
-            debouncedLoadActiveDraft();
-        });
-
         return () => {
-            if (unsubscribe) unsubscribe();
             // Clear debounce timer on cleanup
             if (debounceTimerRef.current) {
                 clearTimeout(debounceTimerRef.current);
@@ -135,6 +130,13 @@ const Draft: React.FC = () => {
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps -- loadActiveDraft and debouncedLoadActiveDraft are stable
     }, []);
+
+    // Rewired per ADR-084: readmodel.updated drafts domain replaces the dead
+    // draft:updated colon-vocabulary listener (no server emitter since Wails→REST).
+    // Uses a ref so the hook is called before debouncedLoadActiveDraft is declared.
+    useReadModelUpdates({
+        onDrafts: () => debouncedLoadActiveDraftRef.current(),
+    });
 
     // SSE implicit-start trigger (#1349): when a draft.pack or draft.started event arrives,
     // call debouncedLoadActiveDraft() so Draft.tsx transitions from Draft History → Case B/C
@@ -399,6 +401,9 @@ const Draft: React.FC = () => {
             loadActiveDraft();
         }, 500);
     };
+    // Keep the ref in sync so the useReadModelUpdates callback stays current
+    // without needing to re-register the subscription on every render.
+    debouncedLoadActiveDraftRef.current = debouncedLoadActiveDraft;
 
     const handleCardHover = (card: models.SetCard | null) => {
         setSelectedCard(card);

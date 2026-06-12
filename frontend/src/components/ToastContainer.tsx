@@ -1,9 +1,15 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { EventsOn } from '@/services/websocketClient';
 import Toast from './Toast';
 import { getReplayState, subscribeToReplayState } from '../App';
 import { useSettings } from '../hooks/useSettings';
-import { gui } from '@/types/models';
+
+// Dead colon-vocabulary listeners (stats:updated, rank:updated, quest:updated,
+// draft:updated, collection:updated) deleted per ADR-084 §G1 sweep — they had
+// zero server-side emitters since the Wails→REST migration.
+//
+// Toast reintroduction on readmodel.updated requires a Prof PLAYER_VERDICT first
+// (ADR-084 §Risks, AC8 of #1369). This component retains the toast infrastructure
+// (addToast, showToast) so it is ready when that gate is passed.
 
 interface ToastData {
   id: number;
@@ -15,6 +21,8 @@ let toastIdCounter = 0;
 
 const ToastContainer = () => {
   const [toasts, setToasts] = useState<ToastData[]>([]);
+  // isReplayActiveRef and draftUpdateCountRef/Timer are retained because the
+  // toast infrastructure will re-use them once Prof's gate is passed.
   const isReplayActiveRef = useRef(getReplayState().isActive);
   const draftUpdateCountRef = useRef(0);
   const draftUpdateTimerRef = useRef<number | null>(null);
@@ -65,133 +73,6 @@ const ToastContainer = () => {
         addToast(message, type);
       }
     });
-  }, [addToast]);
-
-  useEffect(() => {
-    // Listen for stats:updated events from backend
-    const unsubscribeStats = EventsOn('stats:updated', (data: unknown) => {
-      if (!showNotificationsRef.current) return;
-      const eventData = gui.StatsUpdatedEvent.createFrom(data);
-      const matches = eventData.matches || 0;
-      const games = eventData.games || 0;
-
-      if (matches > 0) {
-        addToast(
-          `New match detected! ${matches} match${matches > 1 ? 'es' : ''}, ${games} game${games > 1 ? 's' : ''} - Stats updated`,
-          'success'
-        );
-      }
-    });
-
-    // Listen for rank:updated events
-    const unsubscribeRank = EventsOn('rank:updated', (data: unknown) => {
-      if (!showNotificationsRef.current) return;
-      const eventData = gui.RankUpdatedEvent.createFrom(data);
-      const format = eventData.format || 'Ranked';
-      const tier = eventData.tier || '';
-      const step = eventData.step || '';
-
-      if (tier && step) {
-        addToast(
-          `Rank updated: ${format} ${tier} ${step}`,
-          'info'
-        );
-      }
-    });
-
-    // Listen for quest update events
-    const unsubscribeQuest = EventsOn('quest:updated', (data: unknown) => {
-      if (!showNotificationsRef.current) return;
-      const eventData = gui.QuestUpdatedEvent.createFrom(data);
-      const completed = eventData.completed || 0;
-      const count = eventData.count || 0;
-
-      if (completed > 0) {
-        addToast(
-          `Quest${completed > 1 ? 's' : ''} completed! (${completed})`,
-          'success'
-        );
-      } else if (count > 0) {
-        addToast(
-          `Quest${count > 1 ? 's' : ''} updated (${count})`,
-          'info'
-        );
-      }
-    });
-
-    // Listen for draft update events with spam protection during replay
-    const unsubscribeDraft = EventsOn('draft:updated', (data: unknown) => {
-      const eventData = gui.DraftUpdatedEvent.createFrom(data);
-      const count = eventData.count || 0;
-      const picks = eventData.picks || 0;
-
-      // During replay, batch draft updates to prevent spam
-      if (isReplayActiveRef.current) {
-        draftUpdateCountRef.current++;
-
-        // Clear existing timer
-        if (draftUpdateTimerRef.current) {
-          clearTimeout(draftUpdateTimerRef.current);
-        }
-
-        // Show batched toast after 2 seconds of no new updates
-        draftUpdateTimerRef.current = window.setTimeout(() => {
-          if (draftUpdateCountRef.current > 0 && showNotificationsRef.current) {
-            addToast(
-              `Replay: ${draftUpdateCountRef.current} draft update${draftUpdateCountRef.current !== 1 ? 's' : ''} processed`,
-              'info'
-            );
-            draftUpdateCountRef.current = 0;
-          }
-        }, 2000);
-        return;
-      }
-
-      // Normal mode: show toast immediately (if notifications enabled)
-      if (count > 0 && showNotificationsRef.current) {
-        addToast(
-          `Draft session${count > 1 ? 's' : ''} stored! (${count} session${count > 1 ? 's' : ''}, ${picks} pick${picks !== 1 ? 's' : ''})`,
-          'success'
-        );
-      }
-    });
-
-    // Listen for collection:updated events
-    const unsubscribeCollection = EventsOn('collection:updated', (data: unknown) => {
-      if (!showNotificationsRef.current) return;
-
-      const eventData = gui.CollectionUpdatedEvent.createFrom(data);
-      const newCards = eventData.newCards || 0;
-      const cardsAdded = eventData.cardsAdded || 0;
-
-      // Skip during replay to avoid spam
-      if (isReplayActiveRef.current) {
-        return;
-      }
-
-      if (newCards > 0) {
-        addToast(
-          `Collection updated! ${newCards} new card${newCards !== 1 ? 's' : ''} discovered (${cardsAdded} total added)`,
-          'success'
-        );
-      } else if (cardsAdded > 0) {
-        addToast(
-          `Collection updated! ${cardsAdded} card${cardsAdded !== 1 ? 's' : ''} added`,
-          'info'
-        );
-      }
-    });
-
-    return () => {
-      if (unsubscribeStats) unsubscribeStats();
-      if (unsubscribeRank) unsubscribeRank();
-      if (unsubscribeQuest) unsubscribeQuest();
-      if (unsubscribeDraft) unsubscribeDraft();
-      if (unsubscribeCollection) unsubscribeCollection();
-      if (draftUpdateTimerRef.current) {
-        clearTimeout(draftUpdateTimerRef.current);
-      }
-    };
   }, [addToast]);
 
   return (

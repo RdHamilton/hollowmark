@@ -50,20 +50,10 @@ vi.mock('../components/MatchDetailsModal', () => ({
   ),
 }));
 
-// Track registered SSE event callbacks so tests can fire them manually.
-// The correct event name is 'match.completed' (not the legacy 'stats:updated').
-const registeredCallbacks: Record<string, (() => void) | null> = {
-  'match.completed': null,
-};
-
-vi.mock('@/services/websocketClient', () => ({
-  EventsOn: vi.fn((event: string, cb: () => void) => {
-    registeredCallbacks[event] = cb;
-    return () => {
-      registeredCallbacks[event] = null;
-    };
-  }),
-}));
+// BffMatchHistory now uses useReadModelUpdates (ADR-084) instead of EventsOn.
+// The global setup.ts mock for @/services/websocketClient exposes mockEventEmitter,
+// so we import it to simulate readmodel.updated frames in the SSE tests below.
+import { mockEventEmitter } from '@/test/mocks/websocketMock';
 
 // Import after mock so we get the vi.fn() version.
 import { getMatchHistory } from '@/services/api/bffMatchHistory';
@@ -134,7 +124,7 @@ function makeResponse(overrides: Partial<MatchHistoryResponse> = {}): MatchHisto
 describe('BffMatchHistory', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    registeredCallbacks['match.completed'] = null;
+    mockEventEmitter.clear();
   });
 
   // --------------------------------------------------------------------------
@@ -539,32 +529,16 @@ describe('BffMatchHistory', () => {
   });
 
   // --------------------------------------------------------------------------
-  // SSE refresh — match.completed (secondary fix, vmt-t#625)
+  // SSE refresh — readmodel.updated matches domain (ADR-084 rewire)
   //
-  // The BFF broker publishes contract.DaemonEvent.Type names. The correct event
-  // name is "match.completed". The old code subscribed to "stats:updated" which
-  // the BFF never emits — meaning the list never auto-refreshed.
+  // BffMatchHistory now subscribes to readmodel.updated (matches domain) instead
+  // of the legacy match.completed dot-vocabulary that raced the projection layer
+  // (ADR-084 §Context root cause 1). The new subscription fires only after the
+  // projection worker has committed the read model — the race is closed.
   // --------------------------------------------------------------------------
 
-  describe('SSE refresh on match.completed', () => {
-    it('registers listener on the match.completed event (not stats:updated)', async () => {
-      mockGetMatchHistory.mockResolvedValue(makeResponse());
-
-      render(<BffMatchHistory />);
-
-      await waitFor(() => {
-        expect(mockGetMatchHistory).toHaveBeenCalledTimes(1);
-      });
-
-      // The component must have registered a callback for 'match.completed'.
-      // registeredCallbacks is populated by the EventsOn mock at the top of this file.
-      expect(registeredCallbacks['match.completed']).not.toBeNull();
-      // Must NOT subscribe to 'stats:updated' — that event is never emitted by the BFF.
-      expect(registeredCallbacks['stats:updated']).toBeUndefined();
-    });
-
-    it('re-fetches matches when match.completed fires', async () => {
-      registeredCallbacks['match.completed'] = null;
+  describe('SSE refresh on readmodel.updated matches domain (ADR-084)', () => {
+    it('re-fetches matches when readmodel.updated fires for the matches domain', async () => {
       mockGetMatchHistory.mockResolvedValue(makeResponse({ data: [], has_more: false }));
 
       render(<BffMatchHistory />);
@@ -573,10 +547,7 @@ describe('BffMatchHistory', () => {
         expect(mockGetMatchHistory).toHaveBeenCalledTimes(1);
       });
 
-      // The component must have registered a callback for match.completed.
-      expect(registeredCallbacks['match.completed']).not.toBeNull();
-
-      // Simulate the BFF emitting a match.completed event after a new match.
+      // Simulate the BFF emitting readmodel.updated after projection completes.
       mockGetMatchHistory.mockResolvedValue(
         makeResponse({
           data: [makeItem({ id: 'new-match', format: 'Standard', result: 'win' })],
@@ -585,14 +556,31 @@ describe('BffMatchHistory', () => {
       );
 
       await act(async () => {
-        registeredCallbacks['match.completed']!();
+        mockEventEmitter.emit('readmodel.updated', { domains: ['matches'] });
       });
 
       await waitFor(() => {
         expect(mockGetMatchHistory).toHaveBeenCalledTimes(2);
-        // The refreshed data must be visible.
         expect(screen.getByTestId('match-history-table')).toBeInTheDocument();
       });
+    });
+
+    it('does NOT re-fetch when readmodel.updated fires for an unrelated domain', async () => {
+      mockGetMatchHistory.mockResolvedValue(makeResponse({ data: [], has_more: false }));
+
+      render(<BffMatchHistory />);
+
+      await waitFor(() => {
+        expect(mockGetMatchHistory).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        mockEventEmitter.emit('readmodel.updated', { domains: ['quests'] });
+      });
+
+      // Brief settle — should not have triggered a second fetch.
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(mockGetMatchHistory).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -203,6 +203,7 @@ describe('Draft Component', () => {
       mockDrafts.getDraftPool.mockResolvedValue(packs);
       mockCards.getSetCards.mockResolvedValue(setCards);
       mockCards.getCardRatings.mockResolvedValue(ratings);
+      mockDrafts.getDraftDeckMetrics.mockResolvedValue(createMockDeckMetrics());
 
       render(<Draft />);
 
@@ -252,8 +253,8 @@ describe('Draft Component', () => {
       mockDrafts.getDraftPicks.mockResolvedValue([initialPick, secondPick]);
       mockDrafts.getDraftDeckMetrics.mockResolvedValue(mockMetrics);
 
-      // Fire draft:updated event
-      mockEventEmitter.emit('draft:updated');
+      // Fire readmodel.updated event for the drafts domain (ADR-084)
+      mockEventEmitter.emit('readmodel.updated', { domains: ['drafts'] });
 
       await waitFor(() => {
         expect(screen.getByText(/Picks: 2\/45/i)).toBeInTheDocument();
@@ -937,8 +938,8 @@ describe('Draft Component', () => {
       const newPick = createMockDraftPick({ CardID: '12345' });
       mockDrafts.getDraftPicks.mockResolvedValue([newPick]);
 
-      // Fire draft:updated event — this triggers debouncedLoadActiveDraft
-      mockEventEmitter.emit('draft:updated');
+      // Fire readmodel.updated event for the drafts domain (ADR-084) — triggers debouncedLoadActiveDraft
+      mockEventEmitter.emit('readmodel.updated', { domains: ['drafts'] });
 
       // Case B inline banner should disappear; Draft Assistant heading must still be present
       await waitFor(() => {

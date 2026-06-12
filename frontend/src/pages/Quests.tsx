@@ -3,8 +3,8 @@ import { ClipboardDocumentIcon ,
   DocumentTextIcon,
   MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
-import { EventsOn } from '@/services/websocketClient';
 import { quests, system } from '@/services/api';
+import { useReadModelUpdates } from '@/hooks/useReadModelUpdates';
 import { models } from '@/types/models';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Tooltip from '../components/Tooltip';
@@ -140,24 +140,11 @@ const Quests = () => {
     loadQuestData();
   }, [loadQuestData]);
 
-  // Listen for real-time updates. Subscribe once on mount and reuse the shared
-  // loader; the in-flight guard collapses event bursts into a single reload.
-  useEffect(() => {
-    const unsubscribeStats = EventsOn('stats:updated', () => {
-      console.log('Stats updated event received - reloading quest data');
-      loadQuestData();
-    });
-
-    const unsubscribeQuests = EventsOn('quest:updated', () => {
-      console.log('Quest updated event received - reloading quest data');
-      loadQuestData();
-    });
-
-    return () => {
-      if (unsubscribeStats) unsubscribeStats();
-      if (unsubscribeQuests) unsubscribeQuests();
-    };
-  }, [loadQuestData]);
+  // Rewired per ADR-084: readmodel.updated quests domain replaces the dead
+  // stats:updated and quest:updated colon-vocabulary listeners (no server emitters).
+  useReadModelUpdates({
+    onQuests: loadQuestData,
+  });
 
   const formatDate = (timestamp: unknown) => {
     return new Date(String(timestamp)).toLocaleDateString();

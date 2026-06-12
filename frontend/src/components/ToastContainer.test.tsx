@@ -1,3 +1,18 @@
+/**
+ * ToastContainer component tests — updated for ADR-084.
+ *
+ * The dead colon-vocabulary SSE listeners (stats:updated, rank:updated,
+ * quest:updated, draft:updated, collection:updated) were removed per ADR-084 §G1.
+ * Toast reintroduction on readmodel.updated requires a Prof PLAYER_VERDICT first
+ * (AC8 of #1369).
+ *
+ * This file tests:
+ *  1. The showToast imperative API still works for all toast types.
+ *  2. Dead event vocabulary no longer triggers toasts (regression guard).
+ *  3. The component mounts/unmounts without errors.
+ *  4. Notification preference (showNotifications=false) suppresses success/info toasts.
+ */
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { render } from '../test/utils/testUtils';
@@ -10,7 +25,6 @@ vi.mock('../hooks/useSettings', () => ({
   useSettings: () => mockUseSettings(),
 }));
 
-// Mock the getReplayState and subscribeToReplayState functions
 const mockReplayState = {
   isActive: false,
   isPaused: false,
@@ -45,386 +59,50 @@ describe('ToastContainer Component', () => {
     mockSubscribers.length = 0;
     mockReplayState.isActive = false;
     mockReplayState.isPaused = false;
-    // Default: notifications enabled.
     mockUseSettings.mockReturnValue({ showNotifications: true });
   });
 
-  describe('Toast Display', () => {
+  describe('Initial state', () => {
     it('should not display toasts initially', () => {
       render(<ToastContainer />);
-
-      expect(screen.queryByText(/New match detected/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/match detected/i)).not.toBeInTheDocument();
     });
 
-    it('should display toast when stats:updated event fires', async () => {
+    it('renders the toast container div', () => {
       render(<ToastContainer />);
-
-      mockEventEmitter.emit('stats:updated', { matches: 1, games: 2 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/New match detected! 1 match, 2 games/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should display plural form for multiple matches', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('stats:updated', { matches: 3, games: 5 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/3 matches, 5 games/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should display rank update toast', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('rank:updated', {
-        format: 'Standard',
-        tier: 'Gold',
-        step: '3',
-      });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Rank updated: Standard Gold 3/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should display quest completed toast', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('quest:updated', { completed: 1, count: 1 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Quest completed!/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should display multiple quests completed toast', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('quest:updated', { completed: 3, count: 3 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Quests completed! \(3\)/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should display quest updated toast when not completed', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('quest:updated', { completed: 0, count: 2 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Quests updated \(2\)/i)).toBeInTheDocument();
-      });
-    });
-  });
-
-  describe('Collection Updates', () => {
-    it('should display collection update toast with new cards', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('collection:updated', { newCards: 5, cardsAdded: 10 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Collection updated! 5 new cards discovered \(10 total added\)/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should display singular form for single new card', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('collection:updated', { newCards: 1, cardsAdded: 1 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Collection updated! 1 new card discovered \(1 total added\)/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should display info toast when cards added but no new cards', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('collection:updated', { newCards: 0, cardsAdded: 3 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Collection updated! 3 cards added/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should display singular form for single card added', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('collection:updated', { newCards: 0, cardsAdded: 1 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Collection updated! 1 card added/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should not display toast when no cards added', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('collection:updated', { newCards: 0, cardsAdded: 0 });
-
-      // Wait a bit to ensure no toast appears
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      expect(screen.queryByText(/Collection updated/i)).not.toBeInTheDocument();
-    });
-
-    it('should skip collection updates during replay mode', async () => {
-      mockReplayState.isActive = true;
-
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('collection:updated', { newCards: 5, cardsAdded: 10 });
-
-      // Wait a bit to ensure no toast appears
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      expect(screen.queryByText(/Collection updated/i)).not.toBeInTheDocument();
-    });
-
-    it('should show collection updates after replay stops', async () => {
-      mockReplayState.isActive = true;
-
-      render(<ToastContainer />);
-
-      // Stop replay
-      mockReplayState.isActive = false;
-      mockSubscribers.forEach(sub => sub(mockReplayState));
-
-      // Now emit collection update
-      mockEventEmitter.emit('collection:updated', { newCards: 2, cardsAdded: 5 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Collection updated! 2 new cards discovered/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should display success toast for new cards', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('collection:updated', { newCards: 3, cardsAdded: 3 });
-
-      await waitFor(() => {
-        const toast = screen.getByText(/Collection updated! 3 new cards/i).closest('.toast');
-        expect(toast).toHaveClass('toast-success');
-      });
-    });
-
-    it('should display info toast for cards added without new cards', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('collection:updated', { newCards: 0, cardsAdded: 5 });
-
-      await waitFor(() => {
-        const toast = screen.getByText(/Collection updated! 5 cards added/i).closest('.toast');
-        expect(toast).toHaveClass('toast-info');
-      });
-    });
-  });
-
-  describe('Draft Updates', () => {
-    it('should display draft update toast in normal mode', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('draft:updated', { count: 1, picks: 5 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Draft session stored! \(1 session, 5 picks\)/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should display plural form for multiple draft sessions', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('draft:updated', { count: 2, picks: 10 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Draft sessions stored! \(2 sessions, 10 picks\)/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should batch draft updates during replay mode', async () => {
-      mockReplayState.isActive = true;
-
-      render(<ToastContainer />);
-
-      // Emit multiple draft updates
-      mockEventEmitter.emit('draft:updated', { count: 1, picks: 1 });
-      mockEventEmitter.emit('draft:updated', { count: 1, picks: 1 });
-      mockEventEmitter.emit('draft:updated', { count: 1, picks: 1 });
-
-      // Should not show individual toasts
-      expect(screen.queryByText(/Draft session stored!/i)).not.toBeInTheDocument();
-
-      // Wait for batched toast
-      await waitFor(
-        () => {
-          expect(screen.getByText(/Replay: 3 draft updates processed/i)).toBeInTheDocument();
-        },
-        { timeout: 3000 }
-      );
-    });
-
-    it('should clear draft update count when replay stops', async () => {
-      mockReplayState.isActive = true;
-
-      render(<ToastContainer />);
-
-      // Emit draft updates during replay
-      mockEventEmitter.emit('draft:updated', { count: 1, picks: 1 });
-      mockEventEmitter.emit('draft:updated', { count: 1, picks: 1 });
-
-      // Stop replay
-      mockReplayState.isActive = false;
-      mockSubscribers.forEach(sub => sub(mockReplayState));
-
-      // New update should show immediately
-      mockEventEmitter.emit('draft:updated', { count: 1, picks: 5 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Draft session stored! \(1 session, 5 picks\)/i)).toBeInTheDocument();
-      });
-    });
-  });
-
-  describe('Toast Types', () => {
-    it('should display success toast for match updates', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('stats:updated', { matches: 1, games: 1 });
-
-      await waitFor(() => {
-        const toast = screen.getByText(/New match detected/i).closest('.toast');
-        expect(toast).toHaveClass('toast-success');
-      });
-    });
-
-    it('should display info toast for rank updates', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('rank:updated', {
-        format: 'Standard',
-        tier: 'Gold',
-        step: '3',
-      });
-
-      await waitFor(() => {
-        const toast = screen.getByText(/Rank updated/i).closest('.toast');
-        expect(toast).toHaveClass('toast-info');
-      });
-    });
-  });
-
-  describe('Toast Auto-removal', () => {
-    it('should display multiple toasts simultaneously', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('stats:updated', { matches: 1, games: 1 });
-
-      await waitFor(() => {
-        expect(screen.getByText(/New match detected/i)).toBeInTheDocument();
-      });
-
-      mockEventEmitter.emit('rank:updated', {
-        format: 'Standard',
-        tier: 'Gold',
-        step: '3',
-      });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Rank updated/i)).toBeInTheDocument();
-      });
-
-      // Both toasts should be visible
-      expect(screen.getByText(/New match detected/i)).toBeInTheDocument();
-      expect(screen.getByText(/Rank updated/i)).toBeInTheDocument();
-    });
-  });
-
-  describe('Toast Position', () => {
-    it('should render toasts in a container', () => {
-      render(<ToastContainer />);
-
-      // Container should exist
       const container = document.querySelector('[style*="position: fixed"]');
       expect(container).toBeInTheDocument();
     });
   });
 
-  describe('Cleanup', () => {
-    it('should not crash on unmount', () => {
-      const { unmount } = render(<ToastContainer />);
-
-      // Should unmount without errors
-      expect(() => unmount()).not.toThrow();
-    });
-  });
-
-  describe('showNotifications=false (AC1/AC2 #2024)', () => {
-    beforeEach(() => {
-      mockUseSettings.mockReturnValue({ showNotifications: false });
-    });
-
-    it('should suppress stats:updated success toasts when notifications disabled', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('stats:updated', { matches: 1, games: 2 });
-
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      expect(screen.queryByText(/New match detected/i)).not.toBeInTheDocument();
-    });
-
-    it('should suppress rank:updated info toasts when notifications disabled', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('rank:updated', { format: 'Standard', tier: 'Gold', step: '3' });
-
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      expect(screen.queryByText(/Rank updated/i)).not.toBeInTheDocument();
-    });
-
-    it('should suppress quest:updated toasts when notifications disabled', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('quest:updated', { completed: 1, count: 1 });
-
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      expect(screen.queryByText(/Quest completed/i)).not.toBeInTheDocument();
-    });
-
-    it('should suppress collection:updated toasts when notifications disabled', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('collection:updated', { newCards: 5, cardsAdded: 10 });
-
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      expect(screen.queryByText(/Collection updated/i)).not.toBeInTheDocument();
-    });
-
-    it('should suppress draft:updated toasts when notifications disabled', async () => {
-      render(<ToastContainer />);
-
-      mockEventEmitter.emit('draft:updated', { count: 1, picks: 5 });
-
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      expect(screen.queryByText(/Draft session stored/i)).not.toBeInTheDocument();
-    });
-
-    it('should still show error toasts from showToast when notifications disabled', async () => {
+  describe('showToast imperative API (primary toast mechanism)', () => {
+    it('displays a success toast via showToast.show', async () => {
       const { showToast } = await import('./ToastContainer');
-
       render(<ToastContainer />);
+      await new Promise(resolve => setTimeout(resolve, 50));
 
-      // Give showToast.setAddFn time to register
+      showToast.show('Match recorded!', 'success');
+
+      await waitFor(() => {
+        expect(screen.getByText('Match recorded!')).toBeInTheDocument();
+      });
+    });
+
+    it('displays an info toast via showToast.show', async () => {
+      const { showToast } = await import('./ToastContainer');
+      render(<ToastContainer />);
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      showToast.show('Data refreshed', 'info');
+
+      await waitFor(() => {
+        expect(screen.getByText('Data refreshed')).toBeInTheDocument();
+      });
+    });
+
+    it('displays an error toast via showToast.show', async () => {
+      const { showToast } = await import('./ToastContainer');
+      render(<ToastContainer />);
       await new Promise(resolve => setTimeout(resolve, 50));
 
       showToast.show('Critical error occurred', 'error');
@@ -434,11 +112,88 @@ describe('ToastContainer Component', () => {
       });
     });
 
-    it('should still show warning toasts from showToast when notifications disabled', async () => {
+    it('displays a warning toast via showToast.show', async () => {
       const { showToast } = await import('./ToastContainer');
-
       render(<ToastContainer />);
+      await new Promise(resolve => setTimeout(resolve, 50));
 
+      showToast.show('Warning message', 'warning');
+
+      await waitFor(() => {
+        expect(screen.getByText('Warning message')).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('Dead event vocabulary no longer triggers toasts (ADR-084 §G1)', () => {
+    // These guard against reintroduction of the dead event listeners.
+    // The readmodel.updated event itself does NOT trigger toasts yet — Prof's
+    // PLAYER_VERDICT is required first (AC8 of #1369).
+
+    it('does NOT show a toast on stats:updated (listener removed)', async () => {
+      render(<ToastContainer />);
+      mockEventEmitter.emit('stats:updated', { matches: 1, games: 2 });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(screen.queryByText(/match detected/i)).not.toBeInTheDocument();
+    });
+
+    it('does NOT show a toast on rank:updated (listener removed)', async () => {
+      render(<ToastContainer />);
+      mockEventEmitter.emit('rank:updated', { format: 'Standard', tier: 'Gold', step: '3' });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(screen.queryByText(/rank updated/i)).not.toBeInTheDocument();
+    });
+
+    it('does NOT show a toast on quest:updated (listener removed)', async () => {
+      render(<ToastContainer />);
+      mockEventEmitter.emit('quest:updated', { completed: 1, count: 1 });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(screen.queryByText(/quest/i)).not.toBeInTheDocument();
+    });
+
+    it('does NOT show a toast on draft:updated (listener removed)', async () => {
+      render(<ToastContainer />);
+      mockEventEmitter.emit('draft:updated', { count: 1, picks: 5 });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(screen.queryByText(/draft session/i)).not.toBeInTheDocument();
+    });
+
+    it('does NOT show a toast on collection:updated (listener removed)', async () => {
+      render(<ToastContainer />);
+      mockEventEmitter.emit('collection:updated', { newCards: 5, cardsAdded: 10 });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(screen.queryByText(/collection updated/i)).not.toBeInTheDocument();
+    });
+
+    it('does NOT show a toast on readmodel.updated (Prof gate required for toast, AC8)', async () => {
+      render(<ToastContainer />);
+      mockEventEmitter.emit('readmodel.updated', { domains: ['matches', 'quests'] });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(screen.queryByText(/match/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/quest/i)).not.toBeInTheDocument();
+    });
+  });
+
+  describe('showNotifications=false (AC1/AC2 #2024)', () => {
+    beforeEach(() => {
+      mockUseSettings.mockReturnValue({ showNotifications: false });
+    });
+
+    it('still shows error toasts from showToast when notifications disabled', async () => {
+      const { showToast } = await import('./ToastContainer');
+      render(<ToastContainer />);
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      showToast.show('Critical error occurred', 'error');
+
+      await waitFor(() => {
+        expect(screen.getByText('Critical error occurred')).toBeInTheDocument();
+      });
+    });
+
+    it('still shows warning toasts from showToast when notifications disabled', async () => {
+      const { showToast } = await import('./ToastContainer');
+      render(<ToastContainer />);
       await new Promise(resolve => setTimeout(resolve, 50));
 
       showToast.show('Warning message', 'warning');
@@ -448,32 +203,33 @@ describe('ToastContainer Component', () => {
       });
     });
 
-    it('should suppress info toasts from showToast when notifications disabled', async () => {
+    it('suppresses info toasts from showToast when notifications disabled', async () => {
       const { showToast } = await import('./ToastContainer');
-
       render(<ToastContainer />);
-
       await new Promise(resolve => setTimeout(resolve, 50));
 
       showToast.show('Info message', 'info');
 
       await new Promise(resolve => setTimeout(resolve, 100));
-
       expect(screen.queryByText('Info message')).not.toBeInTheDocument();
     });
 
-    it('should suppress success toasts from showToast when notifications disabled', async () => {
+    it('suppresses success toasts from showToast when notifications disabled', async () => {
       const { showToast } = await import('./ToastContainer');
-
       render(<ToastContainer />);
-
       await new Promise(resolve => setTimeout(resolve, 50));
 
       showToast.show('Success message', 'success');
 
       await new Promise(resolve => setTimeout(resolve, 100));
-
       expect(screen.queryByText('Success message')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Cleanup', () => {
+    it('does not crash on unmount', () => {
+      const { unmount } = render(<ToastContainer />);
+      expect(() => unmount()).not.toThrow();
     });
   });
 });

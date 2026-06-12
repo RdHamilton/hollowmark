@@ -1,3 +1,6 @@
+export { useReadModelUpdates } from './useReadModelUpdates';
+export type { ReadModelDomainCallbacks } from './useReadModelUpdates';
+
 export { useDaemonConnection } from './useDaemonConnection';
 export type { UseDaemonConnectionReturn } from './useDaemonConnection';
 

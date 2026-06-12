@@ -1,5 +1,4 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
-import { EventsOn } from '@/services/websocketClient';
 
 // Task status types
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
@@ -297,66 +296,10 @@ export const TaskProgressProvider = ({ children }: TaskProgressProviderProps) =>
   // Get active task
   const activeTask = state.activeTaskId ? state.tasks.get(state.activeTaskId) || null : null;
 
-  // Listen for WebSocket progress events
-  useEffect(() => {
-    const unsubscribeProgress = EventsOn('task:progress', (rawData: unknown) => {
-      const data = rawData as {
-        id: string;
-        title?: string;
-        category?: TaskCategory;
-        progress: number;
-        detail?: string;
-        estimatedDuration?: number;
-      };
-
-      setState((prev) => {
-        const existing = prev.tasks.get(data.id);
-        const newTasks = new Map(prev.tasks);
-
-        if (!existing) {
-          // Create new task from WebSocket event
-          newTasks.set(data.id, {
-            id: data.id,
-            category: data.category || 'general',
-            title: data.title || 'Processing...',
-            status: 'running',
-            progress: Math.min(100, Math.max(-1, data.progress)),
-            detail: data.detail,
-            startedAt: Date.now(),
-            estimatedDuration: data.estimatedDuration,
-          });
-        } else {
-          // Update existing task
-          newTasks.set(data.id, {
-            ...existing,
-            progress: Math.min(100, Math.max(-1, data.progress)),
-            detail: data.detail,
-          });
-        }
-
-        return {
-          tasks: newTasks,
-          activeTaskId: prev.activeTaskId || data.id,
-        };
-      });
-    });
-
-    const unsubscribeComplete = EventsOn('task:complete', (rawData: unknown) => {
-      const data = rawData as { id: string };
-      completeTask(data.id);
-    });
-
-    const unsubscribeError = EventsOn('task:error', (rawData: unknown) => {
-      const data = rawData as { id: string; error: string };
-      failTask(data.id, data.error);
-    });
-
-    return () => {
-      unsubscribeProgress?.();
-      unsubscribeComplete?.();
-      unsubscribeError?.();
-    };
-  }, [completeTask, failTask]);
+  // task:progress / task:complete / task:error listeners removed per ADR-084 §G1 sweep
+  // — all three had zero BFF server-side emitters since the Wails→REST migration.
+  // Task state is now driven imperatively via startTask / updateTask / completeTask /
+  // failTask called by collection-sync and other callers through the context API.
 
   const value: TaskProgressContextType = {
     state,

@@ -272,7 +272,7 @@ describe('StatusStrip Component', () => {
   });
 
   describe('Real-time updates', () => {
-    it('reloads stats on stats:updated event', async () => {
+    it('reloads stats on readmodel.updated matches domain (ADR-084)', async () => {
       const initialStats = createMockStatistics({ TotalMatches: 10 });
       const updatedStats = createMockStatistics({ TotalMatches: 11 });
 
@@ -286,7 +286,7 @@ describe('StatusStrip Component', () => {
       });
 
       mockMatches.getStats.mockResolvedValueOnce(updatedStats);
-      mockEventEmitter.emit('stats:updated');
+      mockEventEmitter.emit('readmodel.updated', { domains: ['matches'] });
 
       await waitFor(() => {
         expect(screen.getByText('11')).toBeInTheDocument();

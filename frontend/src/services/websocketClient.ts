@@ -21,8 +21,18 @@ import { getClerkToken } from './apiClient';
 
 export interface WebSocketConfig {
   url: string;
-  reconnectInterval?: number;
+  /** Base delay for the first reconnect attempt (ms). Defaults to 1000. */
+  reconnectBaseDelay?: number;
+  /** Maximum reconnect delay cap (ms). Defaults to 30 000. */
+  reconnectMaxDelay?: number;
+  /**
+   * @deprecated Ignored — reconnect never permanently gives up (ADR-084 §3).
+   * Kept in the interface only for backward-compat with call sites that set it;
+   * the value is never read.
+   */
   maxReconnectAttempts?: number;
+  /** @deprecated Use reconnectBaseDelay. Kept for backward-compat; ignored. */
+  reconnectInterval?: number;
 }
 
 export interface WebSocketEvent {
@@ -43,15 +53,26 @@ type ConnectionStateCallback = (connected: boolean) => void;
 // config.json is unavailable and the DEV fallback path is active.
 let config: WebSocketConfig = {
   url: `${import.meta.env.DEV ? (import.meta.env.VITE_BFF_URL ?? 'http://localhost:8080/api/v1') : 'http://localhost:8080/api/v1'}/events`,
-  reconnectInterval: 3000,
-  maxReconnectAttempts: 10,
+  reconnectBaseDelay: 1000,
+  reconnectMaxDelay: 30_000,
 };
+
+// ADR-084 §3: capped exponential backoff — no permanent give-up.
+// Attempt 0 → base; attempt n → min(base * 2^n, max).
+const RECONNECT_BASE_DELAY = 1000;
+const RECONNECT_MAX_DELAY = 30_000;
 
 let abortController: AbortController | null = null;
 let reconnectAttempts = 0;
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 let isIntentionalClose = false;
 let connected = false;
+
+// Track whether the tab-focus / online recovery handlers have been registered.
+// We register them once when the first connect() call is made and never remove
+// them (they guard no-op when the connection is already live or intentionally
+// closed), so there is no double-registration risk.
+let recoveryListenersAttached = false;
 
 const eventListeners: Map<string, Set<EventCallback>> = new Map();
 const connectionListeners: Set<ConnectionStateCallback> = new Set();
@@ -112,13 +133,12 @@ function dispatchEvent(eventType: string, data: unknown): void {
 }
 
 function scheduleReconnect(): void {
-  if (reconnectAttempts >= (config.maxReconnectAttempts ?? 10)) {
-    console.warn('[SSE] Max reconnect attempts reached');
-    return;
-  }
+  // ADR-084 §3: capped exponential backoff, NO permanent give-up.
+  const base = config.reconnectBaseDelay ?? RECONNECT_BASE_DELAY;
+  const max = config.reconnectMaxDelay ?? RECONNECT_MAX_DELAY;
+  const delay = Math.min(base * Math.pow(2, reconnectAttempts), max);
 
   reconnectAttempts++;
-  const delay = config.reconnectInterval ?? 3000;
   console.log(`[SSE] Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
 
   reconnectTimeout = setTimeout(() => {
@@ -126,11 +146,51 @@ function scheduleReconnect(): void {
   }, delay);
 }
 
+/**
+ * Attach document.visibilitychange and window.online recovery listeners.
+ * Registered once; each handler is a no-op when already connected or when
+ * the close was intentional (e.g. sign-out).
+ *
+ * ADR-084 §3: reconnect on tab refocus and network restoration.
+ */
+function attachRecoveryListeners(): void {
+  if (recoveryListenersAttached) return;
+  recoveryListenersAttached = true;
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && !connected && !isIntentionalClose) {
+      console.log('[SSE] Tab became visible — attempting reconnect');
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+      }
+      connect().catch((err) => console.error('[SSE] Visibility reconnect failed:', err));
+    }
+  });
+
+  window.addEventListener('online', () => {
+    if (!connected && !isIntentionalClose) {
+      console.log('[SSE] Network online — attempting reconnect');
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+      }
+      connect().catch((err) => console.error('[SSE] Online reconnect failed:', err));
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Connection lifecycle
 // ---------------------------------------------------------------------------
 
 export function connect(): Promise<void> {
+  // Register the tab-focus / network-online recovery handlers on the first call.
+  // Safe to call repeatedly — attachRecoveryListeners guards against double-registration.
+  if (typeof document !== 'undefined') {
+    attachRecoveryListeners();
+  }
+
   return new Promise((resolve, reject) => {
     if (connected) {
       resolve();
