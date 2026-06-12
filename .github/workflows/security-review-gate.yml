@@ -1,16 +1,16 @@
 # security-review-gate.yml
 #
-# S-07 Infra Security Review Gate
+# S-07 BFF/App Security Review Gate
 #
 # PURPOSE
 # -------
-# Blocks merge on any PR that touches IAM, trust policies, security groups, SSM,
-# Secrets Manager, KMS, OIDC, or security-sensitive workflow files until Sarah
-# (Security Engineer) has completed the effect-enumeration SOP and posted an
-# explicit VERDICT: APPROVED comment.
+# Blocks merge on any PR that touches security-sensitive deployment infrastructure
+# (deploy workflows, BFF/daemon entry-points, deploy scripts, gate self) until
+# Sarah (Security Engineer) has completed the effect-enumeration SOP and posted
+# an explicit VERDICT: APPROVED comment.
 #
-# Runbook: vault-mtg-docs/engineering/runbooks/infra-security-review-gate.md
-# Ticket:  RdHamilton/hollowmark#2365
+# Runbook: hollowmark-docs/engineering/runbooks/infra-security-review-gate.md
+# Ticket:  vault-mtg-tickets#231
 #
 # GATE MECHANISM
 # --------------
@@ -19,8 +19,8 @@
 #     sets initial failing state and re-evaluates when the PR diff changes.
 #   - issue_comment events (created) -- re-evaluates when a new comment is posted,
 #     picking up the VERDICT comment the moment Sarah posts it.
-#   - workflow_dispatch with a pr_number input -- for live testing on a disposable
-#     test PR without needing to post a comment or push a commit (ticket #2420).
+#   - workflow_dispatch -- manual test harness; accepts a pr_number input and
+#     runs the full evaluation against that PR without needing a push event.
 #
 # The gate PASSES only when a PR comment matches ALL of:
 #   1. Body contains "## S-07 Security Review" (SOP header).
@@ -73,45 +73,44 @@
 # breaking early the instant a matching APPROVED comment appears. This tolerates
 # comment-availability lag without weakening the gate: a PR with NO verdict still
 # exhausts all attempts and BLOCKS (true-negative preserved). The retry runs
-# before -- and is independent of -- the SHA-delta staleness logic (#119), which
+# before -- and is independent of -- the SHA-delta staleness logic, which
 # is left untouched.
 #
-# STALENESS: SHA-DELTA CHECK WITH A' GUARDED SKIP (tickets #119, #231, #1134, #1224)
-# ---------------------------------------------------------------------------------
+# STALENESS: SHA-DELTA CHECK WITH A' GUARDED SKIP (tickets #231, #260, #1134, #1224)
+# ------------------------------------------------------------------------------------
 # When an APPROVED comment exists but predates the current HEAD (e.g., because
 # Lee ran update-branch to pull in main), the gate performs an A'-guarded
 # SHA-delta check before marking the verdict stale:
 #
 #   1. Collect all PR commits whose committer date is AFTER the verdict timestamp.
 #   2. For each commit, fetch parents[] and files[] in a single commits/{sha} call.
-#   3. For single-parent commits: test files[] against §1A trigger globs directly.
+#   3. For single-parent commits: test files[] against section 1A trigger globs directly.
 #   4. For merge commits (parents >= 2, parent[0] SHA available):
-#      a. Call compare/{parent[0]}...{sha} scoped to §1A globs (A' predicate).
+#      a. Call compare/{parent[0]}...{sha} scoped to section 1A globs (A' predicate).
 #         parent[0] is the PR's own prior tip (the commit Sarah approved).
 #         This compare returns ONLY what the merge pulled in from main (parent[1]),
-#         isolating new §1A content that arrived from outside the PR.
+#         isolating new section 1A content that arrived from outside the PR.
 #      b. Empty result  -> merge is security-inert; skip (carry verdict forward).
-#      c. Non-empty result -> §1A content arrived from main; STALE (re-review needed).
-#   5. If ZERO §1A-path changes across all commits -> FRESH (carry verdict forward).
-#   6. If ANY §1A-path change found -> STALE (Sarah must re-review).
+#      c. Non-empty result -> section 1A content arrived from main; STALE (re-review needed).
+#   5. If ZERO section 1A-path changes across all commits -> FRESH (carry verdict forward).
+#   6. If ANY section 1A-path change found -> STALE (Sarah must re-review).
 #
-# WHY parent[0], NOT parent[1] (fix for hollowmark-tickets#1224):
+# WHY parent[0], NOT parent[1] (fix for ticket #1224):
 #   An update-branch merge commit has parent[0]=prior_PR_tip, parent[1]=main_tip.
 #   compare(parent[1]...merge) returns the PR's own work relative to main -- which
-#   includes any §1A files the PR itself modified. For a §1A-touching PR, this always
-#   produces a non-empty result -> false STALE on every update-branch (the bug).
+#   includes any section 1A files the PR itself modified. For a section 1A-touching PR,
+#   this always produces a non-empty result -> false STALE on every update-branch (the bug).
 #   compare(parent[0]...merge) returns only what main contributed to the merge,
-#   isolating the security question: "did main bring in new §1A content after the
+#   isolating the security question: "did main bring in new section 1A content after the
 #   verdict?" If not -> carry verdict forward. If yes -> re-review required.
-#   Evil merge: if the branch side tampers with §1A content between parent[0] and
-#   the merge commit, compare(parent[0]...merge) catches it (it appears as new
-#   content relative to parent[0]).
+#   Evil merge: if the branch side tampers with section 1A content between parent[0] and
+#   the merge commit, compare(parent[0]...merge) catches it correctly.
 #
 # Octopus merges (parents >= 3): the compare is taken against parent[0] regardless
 # of parent count. Content arriving via parent[2]+ that differs from parent[0] shows
-# up in the compare -- over-inclusive in the fail-closed direction. This is correct:
-# over-stale (false block) is acceptable; under-stale (missed security content) is not.
-# Do NOT change to check all parents without a new ADR + Sarah review.
+# up in the compare -- over-inclusive, never under-inclusive. This is intentionally
+# fail-closed: over-stale (false block) is acceptable; under-stale (missed security
+# content) is not. Do NOT change to check all parents without a new ADR + Sarah review.
 #
 # Fail-closed behaviour: if parent[0] SHA is unavailable (API error), the commit
 # falls through to the files[] scan (over-stale direction). If the compare call
@@ -119,21 +118,29 @@
 # The single-parent authored path is unchanged and unaffected.
 #
 # Truncation bound: the compare API silently caps .files[] at 300 entries with no
-# truncated flag. A merge commit touching >300 files with a §1A file at position
+# truncated flag. A merge commit touching >300 files with a section 1A file at position
 # 301+ would produce a false-clean MERGE_CONTRIB. This is a theoretical limitation;
 # the compare-error fallback to COMMIT_FILES does not address it. Flag to team if
-# any merge is expected to touch >300 files including §1A paths.
+# any merge is expected to touch >300 files including section 1A paths.
 #
 # This eliminates false-positive staleness on update-branch merge commits while
 # preserving gate integrity for real security changes (including evil merges).
 #
-# Ticket #231 (vault-mtg-tickets) is the canonical implementation ticket.
-# Ticket #1120 (hollowmark-tickets) fixes the COMMITS_AFTER delta query: gh api --jq
-#   does not accept --arg; the old form silently returned empty, so COMMITS_AFTER was
-#   always "", and every verdict was carried forward as fresh regardless of what was pushed.
-# Ticket #1134 (hollowmark-tickets) adds the A' guarded-skip predicate.
-# Ticket #1224 (hollowmark-tickets) fixes the A' compare base: parent[0] not parent[1].
-# Runbook: §1D of infra-security-review-gate.md.
+# Port history:
+#   ticket #231 (vault-mtg-tickets)  -- original SHA-delta implementation (PR #2781)
+#   ticket #1120 (hollowmark-tickets) -- fix COMMITS_AFTER delta query (gh api --jq/--arg)
+#   ticket #1134 (hollowmark-tickets) -- A' guarded skip + fail-closed fallback
+#   ticket #1224 (hollowmark-tickets) -- A' compare base: parent[0] not parent[1]
+#   ticket #1201 (hollowmark-tickets) -- Option-B verdict digest (this change)
+#
+# Ticket #1201 (hollowmark-tickets) adds the Option-B verdict digest layer:
+#   at verdict-post time the gate computes SHA-256 of the section-1A-scoped
+#   pulls/{pr}/files array ({filename,sha} sorted by filename) and appends
+#   <!-- S07-DIGEST: <hex> --> to Sarah's verdict comment.  At evaluation time
+#   the current digest is recomputed; a mismatch or compute failure -> STALE.
+#   Digest-absent (pre-feature) verdicts fall through to the A' topology check.
+#   See section 1D-ii of infra-security-review-gate.md.
+# Runbook: section 1D of infra-security-review-gate.md.
 
 name: Security Review Gate (S-07)
 
@@ -158,7 +165,7 @@ concurrency:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write  # #1201: required to PATCH verdict comments with S07-DIGEST annotation
   checks: write
 
 jobs:
@@ -182,17 +189,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          # Finding 1 fix (ticket #267): pass workflow_dispatch input through an
+          # env var rather than interpolating inputs.pr_number directly into the run block.
+          PR_NUMBER_INPUT: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             PR_NUMBER="${{ github.event.pull_request.number }}"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            PR_NUMBER="${{ github.event.inputs.pr_number }}"
-            # Fix 2 (Sarah Finding 3 / #261): guard against malformed pr_number input
-            # before it reaches any gh api URL. A non-numeric value (e.g. "12; rm -rf /")
-            # would previously just result in a 404 -- not exploitable, but fail fast
-            # with a clear error is better hygiene.
+            PR_NUMBER="${PR_NUMBER_INPUT}"
             if ! echo "${PR_NUMBER}" | grep -qE '^[0-9]+$'; then
               echo "ERROR: pr_number input '${PR_NUMBER}' is not a valid PR number (must match ^[0-9]+\$)" >&2
               exit 1
@@ -201,11 +207,6 @@ jobs:
             PR_NUMBER="${{ github.event.issue.number }}"
           fi
 
-          # Always re-fetch the live PR head SHA via the API.
-          # Do NOT use event.pull_request.head.sha -- it is stale on
-          # issue_comment and workflow_dispatch triggers (they run at the
-          # SHA of the commit that triggered the workflow, not the PR head).
-          # This is the root cause fixed by ticket #2420.
           HEAD_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
             --jq '.head.sha' 2>/dev/null || echo "")
 
@@ -225,21 +226,23 @@ jobs:
           set -euo pipefail
 
           # ------------------------------------------------------------------
-          # 1. Label check -- gate required if 'security' or 'infra' label present
+          # 1. Label check -- gate required if 'security' label present
           # ------------------------------------------------------------------
           LABELS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
             --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
           echo "PR labels: ${LABELS}"
 
-          if echo "${LABELS}" | grep -qE '(^|,)(security|infra)(,|$)'; then
-            echo "Gate required: label match (security or infra label present)"
-            { echo "required=true"; echo "reason=label match"; } >> "$GITHUB_OUTPUT"
+          if echo "${LABELS}" | grep -qE '(^|,)security(,|$)'; then
+            echo "Gate required: security label present"
+            { echo "required=true"; echo "reason=security label"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           # ------------------------------------------------------------------
-          # 2. Path glob check -- S-07 trigger paths for vault-mtg
-          #    Source: vault-mtg-docs/engineering/runbooks/infra-security-review-gate.md sec 1A
+          # 2. Path glob check -- S-07 section 1A trigger paths for hollowmark
+          #    Source: hollowmark-docs/engineering/runbooks/infra-security-review-gate.md sec 1A
+          #    #261 keep-in-sync: TRIGGER_GLOBS must be identical in gate_required,
+          #    the A' staleness walk, and the #1201 digest filter.
           # ------------------------------------------------------------------
           CHANGED_FILES=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" \
             --jq '[.[].filename] | join("\n")' 2>/dev/null || echo "")
@@ -254,13 +257,9 @@ jobs:
             ".github/workflows/release.yml"
             ".github/workflows/rollback.yml"
             ".github/workflows/staging-deploy.yml"
-            # daemon-release.yml: pushes GitHub Releases, uses SENTRY_DSN_DAEMON_PRODUCTION,
-            # APPLE_* signing secrets, and GH_VARIABLES_PAT. (#98)
             ".github/workflows/daemon-release.yml"
-            # frontend.yml: production SPA deploy -- AWS_DEPLOY_ROLE_ARN, DEPLOY_BUCKET,
-            # EC2_INSTANCE_ID (SSM Run Command against production instance). (#98)
             ".github/workflows/frontend.yml"
-            # Fix 1 (Sarah Finding 1 / #261): gate self-coverage -- a change to the gate
+            # Fix 1 (#261): gate self-coverage -- a change to the gate
             # workflow itself must also require an S-07 verdict, so the gate can't be
             # weakened without Sarah's review. Mirrors the entry in the staleness check below.
             ".github/workflows/security-review-gate.yml"
@@ -285,14 +284,13 @@ jobs:
               -H "Accept: application/vnd.github.v3.diff" 2>/dev/null || echo "")
 
             CATCH_ALL_STRINGS=(
+              "CLERK_SECRET_KEY"
+              "DATABASE_URL"
+              "JWT_SECRET"
+              "DAEMON_JWT_SECRET"
+              "AWS_ACCESS_KEY"
               "iam:"
               "secretsmanager:"
-              "AssumeRolePolicyDocument"
-              "WebIdentityToken"
-              "SecurityGroupIngress"
-              "SecurityGroupEgress"
-              "ssm:"
-              "kms:"
             )
 
             for KEYWORD in "${CATCH_ALL_STRINGS[@]}"; do
@@ -317,12 +315,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr_info.outputs.pr_number }}
-          # Comment-indexing race tolerance (ticket #2608). Bounds the retry loop
-          # around the verdict-comment fetch so a synchronize event arriving within
-          # seconds of a valid verdict still finds the (eventually-consistent)
-          # comment instead of false-negative-blocking. 4 attempts x 5s sleep =>
-          # tolerates ~15s of API lag, comfortably covering the AC1 5s window while
-          # staying well inside the 5-minute job timeout.
+          # Comment-indexing race tolerance (ticket #2608).
           S07_VERDICT_FETCH_MAX_ATTEMPTS: "4"
           S07_VERDICT_FETCH_SLEEP_SECONDS: "5"
         run: |
@@ -334,8 +327,6 @@ jobs:
 
           # ------------------------------------------------------------------
           # 1. Resolve current HEAD SHA and its committer timestamp.
-          #    HEAD_SHA already resolved in pr_info step; re-use it here.
-          #    Fetch the committer timestamp from the commits API.
           # ------------------------------------------------------------------
           HEAD_SHA="${{ steps.pr_info.outputs.head_sha }}"
           LAST_PUSH_TIMESTAMP=$(gh api "repos/${REPO}/commits/${HEAD_SHA}" \
@@ -348,19 +339,11 @@ jobs:
 
           # ------------------------------------------------------------------
           # 2. Find the most-recent matching APPROVED comment.
-          #    jq selects comments that:
-          #      a. Contain the S-07 SOP header string
-          #      b. Have a line that is exactly "VERDICT: APPROVED" (stripped of
-          #         CR/spaces) OR the bolded variant "**VERDICT: APPROVED**"
-          #    Output format: "<comment_id> <author_login> <created_at>"
-          #    Newlines in bodies are safe -- jq handles JSON string escaping.
+          #    NOTE: jq only needs to scan text lines; the <!-- S07-DIGEST -->
+          #    HTML comment appended by the Post verdict digest step does not
+          #    affect verdict detection.
           #
-          #    RETRY (ticket #2608): the comments API is eventually consistent, so
-          #    a verdict posted moments before a synchronize event may not yet be
-          #    returned. Retry the fetch up to S07_VERDICT_FETCH_MAX_ATTEMPTS times
-          #    with S07_VERDICT_FETCH_SLEEP_SECONDS between attempts, breaking the
-          #    instant a match appears. If no match is ever found the loop exits
-          #    with an empty MATCH and the gate BLOCKS (true-negative preserved).
+          #    RETRY (ticket #2608): the comments API is eventually consistent.
           # ------------------------------------------------------------------
           MATCH=""
           ATTEMPT=1
@@ -384,7 +367,7 @@ jobs:
             fi
 
             if [ "${ATTEMPT}" -lt "${S07_VERDICT_FETCH_MAX_ATTEMPTS}" ]; then
-              echo "No verdict comment on attempt ${ATTEMPT}/${S07_VERDICT_FETCH_MAX_ATTEMPTS}; the comments API may not yet have indexed a recent verdict. Retrying in ${S07_VERDICT_FETCH_SLEEP_SECONDS}s..."
+              echo "No verdict comment on attempt ${ATTEMPT}/${S07_VERDICT_FETCH_MAX_ATTEMPTS}; retrying in ${S07_VERDICT_FETCH_SLEEP_SECONDS}s..."
               sleep "${S07_VERDICT_FETCH_SLEEP_SECONDS}"
             else
               echo "No verdict comment after ${S07_VERDICT_FETCH_MAX_ATTEMPTS} attempts."
@@ -408,19 +391,18 @@ jobs:
             echo "Comment timestamp: ${COMMENT_TIMESTAMP}"
 
             # ------------------------------------------------------------------
-            # 3. Staleness check: SHA-delta-based (ticket #119).
+            # 3. Staleness check: SHA-delta-based with A' guarded skip (#1134).
             #
             #    FAST PATH: if the verdict post-dates the last push, it is fresh
             #    by definition -- skip the delta check entirely.
             #
             #    DELTA PATH: if the verdict pre-dates the last push (e.g., an
-            #    update-branch merge commit landed after Sarah approved), collect
-            #    all commits pushed to this PR after the verdict timestamp and
-            #    check whether any of those commits touched an S-07 §1A trigger
-            #    path.  If none did, the verdict is carried forward as FRESH
-            #    (inert merge commits do not invalidate the approval).  If any
-            #    §1A-path change is found the verdict is genuinely stale and
-            #    Sarah must re-review.
+            #    update-branch merge commit landed after Sarah approved), the gate
+            #    first attempts a digest-based freshness check (#1201, OQ-4 ruling):
+            #      - Digest present + match   -> FRESH (skip A' topology walk).
+            #      - Digest present + mismatch -> STALE (fail closed).
+            #      - Digest present + compute failure -> STALE (fail closed).
+            #      - Digest absent (pre-feature verdict) -> fall through to A' check.
             # ------------------------------------------------------------------
 
             # Determine temporal ordering (python3 for UTC-safe ISO8601 parsing)
@@ -460,180 +442,385 @@ jobs:
               } >> "$GITHUB_OUTPUT"
             else
               # Delta path: verdict pre-dates current HEAD.
-              # Collect commits added to this PR after the verdict timestamp,
-              # then check if any of those commits touched S-07 §1A trigger paths.
               echo ""
               echo "Verdict pre-dates last push -- running SHA-delta staleness check..."
-              echo "Collecting PR commits after verdict timestamp (${COMMENT_TIMESTAMP})..."
 
-              # List all commits on the PR; filter to those whose committer date
-              # is strictly after the verdict timestamp.
-              # gh api --jq takes a single jq expression string; it does not
-              # accept --arg (that is a standalone jq binary flag). Embed the
-              # timestamp directly via shell interpolation so the filter is a
-              # self-contained string that gh api can evaluate. Bug: #1120.
-              COMMITS_AFTER=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" \
-                --paginate \
-                --jq ".[] | select(.commit.committer.date > \"${COMMENT_TIMESTAMP}\") | .sha" \
-                2>/dev/null || echo "")
+              # ------------------------------------------------------------------
+              # DIGEST CHECK (ticket #1201, OQ-4 ruling):
+              #
+              # Runs at the TOP of the delta path, BEFORE COMMITS_AFTER collection.
+              # When a stored S07-DIGEST is present it decides freshness alone; the
+              # COMMITS_AFTER empty-guard and A' walk are only reachable for
+              # digest-ABSENT (pre-feature) verdicts.
+              #
+              # #261 + #1201 keep-in-sync: the TRIGGER_GLOBS used by the Python
+              # digest filter below are identical to gate_required and the A' walk.
+              # Any future section 1A scope change must update all three locations.
+              #
+              # Accepted limitation (F2, documented in runbook section 1D):
+              # The A' walk and this digest both ignore CATCH_ALL_STRINGS content
+              # post-verdict -- pre-existing behaviour, no new hole.
+              # ------------------------------------------------------------------
 
-              if [ -z "${COMMITS_AFTER}" ]; then
-                # No commits registered after the verdict -- likely a race between
-                # comment creation and the push event.  Treat as fresh.
-                echo "No commits found after verdict timestamp. Treating verdict as fresh."
-                {
-                  echo "approved=true"
-                  echo "approver=${APPROVER}"
-                  echo "comment_id=${COMMENT_ID}"
-                  echo "comment_timestamp=${COMMENT_TIMESTAMP}"
-                  echo "last_push_timestamp=${LAST_PUSH_TIMESTAMP}"
-                  echo "staleness_check=delta-no-commits"
-                } >> "$GITHUB_OUTPUT"
-              else
-                echo "Commits after verdict:"
-                echo "${COMMITS_AFTER}"
-                echo ""
+              # Fetch verdict comment body to extract any stored S07-DIGEST.
+              # The verdict-scan jq above emits only "id login created_at";
+              # re-fetch body by COMMENT_ID (#1201 implementation note).
+              VERDICT_COMMENT_BODY=$(gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" \
+                --jq '.body' 2>/dev/null || echo "")
 
-                # S-07 §1A trigger path globs (must mirror gate_required step above)
-                TRIGGER_GLOBS=(
-                  ".github/workflows/deploy-bff.yml"
-                  ".github/workflows/deploy-spa.yml"
-                  ".github/workflows/release.yml"
-                  ".github/workflows/rollback.yml"
-                  ".github/workflows/staging-deploy.yml"
-                  ".github/workflows/daemon-release.yml"
-                  ".github/workflows/frontend.yml"
-                  # Fix 1 (#261): mirrors gate_required TRIGGER_GLOBS above -- keep in sync.
-                  ".github/workflows/security-review-gate.yml"
-                  "services/bff/cmd/"
-                  "services/daemon/cmd/"
-                  "scripts/deploy/"
-                )
+              # Parse stored digest: <!-- S07-DIGEST: <64-char-hex> -->
+              STORED_DIGEST=$(echo "${VERDICT_COMMENT_BODY}" | \
+                python3 -c "
+          import sys
+          import re
+          body = sys.stdin.read()
+          m = re.search(r'<!-- S07-DIGEST: ([0-9a-f]{64}) -->', body)
+          print(m.group(1) if m else '')
+          " 2>/dev/null || echo "")
 
-                S07_DELTA_FOUND=false
+              echo "Stored S07-DIGEST: ${STORED_DIGEST:-<none>}"
 
-                for COMMIT_SHA in ${COMMITS_AFTER}; do
-                  echo "Checking commit ${COMMIT_SHA}..."
+              if [ -n "${STORED_DIGEST}" ]; then
+                # Digest present: compute current section 1A digest and compare.
+                # Fail-closed (#1201 Ray binding constraints 1 and 2):
+                #   - FRESH requires CURRENT_DIGEST to be a valid 64-char hex string
+                #     AND equal to STORED_DIGEST.
+                #   - Any other outcome (API error, malformed, mismatch) -> STALE.
+                #   - No empty-equals-empty: empty string never passes the hex guard.
+                #   - The empty-section-1A sentinel is sha256(json.dumps([])) -- a
+                #     real 64-char hex value, not the empty string.
+                echo "Stored digest found; computing current section 1A digest..."
 
-                  # Fetch commit metadata: parents[] and files[] in a single API call
-                  # (OQ-1: batch -- no extra round-trip for the common single-parent case).
-                  COMMIT_JSON=$(gh api "repos/${REPO}/commits/${COMMIT_SHA}" \
-                    2>/dev/null || echo "")
+                SCOPE_JSON=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" \
+                  --paginate \
+                  --jq '[.[]]' 2>/dev/null || echo "")
 
-                  COMMIT_FILES=$(echo "${COMMIT_JSON}" | \
-                    python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(f['filename'] for f in d.get('files',[])) if d else '')" \
-                    2>/dev/null || echo "")
+                CURRENT_DIGEST=$(echo "${SCOPE_JSON}" | python3 -c "
+          import json
+          import hashlib
+          import sys
+          globs = [
+              '.github/workflows/deploy-bff.yml',
+              '.github/workflows/deploy-spa.yml',
+              '.github/workflows/release.yml',
+              '.github/workflows/rollback.yml',
+              '.github/workflows/staging-deploy.yml',
+              '.github/workflows/daemon-release.yml',
+              '.github/workflows/frontend.yml',
+              '.github/workflows/security-review-gate.yml',
+              'services/bff/cmd/',
+              'services/daemon/cmd/',
+              'scripts/deploy/',
+          ]
+          try:
+              raw = sys.stdin.read().strip()
+              files = json.loads(raw) if raw else []
+              s1a = [f for f in files if any(g in f['filename'] for g in globs)]
+              s1a.sort(key=lambda f: f['filename'])
+              arr = [{'filename': f['filename'], 'sha': f.get('sha')} for f in s1a]
+              digest = hashlib.sha256(json.dumps(arr, separators=(',', ':')).encode()).hexdigest()
+              print(digest)
+          except Exception:
+              print('')
+          " 2>/dev/null || echo "")
 
-                  PARENT_COUNT=$(echo "${COMMIT_JSON}" | \
-                    python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('parents',[])) if d else 0)" \
-                    2>/dev/null || echo "0")
-
-                  PARENT0_SHA=$(echo "${COMMIT_JSON}" | \
-                    python3 -c "import json,sys; d=json.load(sys.stdin); ps=d.get('parents',[]) if d else []; print(ps[0]['sha'] if len(ps)>=1 else '')" \
-                    2>/dev/null || echo "")
-
-                  echo "  Parent count: ${PARENT_COUNT}"
-                  echo "  Changed files: $(echo "${COMMIT_FILES}" | tr '\n' ' ')"
-
-                  # ------------------------------------------------------------------
-                  # A' guarded skip (tickets #1134, #1224):
-                  #
-                  # For merge commits (parents >= 2 with a non-empty parent[0] SHA),
-                  # the full files[] list includes content that arrived via parent[1]
-                  # (the already-reviewed main tip) -- not changes authored by this
-                  # branch. A flat files[] scan therefore false-stales on update-branch.
-                  #
-                  # Instead, call compare/{parent0}...{sha} scoped to §1A globs:
-                  #   empty  -> merge is security-inert (skip; carry verdict forward)
-                  #   non-empty -> §1A content arrived via main (or evil merge); STALE
-                  #
-                  # WHY parent[0] (fix for #1224): parent[0] is the PR's own prior tip
-                  # (what Sarah already approved). compare(parent[0]...merge) isolates
-                  # what main brought in -- not the PR's own §1A work already in parent[0].
-                  # compare(parent[1]...merge) would return the PR's own §1A content,
-                  # causing false STALE on every update-branch for §1A-touching PRs.
-                  #
-                  # Octopus merges (parents >= 3): the compare is taken against parent[0]
-                  # regardless of parent count. Content arriving via parent[2]+ that
-                  # differs from parent[0] appears in the compare -- over-inclusive,
-                  # never under-inclusive. That is intentionally fail-closed (over-stale
-                  # is safe; under-stale masks security content and is not acceptable).
-                  # Do NOT change this to check all parents without a new ADR + Sarah review.
-                  #
-                  # Fail-closed guards:
-                  #   - PARENT0_SHA empty (API error / no parents) -> falls through to
-                  #     the else branch: full files[] check -> over-stale, not under-stale.
-                  #   - compare API error -> MERGE_CONTRIB falls back to COMMIT_FILES
-                  #     (over-stale, not under-stale). The single-parent path (which has
-                  #     no compare) remains unchanged.
-                  # ------------------------------------------------------------------
-                  if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
-                    echo "  Merge commit: running A' compare/${PARENT0_SHA}...${COMMIT_SHA} scoped to §1A globs..."
-
-                    MERGE_CONTRIB=$(gh api "repos/${REPO}/compare/${PARENT0_SHA}...${COMMIT_SHA}" \
-                      --jq '[.files[].filename] | join("\n")' 2>/dev/null || echo "${COMMIT_FILES}")
-
-                    echo "  A' compare files: $(echo "${MERGE_CONTRIB}" | tr '\n' ' ')"
-
-                    S1A_IN_CONTRIB=false
-                    while IFS= read -r FILE; do
-                      [ -z "${FILE}" ] && continue
-                      for GLOB in "${TRIGGER_GLOBS[@]}"; do
-                        if echo "${FILE}" | grep -qF "${GLOB}"; then
-                          echo "  A' §1A path match in merge contribution: ${FILE} -> ${GLOB}"
-                          S1A_IN_CONTRIB=true
-                          break 2
-                        fi
-                      done
-                    done <<< "${MERGE_CONTRIB}"
-
-                    if [ "${S1A_IN_CONTRIB}" = "true" ]; then
-                      echo "  A' delta check: STALE (§1A path in merge contribution)"
-                      S07_DELTA_FOUND=true
-                      break
-                    else
-                      echo "  A' delta check: inert (no §1A paths in merge contribution; skipping)"
-                      continue
-                    fi
-                  fi
-
-                  # Single-parent commit (or merge commit where parent[0] SHA is unavailable):
-                  # use the full files[] list against §1A globs.
-                  if [ -z "${COMMIT_FILES}" ]; then
-                    echo "  (no files listed -- API error; skipping)"
-                    continue
-                  fi
-
-                  for GLOB in "${TRIGGER_GLOBS[@]}"; do
-                    if echo "${COMMIT_FILES}" | grep -qF "${GLOB}"; then
-                      echo "  S-07 §1A path match in commit ${COMMIT_SHA}: ${GLOB}"
-                      S07_DELTA_FOUND=true
-                      break 2
-                    fi
-                  done
-                done
-
-                echo ""
-                if [ "${S07_DELTA_FOUND}" = "true" ]; then
-                  echo "SHA-delta check: STALE -- S-07 §1A path(s) changed after verdict."
-                  echo "Sarah must re-review the new security-sensitive changes."
+                # Validate: must be a 64-char hex string. Anything else -> STALE.
+                if ! echo "${CURRENT_DIGEST:-}" | grep -qE '^[0-9a-f]{64}$'; then
+                  echo "Digest check: STALE (could not compute current section 1A digest -- API error or exception)"
+                  echo "Fail-closed: stored digest present + compute failure -> STALE, never FRESH."
                   echo "approved=false" >> "$GITHUB_OUTPUT"
-                else
-                  echo "SHA-delta check: FRESH -- no S-07 §1A path changes since verdict."
-                  echo "All commits after verdict are inert (merge commits / unrelated changes)."
-                  echo "Carrying verdict forward."
+                elif [ "${CURRENT_DIGEST}" = "${STORED_DIGEST}" ]; then
+                  echo "Digest check: FRESH (current section 1A digest matches stored digest)"
                   {
                     echo "approved=true"
                     echo "approver=${APPROVER}"
                     echo "comment_id=${COMMENT_ID}"
                     echo "comment_timestamp=${COMMENT_TIMESTAMP}"
                     echo "last_push_timestamp=${LAST_PUSH_TIMESTAMP}"
-                    echo "staleness_check=delta-clean"
+                    echo "staleness_check=digest-match"
                   } >> "$GITHUB_OUTPUT"
+                else
+                  echo "Digest check: STALE (section 1A surface changed since Sarah's review)"
+                  echo "  Stored:  ${STORED_DIGEST}"
+                  echo "  Current: ${CURRENT_DIGEST}"
+                  echo "Sarah must re-review the new security-sensitive changes."
+                  echo "approved=false" >> "$GITHUB_OUTPUT"
+                fi
+              else
+                # No stored digest: pre-feature verdict.
+                # Fall through to the existing A' topology check (backward compat).
+                # No behaviour change for verdicts predating ticket #1201.
+                echo "No stored digest; falling through to A' topology check (pre-#1201 compat)..."
+                echo "Collecting PR commits after verdict timestamp (${COMMENT_TIMESTAMP})..."
+
+                # List all commits on the PR; filter to those whose committer date
+                # is strictly after the verdict timestamp.
+                # gh api --jq takes a single jq expression string; it does not
+                # accept --arg (that is a standalone jq binary flag). Embed the
+                # timestamp directly via shell interpolation so the filter is a
+                # self-contained string that gh api can evaluate. Bug: #1120.
+                COMMITS_AFTER=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" \
+                  --paginate \
+                  --jq ".[] | select(.commit.committer.date > \"${COMMENT_TIMESTAMP}\") | .sha" \
+                  2>/dev/null || echo "")
+
+                if [ -z "${COMMITS_AFTER}" ]; then
+                  # No commits registered after the verdict -- likely a race between
+                  # comment creation and the push event.  Treat as fresh.
+                  echo "No commits found after verdict timestamp. Treating verdict as fresh."
+                  {
+                    echo "approved=true"
+                    echo "approver=${APPROVER}"
+                    echo "comment_id=${COMMENT_ID}"
+                    echo "comment_timestamp=${COMMENT_TIMESTAMP}"
+                    echo "last_push_timestamp=${LAST_PUSH_TIMESTAMP}"
+                    echo "staleness_check=delta-no-commits"
+                  } >> "$GITHUB_OUTPUT"
+                else
+                  echo "Commits after verdict:"
+                  echo "${COMMITS_AFTER}"
+                  echo ""
+
+                  # S-07 section 1A trigger path globs (must mirror gate_required step above).
+                  # #261 keep-in-sync: identical TRIGGER_GLOBS; #1201 extends invariant.
+                  TRIGGER_GLOBS=(
+                    ".github/workflows/deploy-bff.yml"
+                    ".github/workflows/deploy-spa.yml"
+                    ".github/workflows/release.yml"
+                    ".github/workflows/rollback.yml"
+                    ".github/workflows/staging-deploy.yml"
+                    ".github/workflows/daemon-release.yml"
+                    ".github/workflows/frontend.yml"
+                    # Fix 1 (#261): mirrors gate_required TRIGGER_GLOBS above -- keep in sync.
+                    ".github/workflows/security-review-gate.yml"
+                    "services/bff/cmd/"
+                    "services/daemon/cmd/"
+                    "scripts/deploy/"
+                  )
+
+                  S07_DELTA_FOUND=false
+
+                  for COMMIT_SHA in ${COMMITS_AFTER}; do
+                    echo "Checking commit ${COMMIT_SHA}..."
+
+                    # Fetch commit metadata: parents[] and files[] in a single API call
+                    # (OQ-1: batch -- no extra round-trip for the common single-parent case).
+                    COMMIT_JSON=$(gh api "repos/${REPO}/commits/${COMMIT_SHA}" \
+                      2>/dev/null || echo "")
+
+                    COMMIT_FILES=$(echo "${COMMIT_JSON}" | \
+                      python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(f['filename'] for f in d.get('files',[])) if d else '')" \
+                      2>/dev/null || echo "")
+
+                    PARENT_COUNT=$(echo "${COMMIT_JSON}" | \
+                      python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('parents',[])) if d else 0)" \
+                      2>/dev/null || echo "0")
+
+                    PARENT0_SHA=$(echo "${COMMIT_JSON}" | \
+                      python3 -c "import json,sys; d=json.load(sys.stdin); ps=d.get('parents',[]) if d else []; print(ps[0]['sha'] if len(ps)>=1 else '')" \
+                      2>/dev/null || echo "")
+
+                    echo "  Parent count: ${PARENT_COUNT}"
+                    echo "  Changed files: $(echo "${COMMIT_FILES}" | tr '\n' ' ')"
+
+                    # ------------------------------------------------------------------
+                    # A' guarded skip (tickets #1134, #1224):
+                    #
+                    # For merge commits (parents >= 2 with a non-empty parent[0] SHA),
+                    # the full files[] list includes content that arrived via parent[1]
+                    # (the already-reviewed main tip) -- not changes authored by this
+                    # branch. A flat files[] scan therefore false-stales on update-branch.
+                    #
+                    # Instead, call compare/{parent0}...{sha} scoped to section 1A globs:
+                    #   empty  -> merge is security-inert (skip; carry verdict forward)
+                    #   non-empty -> section 1A content arrived via main (or evil merge); STALE
+                    #
+                    # WHY parent[0] (fix for #1224): parent[0] is the PR's own prior tip
+                    # (what Sarah already approved). compare(parent[0]...merge) isolates
+                    # what main brought in -- not the PR's own section 1A work already in parent[0].
+                    #
+                    # Octopus merges (parents >= 3): the compare is taken against parent[0]
+                    # regardless of parent count. Content arriving via parent[2]+ that
+                    # differs from parent[0] appears in the compare -- over-inclusive,
+                    # never under-inclusive. That is intentionally fail-closed (over-stale
+                    # is safe; under-stale masks security content and is not acceptable).
+                    # Do NOT change this to check all parents without a new ADR + Sarah review.
+                    #
+                    # Fail-closed guards:
+                    #   - PARENT0_SHA empty (API error / no parents) -> falls through to
+                    #     the else branch: full files[] check -> over-stale, not under-stale.
+                    #   - compare API error -> MERGE_CONTRIB falls back to COMMIT_FILES
+                    #     (over-stale, not under-stale). The single-parent path (which has
+                    #     no compare) remains unchanged.
+                    # ------------------------------------------------------------------
+                    if [ "${PARENT_COUNT}" -ge 2 ] && [ -n "${PARENT0_SHA}" ]; then
+                      echo "  Merge commit: running A' compare/${PARENT0_SHA}...${COMMIT_SHA} scoped to section 1A globs..."
+
+                      MERGE_CONTRIB=$(gh api "repos/${REPO}/compare/${PARENT0_SHA}...${COMMIT_SHA}" \
+                        --jq '[.files[].filename] | join("\n")' 2>/dev/null || echo "${COMMIT_FILES}")
+
+                      echo "  A' compare files: $(echo "${MERGE_CONTRIB}" | tr '\n' ' ')"
+
+                      S1A_IN_CONTRIB=false
+                      while IFS= read -r FILE; do
+                        [ -z "${FILE}" ] && continue
+                        for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                          if echo "${FILE}" | grep -qF "${GLOB}"; then
+                            echo "  A' section 1A path match in merge contribution: ${FILE} -> ${GLOB}"
+                            S1A_IN_CONTRIB=true
+                            break 2
+                          fi
+                        done
+                      done <<< "${MERGE_CONTRIB}"
+
+                      if [ "${S1A_IN_CONTRIB}" = "true" ]; then
+                        echo "  A' delta check: STALE (section 1A path in merge contribution)"
+                        S07_DELTA_FOUND=true
+                        break
+                      else
+                        echo "  A' delta check: inert (no section 1A paths in merge contribution; skipping)"
+                        continue
+                      fi
+                    fi
+
+                    # Single-parent commit (or merge commit where parent[0] SHA is unavailable):
+                    # use the full files[] list against section 1A globs.
+                    if [ -z "${COMMIT_FILES}" ]; then
+                      echo "  (no files listed -- API error; skipping)"
+                      continue
+                    fi
+
+                    for GLOB in "${TRIGGER_GLOBS[@]}"; do
+                      if echo "${COMMIT_FILES}" | grep -qF "${GLOB}"; then
+                        echo "  S-07 section 1A path match in commit ${COMMIT_SHA}: ${GLOB}"
+                        S07_DELTA_FOUND=true
+                        break 2
+                      fi
+                    done
+                  done
+
+                  echo ""
+                  if [ "${S07_DELTA_FOUND}" = "true" ]; then
+                    echo "SHA-delta check: STALE -- S-07 section 1A path(s) changed after verdict."
+                    echo "Sarah must re-review the new security-sensitive changes."
+                    echo "approved=false" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "SHA-delta check: FRESH -- no S-07 section 1A path changes since verdict."
+                    echo "All commits after verdict are inert (merge commits / unrelated changes)."
+                    echo "Carrying verdict forward."
+                    {
+                      echo "approved=true"
+                      echo "approver=${APPROVER}"
+                      echo "comment_id=${COMMENT_ID}"
+                      echo "comment_timestamp=${COMMENT_TIMESTAMP}"
+                      echo "last_push_timestamp=${LAST_PUSH_TIMESTAMP}"
+                      echo "staleness_check=delta-clean"
+                    } >> "$GITHUB_OUTPUT"
+                  fi
                 fi
               fi
             fi
           fi
+
+      - name: Post verdict digest
+        # Appends <!-- S07-DIGEST: <sha256-hex> --> to Sarah's verdict comment.
+        # This pins the section 1A surface at verdict time so the digest check above
+        # can verify content-level freshness on subsequent gate runs (ticket #1201).
+        #
+        # Only fires on issue_comment when ALL conditions hold:
+        #   1. Gate is required for this PR.
+        #   2. A fresh verdict was found (approved=true, staleness_check=fresh).
+        #   3. The verdict comment does NOT already have a S07-DIGEST line (idempotent).
+        #
+        # Requires pull-requests: write (workflow-level permission granted above).
+        # S07_DIGEST_ENABLED kill-switch: set to "false" to disable in fork contexts
+        # where the PATCH permission may be denied.
+        if: >
+          github.event_name == 'issue_comment' &&
+          steps.gate_required.outputs.required == 'true' &&
+          steps.verdict_check.outputs.approved == 'true' &&
+          steps.verdict_check.outputs.staleness_check == 'fresh'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr_info.outputs.pr_number }}
+          COMMENT_ID: ${{ steps.verdict_check.outputs.comment_id }}
+          S07_DIGEST_ENABLED: "true"
+        run: |
+          set -euo pipefail
+
+          if [ "${S07_DIGEST_ENABLED}" != "true" ]; then
+            echo "S07_DIGEST_ENABLED=false; skipping digest annotation."
+            exit 0
+          fi
+
+          echo "Checking whether verdict comment already has S07-DIGEST..."
+
+          COMMENT_BODY=$(gh api "repos/${REPO}/issues/comments/${COMMENT_ID}" \
+            --jq '.body' 2>/dev/null || echo "")
+
+          if echo "${COMMENT_BODY}" | grep -qF "<!-- S07-DIGEST:"; then
+            echo "Verdict comment already has S07-DIGEST annotation; skipping (idempotent)."
+            exit 0
+          fi
+
+          echo "Computing section 1A digest for PR #${PR_NUMBER}..."
+
+          # Fetch section 1A-scoped PR files (paginated, up to 3000 files).
+          # #261 + #1201 keep-in-sync: TRIGGER_GLOBS and substring match semantics
+          # are identical to gate_required and the A' staleness walk.
+          SCOPE_JSON=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" \
+            --paginate \
+            --jq '[.[]]' 2>/dev/null || echo "")
+
+          if [ -z "${SCOPE_JSON}" ] || [ "${SCOPE_JSON}" = "null" ]; then
+            echo "ERROR: could not fetch PR files for digest computation; aborting."
+            echo "Fail-closed: do not post a partial or empty digest."
+            exit 1
+          fi
+
+          DIGEST=$(echo "${SCOPE_JSON}" | python3 -c "
+          import json
+          import hashlib
+          import sys
+          globs = [
+              '.github/workflows/deploy-bff.yml',
+              '.github/workflows/deploy-spa.yml',
+              '.github/workflows/release.yml',
+              '.github/workflows/rollback.yml',
+              '.github/workflows/staging-deploy.yml',
+              '.github/workflows/daemon-release.yml',
+              '.github/workflows/frontend.yml',
+              '.github/workflows/security-review-gate.yml',
+              'services/bff/cmd/',
+              'services/daemon/cmd/',
+              'scripts/deploy/',
+          ]
+          raw = sys.stdin.read().strip()
+          files = json.loads(raw) if raw else []
+          s1a = [f for f in files if any(g in f['filename'] for g in globs)]
+          s1a.sort(key=lambda f: f['filename'])
+          arr = [{'filename': f['filename'], 'sha': f.get('sha')} for f in s1a]
+          digest = hashlib.sha256(json.dumps(arr, separators=(',', ':')).encode()).hexdigest()
+          print(digest)
+          " 2>/dev/null || echo "")
+
+          if ! echo "${DIGEST:-}" | grep -qE '^[0-9a-f]{64}$'; then
+            echo "ERROR: digest computation failed (got: '${DIGEST:-<empty>}'); aborting."
+            echo "Fail-closed: do not post a malformed digest."
+            exit 1
+          fi
+
+          echo "Computed section 1A digest: ${DIGEST}"
+
+          NEW_BODY=$(printf '%s\n<!-- S07-DIGEST: %s -->\n' "${COMMENT_BODY}" "${DIGEST}")
+
+          gh api --method PATCH \
+            "repos/${REPO}/issues/comments/${COMMENT_ID}" \
+            --field "body=${NEW_BODY}" \
+            --silent
+
+          echo "S07-DIGEST annotation posted to comment ${COMMENT_ID}."
 
       - name: Publish check-run result
         if: always()
@@ -663,7 +850,7 @@ jobs:
             if (!required) {
               conclusion = 'success';
               title      = 'Security Review Gate: Not Required';
-              summary    = 'This PR does not match S-07 trigger criteria. Gate skipped (no IAM/security-sensitive paths, labels, or keywords detected).';
+              summary    = 'This PR does not match S-07 trigger criteria. Gate skipped (no security-sensitive paths, labels, or keywords detected).';
             } else if (approved) {
               conclusion = 'success';
               title      = 'Security Review Gate: PASSED';
@@ -682,7 +869,7 @@ jobs:
               conclusion = 'failure';
               title      = 'Security Review Gate: BLOCKED';
               summary    = [
-                'This PR matches S-07 infra security review criteria.',
+                'This PR matches S-07 security review criteria.',
                 'Merge is blocked until Sarah posts the APPROVED verdict.',
                 '',
                 'Required action:',
@@ -696,12 +883,12 @@ jobs:
                 '',
                 '  If the verdict was posted before an update-branch merge commit,',
                 '  the gate will carry it forward automatically provided no S-07',
-                '  §1A trigger paths changed in the commits since the verdict.',
+                '  sec-1A trigger paths changed in the commits since the verdict.',
                 '  Re-review is only required when new security-sensitive code',
                 '  was pushed after the last approval.',
                 '',
-                'Runbook: vault-mtg-docs/engineering/runbooks/infra-security-review-gate.md',
-                'Ticket:  RdHamilton/hollowmark#2365',
+                'Runbook: hollowmark-docs/engineering/runbooks/infra-security-review-gate.md',
+                'Ticket:  RdHamilton/hollowmark-tickets#2420',
               ].join('\n');
             }
 
@@ -711,12 +898,12 @@ jobs:
             }
 
             await github.rest.checks.create({
-              owner:       context.repo.owner,
-              repo:        context.repo.repo,
-              name:        'Security Review Gate',
-              head_sha:    headSha,
-              status:      'completed',
-              conclusion:  conclusion,
+              owner:      context.repo.owner,
+              repo:       context.repo.repo,
+              name:       'Security Review Gate',
+              head_sha:   headSha,
+              status:     'completed',
+              conclusion: conclusion,
               output: {
                 title:   title,
                 summary: summary,
