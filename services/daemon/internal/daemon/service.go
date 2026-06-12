@@ -26,6 +26,7 @@ import (
 	"github.com/RdHamilton/hollowmark/services/contract"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/classify"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/config"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/credstore"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/dispatch"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/draftstate"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/gre"
@@ -226,13 +227,20 @@ type Service struct {
 
 // New creates a Service from cfg.
 func New(cfg *config.Config) *Service {
-	// ADR-049 Ticket 2: use the channel-derived keychain service so the staging
-	// daemon reads/writes its own slot rather than clobbering the prod entry.
-	keychainService := install.Identity(install.Channel).KeychainService
-	keychainGetFn := func() (string, error) { return keychain.GetForService(keychainService) }
+	// ADR-049 Ticket 2: use the channel-derived identity so the staging daemon
+	// reads/writes its own credential slot rather than clobbering the prod entry.
+	identity := install.Identity(install.Channel)
+
+	// credStore is the platform credential backend (ADR-081):
+	//   darwin  — 0600 file at identity.CredentialFile with keychain migration.
+	//   windows — Windows Credential Manager via go-keyring.
+	// keychainGetFn wraps credStore.Get so the existing keychainGet field
+	// continues to work without changes to any non-call-site code.
+	cs := credstore.New(identity.CredentialFile, identity.KeychainService)
+	keychainGetFn := cs.Get
 
 	// Resolve the dispatcher bearer token in this priority order:
-	//   1. cfg.Keychain == true → load api_key from the OS keychain (PKCE path).
+	//   1. cfg.Keychain == true → load api_key from the credential store (PKCE path).
 	//   2. cfg.DaemonJWT (legacy HMAC daemon-JWT path).
 	//   3. cfg.APIKey plaintext (pre-keychain-migration legacy path).
 	// The PKCE path is the only one that works against the current BFF; the
@@ -245,7 +253,7 @@ func New(cfg *config.Config) *Service {
 		key, err := keychainGetFn()
 		if err != nil {
 			keychainErr = err
-			log.Printf("[daemon] warn: keychain.GetForService(%q) failed: %v — will retry on startup", keychainService, err)
+			log.Printf("[daemon] warn: credential store read failed: %v — will retry on startup", err)
 		}
 		token = key
 	case cfg.DaemonJWT != "":
@@ -865,27 +873,40 @@ var keychainMaxRetries = 3
 // correct — the AC was written before retryKeychain existed; code wins.
 var keychainRetryBase = 2 * time.Second
 
-// retryKeychain retries keychain.Get with linear backoff (2s/4s/8s), surfacing
-// the error state in the tray. Returns nil on success, ErrSetupRequired if the
-// error is permanent (ErrNotFound), or a generic error after all retries are
-// exhausted or the context is cancelled.
+// keychainAccessDeniedPollInterval is how often the idle-degraded loop retries
+// after exhausted ErrAccessDenied (R1, ADR-081 §Decision 3). Exposed as a var
+// so tests can use shorter durations.
+var keychainAccessDeniedPollInterval = 30 * time.Second
+
+// retryKeychain retries credential reads with linear backoff (2s/4s/8s),
+// surfacing the error state in the tray. Returns nil on success or when the
+// context is cancelled. Returns ErrSetupRequired if the error is permanent
+// (ErrNotFound).
 //
 // REV-1: ErrNotFound short-circuit is the FIRST statement — before any tray
 // state change. This ensures computeAuthStatus returns "setup_required" (not
 // "keychain_error") on the next heartbeat tick.
+//
+// R1 (ADR-081 / #1345): after retry exhaustion where ALL failures are
+// ErrAccessDenied, the function enters an idle-degraded loop rather than
+// returning an error. Returning an error would cause Run() → main.go:exit →
+// launchd respawn — a new exit loop. Instead the daemon idles with
+// SetKeychainError(true) set and polls until ctx is cancelled or TryAgain
+// fires + read succeeds. On ctx cancel it returns nil (not an error), so
+// main.go does not call os.Exit.
 func (s *Service) retryKeychain(ctx context.Context) error {
 	// ── REV-1: ErrNotFound short-circuit ──────────────────────────────────────
-	// ErrNotFound is permanent (key never stored / keychain wiped). Retrying
+	// ErrNotFound is permanent (key never stored / credential wiped). Retrying
 	// would loop forever. Clear keychainErr so computeAuthStatus routes to
 	// "setup_required" rather than "keychain_error", then return the sentinel
 	// without touching tray state. Launchd respawn + NeedsFirstRunAuth handles
 	// PKCE re-auth on the next boot.
-	if errors.Is(s.getKeychainErr(), keychain.ErrNotFound) {
+	if errors.Is(s.getKeychainErr(), keychain.ErrNotFound) || errors.Is(s.getKeychainErr(), credstore.ErrNotFound) {
 		s.setKeychainErr(nil)
 		return ErrSetupRequired
 	}
 
-	// ── Transient error: surface tray state and retry ─────────────────────────
+	// ── Transient / access-denied error: surface tray state and retry ─────────
 	if s.trayHooks.SetKeychainError != nil {
 		s.trayHooks.SetKeychainError(true)
 	}
@@ -895,13 +916,17 @@ func (s *Service) retryKeychain(ctx context.Context) error {
 		}
 	}()
 
+	// Track whether every failure in the retry loop was ErrAccessDenied so we
+	// know whether to enter the idle-degraded state after exhaustion.
+	allAccessDenied := true
+
 	for attempt := 1; attempt <= keychainMaxRetries; attempt++ {
 		backoff := keychainRetryBase * time.Duration(attempt)
 		log.Printf("[daemon] keychain retry %d/%d in %s", attempt, keychainMaxRetries, backoff)
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil // context cancelled — do not error out (R1 anti-respawn)
 		case <-s.trayHooks.TryAgain:
 			// User clicked Try Again — retry immediately, skipping backoff.
 			log.Printf("[daemon] keychain retry %d/%d triggered by user", attempt, keychainMaxRetries)
@@ -919,9 +944,56 @@ func (s *Service) retryKeychain(ctx context.Context) error {
 			}
 			return nil
 		}
+		if !errors.Is(err, credstore.ErrAccessDenied) {
+			allAccessDenied = false
+		}
 		log.Printf("[daemon] keychain retry %d/%d failed: %v", attempt, keychainMaxRetries, err)
 	}
 
+	// ── R1: idle-degraded path for exhausted ErrAccessDenied ──────────────────
+	// When every retry returned ErrAccessDenied (OS permission / ACL denial,
+	// the launchd headless scenario from #1345), we MUST NOT return an error.
+	// Returning an error routes to main.go → logAndExitHeadlessKeychain → os.Exit
+	// → launchd respawns → repeat (the "respawn loop" Ray's R1 is fixing).
+	//
+	// Instead: idle with SetKeychainError(true) active and emit telemetry.
+	// The daemon stays alive — it just doesn't dispatch any events. This mirrors
+	// the idleUntilMTGADetected anti-respawn precedent (service.go:1014).
+	//
+	// On TryAgain + successful read: recover and return nil.
+	// On context cancel: return nil (clean exit — supervisor does NOT respawn).
+	if allAccessDenied {
+		log.Printf("[daemon] credential access-denied after %d retries — entering idle-degraded state (no os.Exit, ADR-081 R1)", keychainMaxRetries)
+
+		if s.cfg.AccountID != "" {
+			go s.dispatchKeychainError(ctx, "access_denied")
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return nil // clean exit; launchd/NSSM does NOT respawn
+			case <-s.trayHooks.TryAgain:
+				log.Printf("[daemon] idle-degraded: TryAgain signal received — probing credential")
+			case <-time.After(keychainAccessDeniedPollInterval):
+				log.Printf("[daemon] idle-degraded: periodic credential probe")
+			}
+
+			key, err := s.keychainGet()
+			if err == nil && key != "" {
+				log.Printf("[daemon] idle-degraded: credential read succeeded — resuming normal operation")
+				s.setKeychainErr(nil)
+				s.dispatcher.SetToken(key)
+				if s.ratings != nil {
+					s.ratings.SetToken(key)
+				}
+				return nil
+			}
+			log.Printf("[daemon] idle-degraded: credential still unreadable: %v", err)
+		}
+	}
+
+	// ── Non-access-denied exhaustion: propagate for non-headless tray handling ─
 	// Dispatch daemon.keychain_error only when AccountID is non-empty (post-auth
 	// case B per Ray's OQ-1 verdict). Pre-auth keychain failures are unobservable
 	// via the BFF emission boundary — the event would have no api_key and never

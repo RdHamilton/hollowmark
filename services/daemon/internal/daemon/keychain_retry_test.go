@@ -136,7 +136,11 @@ func TestRetryKeychain_TryAgainSkipsBackoff(t *testing.T) {
 }
 
 // TestRetryKeychain_ContextCancelledExitsEarly verifies that retryKeychain
-// returns the context error when the context is cancelled mid-wait.
+// returns nil (not an error) when the context is cancelled mid-wait.
+//
+// R1 anti-respawn contract (ADR-081 / #1345): returning a non-nil error on
+// context-cancel would bubble to main.go → os.Exit → launchd respawn loop.
+// Returning nil on cancel signals a clean, intentional exit.
 func TestRetryKeychain_ContextCancelledExitsEarly(t *testing.T) {
 	origBase := keychainRetryBase
 	keychainRetryBase = 10 * time.Second // long enough that only cancel fires
@@ -154,8 +158,8 @@ func TestRetryKeychain_ContextCancelledExitsEarly(t *testing.T) {
 
 	err := svc.retryKeychain(ctx)
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	// R1: context cancel must return nil so main.go does NOT call os.Exit.
+	require.NoError(t, err, "context cancel must return nil (R1 anti-respawn contract)")
 	assert.Equal(t, int32(0), calls.Load(), "no keychainGet call expected when context cancelled before backoff")
 }
 
