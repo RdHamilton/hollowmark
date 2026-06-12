@@ -653,6 +653,47 @@ test.describe('Layer 5 — Surface 4: Rank Progression chart (rank_class/rank_le
     await expect(timelineItems.first()).toBeVisible({ timeout: 10_000 });
     const itemCount = await timelineItems.count();
     expect(itemCount).toBeGreaterThan(0);
+
+    // FLAT-CHART REGRESSION GUARD (rank_class/rank_level missing → zero rankValues):
+    // When parseRankString correctly derives rank from the flat "rank" field, the
+    // chart's data maps Gold 1-3 entries to numeric values ≥9 and the progression
+    // summary reflects Gold ranks. When the SPA reads rank_class/rank_level
+    // directly (old bug — both absent from wire), every chartData point gets
+    // rankValue=0 → line flat at Bronze floor, summary shows "Bronze 4".
+    //
+    // We do NOT assert on Recharts SVG internals (.recharts-yAxis tick elements).
+    // Recharts ResponsiveContainer with width="100%" requires a non-zero container
+    // width; in headless Playwright CI (Playwright Docker container) the
+    // ResizeObserver measurement returns 0px, preventing SVG rendering even though
+    // the outer div is visible. This is a known Recharts/headless-browser
+    // interaction — not a product defect. Asserting on .recharts-yAxis tick
+    // selectors in CI produces "element not found" regardless of data correctness.
+    //
+    // The definitive parseRankString regression guard is the progression summary:
+    // parseRankString(last.rank) → rankToNumeric → numericToRank must round-trip
+    // to a Gold value for the last mock entry ("Gold 1"). If rank_class/rank_level
+    // are read directly (→ undefined → rankToNumeric=0 → "Bronze 4"), the summary
+    // shows "Bronze 4" and this assertion fails — catching the exact regression.
+    //
+    // Manifest: rank-progression.json → chart_must_be_non_flat: true.
+    const summaryValues = page.locator('.summary-item .summary-value');
+    // Wait for the progression summary to render before reading values.
+    await expect(summaryValues.first()).toBeVisible({ timeout: 10_000 });
+
+    const summaryTexts: string[] = [];
+    const summaryCount = await summaryValues.count();
+    for (let i = 0; i < summaryCount; i++) {
+      summaryTexts.push((await summaryValues.nth(i).textContent()) ?? '');
+    }
+    const hasGoldSummaryValue = summaryTexts.some(t => t.startsWith('Gold'));
+    expect(
+      hasGoldSummaryValue,
+      'Progression summary must include at least one "Gold" rank value — derived via ' +
+      'parseRankString from mock entries ("Gold 3"/"Gold 2"/"Gold 1"). If rank_class/' +
+      'rank_level are read directly (undefined), rankToNumeric returns 0 and summary ' +
+      `shows "Bronze 4" instead. Summary values: [${summaryTexts.join(', ')}]. ` +
+      'Manifest: rank-progression.json, chart_must_be_non_flat: true',
+    ).toBe(true);
   });
 
   test('rank chart empty state renders correctly when no rank data exists', async ({ page }) => {
