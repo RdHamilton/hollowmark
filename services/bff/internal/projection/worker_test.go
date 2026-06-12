@@ -27,11 +27,42 @@ func (f *fakeEventStore) ListPendingProjection(_ context.Context, limit int) ([]
 	return f.pending, nil
 }
 
+// ListPendingProjectionAfter returns pending rows AFTER (afterTime, afterID).
+// The existing fakeEventStore has no cursor semantics — for simple unit tests
+// that do not exercise the keyset pagination path, we just return all pending
+// rows that haven't been projected (mimicking a DB result).
+func (f *fakeEventStore) ListPendingProjectionAfter(_ context.Context, afterTime time.Time, afterID int64, limit int) ([]repository.DaemonEventRow, error) {
+	var result []repository.DaemonEventRow
+	for i := range f.pending {
+		r := f.pending[i]
+		if r.ReceivedAt.After(afterTime) || (r.ReceivedAt.Equal(afterTime) && r.ID > afterID) {
+			result = append(result, r)
+			if len(result) == limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
 func (f *fakeEventStore) MarkProjected(_ context.Context, id int64) error {
 	if f.projectErr != nil {
 		return f.projectErr
 	}
 	f.projected = append(f.projected, id)
+	return nil
+}
+
+// ResetProjected removes id from the projected set (simulates projected_at=NULL).
+// Existing tests that don't use ResetProjected won't call this.
+func (f *fakeEventStore) ResetProjected(_ context.Context, id int64) error {
+	out := f.projected[:0]
+	for _, pid := range f.projected {
+		if pid != id {
+			out = append(out, pid)
+		}
+	}
+	f.projected = out
 	return nil
 }
 
