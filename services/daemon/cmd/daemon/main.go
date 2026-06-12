@@ -87,26 +87,26 @@ var DefaultCloudAPIURL = "http://localhost:8080/api/v1"
 // snapshot build). The DSN itself is never logged. Issue #1832.
 var DefaultSentryDSN = ""
 
-// DefaultSPAURL is the build-time default URL for the VaultMTG SPA, injected
+// DefaultSPAURL is the build-time default URL for the Hollowmark SPA, injected
 // via -ldflags -X main.DefaultSPAURL=<url>. The release workflow picks the value:
 //
-//	stable tags (daemon/v0.3.1)           -> https://app.vaultmtg.app
+//	stable tags (daemon/v0.3.1)           -> https://app.hollowmark.app
 //	pre-release tags (-rc/-alpha/-beta/-pre) -> https://stg-app.vaultmtg.app
 //
-// Used by tray.New(...) so the tray "Open VaultMTG" menu item opens the
+// Used by tray.New(...) so the tray "Open Hollowmark" menu item opens the
 // correct SPA environment. Local builds default to the production URL — release
 // workflow always overrides via -ldflags. Issue #637.
-var DefaultSPAURL = "https://app.vaultmtg.app"
+var DefaultSPAURL = "https://app.hollowmark.app"
 
 // DefaultSetupURL is the build-time default URL for the first-run setup page,
 // injected via -ldflags -X main.DefaultSetupURL=<url>. The release workflow
 // picks the value:
 //
-//	stable tags (daemon/v0.3.1)           -> https://vaultmtg.app/setup
+//	stable tags (daemon/v0.3.1)           -> https://hollowmark.app/setup
 //	pre-release tags (-rc/-alpha/-beta/-pre) -> https://stg.vaultmtg.app/setup
 //
 // Used by handleMissingConfig and the retry-setup loop. Issue #637.
-var DefaultSetupURL = "https://vaultmtg.app/setup"
+var DefaultSetupURL = "https://hollowmark.app/setup"
 
 // headlessKeychainFatalLog is the canonical FATAL log line emitted when the
 // daemon exits in headless mode because the keychain is unavailable after all

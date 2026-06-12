@@ -128,7 +128,7 @@ type IdentitySet struct {
 	AppBundlePath string
 
 	// TrayLabel is the user-visible tray icon title / tooltip.
-	// "VaultMTG" (stable) or "VaultMTG (Staging)" (staging).
+	// "Hollowmark" (stable) or "Hollowmark (Staging)" (staging).
 	TrayLabel string
 
 	// LocalAPIPort is the loopback TCP port the daemon's local HTTP API listens on.
@@ -210,7 +210,7 @@ func Identity(channel string) IdentitySet {
 		CredentialFile:       filepath.Join(configDir, "credentials"), // ADR-081 §Decision 1
 		LogPath:              logPath,
 		AppBundlePath:        "/Applications/VaultMTG" + s.App + ".app",
-		TrayLabel:            "VaultMTG" + s.Display,
+		TrayLabel:            "Hollowmark" + s.Display,
 		LocalAPIPort:         port,
 		PlistLabelHollowmark: plistLabelHollowmark,
 		PlistPathHollowmark:  plistPathHollowmark,

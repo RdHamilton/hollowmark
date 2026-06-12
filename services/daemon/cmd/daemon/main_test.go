@@ -1423,11 +1423,29 @@ func TestDefaultSPAURL_ProductionDefault(t *testing.T) {
 		"DefaultSPAURL must have a non-empty package-level default")
 }
 
+// TestDefaultSPAURL_SourceDefaultIsHollowmark verifies the source-code default
+// for DefaultSPAURL is the canonical hollowmark.app SPA domain (not the legacy
+// app.vaultmtg.app). The release workflow ldflags inject this same value for
+// stable tags; the source default applies to direct `go build` without ldflags.
+func TestDefaultSPAURL_SourceDefaultIsHollowmark(t *testing.T) {
+	assert.Equal(t, "https://app.hollowmark.app", DefaultSPAURL,
+		"DefaultSPAURL source default must be https://app.hollowmark.app (canonical domain decision)")
+}
+
 // TestDefaultSetupURL_ProductionDefault verifies that the package-level default
 // for DefaultSetupURL is non-empty.
 func TestDefaultSetupURL_ProductionDefault(t *testing.T) {
 	assert.NotEmpty(t, DefaultSetupURL,
 		"DefaultSetupURL must have a non-empty package-level default")
+}
+
+// TestDefaultSetupURL_SourceDefaultIsHollowmark verifies the source-code default
+// for DefaultSetupURL is the canonical hollowmark.app setup domain (not the legacy
+// vaultmtg.app/setup). The release workflow ldflags inject this same value for
+// stable tags.
+func TestDefaultSetupURL_SourceDefaultIsHollowmark(t *testing.T) {
+	assert.Equal(t, "https://hollowmark.app/setup", DefaultSetupURL,
+		"DefaultSetupURL source default must be https://hollowmark.app/setup (canonical domain decision)")
 }
 
 // ---------------------------------------------------------------------------
