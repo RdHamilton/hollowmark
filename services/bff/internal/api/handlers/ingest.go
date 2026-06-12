@@ -189,6 +189,32 @@ func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 // batch paths of IngestEvent so behavior is identical regardless of the wire
 // shape.
 func (h *IngestHandler) processEvent(ctx context.Context, userID int64, event contract.DaemonEvent) {
+	// Ingest-layer mismatch detection (#1336, ADR-080 D7.3).
+	// When the key-bound account_id (set by DaemonAPIKeyAuth) differs from the
+	// client-supplied event.AccountID, emit a WARN log and a metric.  This
+	// indicates a stale-config daemon dispatching events tagged with an old
+	// Clerk identity.  The event is NOT rejected here — this is observability
+	// only; the parking behaviour is the ADR-080 enforcement epic.
+	// Guard: absent key_bound_account_id means legacy APIKeyAuth path — skip.
+	if keyBoundAccountID, ok := bffmiddleware.KeyBoundAccountIDFromContext(ctx); ok {
+		if event.AccountID != keyBoundAccountID {
+			eventHash := identityhash.HashAccountID(event.AccountID)
+			boundHash := identityhash.HashAccountID(keyBoundAccountID)
+			slog.Warn(
+				"[ingest] account_id mismatch: event != key_bound",
+				"event_account_id_hash", eventHash,
+				"key_bound_account_id_hash", boundHash,
+				"user_id", userID,
+			)
+			_ = h.analytics.Capture(ctx, boundHash, analytics.EventDaemonAccountIdMismatch, map[string]any{
+				"account_id_hash":           boundHash,
+				"event_account_id_hash":     eventHash,
+				"key_bound_account_id_hash": boundHash,
+				"user_id":                   userID,
+			})
+		}
+	}
+
 	// Persist the event before broadcasting. A persistence failure is logged
 	// but does not drop the live event — the broadcast still proceeds so the
 	// frontend receives the event even when the database is degraded.

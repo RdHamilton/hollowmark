@@ -18,6 +18,12 @@ type ctxKey string
 
 const ctxKeyUserID ctxKey = "user_id"
 
+// ctxKeyBoundAccountID is the context key used to store the Clerk account_id
+// (string) that is bound to the authenticated daemon api_key row.  Set by
+// DaemonAPIKeyAuth; absent on the legacy APIKeyAuth path.  Handlers compare
+// this value against event.AccountID to detect stale-config daemons (#1336).
+const ctxKeyBoundAccountID ctxKey = "key_bound_account_id"
+
 // activeKeyLister is the subset of APIKeyRepository used by the middleware.
 type activeKeyLister interface {
 	ListAllActive(ctx context.Context) ([]repository.APIKey, error)
@@ -85,6 +91,21 @@ func UserIDFromContext(ctx context.Context) (int64, bool) {
 // tests and middleware-chaining helpers.
 func WithUserID(ctx context.Context, userID int64) context.Context {
 	return context.WithValue(ctx, ctxKeyUserID, userID)
+}
+
+// KeyBoundAccountIDFromContext retrieves the Clerk account_id (string) that is
+// bound to the authenticated daemon api_key, as set by DaemonAPIKeyAuth.
+// Returns ("", false) when the value is absent — for example, on requests
+// authenticated by the legacy APIKeyAuth middleware.
+func KeyBoundAccountIDFromContext(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(ctxKeyBoundAccountID).(string)
+	return v, ok && v != ""
+}
+
+// WithKeyBoundAccountID returns a copy of ctx with the given Clerk account_id
+// stored as the key-bound account.  Intended for DaemonAPIKeyAuth and tests.
+func WithKeyBoundAccountID(ctx context.Context, accountID string) context.Context {
+	return context.WithValue(ctx, ctxKeyBoundAccountID, accountID)
 }
 
 // bearerToken extracts the token from "Authorization: Bearer <token>".
