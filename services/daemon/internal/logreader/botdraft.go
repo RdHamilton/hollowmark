@@ -1,29 +1,32 @@
 package logreader
 
-// botdraft.go — BotDraft (QuickDraft / bot-draft) wire format parsers (#337).
+// botdraft.go — BotDraft (QuickDraft / bot-draft) wire format parsers (#337, #1344).
 //
 // QuickDraft (and other bot drafts) emit a different wire format than Premier
-// (#338). Both shapes are DOUBLY-NESTED: a stringified inner JSON envelope with
-// CAPITALIZED keys and STRINGIFIED grpIds, requiring a double-unmarshal.
+// (#338). The format has two historical shapes:
 //
-// Pack (BotDraft status / pack offer):
+// OLD format (MTGA ≤ 2026.59.x) — doubly-nested: a stringified inner JSON
+// envelope with CAPITALIZED keys and STRINGIFIED grpIds, requiring a
+// double-unmarshal:
 //
-//	{"CurrentModule":"BotDraft","Payload":"{\"Result\":\"Success\",
-//	 \"EventName\":\"QuickDraft_SOS_20260526\",\"DraftStatus\":\"PickNext\",
-//	 \"PackNumber\":0,\"PickNumber\":0,\"NumCardsToPick\":1,
-//	 \"DraftPack\":[\"102470\",...],\"PackStyles\":[],
-//	 \"PickedCards\":[],\"PickedStyles\":[]}"}
+//	Pack:  {"CurrentModule":"BotDraft","Payload":"{\"EventName\":\"QuickDraft_SOS_20260526\",
+//	         \"PackNumber\":0,\"PickNumber\":0,\"DraftPack\":[\"102470\",...]}"}
+//	Pick:  {"id":"<uuid>","request":"{\"EventName\":\"QuickDraft_SOS_20260526\",
+//	         \"PickInfo\":{\"EventName\":\"...\",\"CardIds\":[\"102704\"],
+//	         \"PackNumber\":0,\"PickNumber\":0}}"}
 //
-// Pick (BotDraftDraftPick request):
+// NEW format (MTGA ≥ 2026.60) — Payload and request are native JSON objects
+// (no string-escape wrapping), but grpIds in DraftPack and CardIds remain
+// strings:
 //
-//	{"id":"<uuid>","request":"{\"EventName\":\"QuickDraft_SOS_20260526\",
-//	 \"PickInfo\":{\"EventName\":\"QuickDraft_SOS_20260526\",
-//	 \"CardIds\":[\"102704\"],\"PackNumber\":0,\"PickNumber\":0}}"}
+//	Pack:  {"CurrentModule":"BotDraft","Payload":{"EventName":"QuickDraft_SOS_20260526",
+//	         "PackNumber":0,"PickNumber":0,"DraftPack":["102470",...]}}
+//	Pick:  {"id":"<uuid>","request":{"EventName":"QuickDraft_SOS_20260526",
+//	         "PickInfo":{"CardIds":["102704"],"PackNumber":0,"PickNumber":0}}}
 //
-// PackNumber/PickNumber are 0-based on the wire (no conversion). grpIds are
-// STRINGS and are converted to ints. The parsers reuse the existing
-// DraftPackPayload / DraftPickPayload types so HandlePack/HandlePick and the
-// BFF contract are unchanged.
+// Both parsers accept both shapes. The classifiers in classify.go mirror the
+// same tolerance. The BFF contract (DraftPackPayload / DraftPickPayload) is
+// unchanged — callers are unaffected.
 
 import (
 	"encoding/json"
@@ -31,15 +34,16 @@ import (
 	"strconv"
 )
 
-// botDraftEnvelope is the outer wrapper for a BotDraft status/pack line. The
-// inner Payload is a STRINGIFIED JSON object that must be unmarshalled again.
+// botDraftEnvelope is the outer wrapper for a BotDraft status/pack line.
+// Payload uses json.RawMessage so it can hold either a JSON string (old format)
+// or a JSON object (new format). The parser discriminates at runtime.
 type botDraftEnvelope struct {
-	CurrentModule string `json:"CurrentModule"`
-	Payload       string `json:"Payload"`
+	CurrentModule string          `json:"CurrentModule"`
+	Payload       json.RawMessage `json:"Payload"`
 }
 
 // botDraftStatus is the decoded inner Payload of a BotDraft pack line. grpIds
-// in DraftPack are strings on the wire.
+// in DraftPack are strings on the wire in both old and new formats.
 type botDraftStatus struct {
 	EventName  string   `json:"EventName"`
 	PackNumber int      `json:"PackNumber"`
@@ -47,9 +51,9 @@ type botDraftStatus struct {
 	DraftPack  []string `json:"DraftPack"`
 }
 
-// botDraftPickRequest is the decoded inner "request" string of a
-// BotDraftDraftPick line. The presence of PickInfo distinguishes BotDraft from
-// Premier (which carries DraftId/GrpIds/Pack/Pick instead).
+// botDraftPickRequest is the decoded inner "request" of a BotDraftDraftPick
+// line (old format: JSON string; new format: JSON object). The presence of
+// PickInfo distinguishes BotDraft from Premier (which carries DraftId/GrpIds).
 type botDraftPickRequest struct {
 	EventName string            `json:"EventName"`
 	PickInfo  *botDraftPickInfo `json:"PickInfo"`
@@ -77,11 +81,41 @@ func parseStringGrpIDs(ids []string) ([]int, error) {
 	return out, nil
 }
 
-// ParseBotDraftStatusPack parses a BotDraft pack line (CurrentModule=BotDraft +
-// stringified Payload) into the existing DraftPackPayload. EventName becomes
-// CourseName (the draftstate session key). PackNumber/PickNumber are 0-based on
-// the wire; the within-pack pick is reconstructed into the cumulative 1-based
-// index the draftstate Store expects:
+// decodeBotDraftStatus extracts a botDraftStatus from a Payload RawMessage that
+// is either a JSON string (old format, double-nested) or a JSON object (new
+// format, single-nested).
+func decodeBotDraftStatus(raw json.RawMessage) (botDraftStatus, error) {
+	if len(raw) == 0 {
+		return botDraftStatus{}, fmt.Errorf("BotDraft envelope missing Payload")
+	}
+	var status botDraftStatus
+	if raw[0] == '"' {
+		// Old format: Payload is a JSON-encoded string; unwrap and decode.
+		var inner string
+		if err := json.Unmarshal(raw, &inner); err != nil {
+			return botDraftStatus{}, fmt.Errorf("unwrap BotDraft Payload string: %w", err)
+		}
+		if inner == "" {
+			return botDraftStatus{}, fmt.Errorf("BotDraft envelope empty Payload string")
+		}
+		if err := json.Unmarshal([]byte(inner), &status); err != nil {
+			return botDraftStatus{}, fmt.Errorf("unmarshal BotDraft Payload: %w", err)
+		}
+	} else {
+		// New format: Payload is a JSON object; decode directly.
+		if err := json.Unmarshal(raw, &status); err != nil {
+			return botDraftStatus{}, fmt.Errorf("unmarshal BotDraft Payload: %w", err)
+		}
+	}
+	return status, nil
+}
+
+// ParseBotDraftStatusPack parses a BotDraft pack line
+// (CurrentModule=BotDraft + Payload) into the existing DraftPackPayload.
+// Both old (Payload-as-string) and new (Payload-as-object) wire shapes are
+// accepted. EventName becomes CourseName (the draftstate session key).
+// PackNumber/PickNumber are 0-based on the wire; they are reconstructed into
+// the cumulative 1-based index the draftstate Store expects:
 //
 //	cumulative_1based = PackNumber*15 + PickNumber + 1
 //
@@ -104,13 +138,10 @@ func ParseBotDraftStatusPack(entry *LogEntry) (*DraftPackPayload, error) {
 	if env.CurrentModule != "BotDraft" {
 		return nil, fmt.Errorf("entry CurrentModule is %q, not BotDraft", env.CurrentModule)
 	}
-	if env.Payload == "" {
-		return nil, fmt.Errorf("BotDraft envelope missing Payload")
-	}
 
-	var status botDraftStatus
-	if err := json.Unmarshal([]byte(env.Payload), &status); err != nil {
-		return nil, fmt.Errorf("unmarshal BotDraft Payload: %w", err)
+	status, err := decodeBotDraftStatus(env.Payload)
+	if err != nil {
+		return nil, err
 	}
 
 	cards, err := parseStringGrpIDs(status.DraftPack)
@@ -129,10 +160,45 @@ func ParseBotDraftStatusPack(entry *LogEntry) (*DraftPackPayload, error) {
 	}, nil
 }
 
+// decodeBotDraftPickRequest extracts a botDraftPickRequest from the "request"
+// value in entry.JSON. Accepts both old format (string, double-nested) and new
+// format (object, single-nested).
+func decodeBotDraftPickRequest(entry *LogEntry) (botDraftPickRequest, error) {
+	reqVal, ok := entry.JSON["request"]
+	if !ok || reqVal == nil {
+		return botDraftPickRequest{}, fmt.Errorf("entry missing request field")
+	}
+
+	var reqBytes []byte
+	switch v := reqVal.(type) {
+	case string:
+		// Old format: request is a JSON-encoded string.
+		if v == "" {
+			return botDraftPickRequest{}, fmt.Errorf("entry has empty request string")
+		}
+		reqBytes = []byte(v)
+	default:
+		// New format: request is a JSON object (map[string]interface{} after
+		// JSON unmarshal). Re-marshal it to get canonical bytes for decoding.
+		b, err := json.Marshal(v)
+		if err != nil {
+			return botDraftPickRequest{}, fmt.Errorf("re-marshal request object: %w", err)
+		}
+		reqBytes = b
+	}
+
+	var req botDraftPickRequest
+	if err := json.Unmarshal(reqBytes, &req); err != nil {
+		return botDraftPickRequest{}, fmt.Errorf("unmarshal BotDraftDraftPick request: %w", err)
+	}
+	return req, nil
+}
+
 // ParseBotDraftPick parses a BotDraftDraftPick request line into the existing
-// DraftPickPayload. The pick data is a JSON STRING nested under "request"
-// (double-unmarshal) carrying PickInfo.CardIds. PackNumber/PickNumber are
-// 0-based and passed through unchanged. EventName becomes CourseName.
+// DraftPickPayload. Both old (request-as-string) and new (request-as-object)
+// wire shapes are accepted. PickInfo.CardIds are strings on the wire in both
+// formats. PackNumber/PickNumber are 0-based and passed through unchanged.
+// EventName becomes CourseName.
 //
 // The parser is strict: a request without a PickInfo block is rejected — that
 // is the Premier (DraftId/GrpIds/Pack/Pick) shape, not BotDraft.
@@ -140,14 +206,10 @@ func ParseBotDraftPick(entry *LogEntry) (*DraftPickPayload, error) {
 	if entry == nil || !entry.IsJSON {
 		return nil, fmt.Errorf("entry is not JSON")
 	}
-	reqStr, ok := entry.JSON["request"].(string)
-	if !ok || reqStr == "" {
-		return nil, fmt.Errorf("entry does not contain request string")
-	}
 
-	var req botDraftPickRequest
-	if err := json.Unmarshal([]byte(reqStr), &req); err != nil {
-		return nil, fmt.Errorf("unmarshal BotDraftDraftPick request: %w", err)
+	req, err := decodeBotDraftPickRequest(entry)
+	if err != nil {
+		return nil, err
 	}
 	if req.PickInfo == nil {
 		return nil, fmt.Errorf("BotDraftDraftPick request missing PickInfo")

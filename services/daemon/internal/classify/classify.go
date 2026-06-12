@@ -42,18 +42,30 @@ func ClassifyEntry(entry *logreader.LogEntry) string {
 		}
 	}
 
-	// BotDraft pack: CurrentModule=BotDraft with a stringified Payload envelope
-	// (QuickDraft / bot drafts). The Premier probes above short-circuit first.
+	// BotDraft pack: CurrentModule=BotDraft with a Payload field.
+	// Old format (≤2026.59): Payload is a JSON string. New format (≥2026.60):
+	// Payload is a JSON object. Both shapes are accepted here; the parser
+	// (ParseBotDraftStatusPack) handles the dual-decode. The Premier probes
+	// above short-circuit first so this branch only fires for BotDraft lines.
 	if mod, ok := entry.JSON["CurrentModule"].(string); ok && mod == "BotDraft" {
-		if _, hasPayload := entry.JSON["Payload"].(string); hasPayload {
+		if _, hasPayload := entry.JSON["Payload"]; hasPayload {
 			return "draft.pack"
 		}
 	}
-	// BotDraft pick: BotDraftDraftPick request carries a "request" JSON string
-	// containing a PickInfo block. PickInfo distinguishes it from the Premier
-	// EventPlayerDraftMakePick request (which carries DraftId).
-	if req, ok := entry.JSON["request"].(string); ok && strings.Contains(req, `"PickInfo"`) {
-		return "draft.pick"
+	// BotDraft pick: BotDraftDraftPick request carries PickInfo.
+	// Old format: request is a JSON string containing "PickInfo". New format:
+	// request is a JSON object with a "PickInfo" key. Both shapes are accepted.
+	switch req := entry.JSON["request"].(type) {
+	case string:
+		// Old format — substring match is safe; ParseBotDraftPick re-validates.
+		if strings.Contains(req, `"PickInfo"`) {
+			return "draft.pick"
+		}
+	case map[string]interface{}:
+		// New format — PickInfo is a direct map key.
+		if _, hasPickInfo := req["PickInfo"]; hasPickInfo {
+			return "draft.pick"
+		}
 	}
 
 	// Scene change (draft start/end).

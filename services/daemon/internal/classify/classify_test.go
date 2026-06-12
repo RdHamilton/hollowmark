@@ -71,3 +71,91 @@ func TestClassifyEntry_DeckUpdatedStillClassified(t *testing.T) {
 	}
 	assert.Equal(t, "deck.updated", ClassifyEntry(entry))
 }
+
+// ---------------------------------------------------------------------------
+// BotDraft pack classifier — old vs new MTGA wire format (#1344, Defect 1)
+// ---------------------------------------------------------------------------
+
+// TestClassifyEntry_BotDraftPack_OldFormat_StringPayload verifies the old wire
+// shape (CurrentModule=BotDraft + Payload as a JSON string) still classifies as
+// draft.pack — regression guard for pre-2026.60 clients.
+func TestClassifyEntry_BotDraftPack_OldFormat_StringPayload(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"CurrentModule": "BotDraft",
+			"Payload":       `{"EventName":"QuickDraft_SOS_20260526","PackNumber":0,"PickNumber":0,"DraftPack":["102470"]}`,
+		},
+	}
+	assert.Equal(t, "draft.pack", ClassifyEntry(entry))
+}
+
+// TestClassifyEntry_BotDraftPack_NewFormat_ObjectPayload verifies the new wire
+// shape (CurrentModule=BotDraft + Payload as a JSON object, not a string)
+// classifies as draft.pack.
+//
+// MTGA drifted from a doubly-nested stringified envelope to native objects
+// around 2026.60. Without the Defect-1 fix ClassifyEntry returns "" for all
+// QuickDraft / BotDraft pack lines on new-format clients, making draft packs
+// completely invisible to the daemon.
+func TestClassifyEntry_BotDraftPack_NewFormat_ObjectPayload(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"CurrentModule": "BotDraft",
+			"Payload": map[string]interface{}{
+				"EventName":  "QuickDraft_SOS_20260526",
+				"PackNumber": float64(0),
+				"PickNumber": float64(0),
+				"DraftPack":  []interface{}{"102470", "102645"},
+			},
+		},
+	}
+	assert.Equal(t, "draft.pack", ClassifyEntry(entry))
+}
+
+// ---------------------------------------------------------------------------
+// BotDraft pick classifier — old vs new MTGA wire format (#1344, Defect 1)
+// ---------------------------------------------------------------------------
+
+// TestClassifyEntry_BotDraftPick_OldFormat_StringRequest verifies the old wire
+// shape (request as a JSON string containing PickInfo) still classifies as
+// draft.pick — regression guard for pre-2026.60 clients.
+func TestClassifyEntry_BotDraftPick_OldFormat_StringRequest(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"id":      "ca1131f9-2033-418b-a726-4fd9b567af4d",
+			"request": `{"EventName":"QuickDraft_SOS_20260526","PickInfo":{"CardIds":["102704"],"PackNumber":0,"PickNumber":0}}`,
+		},
+	}
+	assert.Equal(t, "draft.pick", ClassifyEntry(entry))
+}
+
+// TestClassifyEntry_BotDraftPick_NewFormat_ObjectRequest verifies the new wire
+// shape (request as a JSON object, not a string) classifies as draft.pick.
+//
+// MTGA drifted from a doubly-nested stringified request to a native object
+// around 2026.60. Without the Defect-1 fix ClassifyEntry returns "" for all
+// BotDraft pick lines on new-format clients, making picks invisible to the
+// daemon. H1 (Ray's plan gate) — the PickInfo substring match on a string
+// request — does NOT fire on the new format because the type assertion
+// entry.JSON["request"].(string) returns ("", false).
+func TestClassifyEntry_BotDraftPick_NewFormat_ObjectRequest(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"id": "11111111-0000-4000-8000-000000004762",
+			"request": map[string]interface{}{
+				"EventName": "QuickDraft_SOS_20260526",
+				"PickInfo": map[string]interface{}{
+					"EventName":  "QuickDraft_SOS_20260526",
+					"CardIds":    []interface{}{"102473"},
+					"PackNumber": float64(0),
+					"PickNumber": float64(0),
+				},
+			},
+		},
+	}
+	assert.Equal(t, "draft.pick", ClassifyEntry(entry))
+}

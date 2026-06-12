@@ -308,6 +308,74 @@ func TestRealFixture_BotDraftPick_2026_59_20(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// botdraft_pack / botdraft_pick — new MTGA wire format (#1344, Defect 1)
+// ---------------------------------------------------------------------------
+
+// TestRealFixture_BotDraftPack_2026_60 asserts that the new-format BotDraft
+// pack fixture (CurrentModule=BotDraft + Payload as a native JSON object)
+// classifies and parses correctly. Source: corpus catalog sample
+// api-response__BotDraftDraftStatus.json (format-confirmed 2026.60+).
+// There is no draftId on the BotDraft wire — session keyed by EventName.
+func TestRealFixture_BotDraftPack_2026_60(t *testing.T) {
+	entry := loadRealFixture(t, "botdraft_pack_2026.60.log")
+
+	mod, ok := entry.JSON["CurrentModule"].(string)
+	require.True(t, ok, "BotDraft new-format pack fixture must contain CurrentModule key")
+	require.Equal(t, "BotDraft", mod)
+
+	// New format: Payload is a JSON object, not a string.
+	_, isString := entry.JSON["Payload"].(string)
+	require.False(t, isString, "new-format Payload must NOT be a string")
+	_, isMap := entry.JSON["Payload"].(map[string]interface{})
+	require.True(t, isMap, "new-format Payload must be a JSON object")
+
+	p, err := ParseBotDraftStatusPack(entry)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+
+	assert.Equal(t, "QuickDraft_SOS_20260526", p.CourseName)
+	assert.Equal(t, "", p.DraftID)
+	// Pack 0 / Pick 0 → cumulative 1-based SelfPick = 1.
+	assert.Equal(t, 1, p.DraftPack.SelfPick)
+
+	require.Len(t, p.DraftPack.PackCards, 14)
+	packSet := make(map[int]bool, len(p.DraftPack.PackCards))
+	for _, id := range p.DraftPack.PackCards {
+		packSet[id] = true
+	}
+	assert.True(t, packSet[102644], "GRP 102644 must be present in new-format pack")
+	assert.True(t, packSet[102523], "GRP 102523 must be present in new-format pack")
+	assert.True(t, packSet[102736], "GRP 102736 must be present in new-format pack")
+}
+
+// TestRealFixture_BotDraftPick_2026_60 asserts that the new-format BotDraft
+// pick fixture (request as a native JSON object) classifies and parses
+// correctly. Source: corpus catalog sample api-request__BotDraftDraftPick.json
+// (format-confirmed 2026.60+). The outer id is a sanitized stable fake.
+func TestRealFixture_BotDraftPick_2026_60(t *testing.T) {
+	entry := loadRealFixture(t, "botdraft_pick_2026.60.log")
+
+	// New format: request is a JSON object, not a string.
+	_, isString := entry.JSON["request"].(string)
+	require.False(t, isString, "new-format request must NOT be a string")
+	reqMap, isMap := entry.JSON["request"].(map[string]interface{})
+	require.True(t, isMap, "new-format request must be a JSON object")
+	_, hasPickInfo := reqMap["PickInfo"]
+	require.True(t, hasPickInfo, "new-format request object must contain PickInfo key")
+
+	p, err := ParseBotDraftPick(entry)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+
+	assert.Equal(t, "QuickDraft_SOS_20260526", p.CourseName)
+	assert.Equal(t, "", p.DraftID)
+	assert.Equal(t, 0, p.PackNumber)
+	assert.Equal(t, 0, p.PickNumber)
+	require.Len(t, p.PickedCards, 1)
+	assert.Equal(t, 102473, p.PickedCards[0])
+}
+
+// ---------------------------------------------------------------------------
 // collection_updated
 // ---------------------------------------------------------------------------
 
