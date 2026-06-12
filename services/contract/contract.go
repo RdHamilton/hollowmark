@@ -67,13 +67,29 @@ type DeckSummary struct {
 	Format string `json:"format"`
 }
 
+// MasteryInfo carries the player's mastery pass state as read from the
+// MasteryPass object inside InventoryInfo in the Arena login blob.
+// Used by InventoryUpdatedPayload.Mastery (additive field, #1338).
+type MasteryInfo struct {
+	// Level is the player's current mastery level (maps to InventoryInfo.MasteryPass.CurrentLevel).
+	Level int `json:"level"`
+	// PassType is the pass tier string (e.g. "Basic", "Standard", "Premium").
+	// Maps to InventoryInfo.MasteryPass.PassType.
+	PassType string `json:"pass_type"`
+	// Max is the maximum level available in the current season
+	// (maps to InventoryInfo.MasteryPass.MaxLevel).
+	Max int `json:"max"`
+}
+
 // InventoryUpdatedPayload is embedded in a DaemonEvent with Type "inventory.updated".
 // It carries the player's current gem/gold/wildcard counts, booster holdings,
-// and — when parsed from a login blob — the full deck header library (Decks).
+// and — when parsed from a login blob — the full deck header library (Decks)
+// and mastery pass state (Mastery).
 //
-// Decks is additive: older daemon versions that do not populate it will produce
-// an empty slice; the BFF projection worker skips the fan-out when Decks is
-// empty. No contract version bump required (JSON omitempty on the wire).
+// Decks and Mastery are additive: older daemon versions that do not populate
+// them will produce nil/empty values; the BFF projection worker skips fan-outs
+// when these fields are nil/empty. No contract version bump required for Decks
+// (JSON omitempty on the wire). Mastery requires v0.1.8 (#1338).
 type InventoryUpdatedPayload struct {
 	Gems               int                `json:"gems"`
 	Gold               int                `json:"gold"`
@@ -88,6 +104,10 @@ type InventoryUpdatedPayload struct {
 	// when DeckSummaries is present (Arena 2026.60+). Omitted from the wire
 	// payload when empty so older BFF versions ignore it gracefully.
 	Decks []DeckSummary `json:"decks,omitempty"`
+	// Mastery carries the player's mastery pass state from the MasteryPass object
+	// inside InventoryInfo. Populated by the daemon's ParseInventoryEntry when
+	// MasteryPass is present. Nil when absent so older BFF versions ignore it.
+	Mastery *MasteryInfo `json:"mastery,omitempty"`
 }
 
 // QuestProgressPayload is embedded in a DaemonEvent with Type "quest.progress".

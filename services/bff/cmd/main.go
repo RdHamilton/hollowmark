@@ -715,6 +715,10 @@ func main() {
 			worker.WithDraftDeckCreator(decksRepo)
 			worker.WithDraftPickReader(draftSessionsRepo)
 			worker.WithAnalyticsClient(analyticsClient)
+			// Wire deck-summary (header-only) fan-out from inventory.updated (#1337).
+			worker.WithDeckSummaryStore(deckProjectorRepo)
+			// Wire mastery pass fan-out from inventory.updated (#1338).
+			worker.WithMasteryStore(repository.NewAccountMasteryRepository(sqlDB))
 			go worker.Run(projCtx)
 		} else {
 			log.Println("BFF_PROJECTION_DISABLED=true — projection worker not started.")
