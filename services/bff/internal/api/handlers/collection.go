@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -33,7 +34,8 @@ import (
 // concrete repository.CollectionRepository satisfies it; tests stub it
 // directly.
 type collectionReader interface {
-	ListCollection(ctx context.Context, accountID int64, f repository.CollectionFilter) ([]repository.CollectionItem, error)
+	ListCollectionPage(ctx context.Context, accountID int64, f repository.CollectionFilter, p repository.CollectionPage) ([]repository.CollectionItem, error)
+	CountFilteredCollection(ctx context.Context, accountID int64, f repository.CollectionFilter) (int, error)
 	CountCollection(ctx context.Context, accountID int64) (repository.CollectionCounts, error)
 	CountByRarity(ctx context.Context, accountID int64) ([]repository.RarityCount, error)
 	SetCardCount(ctx context.Context, setCode string) (int, error)
@@ -58,14 +60,24 @@ func NewCollectionHandler(c collectionReader, accounts AccountLookup) *Collectio
 // ─── wire shapes ────────────────────────────────────────────────────────────
 
 // collectionFilterRequest mirrors the SPA's CollectionFilter (snake_case to
-// match the existing daemon contract).
+// match the existing daemon contract). New pagination + search + sort fields
+// are added for #1325; zero-values produce the same behaviour as before.
 type collectionFilterRequest struct {
 	SetCode     string   `json:"set_code"`
 	Rarity      string   `json:"rarity"`
 	Colors      []string `json:"colors"`
 	OwnedOnly   bool     `json:"owned_only"`
 	MissingOnly bool     `json:"missing_only"`
+	// Pagination (#1325)
+	Page  int `json:"page"`  // 1-indexed; 0 treated as 1
+	Limit int `json:"limit"` // rows per page; 0 treated as defaultPageLimit
+	// Server-side search + sort (#1325)
+	Search   string `json:"search"`    // ILIKE against name/set_code
+	SortBy   string `json:"sort_by"`   // name|quantity|rarity|cmc|price
+	SortDesc bool   `json:"sort_desc"` // descending when true
 }
+
+const defaultPageLimit = 50
 
 // collectionCardResponse is one item in the list response — matches the
 // SPA's gui.CollectionCard (camelCase keys).
@@ -96,6 +108,8 @@ type collectionResponse struct {
 	Cards                 []collectionCardResponse `json:"cards"`
 	TotalCount            int                      `json:"totalCount"`
 	FilterCount           int                      `json:"filterCount"`
+	TotalPages            int                      `json:"totalPages"`
+	Page                  int                      `json:"page"`
 	UnknownCardsRemaining int                      `json:"unknownCardsRemaining"`
 	UnknownCardsFetched   int                      `json:"unknownCardsFetched"`
 }
@@ -160,7 +174,14 @@ type collectionValueResponse struct {
 // ─── handlers ───────────────────────────────────────────────────────────────
 
 // List handles POST /api/v1/collection. Returns the user's collection,
-// filtered per the request body, with metadata counts.
+// filtered per the request body, with metadata counts and pagination.
+//
+// Response fields:
+//   - totalCount  = CountCollection.UniqueCards (all owned unique cards, no filter)
+//   - filterCount = CountFilteredCollection (unique cards matching the current filter)
+//   - totalPages  = ceil(filterCount / limit)
+//   - page        = the requested page (1-indexed)
+//   - cards       = one page of CollectionItem rows (server-sorted, server-searched)
 func (h *CollectionHandler) List(w http.ResponseWriter, r *http.Request) {
 	accountID, found, ok := h.resolveAccount(w, r, "List")
 	if !ok {
@@ -177,25 +198,52 @@ func (h *CollectionHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalise pagination defaults.
+	page := req.Page
+	if page < 1 {
+		page = 1
+	}
+	limit := req.Limit
+	if limit < 1 {
+		limit = defaultPageLimit
+	}
+
 	filter := repository.CollectionFilter{
 		SetCode:     strings.TrimSpace(req.SetCode),
 		Rarity:      strings.TrimSpace(req.Rarity),
 		Colors:      dedupeNonEmpty(req.Colors),
 		OwnedOnly:   req.OwnedOnly,
 		MissingOnly: req.MissingOnly,
+		Search:      strings.TrimSpace(req.Search),
+		SortBy:      strings.TrimSpace(req.SortBy),
+		SortDesc:    req.SortDesc,
 	}
+	pageParams := repository.CollectionPage{Page: page, Limit: limit}
 
-	rows, err := h.collection.ListCollection(r.Context(), accountID, filter)
+	rows, err := h.collection.ListCollectionPage(r.Context(), accountID, filter, pageParams)
 	if err != nil {
-		log.Printf("[CollectionHandler.List] ListCollection accountID=%d: %v", accountID, err)
+		log.Printf("[CollectionHandler.List] ListCollectionPage accountID=%d: %v", accountID, err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	// totalCount = all unique owned cards (unfiltered) — handler:207 per Ray's rule 5.
 	totals, err := h.collection.CountCollection(r.Context(), accountID)
 	if err != nil {
 		log.Printf("[CollectionHandler.List] CountCollection accountID=%d: %v", accountID, err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
+	}
+	// filterCount = cards matching the current filter (drives totalPages).
+	filterCount, err := h.collection.CountFilteredCollection(r.Context(), accountID, filter)
+	if err != nil {
+		log.Printf("[CollectionHandler.List] CountFilteredCollection accountID=%d: %v", accountID, err)
+		writeJSONError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	totalPages := int(math.Ceil(float64(filterCount) / float64(limit)))
+	if totalPages < 1 {
+		totalPages = 1
 	}
 
 	cards := make([]collectionCardResponse, 0, len(rows))
@@ -205,7 +253,9 @@ func (h *CollectionHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeMatchesJSON(w, collectionResponse{
 		Cards:       cards,
 		TotalCount:  totals.UniqueCards,
-		FilterCount: len(cards),
+		FilterCount: filterCount,
+		TotalPages:  totalPages,
+		Page:        page,
 	})
 }
 

@@ -31,7 +31,11 @@ func (c *collectionAccountLookup) GetAccountIDByUserID(_ context.Context, _ int6
 type stubCollectionReader struct {
 	listRows   []repository.CollectionItem
 	listFilter repository.CollectionFilter
+	listPage   repository.CollectionPage
 	listErr    error
+
+	filteredCount int
+	filteredErr   error
 
 	counts    repository.CollectionCounts
 	countsErr error
@@ -55,9 +59,14 @@ type stubCollectionReader struct {
 	lastUpdatedEr error
 }
 
-func (s *stubCollectionReader) ListCollection(_ context.Context, _ int64, f repository.CollectionFilter) ([]repository.CollectionItem, error) {
+func (s *stubCollectionReader) ListCollectionPage(_ context.Context, _ int64, f repository.CollectionFilter, p repository.CollectionPage) ([]repository.CollectionItem, error) {
 	s.listFilter = f
+	s.listPage = p
 	return s.listRows, s.listErr
+}
+
+func (s *stubCollectionReader) CountFilteredCollection(_ context.Context, _ int64, _ repository.CollectionFilter) (int, error) {
+	return s.filteredCount, s.filteredErr
 }
 
 func (s *stubCollectionReader) CountCollection(_ context.Context, _ int64) (repository.CollectionCounts, error) {

@@ -31,6 +31,15 @@ type CollectionFilter struct {
 	Colors      []string // any-of match against the set_cards.colors JSON array
 	OwnedOnly   bool     // require count > 0 (always true today; kept for API symmetry)
 	MissingOnly bool     // require count = 0 (rare — an account row only exists for owned cards, so this returns nothing today)
+	Search      string   // ILIKE against sc.name and sc.set_code (applied in CTE, not outer WHERE)
+	SortBy      string   // one of: name, quantity, rarity, cmc, price (default: name)
+	SortDesc    bool     // descending when true
+}
+
+// CollectionPage carries pagination parameters for ListCollectionPage.
+type CollectionPage struct {
+	Page  int // 1-indexed
+	Limit int // rows per page
 }
 
 // CollectionItem is a single card in the collection-list response — joined
@@ -169,6 +178,206 @@ func (r *CollectionRepository) ListCollection(ctx context.Context, accountID int
 	}
 	return out, rows.Err()
 }
+
+// ─── shared CTE/WHERE builder ────────────────────────────────────────────────
+
+// collectionClauses holds the pre-built SQL fragments shared between
+// ListCollectionPage and CountFilteredCollection. Using one builder ensures
+// the two functions always agree on which rows are "in the filtered set".
+type collectionClauses struct {
+	scWhere   string // fragment injected into the sc CTE WHERE clause
+	ciWhere   string // fragment appended to the outer WHERE clause
+	args      []any  // positional args so far ($1 = accountID, $2...$N = filter values)
+	nextParam int    // next positional placeholder index
+}
+
+// buildCollectionClauses constructs the shared WHERE/CTE fragment for a given
+// account + filter. The caller appends its own args (pagination, etc.) starting
+// at c.nextParam.
+//
+// Rules enforced here:
+//   - sc predicates (SetCode, Rarity, Colors, Search) go in the CTE WHERE so
+//     DISTINCT ON picks the correct printing (not the globally-lowest-id one).
+//   - When any sc predicate is active, sc.arena_id IS NOT NULL is added to the
+//     outer WHERE so cards with no matching printing are excluded.
+//   - Search matches sc.name ILIKE and sc.set_code ILIKE — both in the CTE.
+func buildCollectionClauses(accountID int64, f CollectionFilter) collectionClauses {
+	ciClauses := []string{"ci.account_id = $1"}
+	args := []any{accountID}
+	next := 2
+
+	if !f.MissingOnly {
+		ciClauses = append(ciClauses, "ci.count > 0")
+	} else {
+		ciClauses = append(ciClauses, "ci.count = 0")
+	}
+
+	var scClauses []string
+
+	if f.SetCode != "" {
+		scClauses = append(scClauses, "lower(set_code) = lower($"+strconv.Itoa(next)+")")
+		args = append(args, f.SetCode)
+		next++
+	}
+	if f.Rarity != "" {
+		scClauses = append(scClauses, "lower(rarity) = lower($"+strconv.Itoa(next)+")")
+		args = append(args, f.Rarity)
+		next++
+	}
+	for _, color := range f.Colors {
+		scClauses = append(scClauses, "colors ILIKE $"+strconv.Itoa(next))
+		args = append(args, "%\""+strings.ToUpper(strings.TrimSpace(color))+"\"%")
+		next++
+	}
+	if f.Search != "" {
+		// Search matches name OR set_code — both stay in the CTE to preserve
+		// the reprint-dedup invariant.
+		scClauses = append(scClauses, "(lower(name) LIKE lower($"+strconv.Itoa(next)+")")
+		args = append(args, "%"+strings.TrimSpace(f.Search)+"%")
+		next++
+		scClauses[len(scClauses)-1] += " OR lower(set_code) LIKE lower($" + strconv.Itoa(next) + "))"
+		args = append(args, "%"+strings.TrimSpace(f.Search)+"%")
+		next++
+	}
+
+	scWhere := ""
+	if len(scClauses) > 0 {
+		scWhere = "\n\t\t\t\tWHERE " + strings.Join(scClauses, " AND ")
+		ciClauses = append(ciClauses, "sc.arena_id IS NOT NULL")
+	}
+
+	return collectionClauses{
+		scWhere:   scWhere,
+		ciWhere:   strings.Join(ciClauses, " AND "),
+		args:      args,
+		nextParam: next,
+	}
+}
+
+// collectionOrderBy returns the ORDER BY clause for a given sort column. All
+// variants end in "ci.card_id" as a unique tiebreaker to guarantee deterministic
+// page boundaries under OFFSET pagination.
+func collectionOrderBy(sortBy string, desc bool) string {
+	dir := "ASC"
+	if desc {
+		dir = "DESC"
+	}
+	var primary string
+	switch sortBy {
+	case "quantity":
+		primary = "ci.count " + dir
+	case "rarity":
+		// Rarity as a ranked value: mythic > rare > uncommon > common.
+		primary = "CASE lower(sc.rarity) WHEN 'mythic' THEN 4 WHEN 'rare' THEN 3 WHEN 'uncommon' THEN 2 WHEN 'common' THEN 1 ELSE 0 END " + dir
+	case "cmc":
+		primary = "COALESCE(sc.cmc, 0) " + dir
+	case "price":
+		primary = "COALESCE(sc.price_usd, 0) " + dir
+	default: // "name" and anything unrecognised
+		primary = "COALESCE(sc.name, '') " + dir
+	}
+	return primary + ", ci.card_id ASC"
+}
+
+// ─── ListCollectionPage ───────────────────────────────────────────────────────
+
+// ListCollectionPage returns a single page of the joined collection rows for the
+// account, with server-side filtering, sorting, and OFFSET pagination. It uses
+// the same shared CTE builder as CountFilteredCollection so the two always agree
+// on which rows are "in scope".
+func (r *CollectionRepository) ListCollectionPage(ctx context.Context, accountID int64, f CollectionFilter, p CollectionPage) ([]CollectionItem, error) {
+	c := buildCollectionClauses(accountID, f)
+
+	// Append LIMIT/OFFSET as the final two positional parameters.
+	limitParam := "$" + strconv.Itoa(c.nextParam)
+	offsetParam := "$" + strconv.Itoa(c.nextParam+1)
+	offset := (p.Page - 1) * p.Limit
+	args := append(c.args, p.Limit, offset)
+
+	q := `
+		WITH sc AS (
+			SELECT DISTINCT ON (arena_id) *
+			FROM set_cards` + c.scWhere + `
+			ORDER BY arena_id, id
+		)
+		SELECT
+			ci.card_id,
+			COALESCE(sc.arena_id::INT, ci.card_id),
+			ci.count,
+			COALESCE(sc.name, ''),
+			COALESCE(sc.set_code, ''),
+			COALESCE(s.name, ''),
+			COALESCE(sc.rarity, ''),
+			COALESCE(sc.mana_cost, ''),
+			COALESCE(sc.cmc, 0),
+			COALESCE(sc.types, ''),
+			COALESCE(sc.colors, '[]'),
+			'[]',
+			CASE WHEN sc.image_url IS NOT NULL THEN json_build_object('normal', sc.image_url)::TEXT ELSE '{}' END,
+			sc.power,
+			sc.toughness,
+			sc.price_usd,
+			sc.price_usd_foil,
+			sc.price_eur,
+			EXTRACT(EPOCH FROM sc.prices_updated_at)::BIGINT
+		FROM card_inventory ci
+		LEFT JOIN sc ON sc.arena_id = ci.card_id::TEXT
+		LEFT JOIN sets s ON s.code = sc.set_code
+		WHERE ` + c.ciWhere + `
+		ORDER BY ` + collectionOrderBy(f.SortBy, f.SortDesc) + `
+		LIMIT ` + limitParam + ` OFFSET ` + offsetParam
+
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		observability.ReportError(ctx, err, map[string]string{"component": "db", "table": "card_inventory"})
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []CollectionItem
+	for rows.Next() {
+		var ci CollectionItem
+		if err := rows.Scan(
+			&ci.CardID, &ci.ArenaID, &ci.Quantity, &ci.Name, &ci.SetCode, &ci.SetName,
+			&ci.Rarity, &ci.ManaCost, &ci.CMC, &ci.TypeLine, &ci.Colors, &ci.ColorIdentity,
+			&ci.ImageURIs, &ci.Power, &ci.Toughness,
+			&ci.PriceUSD, &ci.PriceUSDFoil, &ci.PriceEUR, &ci.PricesUpdated,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, ci)
+	}
+	return out, rows.Err()
+}
+
+// ─── CountFilteredCollection ─────────────────────────────────────────────────
+
+// CountFilteredCollection returns the number of distinct owned cards that match
+// the given filter. It uses the same shared CTE builder as ListCollectionPage,
+// so the count always agrees with the list result's total across all pages.
+func (r *CollectionRepository) CountFilteredCollection(ctx context.Context, accountID int64, f CollectionFilter) (int, error) {
+	c := buildCollectionClauses(accountID, f)
+
+	q := `
+		WITH sc AS (
+			SELECT DISTINCT ON (arena_id) arena_id
+			FROM set_cards` + c.scWhere + `
+			ORDER BY arena_id, id
+		)
+		SELECT COUNT(*)
+		FROM card_inventory ci
+		LEFT JOIN sc ON sc.arena_id = ci.card_id::TEXT
+		WHERE ` + c.ciWhere
+
+	var n int
+	if err := r.db.QueryRowContext(ctx, q, c.args...).Scan(&n); err != nil {
+		observability.ReportError(ctx, err, map[string]string{"component": "db", "table": "card_inventory"})
+		return 0, err
+	}
+	return n, nil
+}
+
+// ─── CollectionCounts ────────────────────────────────────────────────────────
 
 // CollectionCounts is the aggregated total + unique count for the account.
 // Per-rarity counts come from CollectionStatsByRarity below.

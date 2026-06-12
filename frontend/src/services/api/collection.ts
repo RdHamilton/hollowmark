@@ -19,7 +19,10 @@ export type CollectionStats = gui.CollectionStats;
 export type CollectionChangeEntry = gui.CollectionChangeEntry;
 
 /**
- * Filter for collection queries.
+ * Filter and pagination for collection queries.
+ *
+ * New in #1325: search, sort_by, sort_desc, page, limit are sent to the BFF
+ * for server-side execution. The SPA no longer does client-side search/sort.
  */
 export interface CollectionFilter {
   set_code?: string;
@@ -27,31 +30,46 @@ export interface CollectionFilter {
   colors?: string[];
   owned_only?: boolean;
   missing_only?: boolean;
+  // Server-side search + sort (#1325)
+  search?: string;
+  sort_by?: string;
+  sort_desc?: boolean;
+  // Pagination (#1325)
+  page?: number;
+  limit?: number;
 }
 
 /**
  * Response from collection API.
+ *
+ * New in #1325:
+ *   - totalCount = UniqueCards (all owned, no filter) — for "Total Cards:" header stat
+ *   - filterCount = cards matching current filter — for "Cards in Set:" and "Showing X of Y"
+ *   - totalPages  = ceil(filterCount / limit) — server-computed pagination
+ *   - page        = the page returned
  */
 export interface CollectionResponse {
   cards: CollectionCard[];
   totalCount: number;
   filterCount: number;
-  unknownCardsRemaining: number;   // Cards without metadata that need Scryfall lookup
-  unknownCardsFetched: number;     // Cards fetched from Scryfall in this request
+  totalPages: number;
+  page: number;
+  unknownCardsRemaining: number;
+  unknownCardsFetched: number;
 }
 
 /**
- * Get collection with optional filters.
- * Returns full response including metadata counts.
+ * Get collection with optional filters and pagination.
+ * Returns full response including server-computed counts and pagination metadata.
  */
 export async function getCollectionWithMetadata(filter: CollectionFilter = {}): Promise<CollectionResponse> {
   const response = await post<CollectionResponse>('/collection', filter);
-  // Defensive: BFF will always return a populated envelope, but the SPA
-  // historically tolerated nulls so keep the fallback.
   return {
     cards: response?.cards ?? [],
     totalCount: response?.totalCount ?? 0,
     filterCount: response?.filterCount ?? 0,
+    totalPages: response?.totalPages ?? 1,
+    page: response?.page ?? 1,
     unknownCardsRemaining: response?.unknownCardsRemaining ?? 0,
     unknownCardsFetched: response?.unknownCardsFetched ?? 0,
   };
