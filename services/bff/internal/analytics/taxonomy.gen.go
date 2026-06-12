@@ -134,4 +134,12 @@ const (
 	// EventExportDeck corresponds to the "export_deck" PostHog event.
 	// Category: feature_use | Surface: bff | Consent: analytics
 	EventExportDeck = "export_deck"
+
+	// EventAccountDuplicateDetected corresponds to the "account_duplicate_detected" PostHog event.
+	// Category: system | Surface: bff | Consent: necessary
+	EventAccountDuplicateDetected = "account_duplicate_detected"
+
+	// EventAccountDuplicateCanaryTriggered corresponds to the "account_duplicate_canary_triggered" PostHog event.
+	// Category: system | Surface: bff | Consent: necessary
+	EventAccountDuplicateCanaryTriggered = "account_duplicate_canary_triggered"
 )

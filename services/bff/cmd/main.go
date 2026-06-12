@@ -385,7 +385,7 @@ func main() {
 		daemonEventsRepo := repository.NewDaemonEventsRepository(sqlDB)
 		ingestHandler = ingestHandler.WithRepository(daemonEventsRepo)
 
-		accountRepo := repository.NewAccountRepository(sqlDB)
+		accountRepo := repository.NewAccountRepository(sqlDB).WithAnalyticsClient(analyticsClient)
 		matchesRepo := repository.NewMatchesRepository(sqlDB)
 		draftSessionsRepo := repository.NewDraftSessionsRepository(sqlDB)
 		deckListRepo := repository.NewDeckListRepository(sqlDB)
@@ -723,6 +723,11 @@ func main() {
 		} else {
 			log.Println("BFF_PROJECTION_DISABLED=true — projection worker not started.")
 		}
+
+		// D7.1 (ticket #1335): daily canary — detect users with more than one
+		// accounts row.  Fires at startup and then every 24 hours.  Uses projCtx
+		// so it exits cleanly on SIGTERM alongside the projection worker.
+		go runDuplicateAccountCanary(projCtx, accountRepo, analyticsClient)
 	} else {
 		log.Printf("WARN: no DATABASE_URL — API key auth unavailable (env=%s); guarded endpoints return 503", cfg.Env)
 	}
@@ -2093,4 +2098,61 @@ func buildAccountDeletionHandler(
 
 	// resolver uses the DeletionRepository's ResolveAllAccountIDs method (#1333).
 	return handlers.NewAccountDeletionHandler(db, erasureSvc)
+}
+
+// duplicateAccountChecker is the subset of AccountRepository used by the canary.
+type duplicateAccountChecker interface {
+	CheckDuplicateAccounts(ctx context.Context) ([]repository.DuplicateAccountRow, error)
+}
+
+// runDuplicateAccountCanary is the D7.1 daily canary (ticket #1335).
+// It fires once at startup and then every 24 hours.  When duplicates are found
+// it logs at WARN level and emits an operational analytics event.
+// The function blocks until ctx is cancelled (SIGTERM).
+func runDuplicateAccountCanary(ctx context.Context, checker duplicateAccountChecker, ac *analytics.Client) {
+	const interval = 24 * time.Hour
+
+	check := func() {
+		dups, err := checker.CheckDuplicateAccounts(ctx)
+		if err != nil {
+			log.Printf("[WARN] canary: CheckDuplicateAccounts failed: %v", err)
+			return
+		}
+		if len(dups) == 0 {
+			log.Println("[INFO] canary: no duplicate accounts rows found")
+			return
+		}
+
+		log.Printf("[WARN] canary: %d user(s) have more than one accounts row — investigate immediately", len(dups))
+
+		if ac == nil {
+			return
+		}
+		if err := ac.Capture(
+			ctx,
+			"canary",
+			analytics.EventAccountDuplicateCanaryTriggered,
+			map[string]any{
+				"affected_user_count": int64(len(dups)),
+			},
+			analytics.CaptureOptions{Operational: true},
+		); err != nil {
+			log.Printf("[WARN] canary: analytics emit failed: %v", err)
+		}
+	}
+
+	// Run immediately on startup.
+	check()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			check()
+		}
+	}
 }
