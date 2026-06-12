@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,6 +23,7 @@ const DefaultHeartbeatInterval = 30 * time.Second
 // event is the internal wire format sent over each subscriber channel.
 type event struct {
 	Name string
+	ID   string // SSE id: field; empty means no id: line is written
 	Data string
 }
 
@@ -119,6 +121,50 @@ func (b *Broker) Publish(userID int64, e contract.DaemonEvent) {
 	}
 }
 
+// readModelUpdatedData is the JSON payload for readmodel.updated frames.
+type readModelUpdatedData struct {
+	Domains []string `json:"domains"`
+}
+
+// PublishReadModelUpdated sends a coalesced "readmodel.updated" SSE frame to
+// all subscribers of userID.  domains is the set of read-model domains that
+// changed in the projection pass (e.g. ["matches", "decks"]).  maxEventID is
+// the maximum daemon_events.id covered by the pass; it becomes the SSE id:
+// field so #1348 Last-Event-ID replay can key on it.
+//
+// The frame format is:
+//
+//	event: readmodel.updated
+//	id: <maxEventID>
+//	data: {"domains":["matches","decks"]}
+func (b *Broker) PublishReadModelUpdated(userID int64, domains []string, maxEventID int64) {
+	data, err := json.Marshal(readModelUpdatedData{Domains: domains})
+	if err != nil {
+		log.Printf("[sse] PublishReadModelUpdated marshal error: %v", err)
+		return
+	}
+
+	ev := event{
+		Name: "readmodel.updated",
+		ID:   strconv.FormatInt(maxEventID, 10),
+		Data: string(data),
+	}
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for sub := range b.subscribers {
+		if sub.userID != userID {
+			continue
+		}
+		select {
+		case sub.ch <- ev:
+		default:
+			log.Printf("[sse] slow_client_drop userID=%d event=readmodel.updated channel_capacity=%d", sub.userID, cap(sub.ch))
+		}
+	}
+}
+
 // SubscriberCount returns the number of currently connected SSE clients.
 // Intended for metrics and tests.
 func (b *Broker) SubscriberCount() int {
@@ -208,6 +254,9 @@ func (b *Broker) Handler(extractUserID UserIDExtractor) http.HandlerFunc {
 
 				if ev.Name != "" {
 					_, _ = fmt.Fprintf(w, "event: %s\n", ev.Name)
+				}
+				if ev.ID != "" {
+					_, _ = fmt.Fprintf(w, "id: %s\n", ev.ID)
 				}
 
 				_, _ = fmt.Fprintf(w, "data: %s\n\n", ev.Data)

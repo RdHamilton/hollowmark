@@ -236,6 +236,18 @@ func isFKViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.ForeignKeyViolation
 }
 
+// ReadModelNotifier is implemented by any type that can publish a coalesced
+// readmodel.updated SSE notification per (userID, domain) set.  The projection
+// worker calls it after MarkProjected succeeds so that any subscriber that
+// re-queries the read-model endpoints sees the newly projected rows.
+//
+// maxEventID is the maximum daemon_events.id projected in the pass for the
+// given user — it becomes the SSE frame's id: field so #1348 Last-Event-ID
+// replay composes correctly.
+type ReadModelNotifier interface {
+	PublishReadModelUpdated(userID int64, domains []string, maxEventID int64)
+}
+
 // Worker projects pending daemon_events rows into their destination tables.
 type Worker struct {
 	events        daemonEventStore
@@ -256,6 +268,7 @@ type Worker struct {
 	counters      counterStore
 	dlq           dlqStore
 	analytics     *analytics.Client
+	notifier      ReadModelNotifier // optional; wired via WithNotifier (ADR-084)
 }
 
 // NewWorker returns a Worker wired with the provided stores.
@@ -357,6 +370,14 @@ func (w *Worker) WithAnalyticsClient(c *analytics.Client) *Worker {
 	return w
 }
 
+// WithNotifier wires a ReadModelNotifier into the worker (ADR-084).  When
+// wired, runOnce publishes a coalesced readmodel.updated SSE event per
+// (userID, domain) after each projection pass completes.
+func (w *Worker) WithNotifier(n ReadModelNotifier) *Worker {
+	w.notifier = n
+	return w
+}
+
 // Run starts the projection loop.  It performs an immediate drain on startup,
 // then ticks every 30 seconds.  The loop exits when ctx is cancelled.
 func (w *Worker) Run(ctx context.Context) {
@@ -378,15 +399,90 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
+// RunWithNudge starts the projection loop with a non-blocking ingest→worker
+// nudge channel (ADR-084 §2).  When a value is sent on nudge, runOnce fires
+// immediately without waiting for the 30 s ticker.  The ticker is retained as
+// the fallback so a missed nudge never starves projection.
+//
+// Ingest handlers must use sendNudge to send on the channel — never a direct
+// channel send — so the caller never blocks on a full channel.
+func (w *Worker) RunWithNudge(ctx context.Context, nudge <-chan struct{}) {
+	log.Println("[projection] worker started (with nudge)")
+
+	w.runOnce(ctx)
+
+	ticker := time.NewTicker(tickInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("[projection] worker stopped")
+			return
+		case <-nudge:
+			w.runOnce(ctx)
+		case <-ticker.C:
+			w.runOnce(ctx)
+		}
+	}
+}
+
+// sendNudge sends a non-blocking kick to the projection worker nudge channel.
+// If the channel is already full (a nudge is already pending) the send is
+// discarded — the worker will process the ingest on the pending nudge.
+// Ingest must NEVER block on the nudge channel (ADR-084 §2).
+func sendNudge(nudge chan<- struct{}) {
+	select {
+	case nudge <- struct{}{}:
+	default:
+	}
+}
+
 // RunOnce is exported for integration tests.
 func (w *Worker) RunOnce(ctx context.Context) {
 	w.runOnce(ctx)
+}
+
+// domainsForEventType returns the read-model domain names dirtied by the given
+// event type (ADR-084 domain map).  Returns nil for event types that do not
+// dirty a known domain (unknown / daemon-internal events).
+//
+// inventory.updated fans out to ["inventory", "decks", "mastery"] because the
+// projection worker writes to all three tables from that single event type
+// (worker.go projectInventoryUpdated: UpsertInventory + UpsertDeckSummary fan-out
+// + UpsertMastery fan-out).  The notifier always emits all three regardless of
+// whether the optional mastery/deck stores are wired — the fan-out is
+// conditionally executed at projection time, but the domain contract is fixed.
+func domainsForEventType(eventType string) []string {
+	switch eventType {
+	case "match.completed", "match.game_ended":
+		return []string{"matches"}
+	case "draft.started", "draft.completed", "draft.pick":
+		return []string{"drafts"}
+	case "quest.progress", "quest.completed":
+		return []string{"quests"}
+	case "collection.updated":
+		return []string{"collection"}
+	case "deck.updated":
+		return []string{"decks"}
+	case "inventory.updated":
+		// inventory.updated dirtying inventory + decks (deck summaries fan-out,
+		// worker.go ~1145-1161) + mastery (mastery fan-out, worker.go ~1163-1177).
+		return []string{"inventory", "decks", "mastery"}
+	default:
+		return nil
+	}
 }
 
 // runOnce fetches pending events and projects each one, keyset-paginating
 // within a single tick to ensure transient-pending rows do not starve later
 // rows (RC1). Each page is batchSize rows; pagination continues until a page
 // returns fewer than batchSize rows (backlog drained).
+//
+// After the pass completes, if a ReadModelNotifier is wired, one coalesced
+// readmodel.updated SSE notification is published per (userID, domain) that
+// had at least one successfully projected row (ADR-084 §1).  The SSE id: field
+// carries the maximum daemon_events.id projected for that user.
 func (w *Worker) runOnce(ctx context.Context) {
 	start := time.Now()
 
@@ -404,6 +500,19 @@ func (w *Worker) runOnce(ctx context.Context) {
 			time.Since(start).Milliseconds(),
 		)
 	}()
+
+	// ADR-084: coalescer tracks dirty domains and max event ID per user across
+	// the entire pass.  Populated only when a notifier is wired so there is no
+	// allocation overhead in unwired deployments.
+	//
+	// dirtyDomains: userID → set of domain names dirtied this pass.
+	// maxEventID:   userID → max daemon_events.id successfully marked projected.
+	var dirtyDomains map[int64]map[string]struct{}
+	var maxEventID map[int64]int64
+	if w.notifier != nil {
+		dirtyDomains = make(map[int64]map[string]struct{})
+		maxEventID = make(map[int64]int64)
+	}
 
 	// Keyset cursor: (lastReceivedAt, lastID) tracks the position after the
 	// last row processed so we can page past transient-pending rows in a single
@@ -461,12 +570,43 @@ func (w *Worker) runOnce(ctx context.Context) {
 			case outcomeRetryTransient:
 				retryTransient++
 			}
+
+			// ADR-084: record dirty domains for this row when it was successfully
+			// marked projected (any outcome except outcomeRetryTransient, which
+			// leaves the row pending and is not yet visible in the read model).
+			if w.notifier != nil && outcome != outcomeRetryTransient {
+				domains := domainsForEventType(row.EventType)
+				if len(domains) > 0 {
+					if dirtyDomains[row.UserID] == nil {
+						dirtyDomains[row.UserID] = make(map[string]struct{})
+					}
+					for _, d := range domains {
+						dirtyDomains[row.UserID][d] = struct{}{}
+					}
+					if row.ID > maxEventID[row.UserID] {
+						maxEventID[row.UserID] = row.ID
+					}
+				}
+			}
 		}
 
 		// If this page was full, there may be more rows — continue paginating.
 		// If it was short, the backlog is drained for this tick.
 		if len(rows) < batchSize {
 			break
+		}
+	}
+
+	// ADR-084 §1: publish one coalesced readmodel.updated notification per user
+	// after MarkProjected has committed for every row in the pass.  By
+	// construction this fires only after the read model is queryable.
+	if w.notifier != nil {
+		for userID, domainSet := range dirtyDomains {
+			domains := make([]string, 0, len(domainSet))
+			for d := range domainSet {
+				domains = append(domains, d)
+			}
+			w.notifier.PublishReadModelUpdated(userID, domains, maxEventID[userID])
 		}
 	}
 }
