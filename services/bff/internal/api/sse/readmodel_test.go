@@ -18,7 +18,11 @@ import (
 
 // collectLinesUntil reads from scanner until timeout, returning all non-empty
 // lines seen. Must be called after subscribing the scanner goroutine.
-func collectLinesUntil(scanner interface{ Scan() bool; Text() string }, timeout time.Duration) []string {
+func collectLinesUntil(scanner interface {
+	Scan() bool
+	Text() string
+}, timeout time.Duration,
+) []string {
 	lines := make(chan string, 200)
 	go func() {
 		for scanner.Scan() {
