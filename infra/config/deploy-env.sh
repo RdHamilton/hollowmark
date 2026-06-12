@@ -199,6 +199,13 @@ SSM_PROD_ANALYTICS_PII_SALT="/vaultmtg/app/production/analytics-pii-salt"
 #   Provisioned by infra#345 (Bianca); wired into deploy by PR #3121 (Ben).
 SSM_PROD_INTERNAL_SVC_SECRET="/vaultmtg/app/production/internal-svc-secret"
 
+# Legal document version strings — server-canonical values recorded in the
+#   consent_log on every signup.  Plain String params (public document dates;
+#   not secrets).  Update the SSM value and redeploy when the ToS or Privacy
+#   Policy is revised — no code change required (ticket #1157).
+SSM_PROD_BFF_TOS_VERSION="/vaultmtg/app/production/BFF_TOS_VERSION"
+SSM_PROD_BFF_PRIVACY_POLICY_VERSION="/vaultmtg/app/production/BFF_PRIVACY_POLICY_VERSION"
+
 # ───────────────────────────────────────────────────────────────────────────
 # SSM PARAMETER PATHS — STAGING
 #   All staging BFF-runtime params live under /vaultmtg/app/staging/*.
@@ -239,6 +246,10 @@ SSM_STAGING_DAEMON_CI_SMOKE_API_KEY="/vaultmtg/app/staging/daemon-ci-smoke-api-k
 # Daemon version metadata — staging mirror (see production block above).
 SSM_STAGING_BFF_DAEMON_LATEST_VERSION="/vaultmtg/app/staging/BFF_DAEMON_LATEST_VERSION"
 SSM_STAGING_BFF_DAEMON_RELEASED_AT="/vaultmtg/app/staging/BFF_DAEMON_RELEASED_AT"
+
+# Legal document version strings — staging mirror (ticket #1157).
+SSM_STAGING_BFF_TOS_VERSION="/vaultmtg/app/staging/BFF_TOS_VERSION"
+SSM_STAGING_BFF_PRIVACY_POLICY_VERSION="/vaultmtg/app/staging/BFF_PRIVACY_POLICY_VERSION"
 
 # ───────────────────────────────────────────────────────────────────────────
 # SSM PARAMETER PATHS — VAULTMTG SHARED SERVICES (staging)

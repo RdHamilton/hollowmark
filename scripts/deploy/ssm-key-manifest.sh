@@ -39,7 +39,7 @@
 #
 # -----------------------------------------------------------------------
 
-MANIFEST_KEY_COUNT=22
+MANIFEST_KEY_COUNT=24
 
 # 0 -- ALLOWED_ORIGINS
 MANIFEST_KEY_0_NAME=ALLOWED_ORIGINS
@@ -211,3 +211,24 @@ MANIFEST_KEY_21_NAME=POSTHOG_PROJECT_ID
 MANIFEST_KEY_21_SSM_VAR=SSM_PROD_POSTHOG_PROJECT_ID
 MANIFEST_KEY_21_TYPE=plain
 MANIFEST_KEY_21_SCOPE=both
+
+# 22 -- BFF_TOS_VERSION (ticket #1157: server-canonical ToS version for consent_log)
+#   Server-authoritative string recorded in consent_log on every signup.
+#   Plain String (public document date; not a secret).
+#   Prod path: SSM_PROD_BFF_TOS_VERSION (/vaultmtg/app/production/BFF_TOS_VERSION).
+#   Staging path override: provision-staging-env.sh case statement overrides to
+#   SSM_STAGING_BFF_TOS_VERSION (/vaultmtg/app/staging/BFF_TOS_VERSION).
+#   To update: change the SSM value and redeploy — no code change required.
+MANIFEST_KEY_22_NAME=BFF_TOS_VERSION
+MANIFEST_KEY_22_SSM_VAR=SSM_PROD_BFF_TOS_VERSION
+MANIFEST_KEY_22_TYPE=plain
+MANIFEST_KEY_22_SCOPE=both
+
+# 23 -- BFF_PRIVACY_POLICY_VERSION (ticket #1157: server-canonical privacy version)
+#   Prod path: SSM_PROD_BFF_PRIVACY_POLICY_VERSION (/vaultmtg/app/production/BFF_PRIVACY_POLICY_VERSION).
+#   Staging path override: provision-staging-env.sh case statement overrides to
+#   SSM_STAGING_BFF_PRIVACY_POLICY_VERSION (/vaultmtg/app/staging/BFF_PRIVACY_POLICY_VERSION).
+MANIFEST_KEY_23_NAME=BFF_PRIVACY_POLICY_VERSION
+MANIFEST_KEY_23_SSM_VAR=SSM_PROD_BFF_PRIVACY_POLICY_VERSION
+MANIFEST_KEY_23_TYPE=plain
+MANIFEST_KEY_23_SCOPE=both
