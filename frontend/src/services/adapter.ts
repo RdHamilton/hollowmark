@@ -18,6 +18,7 @@ import {
 } from './websocketClient';
 import { configureApi, healthCheck } from './apiClient';
 import { models, gui } from '@/types/models';
+import type { MatchGamesResponse } from './api/matches';
 
 // Configuration state
 let isInitialized = false;
@@ -122,7 +123,7 @@ export const matchesAdapter = {
     return api.matches.getFormats();
   },
 
-  async getMatchGames(matchId: string): Promise<models.Game[]> {
+  async getMatchGames(matchId: string): Promise<MatchGamesResponse> {
     return api.matches.getMatchGames(matchId);
   },
 };

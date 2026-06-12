@@ -71,7 +71,7 @@ const mockGames: models.Game[] = [
 describe('MatchDetailsModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetMatchGames.mockResolvedValue(mockGames);
+    mockGetMatchGames.mockResolvedValue({ games: mockGames, capturedResults: true });
     mockGetMatchTimeline.mockResolvedValue([]);
   });
 
@@ -240,26 +240,68 @@ describe('MatchDetailsModal', () => {
   });
 
   describe('empty state', () => {
-    it('shows explanatory message when no games available', async () => {
-      mockGetMatchGames.mockResolvedValue([]);
-
-      render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
-
-      await waitFor(() => {
-        expect(
-          screen.getByText(/didn.*t capture game events/i)
-        ).toBeInTheDocument();
-      });
-    });
-
-    it('empty-state message mentions VaultMTG', async () => {
-      mockGetMatchGames.mockResolvedValue([]);
+    // AC2: no match_game_results row at all → original "keep VaultMTG running" copy
+    it('shows "keep VaultMTG running" copy when results were never captured (capturedResults=false)', async () => {
+      mockGetMatchGames.mockResolvedValue({ games: [], capturedResults: false });
 
       render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
 
       await waitFor(() => {
         expect(screen.getByTestId('no-games-message')).toBeInTheDocument();
-        expect(screen.getByTestId('no-games-message').textContent).toContain('VaultMTG');
+        expect(screen.getByTestId('no-games-message').textContent).toMatch(
+          /Keep VaultMTG running/i
+        );
+      });
+    });
+
+    // AC1: match_game_results row exists but games projection is incomplete → "still processing" copy
+    it('shows "still processing" copy when results were captured but games not yet projected (capturedResults=true)', async () => {
+      mockGetMatchGames.mockResolvedValue({ games: [], capturedResults: true });
+
+      render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('no-games-message')).toBeInTheDocument();
+        expect(screen.getByTestId('no-games-message').textContent).toMatch(
+          /still processing/i
+        );
+      });
+    });
+
+    it('"still processing" copy does NOT show "Keep VaultMTG running" text (AC1 vs AC2 are distinct)', async () => {
+      mockGetMatchGames.mockResolvedValue({ games: [], capturedResults: true });
+
+      render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('no-games-message').textContent).not.toMatch(
+          /Keep VaultMTG running/i
+        );
+      });
+    });
+
+    it('"keep running" copy does NOT show "still processing" text (AC2 vs AC1 are distinct)', async () => {
+      mockGetMatchGames.mockResolvedValue({ games: [], capturedResults: false });
+
+      render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('no-games-message').textContent).not.toMatch(
+          /still processing/i
+        );
+      });
+    });
+
+    // AC4: happy path — games present → no empty-state message rendered
+    it('does not show empty-state when games are present (AC4 regression guard)', async () => {
+      mockGetMatchGames.mockResolvedValue({ games: mockGames, capturedResults: true });
+
+      render(<MatchDetailsModal match={mockMatch} onClose={() => {}} />);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('no-games-message')).not.toBeInTheDocument();
+        expect(screen.getByText('Game 1')).toBeInTheDocument();
+        expect(screen.getByText('Game 2')).toBeInTheDocument();
       });
     });
   });
