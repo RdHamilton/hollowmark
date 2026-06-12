@@ -544,6 +544,14 @@ func main() {
 		app.SetStatus(tray.StatusConnected)
 		go func() {
 			defer recovery.RecoverGoroutine("daemon-run", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
+			// SH-2 (ADR-083): after the graceful drain completes (svc.Run returns),
+			// the daemon-run goroutine must call app.Quit() so app.Run unblocks and
+			// main() exits. Without this, the no-CGO headless stub's app.Run blocks
+			// on <-a.quit forever after cancel() fires the drain — the process hangs
+			// and is never reaped. The CGO/systray path handles exit via systray.Quit()
+			// in the tray loop; this defer covers the signal-induced drain path.
+			// app.Quit() is idempotent on both the no-CGO stub and systray.
+			defer app.Quit()
 			// ── Auth-failure / auth-paused retry loop (#2132, #2133) ──────────────
 			// Cases handled here:
 			//  (A) Step 3 PKCE failed non-headlessly → NeedsFirstRunAuth still true,
