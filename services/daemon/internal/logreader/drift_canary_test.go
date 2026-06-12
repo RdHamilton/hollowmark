@@ -50,7 +50,8 @@ func isAuthenticateEntry(entry *LogEntry) bool {
 }
 
 // isBotDraftPackEntry returns true for a BotDraft (QuickDraft) pack line —
-// CurrentModule="BotDraft" with a stringified Payload envelope (#337).
+// CurrentModule="BotDraft" with a Payload field in either old (string) or new
+// (object) wire format (#337, #1344).
 func isBotDraftPackEntry(entry *LogEntry) bool {
 	if entry == nil || !entry.IsJSON {
 		return false
@@ -59,18 +60,27 @@ func isBotDraftPackEntry(entry *LogEntry) bool {
 	if !ok || mod != "BotDraft" {
 		return false
 	}
-	_, hasPayload := entry.JSON["Payload"].(string)
+	_, hasPayload := entry.JSON["Payload"]
 	return hasPayload
 }
 
-// isBotDraftPickEntry returns true for a BotDraftDraftPick line — a "request"
-// JSON string carrying a PickInfo block (#337).
+// isBotDraftPickEntry returns true for a BotDraftDraftPick line carrying a
+// PickInfo block in either old (string request) or new (object request) wire
+// format (#337, #1344).
 func isBotDraftPickEntry(entry *LogEntry) bool {
 	if entry == nil || !entry.IsJSON {
 		return false
 	}
-	req, ok := entry.JSON["request"].(string)
-	return ok && strings.Contains(req, `"PickInfo"`)
+	switch req := entry.JSON["request"].(type) {
+	case string:
+		// Old format: PickInfo embedded in a JSON string.
+		return strings.Contains(req, `"PickInfo"`)
+	case map[string]interface{}:
+		// New format: PickInfo is a direct map key.
+		_, hasPickInfo := req["PickInfo"]
+		return hasPickInfo
+	}
+	return false
 }
 
 // isPremierDraftNotifyEntry returns true for a Premier Draft.Notify line
