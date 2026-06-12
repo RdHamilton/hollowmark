@@ -311,6 +311,7 @@ func main() {
 		adminFleetHealthHandler           *handlers.AdminFleetHealthHandler
 		adminProjectionErrorsCountHandler *handlers.AdminProjectionErrorsCountHandler
 		adminDataFreshnessHandler         *handlers.AdminDataFreshnessHandler
+		adminBackfillDraftSessionsHandler *handlers.AdminBackfillDraftSessionsHandler
 		matchesHandler                    *handlers.MatchesHandler
 		collectionHandler                 *handlers.CollectionHandler
 		questsHandler                     *handlers.QuestsHandler
@@ -536,6 +537,10 @@ func main() {
 			draftRatingsRepo,
 			cfg.DraftRatingsStalenessThresholdHours,
 		)
+
+		// #1350 one-time backfill for stale in_progress draft_sessions rows.
+		// Protected by AdminTokenMiddl. POST /api/v1/admin/ops/backfill-draft-sessions.
+		adminBackfillDraftSessionsHandler = handlers.NewAdminBackfillDraftSessionsHandler(draftSessionsRepo)
 
 		// StatsHandler provides deck performance, win-rate trend, and format
 		// distribution analytics endpoints (issue #1513).
@@ -783,6 +788,7 @@ func main() {
 		AdminFleetHealthHandler:           adminFleetHealthHandler,
 		AdminProjectionErrorsCountHandler: adminProjectionErrorsCountHandler,
 		AdminDataFreshnessHandler:         adminDataFreshnessHandler,
+		AdminBackfillDraftSessionsHandler: adminBackfillDraftSessionsHandler,
 		MatchesHandler:                    matchesHandler,
 		CollectionHandler:                 collectionHandler,
 		QuestsHandler:                     questsHandler,
@@ -902,6 +908,11 @@ type RouterDeps struct {
 	// Returns "fresh", "stale", or "no_data" with age_hours and threshold_hours.
 	// Protected by AdminTokenMiddl. Satisfies ticket #402 data-freshness AC.
 	AdminDataFreshnessHandler *handlers.AdminDataFreshnessHandler
+	// AdminBackfillDraftSessionsHandler serves
+	// POST /api/v1/admin/ops/backfill-draft-sessions — one-time idempotent
+	// backfill that closes stale in_progress draft_sessions rows (#1350).
+	// Protected by AdminTokenMiddl.
+	AdminBackfillDraftSessionsHandler *handlers.AdminBackfillDraftSessionsHandler
 	// MatchesHandler serves the Phase 2 /api/v1/matches/* surface that the
 	// SPA's daemonClient previously hit. Protected by DaemonAPIKeyAuth.
 	MatchesHandler *handlers.MatchesHandler
@@ -1260,6 +1271,14 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// feature flag flip. Protected by the same AdminTokenMiddl.
 	if deps.AdminDataFreshnessHandler != nil {
 		r.With(adminMiddl).Get("/api/v1/admin/data-freshness", deps.AdminDataFreshnessHandler.ServeHTTP)
+	}
+
+	// POST /api/v1/admin/ops/backfill-draft-sessions — one-time idempotent
+	// repair for stale in_progress draft_sessions rows (#1350). Must be
+	// invoked manually once in prod after the #1344 PR-B fix ships. Safe to
+	// re-run (returns 0 rows on subsequent calls).
+	if deps.AdminBackfillDraftSessionsHandler != nil {
+		r.With(adminMiddl).Post("/api/v1/admin/ops/backfill-draft-sessions", deps.AdminBackfillDraftSessionsHandler.ServeHTTP)
 	}
 
 	// ── Phase 2 — /api/v1/matches/* (camelCase API, full filter support) ─────
