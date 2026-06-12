@@ -56,6 +56,36 @@ ENV_FILE="$BFF_ENV_FILE"
 ENV_DIR="$BFF_ENV_DIR"
 
 # ---------------------------------------------------------------------------
+# Credential isolation: clear any ambient AWS credential env vars BEFORE the
+# Step 1 SSM reads so the default AWS credential chain falls through to the
+# EC2 instance role (mtga-companion-ec2-role-production).
+#
+# Context: this script is invoked by deploy-bff.yml via SSM RunShellScript.
+# The GHA deploy job runs after assuming vaultmtg-staging-deploy-provisioner,
+# whose session credentials are exported as AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN into the shell environment.  If
+# those vars are present when Step 1 runs, the aws CLI resolves to the
+# provisioner identity, whose SSM policy covers only
+# /vaultmtg/{staging,app/staging}/* -- not /vaultmtg/app/production/*.
+# The result is AccessDeniedException on the Step 1 GetParameter calls.
+#
+# Fix: unset all ambient credential env vars here so Step 1 uses the EC2
+# instance role (the only identity with /vaultmtg/app/production/* read
+# access).  Step 2 then explicitly assumes the provisioner role and exports
+# its credentials for the remainder of the script -- the correct, already-
+# designed flow.
+#
+# Per Ray's diagnosis (docs/status/ray-incident-24sx76.md): do NOT grant the
+# staging provisioner prod SSM read access -- that violates least-privilege.
+# The correct fix is to clear the inherited credentials here.
+# ---------------------------------------------------------------------------
+unset AWS_ACCESS_KEY_ID
+unset AWS_SECRET_ACCESS_KEY
+unset AWS_SESSION_TOKEN
+unset AWS_PROFILE
+unset AWS_CREDENTIAL_EXPIRATION
+
+# ---------------------------------------------------------------------------
 # Step 1: Read production DB SSM params under the EC2 instance role.
 #
 # These three params live under /vaultmtg/app/production/*, which the

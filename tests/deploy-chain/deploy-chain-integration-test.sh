@@ -539,6 +539,213 @@ done
 pass "Phase 1b — provision-prod-env manifest-driven: all C1-C6 contract assertions passed"
 
 # ===========================================================================
+# Phase 1c: credential-isolation regression guard (C7)
+#
+# Verifies the fix for the v0.4.3.2 BFF prod deploy failure (incident
+# docs/status/ray-incident-24sx76.md): when ambient AWS credential env vars
+# are set (as they are when deploy-bff.yml runs SSM RunShellScript AFTER
+# assuming vaultmtg-staging-deploy-provisioner), provision-prod-env.sh MUST
+# unset them before the Step 1 SSM reads so the aws CLI falls through to the
+# EC2 instance role.
+#
+# Test approach: install a stub that records whether AWS_ACCESS_KEY_ID held
+# the poison sentinel during any Step 1 ssm get-parameter call.  If the
+# script correctly unsets the env vars before Step 1, the stub will NOT see
+# the sentinel.  If the unset block is absent or regressed, the stub WILL see
+# it and write a flag file.  The test asserts no flag file is present after
+# the script exits 0.
+# ===========================================================================
+info "Phase 1c — C7 credential-isolation regression guard (ambient creds must not reach Step 1)..."
+
+# Reset the env file for a clean run.
+: > "$STUB_ENV_FILE"
+chmod 600 "$STUB_ENV_FILE"
+
+# Reset stub state dir so session-name state from Phase 1b does not carry over.
+rm -f "${STUB_AWS_STATE_DIR}/last_session_name"
+
+C7_POISON_FLAG="${SCRATCH}/c7-poison-credential-seen"
+rm -f "$C7_POISON_FLAG"
+
+# Install the C7 aws stub: same as the Phase 1b stub but additionally writes
+# $C7_POISON_FLAG if it detects the poison sentinel in AWS_ACCESS_KEY_ID
+# during a Step 1 ssm get-parameter call.
+cat > "$STUB_AWS" <<AWSSTUB_C7
+#!/usr/bin/env bash
+# C7 aws CLI stub — detects poison sentinel in AWS_ACCESS_KEY_ID during
+# ssm get-parameter calls.  If the sentinel is present, the fix is absent.
+
+if [[ "\$1" == "ssm" && "\$2" == "get-parameter" ]]; then
+    # If ambient poison creds were NOT unset, AWS_ACCESS_KEY_ID will still
+    # hold the sentinel.  Record the poison-seen flag and continue (to
+    # distinguish the C7 assertion from a hard failure in the script itself).
+    if [[ "\${AWS_ACCESS_KEY_ID:-}" == "POISON_C7_SENTINEL_CRED" ]]; then
+        printf 'POISON SEEN at ssm get-parameter call\n' >> "${C7_POISON_FLAG}"
+    fi
+    NAME=""
+    while [[ \$# -gt 0 ]]; do
+        case "\$1" in --name) NAME="\$2"; shift 2 ;; *) shift ;; esac
+    done
+    case "\$NAME" in
+        */ALLOWED_ORIGINS)             echo "http://localhost:3000" ;;
+        */CLERK_SECRET_KEY)            echo "sk_live_stub" ;;
+        */CLERK_FRONTEND_API)          echo "https://clerk.stub" ;;
+        */sentry-dsn-bff)              echo "https://sentry.stub/1" ;;
+        */posthog-api-key)             echo "phc_stub" ;;
+        */posthog-host)                echo "https://app.posthog.com" ;;
+        */BFF_DAEMON_LATEST_VERSION)   echo "0.4.2" ;;
+        */BFF_DAEMON_RELEASED_AT)      echo "2026-06-11T00:00:00Z" ;;
+        */analytics-pii-salt)          echo "stub-pii-salt" ;;
+        */internal-svc-secret)         echo "stub-internal-svc-secret" ;;
+        */posthog-personal-api-key)    echo "phx_stub" ;;
+        */posthog-project-id)          echo "12345" ;;
+        */mailchimp-api-key)           echo "stub-mailchimp-key" ;;
+        */mailchimp-list-id)           echo "stub-list-id" ;;
+        */BFF_TOS_VERSION)             echo "2026-01-01" ;;
+        */BFF_PRIVACY_POLICY_VERSION)  echo "2026-01-01" ;;
+        */app-db-secret-arn)           echo "arn:aws:secretsmanager:us-east-1:000000000000:secret:stub-app" ;;
+        */db-endpoint)                 echo "127.0.0.1" ;;
+        */db-name)                     echo "deploy_test_db" ;;
+        *)                             echo "stub_value" ;;
+    esac
+    exit 0
+fi
+
+if [[ "\$1" == "sts" && "\$2" == "assume-role" ]]; then
+    SESSION=""
+    while [[ \$# -gt 0 ]]; do
+        case "\$1" in
+            --role-session-name) SESSION="\$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    if [[ -z "\$SESSION" ]]; then
+        echo "STUB(c7): sts assume-role missing --role-session-name" >&2
+        exit 1
+    fi
+    printf '%s' "\$SESSION" > "${STUB_AWS_STATE_DIR}/last_session_name"
+    printf 'ASIA_STUB_ACCESS_KEY_ID_XXXXXXXX\tstub_secret_access_key_value_XXXXXXXXXXXXXXXXXXXX\tstub_session_token_value_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n'
+    exit 0
+fi
+
+if [[ "\$1" == "sts" && "\$2" == "get-caller-identity" ]]; then
+    SESSION=""
+    if [[ -f "${STUB_AWS_STATE_DIR}/last_session_name" ]]; then
+        SESSION=\$(cat "${STUB_AWS_STATE_DIR}/last_session_name")
+    fi
+    if [[ -z "\$SESSION" ]]; then
+        echo "STUB(c7): sts get-caller-identity called before assume-role (no session-name state)" >&2
+        exit 1
+    fi
+    printf 'arn:aws:sts::901347789205:assumed-role/vaultmtg-staging-deploy-provisioner/%s\n' "\$SESSION"
+    exit 0
+fi
+
+if [[ "\$1" == "secretsmanager" && "\$2" == "get-secret-value" ]]; then
+    printf '{"username":"deploy_test","password":"deploy_test"}\n'
+    exit 0
+fi
+
+echo "STUB(c7): unhandled aws command: \$*" >&2
+exit 1
+AWSSTUB_C7
+chmod +x "$STUB_AWS"
+
+# Run provision-prod-env.sh with poison AWS credential env vars exported.
+# The fix (unset block at top of script) must clear these before Step 1.
+C7_EXIT=0
+AWS_ACCESS_KEY_ID="POISON_C7_SENTINEL_CRED" \
+AWS_SECRET_ACCESS_KEY="POISON_C7_SENTINEL_SECRET" \
+AWS_SESSION_TOKEN="POISON_C7_SENTINEL_TOKEN" \
+    sh "${SCRATCH}/provision-prod-env-test.sh" >/dev/null 2>&1 || C7_EXIT=$?
+
+if [[ "$C7_EXIT" -ne 0 ]]; then
+    fail "Phase 1c C7 — provision-prod-env.sh exited ${C7_EXIT} when run with poisoned ambient credentials (script must succeed with the unset fix in place)"
+fi
+
+# The poison flag file must NOT exist — the stub must not have seen the sentinel.
+if [[ -f "$C7_POISON_FLAG" ]]; then
+    fail "Phase 1c C7 — credential-isolation regression: ambient AWS_ACCESS_KEY_ID poison sentinel WAS PRESENT during Step 1 ssm get-parameter call (unset block missing or ineffective); the v0.4.3.2 AccessDenied incident would recur"
+fi
+
+pass "Phase 1c C7 — credential-isolation guard: poison sentinel was NOT seen during Step 1 SSM reads (ambient creds correctly cleared before instance-role path)"
+
+# Restore the Phase 1b stub for subsequent phases.
+cat > "$STUB_AWS" <<'AWSSTUB_PHASE1B_RESTORE'
+#!/usr/bin/env bash
+# Restored Phase 1b aws CLI stub for use by Phase 2 onwards.
+
+if [[ "$1" == "ssm" && "$2" == "get-parameter" ]]; then
+    NAME=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in --name) NAME="$2"; shift 2 ;; *) shift ;; esac
+    done
+    case "$NAME" in
+        */ALLOWED_ORIGINS)             echo "http://localhost:3000" ;;
+        */CLERK_SECRET_KEY)            echo "sk_live_stub" ;;
+        */CLERK_FRONTEND_API)          echo "https://clerk.stub" ;;
+        */sentry-dsn-bff)              echo "https://sentry.stub/1" ;;
+        */posthog-api-key)             echo "phc_stub" ;;
+        */posthog-host)                echo "https://app.posthog.com" ;;
+        */BFF_DAEMON_LATEST_VERSION)   echo "0.4.2" ;;
+        */BFF_DAEMON_RELEASED_AT)      echo "2026-06-11T00:00:00Z" ;;
+        */analytics-pii-salt)          echo "stub-pii-salt" ;;
+        */internal-svc-secret)         echo "stub-internal-svc-secret" ;;
+        */posthog-personal-api-key)    echo "phx_stub" ;;
+        */posthog-project-id)          echo "12345" ;;
+        */mailchimp-api-key)           echo "stub-mailchimp-key" ;;
+        */mailchimp-list-id)           echo "stub-list-id" ;;
+        */BFF_TOS_VERSION)             echo "2026-01-01" ;;
+        */BFF_PRIVACY_POLICY_VERSION)  echo "2026-01-01" ;;
+        */app-db-secret-arn)           echo "arn:aws:secretsmanager:us-east-1:000000000000:secret:stub-app" ;;
+        */db-endpoint)                 echo "127.0.0.1" ;;
+        */db-name)                     echo "deploy_test_db" ;;
+        *)                             echo "stub_value" ;;
+    esac
+    exit 0
+fi
+
+if [[ "$1" == "sts" && "$2" == "assume-role" ]]; then
+    SESSION=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --role-session-name) SESSION="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    if [[ -z "$SESSION" ]]; then
+        echo "STUB(restore): sts assume-role missing --role-session-name" >&2
+        exit 1
+    fi
+    printf '%s' "$SESSION" > "${STUB_AWS_STATE_DIR}/last_session_name"
+    printf 'ASIA_STUB_ACCESS_KEY_ID_XXXXXXXX\tstub_secret_access_key_value_XXXXXXXXXXXXXXXXXXXX\tstub_session_token_value_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n'
+    exit 0
+fi
+
+if [[ "$1" == "sts" && "$2" == "get-caller-identity" ]]; then
+    SESSION=""
+    if [[ -f "${STUB_AWS_STATE_DIR}/last_session_name" ]]; then
+        SESSION=$(cat "${STUB_AWS_STATE_DIR}/last_session_name")
+    fi
+    if [[ -z "$SESSION" ]]; then
+        echo "STUB(restore): sts get-caller-identity called before assume-role (no session-name state)" >&2
+        exit 1
+    fi
+    printf 'arn:aws:sts::901347789205:assumed-role/vaultmtg-staging-deploy-provisioner/%s\n' "$SESSION"
+    exit 0
+fi
+
+if [[ "$1" == "secretsmanager" && "$2" == "get-secret-value" ]]; then
+    printf '{"username":"deploy_test","password":"deploy_test"}\n'
+    exit 0
+fi
+
+echo "STUB(restore): unhandled aws command: $*" >&2
+exit 1
+AWSSTUB_PHASE1B_RESTORE
+chmod +x "$STUB_AWS"
+
+# ===========================================================================
 # Phase 2: stage-binary.sh (S3 stubbed via aws PATH overlay)
 # ===========================================================================
 info "Phase 2 — stage-binary (S3 stubbed with fake binary)..."
@@ -888,6 +1095,8 @@ echo -e "${GREEN}===========================================${NC}"
 echo ""
 echo "  Phase 0 — throwaway Postgres container"
 echo "  Phase 1 — provision-env + provision-db-url (SSM stubbed)"
+echo "  Phase 1b — provision-prod-env manifest-driven C1-C6"
+echo "  Phase 1c — credential-isolation C7 (ambient creds cleared before Step 1)"
 echo "  Phase 2 — stage-binary (S3 stubbed)"
 echo "  Phase 3 — run-migrations + grant (real Postgres)"
 echo "  Phase 4 — restart-bff (systemctl stubbed)"
