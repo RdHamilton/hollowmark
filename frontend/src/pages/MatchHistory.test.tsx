@@ -270,6 +270,38 @@ describe('MatchHistory', () => {
       });
     });
 
+    it('timestamp cell renders both date and time portions (#1360)', async () => {
+      // The timestamp is a full ISO string; the cell must show a time component
+      // (HH:MM) so same-day matches are visually orderable.
+      // formatTimestamp already calls toLocaleString() which includes time, but
+      // the output format "1/15/2024, 5:00:00 AM" is inconsistent with the rest
+      // of the app. This test pins the requirement that the cell contains both a
+      // date AND a time substring using the locale-aware medium/short format
+      // ("Jan 15, 2024, 5:00 AM").
+      const match = createMockMatch({
+        ID: 'ts-test',
+        Timestamp: new Date('2024-01-15T14:30:00.000Z').toISOString(),
+        Result: 'Win',
+      });
+      mockMatches.getMatches.mockResolvedValue([match]);
+
+      renderWithProvider(<MatchHistory />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('table')).toBeInTheDocument();
+      });
+
+      const rows = screen.getAllByRole('row');
+      // First row is header; second is the data row
+      const dataRow = rows[1];
+      const cells = dataRow.querySelectorAll('td');
+      const timestampCellText = cells[0].textContent ?? '';
+
+      // Must contain a month name (locale medium date) AND a time with AM/PM or HH:MM
+      expect(timestampCellText).toMatch(/Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec/);
+      expect(timestampCellText).toMatch(/\d{1,2}:\d{2}/);
+    });
+
     it('should display match result badges', async () => {
       const matches = [
         createMockMatch({ ID: 'match-001', Result: 'Win' }),

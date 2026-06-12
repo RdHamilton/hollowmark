@@ -189,7 +189,10 @@ export default function Decks() {
 
   const formatDate = (date: unknown) => {
     if (!date) return 'N/A';
-    return new Date(String(date)).toLocaleDateString();
+    return new Date(String(date)).toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
   };
 
   const formatStreak = (streak: number | null | undefined) => {
