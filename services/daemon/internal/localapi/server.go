@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/RdHamilton/hollowmark/pkg/draftalgo"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/recovery"
+	"github.com/getsentry/sentry-go"
 )
 
 // DefaultPort is the loopback TCP port the daemon's local HTTP API listens on.
@@ -217,6 +219,7 @@ func (s *Server) Start() error {
 	}
 
 	go func() {
+		defer recovery.RecoverGoroutine("localapi-serve", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Printf("[localapi] serve error: %v", err)
 		}

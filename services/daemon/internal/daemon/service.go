@@ -35,6 +35,7 @@ import (
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/pkce"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/ratingsclient"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/recovery"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/updatecheck"
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
@@ -713,6 +714,7 @@ func (s *Service) keychainRefresherAdapter() dispatch.Refresher {
 		// prevents concurrent goroutines so there is no goroutine-leak risk.
 		// (Sarah S-07 P1 fix — #2135)
 		go func() {
+			defer recovery.RecoverGoroutine("reauth", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 			defer s.reauthInProgress.Store(false)
 
 			sentry.AddBreadcrumb(&sentry.Breadcrumb{

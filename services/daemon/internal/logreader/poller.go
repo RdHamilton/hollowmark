@@ -10,7 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/recovery"
 	"github.com/fsnotify/fsnotify"
+	"github.com/getsentry/sentry-go"
 )
 
 // Poller monitors a log file for new entries and sends them through a channel.
@@ -187,6 +189,7 @@ func (p *Poller) Start() <-chan *LogEntry {
 }
 
 func (p *Poller) poll() {
+	defer recovery.RecoverGoroutine("logreader-poller", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 	defer close(p.done)
 	defer close(p.updates)
 
