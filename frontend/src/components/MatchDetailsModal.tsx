@@ -15,6 +15,7 @@ interface MatchDetailsModalProps {
 
 const MatchDetailsModal = ({ match, onClose }: MatchDetailsModalProps) => {
   const [games, setGames] = useState<models.Game[]>([]);
+  const [capturedResults, setCapturedResults] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [opponentAnalysisExpanded, setOpponentAnalysisExpanded] = useState(false);
@@ -25,8 +26,9 @@ const MatchDetailsModal = ({ match, onClose }: MatchDetailsModalProps) => {
       try {
         setLoading(true);
         setError(null);
-        const gamesData = await matches.getMatchGames(match.ID);
-        setGames(gamesData || []);
+        const response = await matches.getMatchGames(match.ID);
+        setGames(response?.games ?? []);
+        setCapturedResults(response?.capturedResults ?? false);
       } catch (err) {
         const raw = err instanceof Error ? err.message : 'Failed to load games';
         setError(friendlyErrorMessage(raw));
@@ -153,7 +155,13 @@ const MatchDetailsModal = ({ match, onClose }: MatchDetailsModalProps) => {
               </div>
             )}
 
-            {!loading && !error && games.length === 0 && (
+            {!loading && !error && games.length === 0 && capturedResults && (
+              <div className="no-games" data-testid="no-games-message">
+                Game data is still processing for this match. Check back shortly.
+              </div>
+            )}
+
+            {!loading && !error && games.length === 0 && !capturedResults && (
               <div className="no-games" data-testid="no-games-message">
                 We didn&apos;t capture game events for this match. Keep VaultMTG running during play to unlock full game analysis.
               </div>
