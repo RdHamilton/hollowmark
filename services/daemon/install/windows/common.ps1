@@ -86,4 +86,4 @@ $ConfigFile  = Join-Path $ConfigDir 'daemon.json'
 $LegacyConfigDir = Join-Path $Env:APPDATA 'mtga-companion'
 
 # Tray label
-$TrayLabel   = "VaultMTG${Display}"
+$TrayLabel   = "Hollowmark${Display}"

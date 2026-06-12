@@ -57,7 +57,7 @@ func TestIdentity_Stable_ExactStrings(t *testing.T) {
 	assert.Equal(t, "com.vaultmtg.daemon", id.PlistLabel, "stable plist label must be bare (bundle ID unchanged in v0.3.9 per PRD AC15)")
 	assert.Equal(t, "com.hollowmark.daemon", id.KeychainService, "stable keychain service must advance to hollowmark (ADR-022 Phase 3 shim)")
 	assert.Equal(t, "/Applications/VaultMTG.app", id.AppBundlePath, "stable app bundle path must be bare")
-	assert.Equal(t, "VaultMTG", id.TrayLabel, "stable tray label must be bare")
+	assert.Equal(t, "Hollowmark", id.TrayLabel, "stable tray label must be Hollowmark (canonical domain decision)")
 	assert.Equal(t, 9001, id.LocalAPIPort, "stable local-API port must be 9001")
 }
 
@@ -67,7 +67,7 @@ func TestIdentity_Staging_SuffixedStrings(t *testing.T) {
 	assert.Equal(t, "com.vaultmtg.daemon.staging", id.PlistLabel, "staging plist label must be suffixed (bundle ID unchanged in v0.3.9 per PRD AC15)")
 	assert.Equal(t, "com.hollowmark.daemon.staging", id.KeychainService, "staging keychain service must advance to hollowmark (ADR-022 Phase 3 shim)")
 	assert.Equal(t, "/Applications/VaultMTG Staging.app", id.AppBundlePath, "staging app bundle must be suffixed")
-	assert.Equal(t, "VaultMTG (Staging)", id.TrayLabel, "staging tray label must be suffixed")
+	assert.Equal(t, "Hollowmark (Staging)", id.TrayLabel, "staging tray label must be Hollowmark (Staging) (canonical domain decision)")
 	assert.Equal(t, 9011, id.LocalAPIPort, "staging local-API port must be 9011 (9001+10)")
 }
 

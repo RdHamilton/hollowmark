@@ -1,7 +1,7 @@
 //go:build cgo
 
 // Package tray manages the system tray (menu bar) icon and menu for the
-// VaultMTG daemon. systray.Run must be called on the main OS thread; callers
+// Hollowmark daemon. systray.Run must be called on the main OS thread; callers
 // must invoke App.Run from main() and start the daemon event loop inside the
 // onReady callback.
 package tray
@@ -109,8 +109,8 @@ type App struct {
 	appURL  string
 	version string
 	// appLabel is the user-visible title shown next to the tray icon (macOS) and
-	// in the tooltip. "VaultMTG" for the stable channel; "VaultMTG (Staging)"
-	// for the staging channel. Set via NewWithLabel; defaults to "VaultMTG".
+	// in the tooltip. "Hollowmark" for the stable channel; "Hollowmark (Staging)"
+	// for the staging channel. Set via NewWithLabel; defaults to "Hollowmark".
 	appLabel string
 	openURL  func(string) error
 	onQuit   func()
@@ -171,19 +171,19 @@ type App struct {
 	InstallUpdate chan struct{}
 }
 
-// New creates an App with the default "VaultMTG" label. appURL is opened when
-// "Open VaultMTG" is clicked. version is the daemon build version (injected via
+// New creates an App with the default "Hollowmark" label. appURL is opened when
+// "Open Hollowmark" is clicked. version is the daemon build version (injected via
 // -ldflags -X main.Version=<ver>; defaults to "dev" for local builds) and is
 // displayed in the "About" menu item. openURL is the platform open-browser
 // function. onQuit is called when the tray exits (Quit clicked or process
 // terminated). For channel-aware label use NewWithLabel.
 func New(appURL, version string, openURL func(string) error, onQuit func()) *App {
-	return NewWithLabel(appURL, version, openURL, onQuit, "VaultMTG")
+	return NewWithLabel(appURL, version, openURL, onQuit, "Hollowmark")
 }
 
 // NewWithLabel creates an App with an explicit tray label (ADR-049 Ticket 4).
 // Pass install.Identity(channel).TrayLabel as the label argument so the tray
-// title reflects the channel: "VaultMTG" (stable) or "VaultMTG (Staging)" (staging).
+// title reflects the channel: "Hollowmark" (stable) or "Hollowmark (Staging)" (staging).
 func NewWithLabel(appURL, version string, openURL func(string) error, onQuit func(), label string) *App {
 	return &App{
 		appURL:        appURL,
@@ -421,7 +421,7 @@ func (a *App) setup() {
 	a.miAbout.Disable()
 
 	// Check for Updates — opens the GitHub Releases page for the daemon.
-	a.miCheckForUpdates = systray.AddMenuItem("Check for Updates", "Opens GitHub Releases page for the VaultMTG daemon")
+	a.miCheckForUpdates = systray.AddMenuItem("Check for Updates", "Opens GitHub Releases page for the Hollowmark daemon")
 
 	// Update available — hidden until the update-check loop finds a newer version.
 	a.miUpdateAvailable = systray.AddMenuItem("Update available", "A new daemon version is available")
@@ -457,7 +457,7 @@ func (a *App) setup() {
 
 	systray.AddSeparator()
 
-	a.miOpenApp = systray.AddMenuItem("Open "+a.appLabel, "Open the VaultMTG web app")
+	a.miOpenApp = systray.AddMenuItem("Open "+a.appLabel, "Open the Hollowmark web app")
 
 	systray.AddSeparator()
 

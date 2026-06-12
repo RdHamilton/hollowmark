@@ -143,10 +143,10 @@ builds:
       # Resolved by daemon-release.yml: production tags use the prod DSN, pre-
       # release tags use the staging DSN, snapshot builds get an empty value
       # which leaves Sentry disabled at runtime.
-      # main.DefaultSPAURL is the build-time SPA URL for tray "Open VaultMTG" (#637).
+      # main.DefaultSPAURL is the build-time SPA URL for tray "Open Hollowmark" (#637).
       # main.DefaultSetupURL is the build-time first-run setup page URL (#637).
       # Both mirror the DefaultCloudAPIURL staging/prod split:
-      #   stable tags   -> app.vaultmtg.app / vaultmtg.app/setup
+      #   stable tags   -> app.hollowmark.app / hollowmark.app/setup
       #   pre-release   -> stg-app.vaultmtg.app / stg.vaultmtg.app/setup
       #
       # updatecheck.EmbeddedPublicKey is the minisign public key used to verify

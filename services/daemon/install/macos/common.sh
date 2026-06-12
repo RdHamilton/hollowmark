@@ -83,7 +83,7 @@ INSTALL_STATE="${CONFIG_DIR}/install-state.json"
 APP_BUNDLE_PATH="${APP_BUNDLE_PATH:-/Applications/VaultMTG${APP_SUFFIX}.app}"
 
 # User-visible tray label
-TRAY_LABEL="VaultMTG${DISPLAY}"
+TRAY_LABEL="Hollowmark${DISPLAY}"
 
 # Local-API TCP port (loopback health/status endpoint).
 # stable = 9001, staging = 9011 (stable + 10, offset matches install.stagingPortOffset in Go).
