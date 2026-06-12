@@ -14,6 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/RdHamilton/hollowmark/services/contract"
 
 	"github.com/RdHamilton/hollowmark/services/bff/internal/analytics"
@@ -24,12 +27,27 @@ import (
 const (
 	batchSize    = 100
 	tickInterval = 30 * time.Second
+
+	// transientRetryTTL is the maximum age (measured from received_at) a
+	// transient-pending event may remain in the queue before it is escalated
+	// to the DLQ. Using received_at (not occurred_at) ensures daemon log
+	// replays — which carry days-old occurred_at but fresh received_at —
+	// are not incorrectly DLQ'd on their first failure (RC2).
+	transientRetryTTL = 24 * time.Hour
 )
 
 // daemonEventStore is the subset of DaemonEventsRepository the worker uses.
 type daemonEventStore interface {
 	ListPendingProjection(ctx context.Context, limit int) ([]repository.DaemonEventRow, error)
+	// ListPendingProjectionAfter returns up to limit pending rows with
+	// (received_at, id) strictly greater than (afterTime, afterID).
+	// Used by runOnce to keyset-paginate past transient-pending rows within
+	// a single tick, preventing global livelock (RC1).
+	ListPendingProjectionAfter(ctx context.Context, afterTime time.Time, afterID int64, limit int) ([]repository.DaemonEventRow, error)
 	MarkProjected(ctx context.Context, id int64) error
+	// ResetProjected sets projected_at = NULL for the given row, returning it
+	// to the pending queue. Used by the ops backfill script (RC5).
+	ResetProjected(ctx context.Context, id int64) error
 }
 
 // accountStore resolves accounts.id from accounts.client_id (the raw MTGA string).
@@ -169,6 +187,40 @@ func isPermanent(err error) bool {
 	return errors.As(err, &p)
 }
 
+// transientErr wraps an error to signal that the failure is recoverable —
+// the worker should leave the row pending rather than calling MarkProjected,
+// so the next tick retries it. Only opt-in projectors return transient().
+// Currently only projectGamePlayEvent returns it (for FK 23503 violations).
+type transientErr struct {
+	cause error
+}
+
+func (e *transientErr) Error() string { return e.cause.Error() }
+func (e *transientErr) Unwrap() error { return e.cause }
+
+// transient wraps err in transientErr so the worker leaves the row pending
+// instead of marking it projected. Returns nil when err is nil.
+func transient(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &transientErr{cause: err}
+}
+
+// isTransient reports whether err (or any error in its chain) is a transientErr.
+func isTransient(err error) bool {
+	var t *transientErr
+	return errors.As(err, &t)
+}
+
+// isFKViolation reports whether err is a PostgreSQL SQLSTATE 23503
+// (foreign_key_violation). Detection uses errors.As + pgconn.PgError —
+// never string matching, which does not work with pgx/v5 errors (RC3).
+func isFKViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.ForeignKeyViolation
+}
+
 // Worker projects pending daemon_events rows into their destination tables.
 type Worker struct {
 	events     daemonEventStore
@@ -298,11 +350,14 @@ func (w *Worker) RunOnce(ctx context.Context) {
 	w.runOnce(ctx)
 }
 
-// runOnce fetches up to batchSize pending events and projects each one.
+// runOnce fetches pending events and projects each one, keyset-paginating
+// within a single tick to ensure transient-pending rows do not starve later
+// rows (RC1). Each page is batchSize rows; pagination continues until a page
+// returns fewer than batchSize rows (backlog drained).
 func (w *Worker) runOnce(ctx context.Context) {
 	start := time.Now()
 
-	var projected, skippedUnknown, skippedMalformed, errored, deadLettered int
+	var projected, skippedUnknown, skippedMalformed, errored, deadLettered, retryTransient int
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -310,36 +365,75 @@ func (w *Worker) runOnce(ctx context.Context) {
 		}
 
 		log.Printf(
-			"[projection] runOnce completed pending=%d projected=%d skipped_unknown=%d skipped_malformed=%d errored=%d dead_lettered=%d duration_ms=%d",
-			projected+skippedUnknown+skippedMalformed+errored+deadLettered,
-			projected, skippedUnknown, skippedMalformed, errored, deadLettered,
+			"[projection] runOnce completed pending=%d projected=%d skipped_unknown=%d skipped_malformed=%d errored=%d dead_lettered=%d retry_transient=%d duration_ms=%d",
+			projected+skippedUnknown+skippedMalformed+errored+deadLettered+retryTransient,
+			projected, skippedUnknown, skippedMalformed, errored, deadLettered, retryTransient,
 			time.Since(start).Milliseconds(),
 		)
 	}()
 
-	rows, err := w.events.ListPendingProjection(ctx, batchSize)
-	if err != nil {
-		log.Printf("[projection] ListPendingProjection: %v", err)
-		errored++
-		return
-	}
+	// Keyset cursor: (lastReceivedAt, lastID) tracks the position after the
+	// last row processed so we can page past transient-pending rows in a single
+	// tick without re-fetching them (RC1 starvation guard).
+	var lastReceivedAt time.Time
+	var lastID int64
+	firstPage := true
 
-	for i := range rows {
-		row := rows[i]
+	for {
+		var rows []repository.DaemonEventRow
+		var err error
 
-		outcome := w.projectRow(ctx, &row)
+		if firstPage {
+			rows, err = w.events.ListPendingProjection(ctx, batchSize)
+			firstPage = false
+		} else {
+			rows, err = w.events.ListPendingProjectionAfter(ctx, lastReceivedAt, lastID, batchSize)
+		}
 
-		switch outcome {
-		case outcomeProjected:
-			projected++
-		case outcomeSkippedUnknown:
-			skippedUnknown++
-		case outcomeSkippedMalformed:
-			skippedMalformed++
-		case outcomeErrored:
+		if err != nil {
+			log.Printf("[projection] ListPendingProjection: %v", err)
 			errored++
-		case outcomeDeadLettered:
-			deadLettered++
+			return
+		}
+
+		if len(rows) == 0 {
+			break
+		}
+
+		for i := range rows {
+			row := rows[i]
+
+			// Advance the keyset cursor regardless of outcome.
+			// This ensures transient-pending rows are not re-fetched on the
+			// next page — we advance past them even when not marking projected.
+			if row.ReceivedAt.After(lastReceivedAt) ||
+				(row.ReceivedAt.Equal(lastReceivedAt) && row.ID > lastID) {
+				lastReceivedAt = row.ReceivedAt
+				lastID = row.ID
+			}
+
+			outcome := w.projectRow(ctx, &row)
+
+			switch outcome {
+			case outcomeProjected:
+				projected++
+			case outcomeSkippedUnknown:
+				skippedUnknown++
+			case outcomeSkippedMalformed:
+				skippedMalformed++
+			case outcomeErrored:
+				errored++
+			case outcomeDeadLettered:
+				deadLettered++
+			case outcomeRetryTransient:
+				retryTransient++
+			}
+		}
+
+		// If this page was full, there may be more rows — continue paginating.
+		// If it was short, the backlog is drained for this tick.
+		if len(rows) < batchSize {
+			break
 		}
 	}
 }
@@ -352,6 +446,11 @@ const (
 	outcomeSkippedMalformed
 	outcomeErrored
 	outcomeDeadLettered
+	// outcomeRetryTransient is returned when a projector detects a transient
+	// ordering failure (e.g. FK violation on games.match_id) and leaves the
+	// row pending for retry on the next tick. The row is NOT marked projected.
+	// Observable via the projection.retry_transient PostHog metric (RC4).
+	outcomeRetryTransient
 )
 
 // projectRow processes a single daemon_events row.
@@ -453,7 +552,16 @@ func (w *Worker) projectRow(ctx context.Context, row *repository.DaemonEventRow)
 		outcome = w.writeToDLQ(ctx, row, writeErr)
 	}
 
-	// Always mark projected so we don't re-scan this row.
+	// If the projector returned a transient error, leave the row pending so the
+	// next tick retries it (RC-core fix). Emit an observability metric (RC4).
+	// The received_at TTL check is done inside the projector so the DLQ path
+	// above takes precedence when TTL is exceeded.
+	if writeErr != nil && isTransient(writeErr) {
+		w.emitRetryTransient(ctx, row, writeErr)
+		return outcomeRetryTransient
+	}
+
+	// Mark projected for all other outcomes (projected, skipped, errored, DLQ).
 	if err := w.events.MarkProjected(ctx, row.ID); err != nil {
 		log.Printf("[projection] MarkProjected id=%d: %v", row.ID, err)
 		return outcomeErrored
@@ -499,6 +607,19 @@ func (w *Worker) writeToDLQ(ctx context.Context, row *repository.DaemonEventRow,
 	}, analytics.CaptureOptions{Operational: true})
 
 	return outcomeDeadLettered
+}
+
+// emitRetryTransient emits the projection.retry_transient PostHog operational
+// metric when a projector returns a transient error and the row is left pending.
+// account_id is hashed per I-10 — no raw PII is ever sent (RC4).
+// Operational:true — system health telemetry, GDPR §6(1)(f) carve-out.
+func (w *Worker) emitRetryTransient(ctx context.Context, row *repository.DaemonEventRow, projErr error) {
+	acctHash := hashAccountIDProjection(row.AccountID)
+	_ = w.analytics.Capture(ctx, acctHash, "projection.retry_transient", map[string]any{
+		"account_id_hash": acctHash,
+		"event_type":      row.EventType,
+		"error_message":   projErr.Error(),
+	}, analytics.CaptureOptions{Operational: true})
 }
 
 // hashAccountIDProjection returns a privacy-safe representation of accountID
@@ -1101,11 +1222,12 @@ func (w *Worker) projectDeckUpdated(ctx context.Context, row *repository.DaemonE
 // that out-of-order retransmissions of the same (match_id, game_number) do not
 // regress the stored state.
 //
-// Card plays (ADR-050): after inserting the per-game row, resolve games.id
-// from (match_id, game_number) and write each CardPlayEntry to game_plays.
-// If games.id cannot be resolved (match.completed not yet projected), log at
-// WARN and skip — the raw payload is preserved in daemon_events.payload for
-// retroactive projection (v0.3.8 follow-on, not a v0.3.7 gate).
+// Card plays (ADR-050): after inserting the per-game row, write each
+// CardPlayEntry to game_plays via InsertCardPlays.
+// UpsertGameRow creates the games anchor row required by the game_plays.game_id
+// FK. If UpsertGameRow returns a FK violation (SQLSTATE 23503) it means
+// match.completed has not yet been projected — return transient() so projectRow
+// leaves this row pending for retry on the next tick (fix for #1340).
 //
 // Counter projection (ADR-046 A2.1, vmt-t#613): if the payload carries
 // CounterChanges and the counterStore is wired, each entry is written to
@@ -1202,6 +1324,23 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 			var upsertErr error
 			gameID, upsertErr = w.gameRows.UpsertGameRow(ctx, p.MatchID, p.GameNumber, gameResult)
 			if upsertErr != nil {
+				if isFKViolation(upsertErr) {
+					// FK 23503: games.match_id → matches.id not yet projected.
+					// match.completed arrives after match.game_ended in the
+					// common stream ordering — retry on the next tick.
+					//
+					// TTL (RC2): base the ceiling on received_at, NOT occurred_at.
+					// Daemon replays carry days-old occurred_at but fresh received_at;
+					// using occurred_at would DLQ recoverable events on first failure.
+					if time.Since(row.ReceivedAt) > transientRetryTTL {
+						log.Printf("[projection] projectGamePlayEvent id=%d: FK violation TTL exceeded (received_at=%v) — escalating to DLQ",
+							row.ID, row.ReceivedAt)
+						return permanent(fmt.Errorf("FK violation not resolved after %v (received_at TTL): %w", transientRetryTTL, upsertErr))
+					}
+					log.Printf("[projection] projectGamePlayEvent id=%d: FK violation on games.match_id=%q — leaving pending for retry (match.completed not yet projected)",
+						row.ID, p.MatchID)
+					return transient(upsertErr)
+				}
 				return fmt.Errorf("UpsertGameRow: %w", upsertErr)
 			}
 		}

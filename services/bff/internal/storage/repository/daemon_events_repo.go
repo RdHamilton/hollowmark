@@ -149,6 +149,71 @@ func (r *DaemonEventsRepository) MarkProjected(ctx context.Context, id int64) er
 	return err
 }
 
+// ListPendingProjectionAfter returns up to limit daemon_events rows that have
+// not yet been projected (projected_at IS NULL) and whose (received_at, id) is
+// strictly greater than (afterTime, afterID). Rows are ordered by
+// (received_at ASC, id ASC) — the same ordering as ListPendingProjection.
+//
+// This method enables the worker to keyset-paginate within a single tick,
+// advancing past transient-pending rows so they cannot starve newer events
+// (RC1 starvation guard, fix for #1340).
+func (r *DaemonEventsRepository) ListPendingProjectionAfter(
+	ctx context.Context,
+	afterTime time.Time,
+	afterID int64,
+	limit int,
+) ([]DaemonEventRow, error) {
+	const q = `
+		SELECT id, user_id, account_id, event_type, payload, occurred_at, received_at,
+		       event_id, projected_at
+		FROM daemon_events
+		WHERE projected_at IS NULL
+		  AND (received_at, id) > ($1, $2)
+		ORDER BY received_at ASC, id ASC
+		LIMIT $3`
+
+	rows, err := r.db.QueryContext(ctx, q, afterTime, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var events []DaemonEventRow
+
+	for rows.Next() {
+		var e DaemonEventRow
+
+		if err := rows.Scan(
+			&e.ID, &e.UserID, &e.AccountID, &e.EventType,
+			&e.Payload, &e.OccurredAt, &e.ReceivedAt,
+			&e.EventID, &e.ProjectedAt,
+		); err != nil {
+			return nil, err
+		}
+
+		events = append(events, e)
+	}
+
+	return events, rows.Err()
+}
+
+// ResetProjected sets projected_at = NULL for the given daemon_events row,
+// returning it to the pending queue. Used by the ops backfill script to
+// re-project silently-dropped match.game_ended events whose matches rows
+// now exist (fix for #1340, RC5).
+//
+// The backfill caller is responsible for selecting only rows where the
+// corresponding matches row EXISTS — otherwise the row will fail transiently
+// again and immediately be re-pended on the next tick.
+//
+// This is an ops/admin method, NOT a schema migration. Backfill execution
+// is tracked in a separate ticket per the #1340 out-of-scope decision.
+func (r *DaemonEventsRepository) ResetProjected(ctx context.Context, id int64) error {
+	const q = `UPDATE daemon_events SET projected_at = NULL WHERE id = $1`
+	_, err := r.db.ExecContext(ctx, q, id)
+	return err
+}
+
 // HasRecentEventByUserID returns true when the given user has at least one
 // daemon_events row with received_at within the last window duration.
 // This is used by the health endpoint to determine whether the daemon is
