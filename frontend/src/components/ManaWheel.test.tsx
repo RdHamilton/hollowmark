@@ -18,7 +18,7 @@ describe('ManaWheel', () => {
   it('has default aria-label', () => {
     render(<ManaWheel />);
     const svg = screen.getByRole('img');
-    expect(svg).toHaveAttribute('aria-label', 'VaultMTG five-color mana wheel');
+    expect(svg).toHaveAttribute('aria-label', 'Hollowmark five-color mana wheel');
   });
 
   it('accepts a custom aria-label', () => {
@@ -42,5 +42,17 @@ describe('ManaWheel', () => {
   it('has role=img', () => {
     render(<ManaWheel />);
     expect(screen.getByRole('img')).toBeInTheDocument();
+  });
+
+  it('renders the Watermark center mark as stroked paths, not a filled V', () => {
+    const { container } = render(<ManaWheel />);
+    const svg = container.querySelector('[data-testid="mana-wheel"]');
+    // The 02 Watermark uses stroke-based paths. The old V used a filled path with fillRule=evenodd.
+    // Confirm no filled-V path survives in the center glyph group.
+    const filledPaths = Array.from(svg?.querySelectorAll('path[fill-rule="evenodd"]') ?? []);
+    expect(filledPaths).toHaveLength(0);
+    // Confirm stroke paths are present (the three Watermark paths are inside a g with fill="none")
+    const strokeGroups = Array.from(svg?.querySelectorAll('g[fill="none"]') ?? []);
+    expect(strokeGroups.length).toBeGreaterThan(0);
   });
 });

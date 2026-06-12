@@ -350,7 +350,7 @@ export default function Home() {
     return (
       <div className="home-page" data-testid="home-page">
         <div className="home-empty" data-testid="home-empty">
-          <ManaWheel size={120} ariaLabel="Get started with VaultMTG" />
+          <ManaWheel size={120} ariaLabel="Get started with Hollowmark" />
           <p className="home-empty-title">Welcome, {displayName}</p>
           <p className="home-empty-body">
             Connect your daemon and play a game to get started — your command center

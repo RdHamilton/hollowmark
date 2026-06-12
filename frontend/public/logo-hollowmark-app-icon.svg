@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Hollowmark app icon</title>
+  
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="#0D1117"></rect>
+  <g fill="none" stroke="#4A90D9" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20,17 V47"></path>
+    <path d="M44,17 V47"></path>
+    <path d="M20,32 h9 l3,-4 l3,4 h9"></path>
+  </g>
+</svg>

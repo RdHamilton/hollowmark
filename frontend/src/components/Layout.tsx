@@ -10,7 +10,7 @@ import { usePostHogIdentity } from '@/hooks/usePostHogIdentity';
 import { useDaemonOnboarding, type AccountDataState, SESSION_HAS_ACCOUNT_DATA_KEY } from '@/hooks/useDaemonOnboarding';
 import { useCollectionMode } from '@/hooks/useCollectionMode';
 import ReportBugButton from './ReportBugButton';
-import vaultMark from '@/assets/logo-vaultmtg-mark.svg';
+import hollowmarkWordmark from '@/assets/logo-hollowmark-wordmark.svg';
 import { getHomeSummary } from '@/services/api/bffHomeSummary';
 import './Layout.css';
 
@@ -183,9 +183,8 @@ const Layout = ({ children }: LayoutProps) => {
       <div className="tab-bar" data-testid="nav-tab-bar">
         <div className="tab-bar-left">
           <Link to="/home" className="nav-brand" data-testid="nav-brand" aria-label="Hollowmark home">
-            {/* #1020: Hollowmark orb mark ≥32px per design spec */}
-            <img src={vaultMark} alt="" width={32} height={32} className="nav-brand-mark" />
-            <span className="nav-brand-wordmark">Hollowmark</span>
+            {/* Hollowmark wordmark lockup: mark + logotype in one SVG (02 Watermark + Cormorant italic) */}
+            <img src={hollowmarkWordmark} alt="Hollowmark" height={32} className="nav-brand-wordmark" />
           </Link>
           <div className="tab-links">
           <Link
