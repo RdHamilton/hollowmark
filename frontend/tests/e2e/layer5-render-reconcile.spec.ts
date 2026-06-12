@@ -653,6 +653,49 @@ test.describe('Layer 5 — Surface 4: Rank Progression chart (rank_class/rank_le
     await expect(timelineItems.first()).toBeVisible({ timeout: 10_000 });
     const itemCount = await timelineItems.count();
     expect(itemCount).toBeGreaterThan(0);
+
+    // FLAT-CHART REGRESSION GUARD (rank_class/rank_level missing → all-zero Y-axis):
+    // When parseRankString correctly derives rank from the flat "rank" field, the
+    // chart's Y-axis spans Gold 1-3 (values ≥8) and the Y-axis maximum tick label
+    // reflects a rank above Bronze. When the SPA reads rank_class/rank_level directly
+    // (old bug — both absent from wire), every chartData point has rankValue=0 →
+    // all-zero Y-axis → Recharts renders only Bronze ticks.
+    //
+    // Assertion: the Y-axis custom tick formatter produces at least one non-Bronze
+    // label in the recharts-cartesian-axis-tick-value text elements.
+    // Recharts renders <text class="recharts-text recharts-cartesian-axis-tick-value">
+    // elements for Y-axis ticks; we check at least one tick shows a rank above Bronze.
+    //
+    // Manifest: rank-progression.json → chart_must_be_non_flat: true.
+    const yAxisTicks = page.locator(
+      '[data-testid="rank-chart"] .recharts-yAxis .recharts-text.recharts-cartesian-axis-tick-value'
+    );
+    const tickCount = await yAxisTicks.count();
+    // When all values are 0, Recharts may render 1 tick at 0 ("Bronze 4") or suppress ticks.
+    // When values span Gold 1-3, Recharts renders multiple ticks. A count >1 proves non-flat.
+    // If Recharts renders 0 ticks (no domain), the chart is definitively flat/broken.
+    if (tickCount === 0) {
+      throw new Error(
+        'Rank chart Y-axis has 0 tick labels — chart is definitively flat (all rankValues=0). ' +
+        'parseRankString is not running: SPA is reading rank_class/rank_level (both undefined) ' +
+        'instead of parsing the "rank" string. Manifest: rank-progression.json, chart_must_be_non_flat: true'
+      );
+    }
+    // With real data (Gold 1–3 in mock), Recharts spans a non-trivial domain.
+    // A single tick at 0 means all data is at zero → flat chart regression.
+    const allTickTexts: string[] = [];
+    for (let i = 0; i < tickCount; i++) {
+      allTickTexts.push((await yAxisTicks.nth(i).textContent()) ?? '');
+    }
+    const hasNonBronzeTick = allTickTexts.some(t => !t.startsWith('Bronze'));
+    expect(
+      hasNonBronzeTick,
+      'Rank chart Y-axis must include at least one non-Bronze rank label. ' +
+      `All tick labels: [${allTickTexts.join(', ')}]. ` +
+      'Only Bronze ticks = all rankValues are 0 = parseRankString not running ' +
+      '(rank_class/rank_level direct read regression). ' +
+      'Manifest: rank-progression.json, chart_must_be_non_flat: true',
+    ).toBe(true);
   });
 
   test('rank chart empty state renders correctly when no rank data exists', async ({ page }) => {
