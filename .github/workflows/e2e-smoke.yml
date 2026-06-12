@@ -186,3 +186,137 @@ jobs:
           frontend/playwright-report/
           frontend/test-results/
         retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Layer 5 Mode B — SPA Render Reconciliation (Strict)
+  #
+  # ADR-052 §83/§97: drives the SPA against the REAL seeded BFF with NO
+  # page.route() intercepts on /api/* paths. Guards against the false-PASS
+  # class where mocked adapters satisfy assertions the real BFF would fail.
+  #
+  # Promotion path: this job soaks at continue-on-error: true until two
+  # consecutive clean runs confirm no infrastructure flakiness. Promotion
+  # to hard-fail gate (required status check) is tracked in #1316.
+  # NOT tagged @smoke — @smoke pulls tests into the required gate, bypassing
+  # the soak period. Do NOT add @smoke until #1316 is resolved.
+  #
+  # RULE-INFRA-01: continue-on-error at job level. Folding Mode B specs into
+  # the required e2e-smoke job would hard-fail on day 1 and block all PRs
+  # until every surface is confirmed stable in CI.
+  #
+  # Path filter: only runs when frontend source, e2e tests, BFF source, or
+  # the Layer 5 manifest changes. This avoids burning CI quota on unrelated
+  # PRs during the soak period.
+  # ---------------------------------------------------------------------------
+  layer5-mode-b:
+    name: Layer 5 Mode B (strict BFF — soak, non-blocking)
+    continue-on-error: true
+
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-jammy
+    # Generous ceiling: the strict Mode B suite hits the real BFF for every
+    # assertion — network round-trips are longer than mocked responses.
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: mtga
+          POSTGRES_PASSWORD: mtga
+          POSTGRES_DB: mtga_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 2
+
+    # -----------------------------------------------------------------------
+    # Path filter — only run the heavy BFF build + tests when relevant paths
+    # changed (ADR-052 path-filter requirement). A non-required job that always
+    # runs wastes CI quota on docs-only and Dependabot PRs.
+    #
+    # git diff HEAD^1 is reliable on pull_request and push events (fetch-depth: 2).
+    # On schedule / workflow_dispatch: no GITHUB_BASE_REF — skip the filter.
+    # -----------------------------------------------------------------------
+    - name: Check changed paths (path filter gate)
+      id: paths
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+        else
+          changed=$(git diff --name-only HEAD^1 HEAD 2>/dev/null | grep -cE \
+            '^frontend/src/|^frontend/tests/e2e/|^services/bff/|^services/daemon/testdata/corpus/layer5-expected/|^frontend/tests/e2e/fixtures/test-data\.sql')
+          if [ "$changed" -gt 0 ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+        fi
+
+    # -----------------------------------------------------------------------
+    # BFF binary — fast path: download pre-built artifact from ci.yml
+    # -----------------------------------------------------------------------
+    - name: Download pre-built BFF artifact
+      if: steps.paths.outputs.changed == 'true' && inputs.bff_artifact_name != ''
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.bff_artifact_name }}
+        path: bin
+
+    - name: Make pre-built BFF binary executable
+      if: steps.paths.outputs.changed == 'true' && inputs.bff_artifact_name != ''
+      run: chmod +x bin/mtga-bff
+
+    # -----------------------------------------------------------------------
+    # BFF binary — slow path: build from source
+    # -----------------------------------------------------------------------
+    - name: Set up Go (source build only)
+      if: steps.paths.outputs.changed == 'true' && inputs.bff_artifact_name == ''
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25'
+        cache-dependency-path: services/bff/go.sum
+
+    - name: Build BFF binary (source build only)
+      if: steps.paths.outputs.changed == 'true' && inputs.bff_artifact_name == ''
+      uses: ./.github/actions/build-bff
+      with:
+        output-path: bin/mtga-bff
+
+    - name: Install frontend dependencies
+      if: steps.paths.outputs.changed == 'true'
+      run: |
+        cd frontend
+        npm ci
+
+    - name: Run Layer 5 Mode B spec
+      if: steps.paths.outputs.changed == 'true'
+      run: |
+        cd frontend
+        npx playwright test tests/e2e/layer5/layer5-mode-b.spec.ts --project=full
+      env:
+        CI: true
+        MTGA_ENV: development
+        DATABASE_URL: postgres://mtga:mtga@postgres:5432/mtga_e2e?sslmode=disable
+        CLERK_SECRET_KEY: ${{ secrets.CLERK_STAGING_SECRET_KEY }}
+
+    - name: Upload Mode B test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: layer5-mode-b-results
+        path: |
+          frontend/playwright-report/
+          frontend/test-results/
+        retention-days: 14
