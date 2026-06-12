@@ -773,3 +773,107 @@ func TestMatchesRepository_GetPlayerTeamIDForMatch_CrossTenantIsolation(t *testi
 		t.Errorf("GetPlayerTeamIDForMatch cross-tenant isolation failure: accountA read accountB's player_team_id=%d (expected 0)", teamID)
 	}
 }
+
+// ─── GetResultForMatch integration tests (#1341 fix) ─────────────────────────
+
+// TestMatchesRepository_GetResultForMatch_Win verifies that GetResultForMatch
+// returns "win" for an existing match that was stored with result="win".
+func TestMatchesRepository_GetResultForMatch_Win(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "getresult-win")
+	matchID := fmt.Sprintf("match-grf-win-%d", accountID)
+	now := time.Now().UTC().Truncate(time.Second)
+	insertTestMatch(t, db, matchID, accountID, "Standard", now) // result="win" by default
+
+	result, err := repo.GetResultForMatch(ctx, accountID, matchID)
+	if err != nil {
+		t.Fatalf("GetResultForMatch: unexpected error: %v", err)
+	}
+	if result != "win" {
+		t.Errorf("GetResultForMatch: want %q, got %q", "win", result)
+	}
+}
+
+// TestMatchesRepository_GetResultForMatch_Loss verifies that GetResultForMatch
+// returns "loss" when the match row was stored with result="loss".
+func TestMatchesRepository_GetResultForMatch_Loss(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "getresult-loss")
+	matchID := fmt.Sprintf("match-grf-loss-%d", accountID)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// Insert with result="loss" directly (insertTestMatch always uses "win").
+	_, err := db.ExecContext(
+		ctx,
+		`INSERT INTO matches
+			(id, account_id, event_id, event_name, timestamp, player_wins, opponent_wins,
+			 player_team_id, format, result)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		matchID, accountID, "evt-"+matchID, "event-"+matchID, now,
+		0, 1, 1, "Standard", "loss",
+	)
+	if err != nil {
+		t.Fatalf("insert match with result=loss: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM matches WHERE id = $1`, matchID)
+	})
+
+	result, err := repo.GetResultForMatch(ctx, accountID, matchID)
+	if err != nil {
+		t.Fatalf("GetResultForMatch: unexpected error: %v", err)
+	}
+	if result != "loss" {
+		t.Errorf("GetResultForMatch: want %q, got %q", "loss", result)
+	}
+}
+
+// TestMatchesRepository_GetResultForMatch_NotFound verifies that
+// GetResultForMatch returns ("", nil) — not an error — when the match row does
+// not exist yet (match.completed not yet projected).
+func TestMatchesRepository_GetResultForMatch_NotFound(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "getresult-notfound")
+
+	result, err := repo.GetResultForMatch(ctx, accountID, "no-such-match-1341")
+	if err != nil {
+		t.Fatalf("GetResultForMatch not-found: want (\"\", nil), got err=%v", err)
+	}
+	if result != "" {
+		t.Errorf("GetResultForMatch not-found: want empty string, got %q", result)
+	}
+}
+
+// TestMatchesRepository_GetResultForMatch_CrossTenantIsolation verifies that
+// GetResultForMatch scopes to accountID: account A presenting account B's
+// match_id must receive ("", nil), not B's result.
+func TestMatchesRepository_GetResultForMatch_CrossTenantIsolation(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+	ctx := context.Background()
+
+	accountA := insertTestAccount(t, db, "getresult-iso-a")
+	accountB := insertTestAccount(t, db, "getresult-iso-b")
+
+	matchBID := fmt.Sprintf("match-grf-iso-b-%d", accountB)
+	now := time.Now().UTC().Truncate(time.Second)
+	insertTestMatch(t, db, matchBID, accountB, "Standard", now)
+
+	// accountA must not be able to read accountB's match result.
+	result, err := repo.GetResultForMatch(ctx, accountA, matchBID)
+	if err != nil {
+		t.Fatalf("GetResultForMatch cross-tenant: want (\"\", nil), got err=%v", err)
+	}
+	if result != "" {
+		t.Errorf("GetResultForMatch cross-tenant isolation failure: accountA read accountB's result=%q (expected empty)", result)
+	}
+}
