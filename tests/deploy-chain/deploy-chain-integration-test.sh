@@ -756,11 +756,14 @@ chmod +x "$STUB_AWS"
 # arguments; the provisioner role has no prod SSM/SM access.
 #
 # Test approach: install a stub that records a "provisioner assumed" flag
-# when sts:AssumeRole completes, then FAILS (exit 1) if any ssm get-parameter
-# or secretsmanager get-secret-value call arrives AFTER the assume-role.
-# If write_database_url still re-fetches from SSM/SM (the regression), the
-# stub kills the run and the test asserts the script succeeded -- which it
-# won't, producing a clear FAIL.
+# when sts:AssumeRole completes, then FAILS (exit 1) if any of the three DB
+# SSM params (app-db-secret-arn, db-endpoint, db-name) or any
+# secretsmanager:GetSecretValue call arrives AFTER the assume-role.
+# Non-DB manifest SSM reads (ALLOWED_ORIGINS, CLERK_SECRET_KEY, etc.) are
+# expected to arrive after assume-role via write_param() and are allowed.
+# If write_database_url re-fetches DB params from SSM/SM (the regression),
+# the stub kills the run and the test asserts the script succeeded -- which
+# it won't, producing a clear FAIL.
 # ===========================================================================
 info "Phase 1d — C8 write_database_url no-SSM/SM-read-under-provisioner guard..."
 
@@ -774,22 +777,31 @@ export C8_PROVISIONER_ASSUMED_FLAG
 
 cat > "$STUB_AWS" <<AWSSTUB_C8
 #!/usr/bin/env bash
-# C8 aws CLI stub — poisons any SSM/SM read that arrives AFTER sts assume-role.
-# write_database_url() must not call ssm get-parameter or secretsmanager
-# get-secret-value; if it does, this stub exits 1 to fail the script.
+# C8 aws CLI stub — poisons DB SSM reads and any secretsmanager read that
+# arrive AFTER sts assume-role.
+#
+# write_database_url() must accept pre-fetched VALUES; the three DB SSM
+# params (app-db-secret-arn, db-endpoint, db-name) and the SM secret must
+# all be read BEFORE assume-role, in Step 1.  Non-DB manifest SSM reads
+# (ALLOWED_ORIGINS, CLERK_SECRET_KEY, etc.) legitimately happen after
+# assume-role via write_param() and are allowed.
 
 if [[ "\$1" == "ssm" && "\$2" == "get-parameter" ]]; then
-    # If assume-role has already been called, we are under the provisioner
-    # identity.  Any SSM read here would be the regression (write_database_url
-    # re-fetching under provisioner) -- fail immediately.
-    if [[ -f "${C8_PROVISIONER_ASSUMED_FLAG}" ]]; then
-        echo "STUB(c8) POISON: ssm get-parameter called AFTER sts assume-role -- write_database_url must not re-fetch SSM params under the provisioner role (regression from ray-incident-3qvtcn.md)" >&2
-        exit 1
-    fi
     NAME=""
     while [[ \$# -gt 0 ]]; do
         case "\$1" in --name) NAME="\$2"; shift 2 ;; *) shift ;; esac
     done
+    # If assume-role has already been called, DB SSM params must NOT be
+    # re-fetched (that is the write_database_url regression).  Non-DB params
+    # are expected under the provisioner (manifest loop via write_param).
+    if [[ -f "${C8_PROVISIONER_ASSUMED_FLAG}" ]]; then
+        case "\$NAME" in
+            */app-db-secret-arn|*/db-endpoint|*/db-name)
+                echo "STUB(c8) POISON: DB SSM param '\$NAME' fetched AFTER sts assume-role -- write_database_url must not re-read DB params under provisioner role (regression from ray-incident-3qvtcn.md)" >&2
+                exit 1
+                ;;
+        esac
+    fi
     case "\$NAME" in
         */ALLOWED_ORIGINS)             echo "http://localhost:3000" ;;
         */CLERK_SECRET_KEY)            echo "sk_live_stub" ;;
@@ -816,11 +828,10 @@ if [[ "\$1" == "ssm" && "\$2" == "get-parameter" ]]; then
 fi
 
 if [[ "\$1" == "secretsmanager" && "\$2" == "get-secret-value" ]]; then
-    # If assume-role has already been called, we are under the provisioner
-    # identity.  Any SM read here would be the regression (write_database_url
-    # re-fetching the secret under provisioner) -- fail immediately.
+    # Any SM read after assume-role is the regression: the DB secret must be
+    # fetched in Step 1 (under the instance role) and passed as an argument.
     if [[ -f "${C8_PROVISIONER_ASSUMED_FLAG}" ]]; then
-        echo "STUB(c8) POISON: secretsmanager get-secret-value called AFTER sts assume-role -- write_database_url must not re-fetch the DB secret under the provisioner role (regression from ray-incident-3qvtcn.md)" >&2
+        echo "STUB(c8) POISON: secretsmanager get-secret-value called AFTER sts assume-role -- DB secret must be fetched in Step 1 under the instance role, not under the provisioner (regression from ray-incident-3qvtcn.md)" >&2
         exit 1
     fi
     printf '{"username":"deploy_test","password":"deploy_test"}\n'

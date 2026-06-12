@@ -214,11 +214,49 @@ echo "AWS_DEFAULT_REGION provisioned."
 # The scoped vaultmtg-staging-deploy-provisioner role this script already
 # assumes holds the grant on the staging RDS secret via the
 # StagingProvisioningSecretsManager statement in staging-deploy-role.yml.
-# write_database_url() fetches the JSON secret, URL-encodes credentials via
-# jq @uri, and writes the complete DATABASE_URL to the env file.  No
-# DB_SECRET_ARN is written -- the BFF's runtime SM path stays dormant.
+# Pre-fetch the three DB values here (under the provisioner role) and pass
+# them as arguments to write_database_url(), which performs zero SSM/SM reads.
+# No DB_SECRET_ARN is written -- the BFF's runtime SM path stays dormant.
 # Rotation impact: re-run the staging deploy to pick up a rotated password.
-write_database_url "$SSM_STAGING_DB_SECRET_ARN" "$SSM_STAGING_DB_ENDPOINT" "$SSM_STAGING_DB_NAME"
+STAGING_DB_SECRET_ARN_VALUE=$(aws ssm get-parameter \
+  --name "$SSM_STAGING_DB_SECRET_ARN" \
+  --region "$REGION" \
+  --query Parameter.Value \
+  --output text)
+
+STAGING_DB_ENDPOINT=$(aws ssm get-parameter \
+  --name "$SSM_STAGING_DB_ENDPOINT" \
+  --region "$REGION" \
+  --query Parameter.Value \
+  --output text)
+
+STAGING_DB_NAME=$(aws ssm get-parameter \
+  --name "$SSM_STAGING_DB_NAME" \
+  --region "$REGION" \
+  --query Parameter.Value \
+  --output text)
+
+if [ -z "$STAGING_DB_SECRET_ARN_VALUE" ] || [ -z "$STAGING_DB_ENDPOINT" ] || [ -z "$STAGING_DB_NAME" ]; then
+  echo "ERROR: one or more staging DB SSM parameters returned empty." >&2
+  echo "  STAGING_DB_SECRET_ARN_VALUE (from ${SSM_STAGING_DB_SECRET_ARN}): '${STAGING_DB_SECRET_ARN_VALUE}'" >&2
+  echo "  STAGING_DB_ENDPOINT (from ${SSM_STAGING_DB_ENDPOINT}): '${STAGING_DB_ENDPOINT}'" >&2
+  echo "  STAGING_DB_NAME (from ${SSM_STAGING_DB_NAME}): '${STAGING_DB_NAME}'" >&2
+  exit 1
+fi
+
+STAGING_DB_SECRET_JSON=$(aws secretsmanager get-secret-value \
+  --secret-id "$STAGING_DB_SECRET_ARN_VALUE" \
+  --region "$REGION" \
+  --query SecretString \
+  --output text)
+
+if [ -z "$STAGING_DB_SECRET_JSON" ]; then
+  echo "ERROR: secretsmanager get-secret-value returned empty for staging ARN '${STAGING_DB_SECRET_ARN_VALUE}'." >&2
+  exit 1
+fi
+
+write_database_url "$STAGING_DB_SECRET_JSON" "$STAGING_DB_ENDPOINT" "$STAGING_DB_NAME"
+unset STAGING_DB_SECRET_JSON
 
 # Manifest-driven provisioning loop (ADR-075 D3).
 #
