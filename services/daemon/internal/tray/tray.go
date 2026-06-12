@@ -292,6 +292,47 @@ func (a *App) SetKeychainError(show bool) {
 	}
 }
 
+// SetRunError transitions the tray to StatusError and shows the "Try Again"
+// menu item. Called by runWithDegrade (ADR-083 SH-3) when svc.Run returns a
+// non-fatal error and a retry is available. The user can click "Try Again" to
+// trigger another svc.Run attempt without restarting the daemon.
+// Safe to call from any goroutine.
+func (a *App) SetRunError() {
+	a.SetStatus(StatusError)
+	if a.miTryAgain != nil {
+		a.miTryAgain.Show()
+	}
+}
+
+// SetRunStopped transitions the tray to StatusError with a "daemon stopped"
+// label and hides the "Try Again" item (all retries exhausted — AC3).
+// The process stays alive; the user must restart the daemon manually.
+// Safe to call from any goroutine.
+func (a *App) SetRunStopped() {
+	a.SetStatus(StatusError)
+	if a.miTryAgain != nil {
+		a.miTryAgain.Hide()
+	}
+}
+
+// TryAgainCh returns the TryAgain channel for use by runWithDegrade.
+// This exposes the existing channel via the runDegradeHooks interface
+// without adding a new field — the channel is already driven by the
+// tray loop's miTryAgain.ClickedCh handler.
+func (a *App) TryAgainCh() <-chan struct{} {
+	return a.TryAgain
+}
+
+// SetConnected restores the tray to StatusConnected after a successful
+// svc.Run recovery. Called by runWithDegrade on a clean svc.Run exit (AC6).
+// Safe to call from any goroutine.
+func (a *App) SetConnected() {
+	a.SetStatus(StatusConnected)
+	if a.miTryAgain != nil {
+		a.miTryAgain.Hide()
+	}
+}
+
 // NotifyUpdateAvailable shows the "Update available: vX.Y.Z — Click to Install"
 // menu item. On Windows the tooltip also notes the binary is unsigned (beta).
 // Safe to call from any goroutine.

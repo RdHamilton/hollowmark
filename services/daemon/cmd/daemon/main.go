@@ -654,26 +654,31 @@ func main() {
 				}
 			}
 
-			// ── Normal daemon run loop ─────────────────────────────────────────
-			if err := svc.Run(ctx); err != nil {
-				// SH-5 (ADR-083): structured log line + Sentry breadcrumb at the
-				// run_error exit path. logShutdown does NOT call sentry.Flush —
-				// the headless path flushes explicitly (os.Exit bypasses defers);
-				// the tray path relies on the deferred flush in main().
-				logShutdown(shutdownLogger, ReasonRunError, err)
-				if headless {
-					// Headless path — flush Sentry before os.Exit so the SH-5
-					// breadcrumb is not dropped. defer in main() does not fire here
-					// because os.Exit bypasses it.
+			// ── Normal daemon run loop (ADR-083 SH-3) ────────────────────────
+			// Tray mode: use runWithDegrade so a svc.Run error degrades to an
+			// error state + retry affordance rather than killing the process.
+			// Headless mode: keep the original exit-on-error path (launchd
+			// KeepAlive=true respawns the daemon; no tray to surface a retry).
+			if headless {
+				if err := svc.Run(ctx); err != nil {
+					// SH-5 (ADR-083): structured log line + Sentry breadcrumb.
+					// logShutdown does NOT flush; os.Exit bypasses defers so we
+					// flush explicitly here.
+					logShutdown(shutdownLogger, ReasonRunError, err)
 					sentryhook.Flush()
-					// Log the canonical FATAL line and exit non-zero so the
-					// supervisor (launchd / systemd) respawns.
 					logAndExitHeadlessKeychain(log.Default(), os.Exit)
 				}
-				// ADR-083 SH-1: svc.Run errors do NOT call bootout.
-				// Cancel the context so the graceful drain fires; launchd
-				// KeepAlive=true will respawn the daemon.
-				cancel()
+			} else {
+				// Tray path: degrade and retry (AC1–AC6, ADR-083 SH-3).
+				// runWithDegrade NEVER calls app.Quit or stopLaunchAgent.
+				// On permanent failure the tray shows a "stopped" indicator and
+				// the process stays alive — the user can restart from the menu.
+				if runErr := runWithDegrade(ctx, svc.Run, app, 3, defaultBackoff); runErr != nil {
+					// All retries exhausted: log the final error for diagnostics.
+					// runWithDegrade has already called app.SetRunStopped().
+					logShutdown(shutdownLogger, ReasonRunError, runErr)
+					log.Printf("[mtga-daemon] run: all retries exhausted — daemon in stopped state: %v", runErr)
+				}
 			}
 		}()
 	})
