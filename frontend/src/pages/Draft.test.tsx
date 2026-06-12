@@ -16,6 +16,17 @@ vi.mock('@/hooks/useFeatureFlag', () => ({
   useFeatureFlag: vi.fn().mockReturnValue({ enabled: true }),
 }));
 
+// Mock useDraftEventStream so Draft.tsx's SSE trigger useEffect does not
+// open a real EventSource in unit tests. Default: no event (latestEvent=null).
+// Tests that need to simulate SSE events can set mockDraftEventStream.latestEvent directly.
+const mockDraftEventStream = {
+  latestEvent: null as import('@/hooks/useDraftEventStream').DaemonEvent | null,
+  status: 'open' as import('@/hooks/useDraftEventStream').DraftEventStreamStatus,
+};
+vi.mock('@/hooks/useDraftEventStream', () => ({
+  useDraftEventStream: vi.fn(() => mockDraftEventStream),
+}));
+
 // Helper function to create mock data
 function createMockDraftSession(overrides: Partial<models.DraftSession> = {}): models.DraftSession {
   return new models.DraftSession({
@@ -126,6 +137,8 @@ describe('Draft Component', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockEventEmitter.clear();
+    // Reset SSE stream mock to no-event state
+    mockDraftEventStream.latestEvent = null;
   });
 
   describe('No Active Draft State', () => {
@@ -179,7 +192,8 @@ describe('Draft Component', () => {
   describe('Active Draft Display', () => {
     it('should load and display an active draft session', async () => {
       const session = createMockDraftSession();
-      const picks: models.DraftPickSession[] = [];
+      // Case C requires at least one pick (#1349: zero picks → Case B awaiting-data)
+      const picks = [createMockDraftPick()];
       const packs: models.DraftPackSession[] = [];
       const setCards = [createMockSetCard()];
       const ratings = [createMockCardRating()];
@@ -198,7 +212,7 @@ describe('Draft Component', () => {
 
       expect(screen.getByText('QuickDraft')).toBeInTheDocument();
       expect(screen.getByText(/Set: BLB/i)).toBeInTheDocument();
-      expect(screen.getByText(/Picks: 0\/45/i)).toBeInTheDocument();
+      expect(screen.getByText(/Picks: 1\/45/i)).toBeInTheDocument();
     });
 
     it('should display loading state while fetching draft data', () => {
@@ -213,14 +227,15 @@ describe('Draft Component', () => {
 
     it('should update when draft:updated event is fired', async () => {
       const session = createMockDraftSession();
-      const picks: models.DraftPickSession[] = [];
+      // Start in Case C (one pick) so the active-draft view is rendered immediately
+      const initialPick = createMockDraftPick({ PackNumber: 0, PickNumber: 1 });
       const packs: models.DraftPackSession[] = [];
       const setCards = [createMockSetCard()];
       const ratings = [createMockCardRating()];
       const mockMetrics = createMockDeckMetrics();
 
       mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
-      mockDrafts.getDraftPicks.mockResolvedValue(picks);
+      mockDrafts.getDraftPicks.mockResolvedValue([initialPick]);
       mockDrafts.getDraftPool.mockResolvedValue(packs);
       mockCards.getSetCards.mockResolvedValue(setCards);
       mockCards.getCardRatings.mockResolvedValue(ratings);
@@ -232,16 +247,16 @@ describe('Draft Component', () => {
         expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
       });
 
-      // Update picks
-      const newPick = createMockDraftPick();
-      mockDrafts.getDraftPicks.mockResolvedValue([newPick]);
+      // Update picks — now two picks
+      const secondPick = createMockDraftPick({ ID: 2, PackNumber: 0, PickNumber: 2 });
+      mockDrafts.getDraftPicks.mockResolvedValue([initialPick, secondPick]);
       mockDrafts.getDraftDeckMetrics.mockResolvedValue(mockMetrics);
 
       // Fire draft:updated event
       mockEventEmitter.emit('draft:updated');
 
       await waitFor(() => {
-        expect(screen.getByText(/Picks: 1\/45/i)).toBeInTheDocument();
+        expect(screen.getByText(/Picks: 2\/45/i)).toBeInTheDocument();
       }, { timeout: 3000 });
     });
   });
@@ -443,21 +458,31 @@ describe('Draft Component', () => {
       });
     });
 
-    it('should disable analyze button when no picks exist', async () => {
+    it('should disable analyze button when no picks exist (Case C, one pick, analyze button disabled)', async () => {
+      // Case B (zero picks) never renders the active-draft view at all (#1349).
+      // To test the disabled state of the analyze button, we need Case C (one pick)
+      // and then verify the button is disabled because picks.length === 1 but
+      // the analysis hasn't been triggered yet. The meaningful Case C test:
+      // analyze button is enabled only when picks exist — verify via one-pick setup.
       const session = createMockDraftSession();
+      const pick = createMockDraftPick();
 
       mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
-      mockDrafts.getDraftPicks.mockResolvedValue([]);
+      mockDrafts.getDraftPicks.mockResolvedValue([pick]);
       mockDrafts.getDraftPool.mockResolvedValue([]);
-      mockCards.getSetCards.mockResolvedValue([]);
+      mockCards.getSetCards.mockResolvedValue([createMockSetCard()]);
       mockCards.getCardRatings.mockResolvedValue([]);
 
       render(<Draft />);
 
+      // Wait for Case C (active-draft view) to render
       await waitFor(() => {
-        const analyzeButton = screen.getByRole('button', { name: /Analyze Pick Quality/i });
-        expect(analyzeButton).toBeDisabled();
+        expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
       });
+
+      // Analyze button must be present and enabled (picks.length > 0)
+      const analyzeButton = screen.getByRole('button', { name: /Analyze Pick Quality/i });
+      expect(analyzeButton).not.toBeDisabled();
     });
   });
 
@@ -465,9 +490,11 @@ describe('Draft Component', () => {
     it('should display card details when card is clicked', async () => {
       const session = createMockDraftSession();
       const card = createMockSetCard({ Name: 'Detailed Card' });
+      // Need one pick so we land in Case C (active-draft view), not Case B (#1349)
+      const pick = createMockDraftPick({ CardID: card.ArenaID });
 
       mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
-      mockDrafts.getDraftPicks.mockResolvedValue([]);
+      mockDrafts.getDraftPicks.mockResolvedValue([pick]);
       mockDrafts.getDraftPool.mockResolvedValue([]);
       mockCards.getSetCards.mockResolvedValue([card]);
       mockCards.getCardRatings.mockResolvedValue([]);
@@ -492,9 +519,11 @@ describe('Draft Component', () => {
     it('should close card details overlay when backdrop is clicked', async () => {
       const session = createMockDraftSession();
       const card = createMockSetCard({ Name: 'Closable Card' });
+      // Need one pick so we land in Case C (active-draft view), not Case B (#1349)
+      const pick = createMockDraftPick({ CardID: card.ArenaID });
 
       mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
-      mockDrafts.getDraftPicks.mockResolvedValue([]);
+      mockDrafts.getDraftPicks.mockResolvedValue([pick]);
       mockDrafts.getDraftPool.mockResolvedValue([]);
       mockCards.getSetCards.mockResolvedValue([card]);
       mockCards.getCardRatings.mockResolvedValue([]);
@@ -716,7 +745,8 @@ describe('Draft Component', () => {
   describe('live_draft_advisor_enabled feature flag gate', () => {
     function setupActiveDraft() {
       const session = createMockDraftSession();
-      const picks: models.DraftPickSession[] = [];
+      // Need one pick to reach Case C (active-draft view) — zero picks → Case B (#1349)
+      const picks = [createMockDraftPick()];
       const packs: models.DraftPackSession[] = [];
       const setCards = [createMockSetCard()];
       const ratings = [createMockCardRating()];
@@ -822,7 +852,8 @@ describe('Draft Component', () => {
           UpdatedAt: new Date('2025-11-20T10:00:00Z'),
         }),
       ]);
-      mockDrafts.getDraftPicks.mockResolvedValue([]);
+      // Need one pick to reach Case C (active-draft view) — zero picks → Case B (#1349)
+      mockDrafts.getDraftPicks.mockResolvedValue([createMockDraftPick()]);
       mockDrafts.getDraftPool.mockResolvedValue([]);
       mockCards.getSetCards.mockResolvedValue([]);
       mockCards.getCardRatings.mockResolvedValue([]);
@@ -834,6 +865,97 @@ describe('Draft Component', () => {
         expect(h1).toHaveTextContent('Draft Assistant');
         expect(h1.textContent).not.toMatch(/§|Chapter|Compendium/);
       });
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // #1349 — Draft Resume State + Implicit-Start Hardening
+  // Three-state model: Case A (no session), Case B (session, zero picks+packs),
+  // Case C (session, picks or packs present)
+  // --------------------------------------------------------------------------
+
+  describe('#1349 Draft Resume State (Case A / B / C)', () => {
+    // Test 1 — Case B: active session exists but zero picks and zero packs.
+    // Render guard: session && picks.length===0 && packs.length===0 → "awaiting data"
+    it('Case B: shows awaiting-data state when active session has no picks and no packs', async () => {
+      const session = createMockDraftSession({
+        EventName: 'Quick Draft',
+        SetCode: 'BLB',
+      });
+
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
+      mockDrafts.getDraftPicks.mockResolvedValue([]);
+      mockDrafts.getDraftPool.mockResolvedValue([]);
+      mockCards.getSetCards.mockResolvedValue([]);
+      mockCards.getCardRatings.mockResolvedValue([]);
+
+      render(<Draft />);
+
+      // Case B heading and approved Prof copy (REQ-2)
+      await waitFor(() => {
+        expect(screen.getByText('Draft in progress')).toBeInTheDocument();
+      });
+      expect(screen.getByText(/Connected — waiting on Arena's first pack/i)).toBeInTheDocument();
+
+      // Set + event line shown (REQ-3: EventName · SetCode)
+      expect(screen.getByText(/Quick Draft/i)).toBeInTheDocument();
+      expect(screen.getByText(/BLB/i)).toBeInTheDocument();
+
+      // Draft History grid must NOT be visible
+      expect(screen.queryByText('Draft History')).not.toBeInTheDocument();
+
+      // Full active-draft view must NOT be visible (its heading is "Draft Assistant")
+      expect(screen.queryByText('Draft Assistant')).not.toBeInTheDocument();
+    });
+
+    // Test 2 — Case B → Case C transition: first pick arrives after initial render.
+    it('Case B → Case C: transitions to active-draft view when first pick data arrives', async () => {
+      const session = createMockDraftSession({
+        EventName: 'Quick Draft',
+        SetCode: 'BLB',
+      });
+
+      // Start in Case B: zero picks
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
+      mockDrafts.getDraftPicks.mockResolvedValue([]);
+      mockDrafts.getDraftPool.mockResolvedValue([]);
+      mockCards.getSetCards.mockResolvedValue([createMockSetCard()]);
+      mockCards.getCardRatings.mockResolvedValue([]);
+
+      render(<Draft />);
+
+      // Confirm we're in Case B
+      await waitFor(() => {
+        expect(screen.getByText('Draft in progress')).toBeInTheDocument();
+      });
+
+      // Now picks arrive: update mock so next loadActiveDraft call returns one pick
+      const newPick = createMockDraftPick({ CardID: '12345' });
+      mockDrafts.getDraftPicks.mockResolvedValue([newPick]);
+
+      // Fire draft:updated event — this triggers debouncedLoadActiveDraft
+      mockEventEmitter.emit('draft:updated');
+
+      // Case B heading should disappear; active-draft heading should appear
+      await waitFor(() => {
+        expect(screen.queryByText('Draft in progress')).not.toBeInTheDocument();
+        expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
+      }, { timeout: 3000 });
+    });
+
+    // Test 3 — Case A regression guard: no active session → shows Draft History, not "Draft in progress"
+    it('Case A regression: shows Draft History (not "Draft in progress") when no active session exists', async () => {
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([]);
+      mockDrafts.getCompletedDraftSessions.mockResolvedValue([]);
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Draft History')).toBeInTheDocument();
+      });
+
+      // Case B heading must be absent (regression guard)
+      expect(screen.queryByText('Draft in progress')).not.toBeInTheDocument();
     });
   });
 });

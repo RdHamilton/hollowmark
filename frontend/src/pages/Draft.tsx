@@ -18,6 +18,7 @@ async function getDraftPacks(sessionId: string): Promise<models.DraftPackSession
 }
 
 import { EventsOn } from '@/services/websocketClient';
+import { useDraftEventStream } from '@/hooks/useDraftEventStream';
 import TierList from '../components/TierList';
 import { DraftGrade } from '../components/DraftGrade';
 import { WinRatePrediction } from '../components/WinRatePrediction';
@@ -134,6 +135,21 @@ const Draft: React.FC = () => {
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps -- loadActiveDraft and debouncedLoadActiveDraft are stable
     }, []);
+
+    // SSE implicit-start trigger (#1349): when a draft.pack or draft.started event arrives,
+    // call debouncedLoadActiveDraft() so Draft.tsx transitions from Draft History → Case B/C
+    // within one SSE cycle. This is a latency optimization only — the existing Wails
+    // draft:updated bridge (above) and poll-on-mount (line 119) are the primary recovery paths.
+    // REQ-1: only draft.pack and draft.started trigger the flip (not draft.pick — that event
+    // is not subscribed by useDraftEventStream).
+    const { latestEvent } = useDraftEventStream();
+    useEffect(() => {
+        if (!latestEvent) return;
+        if (latestEvent.type === 'draft.pack' || latestEvent.type === 'draft.started') {
+            debouncedLoadActiveDraft();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- debouncedLoadActiveDraft is stable
+    }, [latestEvent]);
 
     // Track which sessions we've already checked for stale ratings to prevent infinite loops
     const checkedSessionsRef = useRef<Set<string>>(new Set());
@@ -844,6 +860,35 @@ const Draft: React.FC = () => {
                         </div>
                     </div>
                 )}
+            </div>
+        );
+    }
+
+    // Case B — active session exists but no picks and no packs yet.
+    // The daemon has opened the session (draft.started written) but the first
+    // pack data has not arrived yet. Show an awaiting-data state rather than a
+    // blank active-draft view.
+    // REQ-2: copy = "Connected — waiting on Arena's first pack" (Prof option 1)
+    // REQ-3: show EventName · SetCode only — no fabricated pack/pick position
+    // REQ-4: SSE trigger above is reload-only (debouncedLoadActiveDraft), never navigate()
+    if (state.session && state.picks.length === 0 && state.packs.length === 0) {
+        return (
+            <div className="draft-container" data-testid="draft-awaiting-data">
+                <div className="draft-header">
+                    <h1>Draft in progress</h1>
+                    <div className="draft-info">
+                        <span className="draft-event">{state.session.EventName}</span>
+                        <span className="draft-set">{state.session.SetCode}</span>
+                    </div>
+                </div>
+                <div className="draft-awaiting-data">
+                    <div className="loading-spinner"></div>
+                    <p>Connected — waiting on Arena's first pack.</p>
+                    <p className="draft-awaiting-hint">
+                        If this sits here for more than a few picks, switch to another screen in Arena and back.
+                    </p>
+                    <a href="/" className="draft-back-link">← Back to Home</a>
+                </div>
             </div>
         );
     }
