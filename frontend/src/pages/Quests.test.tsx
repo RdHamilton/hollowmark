@@ -1201,7 +1201,7 @@ describe('Quests', () => {
       expect(mockQuests.getWeeklyWins).toHaveBeenCalledTimes(1);
     });
 
-    it('does not duplicate the request set when a stats:updated/quest:updated burst arrives mid-load (in-flight dedup)', async () => {
+    it('does not duplicate the request set when a readmodel.updated burst arrives mid-load (in-flight dedup, ADR-084)', async () => {
       // Hold getActiveQuests open so the load is in flight when events arrive.
       let resolveActive: (value: ActiveQuestsResponse) => void;
       mockQuests.getActiveQuests.mockReturnValue(
@@ -1214,9 +1214,9 @@ describe('Quests', () => {
 
       // Fire a burst of real-time events while the initial load is still in flight.
       await act(async () => {
-        mockEventEmitter.emit('stats:updated', {});
-        mockEventEmitter.emit('quest:updated', {});
-        mockEventEmitter.emit('stats:updated', {});
+        mockEventEmitter.emit('readmodel.updated', { domains: ['quests'] });
+        mockEventEmitter.emit('readmodel.updated', { domains: ['quests'] });
+        mockEventEmitter.emit('readmodel.updated', { domains: ['quests'] });
       });
 
       // The in-flight guard must have collapsed the burst: still one active-quests call.
