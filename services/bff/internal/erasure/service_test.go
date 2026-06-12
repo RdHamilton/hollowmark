@@ -28,7 +28,7 @@ func newStubAuditDB() *stubAuditDB {
 	return &stubAuditDB{stubDB: newStubDB()}
 }
 
-func (s *stubAuditDB) CreateAuditLogEntry(_ context.Context, _ string, _, _ int64) (jobID string, alreadyActive bool, err error) {
+func (s *stubAuditDB) CreateAuditLogEntry(_ context.Context, _ string, _ int64, _ []int64) (jobID string, alreadyActive bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.createCalls++
@@ -59,7 +59,7 @@ func TestService_StartErasureJob_DispatchesGoroutineOnNewJob(t *testing.T) {
 		return "user_clerk_test", true
 	})
 
-	jobID, err := svc.StartErasureJob(context.Background(), 1, 10)
+	jobID, err := svc.StartErasureJob(context.Background(), 1, []int64{10})
 	if err != nil {
 		t.Fatalf("StartErasureJob: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestService_StartErasureJob_ErrorsWhenClerkUserIDFnNotSet(t *testing.T) {
 		Mailchimp: &stubMailchimp{},
 	}, &wg)
 
-	_, err := svc.StartErasureJob(context.Background(), 1, 10)
+	_, err := svc.StartErasureJob(context.Background(), 1, []int64{10})
 	if err == nil {
 		t.Fatal("StartErasureJob: expected error when clerk user ID fn not set, got nil")
 	}
@@ -136,7 +136,7 @@ func TestService_StartErasureJob_ReturnsExistingJobOnConcurrentCall(t *testing.T
 		return "user_clerk_test", true
 	})
 
-	jobID, err := svc.StartErasureJob(context.Background(), 1, 10)
+	jobID, err := svc.StartErasureJob(context.Background(), 1, []int64{10})
 	if err != nil {
 		t.Fatalf("StartErasureJob: %v", err)
 	}

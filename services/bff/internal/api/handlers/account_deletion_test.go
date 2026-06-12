@@ -26,29 +26,29 @@ type stubDeletionStarter struct {
 }
 
 type startedJob struct {
-	UserID    int64
-	AccountID int64
+	UserID     int64
+	AccountIDs []int64
 }
 
-func (s *stubDeletionStarter) StartErasureJob(ctx context.Context, userID, accountID int64) (jobID string, err error) {
+func (s *stubDeletionStarter) StartErasureJob(ctx context.Context, userID int64, accountIDs []int64) (jobID string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return "", s.err
 	}
-	s.started = append(s.started, startedJob{UserID: userID, AccountID: accountID})
+	s.started = append(s.started, startedJob{UserID: userID, AccountIDs: accountIDs})
 	return "job-test-abc", nil
 }
 
-// stubUserIDResolver resolves a Clerk user ID to an internal user ID + account ID.
+// stubUserIDResolver resolves a Clerk user ID to the internal user ID and ALL account IDs.
 type stubUserIDResolver struct {
-	userID    int64
-	accountID int64
-	err       error
+	userID     int64
+	accountIDs []int64
+	err        error
 }
 
-func (s *stubUserIDResolver) ResolveUserAndAccount(ctx context.Context, clerkUserID string) (userID, accountID int64, err error) {
-	return s.userID, s.accountID, s.err
+func (s *stubUserIDResolver) ResolveAllAccountIDs(ctx context.Context, clerkUserID string) (userID int64, accountIDs []int64, err error) {
+	return s.userID, s.accountIDs, s.err
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +71,7 @@ func newDeleteAccountRequest(clerkUserID string) *http.Request {
 // an authenticated DELETE /api/v1/account returns 202 Accepted with a job_id.
 func TestAccountDeletionHandler_Returns202WithJobID(t *testing.T) {
 	starter := &stubDeletionStarter{}
-	resolver := &stubUserIDResolver{userID: 1, accountID: 10}
+	resolver := &stubUserIDResolver{userID: 1, accountIDs: []int64{10}}
 	h := handlers.NewAccountDeletionHandler(resolver, starter)
 
 	req := newDeleteAccountRequest("user_clerk_abc")
@@ -97,7 +97,7 @@ func TestAccountDeletionHandler_Returns202WithJobID(t *testing.T) {
 // without a Clerk session is rejected with 401 Unauthorized.
 func TestAccountDeletionHandler_Returns401WhenNoClerkID(t *testing.T) {
 	starter := &stubDeletionStarter{}
-	resolver := &stubUserIDResolver{userID: 1, accountID: 10}
+	resolver := &stubUserIDResolver{userID: 1, accountIDs: []int64{10}}
 	h := handlers.NewAccountDeletionHandler(resolver, starter)
 
 	req := newDeleteAccountRequest("") // No Clerk session.
@@ -129,7 +129,7 @@ func TestAccountDeletionHandler_Returns500WhenResolverFails(t *testing.T) {
 // erasure job starter is invoked with the resolved user_id and account_id.
 func TestAccountDeletionHandler_StarterReceivesCorrectIDs(t *testing.T) {
 	starter := &stubDeletionStarter{}
-	resolver := &stubUserIDResolver{userID: 42, accountID: 99}
+	resolver := &stubUserIDResolver{userID: 42, accountIDs: []int64{99}}
 	h := handlers.NewAccountDeletionHandler(resolver, starter)
 
 	req := newDeleteAccountRequest("user_clerk_id")
@@ -149,8 +149,8 @@ func TestAccountDeletionHandler_StarterReceivesCorrectIDs(t *testing.T) {
 	if j.UserID != 42 {
 		t.Errorf("UserID: got %d, want 42", j.UserID)
 	}
-	if j.AccountID != 99 {
-		t.Errorf("AccountID: got %d, want 99", j.AccountID)
+	if len(j.AccountIDs) != 1 || j.AccountIDs[0] != 99 {
+		t.Errorf("AccountIDs: got %v, want [99]", j.AccountIDs)
 	}
 }
 
@@ -161,7 +161,7 @@ func TestAccountDeletionHandler_StarterReceivesCorrectIDs(t *testing.T) {
 // This test documents the contract: the handler never blocks on job completion.
 func TestAccountDeletionHandler_Returns202ImmediatelyWithoutBlocking(t *testing.T) {
 	slowStarter := &slowDeletionStarter{delay: 0} // No real delay in unit test.
-	resolver := &stubUserIDResolver{userID: 1, accountID: 1}
+	resolver := &stubUserIDResolver{userID: 1, accountIDs: []int64{1}}
 	h := handlers.NewAccountDeletionHandler(resolver, slowStarter)
 
 	req := newDeleteAccountRequest("user_clerk_fast")
@@ -185,7 +185,7 @@ type slowDeletionStarter struct {
 	delay time.Duration
 }
 
-func (s *slowDeletionStarter) StartErasureJob(ctx context.Context, userID, accountID int64) (string, error) {
+func (s *slowDeletionStarter) StartErasureJob(ctx context.Context, userID int64, accountIDs []int64) (string, error) {
 	if s.delay > 0 {
 		time.Sleep(s.delay)
 	}
@@ -201,7 +201,7 @@ func (s *slowDeletionStarter) StartErasureJob(ctx context.Context, userID, accou
 // executes, and the response includes a Retry-After header.
 func TestAccountDeletionHandler_RateLimit_Returns429AfterLimit(t *testing.T) {
 	starter := &stubDeletionStarter{}
-	resolver := &stubUserIDResolver{userID: 1, accountID: 10}
+	resolver := &stubUserIDResolver{userID: 1, accountIDs: []int64{10}}
 	h := handlers.NewAccountDeletionHandler(resolver, starter)
 
 	const clerkID = "user_rl_abc"
@@ -235,7 +235,7 @@ func TestAccountDeletionHandler_RateLimit_Returns429AfterLimit(t *testing.T) {
 // user's limit.
 func TestAccountDeletionHandler_RateLimit_PerUser(t *testing.T) {
 	starter := &stubDeletionStarter{}
-	resolver := &stubUserIDResolver{userID: 1, accountID: 10}
+	resolver := &stubUserIDResolver{userID: 1, accountIDs: []int64{10}}
 	h := handlers.NewAccountDeletionHandler(resolver, starter)
 
 	// Exhaust the limit for user A.
@@ -259,7 +259,7 @@ func TestAccountDeletionHandler_RateLimit_PerUser(t *testing.T) {
 // the limit is exhausted the erasure job starter is never called.
 func TestAccountDeletionHandler_RateLimit_FiresBeforeDeletion(t *testing.T) {
 	starter := &stubDeletionStarter{}
-	resolver := &stubUserIDResolver{userID: 1, accountID: 10}
+	resolver := &stubUserIDResolver{userID: 1, accountIDs: []int64{10}}
 	h := handlers.NewAccountDeletionHandler(resolver, starter)
 
 	const clerkID = "user_rl_order"

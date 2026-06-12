@@ -16,7 +16,7 @@ import (
 //   - alreadyActive=true  → a concurrent job exists; caller MUST NOT dispatch again.
 type JobAuditLogger interface {
 	DBOps
-	CreateAuditLogEntry(ctx context.Context, clerkUserID string, userID, accountID int64) (jobID string, alreadyActive bool, err error)
+	CreateAuditLogEntry(ctx context.Context, clerkUserID string, userID int64, accountIDs []int64) (jobID string, alreadyActive bool, err error)
 }
 
 // Service orchestrates the erasure cascade: creates the audit log entry,
@@ -46,17 +46,18 @@ func NewService(rootCtx context.Context, db JobAuditLogger, deps Deps, wg *sync.
 }
 
 // StartErasureJob creates the deletion_audit_log entry, then dispatches a
-// background goroutine (from the root context) to run the full cascade.
+// background goroutine (from the root context) to run the full cascade across
+// ALL of the user's accounts (#1333 fix: was single accountID).
 //
 // The method returns the job_id immediately — the cascade runs asynchronously.
 // The 202 response is sent before the goroutine completes.
 //
 // Implements the handlers.erasureJobStarter interface.
-func (s *Service) StartErasureJob(ctx context.Context, userID, accountID int64) (jobID string, err error) {
+func (s *Service) StartErasureJob(ctx context.Context, userID int64, accountIDs []int64) (jobID string, err error) {
 	// Resolve the Clerk user ID from context.
 	// The handler already validated the Clerk session; we read the ID here.
 	// NOTE: clerkUserID is stored in the HTTP request context by the Clerk middleware.
-	// We need it to write to deletion_audit_log.  The handler resolved userID/accountID
+	// We need it to write to deletion_audit_log.  The handler resolved userID/accountIDs
 	// via the resolver, but also needs to pass clerkUserID to us.  We get it from the
 	// request context via a separate lookup — but in Go, context values are opaque.
 	//
@@ -71,11 +72,12 @@ func (s *Service) StartErasureJob(ctx context.Context, userID, accountID int64) 
 	// This ensures the job_id exists in the DB before the 202 is returned, so the
 	// polling endpoint can answer immediately.
 	//
-	// If alreadyActive=true a concurrent cascade is already running for this
-	// account.  We return the existing job_id (202) without spawning a second
-	// goroutine — the idempotency guard in the DB prevents duplicate cascades.
+	// If alreadyActive=true a concurrent cascade is already running for this user.
+	// We return the existing job_id (202) without spawning a second goroutine —
+	// the idempotency guard (unique per-user WHERE completed_at IS NULL) prevents
+	// duplicate cascades.
 	var alreadyActive bool
-	jobID, alreadyActive, err = s.db.CreateAuditLogEntry(ctx, clerkUserID, userID, accountID)
+	jobID, alreadyActive, err = s.db.CreateAuditLogEntry(ctx, clerkUserID, userID, accountIDs)
 	if err != nil {
 		return "", err
 	}
@@ -89,7 +91,7 @@ func (s *Service) StartErasureJob(ctx context.Context, userID, accountID int64) 
 	capturedJobID := jobID
 	capturedClerkUserID := clerkUserID
 	capturedUserID := userID
-	capturedAccountID := accountID
+	capturedAccountIDs := accountIDs
 	capturedDeps := s.deps
 	capturedDB := s.db
 
@@ -103,12 +105,12 @@ func (s *Service) StartErasureJob(ctx context.Context, userID, accountID int64) 
 			capturedJobID,
 			capturedClerkUserID,
 			capturedUserID,
-			capturedAccountID,
+			capturedAccountIDs,
 			capturedDeps,
 		)
 		if err != nil {
-			log.Printf("[erasure] cascade failed job_id=%s clerk_user_id=%s: %v",
-				capturedJobID, capturedClerkUserID, err)
+			log.Printf("[erasure] cascade failed job_id=%s clerk_user_id=%s accounts=%d: %v",
+				capturedJobID, capturedClerkUserID, len(capturedAccountIDs), err)
 			// RecordJobComplete is NOT called on failure — completed_at stays NULL,
 			// which is the AC7 signal for the recovery runbook.
 			// The runbook identifies failed jobs by:
