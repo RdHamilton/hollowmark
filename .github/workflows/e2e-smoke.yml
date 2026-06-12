@@ -256,7 +256,7 @@ jobs:
           echo "changed=true" >> "$GITHUB_OUTPUT"
         else
           changed=$(git diff --name-only HEAD^1 HEAD 2>/dev/null | grep -cE \
-            '^frontend/src/|^frontend/tests/e2e/|^services/bff/|^services/daemon/testdata/corpus/layer5-expected/|^frontend/tests/e2e/fixtures/test-data\.sql')
+            '^frontend/src/|^frontend/tests/e2e/|^services/bff/|^services/daemon/testdata/corpus/layer5-expected/|^frontend/tests/e2e/fixtures/test-data\.sql' || true)
           if [ "$changed" -gt 0 ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
