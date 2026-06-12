@@ -48,7 +48,7 @@ func TestRunErasureCascade_SendsDeletionCompleteEmailOnSuccess(t *testing.T) {
 		Email:     sender,
 	}
 
-	err := erasure.RunErasureCascade(context.Background(), "job-email-ok", "clerk_uid_email", int64(1), int64(1), deps)
+	err := erasure.RunErasureCascade(context.Background(), "job-email-ok", "clerk_uid_email", int64(1), []int64{1}, deps)
 	if err != nil {
 		t.Fatalf("RunErasureCascade: unexpected error: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestRunErasureCascade_SendsDeletionFailedEmailOnCascadeFailure(t *testing.T
 		Email:     sender,
 	}
 
-	err := erasure.RunErasureCascade(context.Background(), "job-email-fail", "clerk_uid_ef", int64(2), int64(2), deps)
+	err := erasure.RunErasureCascade(context.Background(), "job-email-fail", "clerk_uid_ef", int64(2), []int64{2}, deps)
 	if err == nil {
 		t.Fatal("expected cascade to return an error on step4a failure")
 	}
@@ -124,7 +124,7 @@ func TestRunErasureCascade_Step0FailureSkipsEmailSend(t *testing.T) {
 		Email:     sender,
 	}
 
-	err := erasure.RunErasureCascade(context.Background(), "job-email-step0", "clerk_uid_s0", int64(3), int64(3), deps)
+	err := erasure.RunErasureCascade(context.Background(), "job-email-step0", "clerk_uid_s0", int64(3), []int64{3}, deps)
 	if err == nil {
 		t.Fatal("expected cascade to return an error on step0 failure")
 	}
@@ -155,7 +155,7 @@ func TestRunErasureCascade_EmailSendFailureDoesNotBlockCascade(t *testing.T) {
 		Email:     sender,
 	}
 
-	err := erasure.RunErasureCascade(context.Background(), "job-email-err", "clerk_uid_ee", int64(4), int64(4), deps)
+	err := erasure.RunErasureCascade(context.Background(), "job-email-err", "clerk_uid_ee", int64(4), []int64{4}, deps)
 	if err != nil {
 		t.Errorf("email-send failure must not cause cascade error; got: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestRunErasureCascade_NilEmailSenderIsAccepted(t *testing.T) {
 		Email:     nil, // explicitly nil
 	}
 
-	err := erasure.RunErasureCascade(context.Background(), "job-nil-email", "clerk_uid_nil_email", int64(5), int64(5), deps)
+	err := erasure.RunErasureCascade(context.Background(), "job-nil-email", "clerk_uid_nil_email", int64(5), []int64{5}, deps)
 	if err != nil {
 		t.Errorf("nil Email sender must not cause error; got: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestService_StartErasureJob_EmailSentViaGoroutine(t *testing.T) {
 		return "user_clerk_email_svc_test", true
 	})
 
-	_, err := svc.StartErasureJob(context.Background(), 1, 10)
+	_, err := svc.StartErasureJob(context.Background(), 1, []int64{10})
 	if err != nil {
 		t.Fatalf("StartErasureJob returned unexpected synchronous error: %v", err)
 	}

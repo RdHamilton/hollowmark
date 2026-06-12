@@ -43,7 +43,7 @@ func (s *stubDB) record(step string) error {
 }
 
 // CapturePreJobData implements erasure.PreJobDataSource.
-func (s *stubDB) CapturePreJobData(ctx context.Context, userID, accountID int64) (email string, clientIDs []string, err error) {
+func (s *stubDB) CapturePreJobData(ctx context.Context, userID int64, accountIDs []int64) (email string, clientIDs []string, err error) {
 	if err := s.record("step0"); err != nil {
 		return "", nil, err
 	}
@@ -63,7 +63,7 @@ func (s *stubDB) DeleteTextKeyedRows(ctx context.Context, clientIDs []string) er
 }
 
 // AnonymizeConsentLog implements erasure.ConsentLogAnonymizer.
-func (s *stubDB) AnonymizeConsentLog(ctx context.Context, accountID int64) error {
+func (s *stubDB) AnonymizeConsentLog(ctx context.Context, accountIDs []int64) error {
 	return s.record("step4b")
 }
 
@@ -91,8 +91,8 @@ func (s *stubDB) DeleteExplicitBigintRows(ctx context.Context, accountID int64) 
 
 // AssertZeroResiduals implements erasure.ResidualSweeper.
 // Step 4-sweep: queries information_schema and asserts no residual rows remain
-// for the erased account/clientIDs.
-func (s *stubDB) AssertZeroResiduals(ctx context.Context, accountID int64, clientIDs []string) error {
+// for the erased accounts/clientIDs.
+func (s *stubDB) AssertZeroResiduals(ctx context.Context, accountIDs []int64, clientIDs []string) error {
 	return s.record("step4sweep")
 }
 
@@ -175,13 +175,15 @@ func orderedSteps(db *stubDB) []string {
 // ---------------------------------------------------------------------------
 
 // TestRunErasureCascade_StepOrderInvariant verifies the full cascade executes
-// in the mandatory order defined by ADR-056 (amended by ticket #1257):
+// in the mandatory order defined by ADR-056 (amended by ticket #1257 and #1333):
 //
-//	step0 → step1 → step2 → step4a → step4b → step4c → step4d → step4e →
-//	step4explicit → step4sweep → step5 → step6 → step8
+//	step0 → step1 → step2 → step4a → step4b → step4c →
+//	[step4e → step4explicit per account] → step4d →
+//	step4sweep → step5 → step6 → step8
 //
 // Key invariants:
 //   - PostHog delete (step2) MUST run before Clerk delete (step5).
+//   - step4e + step4explicit loop per account BEFORE step4d (users delete).
 //   - Residual sweep (step4sweep) runs after all DB deletes, before Clerk (step5).
 //   - RecordJobComplete (step8) runs only after the sweep succeeds.
 func TestRunErasureCascade_StepOrderInvariant(t *testing.T) {
@@ -203,16 +205,20 @@ func TestRunErasureCascade_StepOrderInvariant(t *testing.T) {
 		Mailchimp: mcRecorder,
 	}
 
-	err := erasure.RunErasureCascade(context.Background(), "job-1", "clerk_uid_1", int64(99), int64(42), deps)
+	err := erasure.RunErasureCascade(context.Background(), "job-1", "clerk_uid_1", int64(99), []int64{42}, deps)
 	if err != nil {
 		t.Fatalf("RunErasureCascade returned unexpected error: %v", err)
 	}
 
 	got := orderedSteps(db)
+	// With 1 account: step4e + step4explicit fire once in the account loop,
+	// then step4d fires after the loop.
 	want := []string{
 		"step0", "step1", "step2",
-		"step4a", "step4b", "step4c", "step4d", "step4e",
-		"step4explicit", "step4sweep",
+		"step4a", "step4b", "step4c",
+		"step4e", "step4explicit",
+		"step4d",
+		"step4sweep",
 		"step5", "step6", "step8",
 	}
 	if len(got) != len(want) {
@@ -242,7 +248,7 @@ func TestRunErasureCascade_SweepFailureHaltsBeforeClerkAndComplete(t *testing.T)
 
 	deps := erasure.Deps{DB: db, PostHog: phRecorder, Clerk: clRecorder, Mailchimp: mcRecorder}
 
-	err := erasure.RunErasureCascade(context.Background(), "job-sweep-fail", "clerk_uid_sf", int64(1), int64(1), deps)
+	err := erasure.RunErasureCascade(context.Background(), "job-sweep-fail", "clerk_uid_sf", int64(1), []int64{1}, deps)
 	if err == nil {
 		t.Error("expected error from sweep failure, got nil")
 	}
@@ -271,7 +277,7 @@ func TestRunErasureCascade_ExplicitBigintDeleteBeforeSweep(t *testing.T) {
 	mcRecorder := &recordingMailchimp{inner: mc, db: db}
 
 	deps := erasure.Deps{DB: db, PostHog: phRecorder, Clerk: clRecorder, Mailchimp: mcRecorder}
-	_ = erasure.RunErasureCascade(context.Background(), "job-order", "clerk_uid_order", int64(1), int64(1), deps)
+	_ = erasure.RunErasureCascade(context.Background(), "job-order", "clerk_uid_order", int64(1), []int64{1}, deps)
 
 	steps := orderedSteps(db)
 	idxExplicit, idxSweep, idxClerk := -1, -1, -1
@@ -323,7 +329,7 @@ func TestRunErasureCascade_ClerkDeletedAfterPostHog(t *testing.T) {
 		Mailchimp: mcRecorder,
 	}
 
-	_ = erasure.RunErasureCascade(context.Background(), "job-2", "clerk_uid_2", int64(1), int64(1), deps)
+	_ = erasure.RunErasureCascade(context.Background(), "job-2", "clerk_uid_2", int64(1), []int64{1}, deps)
 
 	steps := orderedSteps(db)
 	posthogIdx := -1
@@ -362,7 +368,7 @@ func TestRunErasureCascade_Step0FailureAbortsJob(t *testing.T) {
 
 	deps := erasure.Deps{DB: db, PostHog: phRecorder, Clerk: clRecorder, Mailchimp: mcRecorder}
 
-	err := erasure.RunErasureCascade(context.Background(), "job-3", "clerk_uid_3", int64(1), int64(1), deps)
+	err := erasure.RunErasureCascade(context.Background(), "job-3", "clerk_uid_3", int64(1), []int64{1}, deps)
 	if err == nil {
 		t.Error("expected error from Step 0 failure, got nil")
 	}
@@ -388,7 +394,7 @@ func TestRunErasureCascade_ClerkNotCalledIfDBFails(t *testing.T) {
 
 	deps := erasure.Deps{DB: db, PostHog: phRecorder, Clerk: clRecorder, Mailchimp: mcRecorder}
 
-	err := erasure.RunErasureCascade(context.Background(), "job-4", "clerk_uid_4", int64(1), int64(1), deps)
+	err := erasure.RunErasureCascade(context.Background(), "job-4", "clerk_uid_4", int64(1), []int64{1}, deps)
 	if err == nil {
 		t.Error("expected error from Step 4e failure, got nil")
 	}
@@ -415,7 +421,7 @@ func TestRunErasureCascade_UsesStep0ClientIDs(t *testing.T) {
 
 	deps := erasure.Deps{DB: db, PostHog: phRecorder, Clerk: clRecorder, Mailchimp: mcRecorder}
 
-	err := erasure.RunErasureCascade(context.Background(), "job-5", "clerk_uid_5", int64(1), int64(1), deps)
+	err := erasure.RunErasureCascade(context.Background(), "job-5", "clerk_uid_5", int64(1), []int64{1}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -439,7 +445,7 @@ func TestRunErasureCascade_MailchimpUsesPermanentDelete(t *testing.T) {
 
 	deps := erasure.Deps{DB: db, PostHog: phRecorder, Clerk: clRecorder, Mailchimp: mcRecorder}
 
-	_ = erasure.RunErasureCascade(context.Background(), "job-6", "clerk_uid_6", int64(1), int64(1), deps)
+	_ = erasure.RunErasureCascade(context.Background(), "job-6", "clerk_uid_6", int64(1), []int64{1}, deps)
 
 	if mc.capturedAction != "delete-permanent" {
 		t.Errorf("Mailchimp action = %q, want %q (Q2 ruling: must use delete-permanent, not unsubscribe)",
@@ -459,7 +465,7 @@ func TestRunErasureCascade_Step4aBeforeStep4e(t *testing.T) {
 	mcRecorder := &recordingMailchimp{inner: mc, db: db}
 
 	deps := erasure.Deps{DB: db, PostHog: phRecorder, Clerk: clRecorder, Mailchimp: mcRecorder}
-	_ = erasure.RunErasureCascade(context.Background(), "job-7", "clerk_uid_7", int64(1), int64(1), deps)
+	_ = erasure.RunErasureCascade(context.Background(), "job-7", "clerk_uid_7", int64(1), []int64{1}, deps)
 
 	steps := orderedSteps(db)
 	idx4a, idx4e := -1, -1
@@ -518,7 +524,7 @@ func TestRunErasureCascade_NilDBReturnsErrorNotPanic(t *testing.T) {
 			}
 			close(done)
 		}()
-		runErr = erasure.RunErasureCascade(context.Background(), "job-nil-db", "clerk_uid_nil", 1, 1, deps)
+		runErr = erasure.RunErasureCascade(context.Background(), "job-nil-db", "clerk_uid_nil", 1, []int64{1}, deps)
 		returned = true
 	}()
 	<-done
