@@ -100,6 +100,17 @@ var matchPairings = []matchPair{
 		dbExpected:  "db-expected/match-completed-2-1.json",
 		apiExpected: "api-expected/match-history-2-1-response.json",
 	},
+	{
+		// Constructed Traditional Standard ladder fixture (#1317 AC3): SYNTHETIC.
+		// Closes the Constructed coverage gap flagged by Prof — the corpus was
+		// all QuickDraft and Brawl; no TraditionalStandard match existed.
+		// format="TraditionalStandard" is the canonical Arena event ID for the
+		// Standard ladder (verified from catalog/samples/json-key__Formats.json).
+		// 2-1 result with ResultReason_DamageDealt (non-Concede for all game entries).
+		daemonEmit:  "daemon-emit/match-completed-constructed.json",
+		dbExpected:  "db-expected/match-completed-constructed.json",
+		apiExpected: "api-expected/match-history-constructed-response.json",
+	},
 	// daemon-emit/match-completed-missing-id.json intentionally has no pair:
 	// the projection worker dead-letters events with no match_id and writes
 	// nothing to the match table. There is nothing to assert consistency against.

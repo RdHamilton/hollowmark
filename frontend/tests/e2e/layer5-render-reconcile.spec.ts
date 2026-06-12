@@ -72,15 +72,15 @@ async function setClerkSignedIn(page: Page): Promise<void> {
  */
 const SEEDED_DECK_ID = 'deck-004';
 
-/** Full corpus match count (2026-06-11 hardening, 36-log snapshot + 2 new fixtures). Manifest: match-list.json → corpus_match_count: 14. */
-const CORPUS_MATCH_COUNT = 14;
+/** Full corpus match count (2026-06-11 hardening, 36-log snapshot + 3 new fixtures including TraditionalStandard constructed). Manifest: match-list.json → corpus_match_count: 15. */
+const CORPUS_MATCH_COUNT = 15;
 /** Full corpus quest count (2026-06-02 snapshot, 36 files). Manifest: quest-list.json. */
 const CORPUS_QUEST_COUNT = 5;
 
 // ── Full-corpus count assertions (promoted 2026-06-02) ────────────────────────
 
-test.describe('Layer 5 — Full corpus: match-list row count (14 matches: 36-log snapshot + brawl-loss + 2-1 fixtures)', () => {
-  test('@smoke match history table renders full corpus of 14 matches', async ({ page }) => {
+test.describe('Layer 5 — Full corpus: match-list row count (15 matches: 36-log snapshot + brawl-loss + 2-1 + constructed fixtures)', () => {
+  test('@smoke match history table renders full corpus of 15 matches', async ({ page }) => {
     await setClerkSignedIn(page);
     const C0 = '11111111-0000-4000-8000-000000000122';
     const rows = Array.from({ length: CORPUS_MATCH_COUNT }, (_, i) => ({

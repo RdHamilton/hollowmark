@@ -140,7 +140,15 @@ VALUES
 
     -- More Standard for variety
     ('match-011', 'event-std-006', 'Ranked Standard', '2024-10-15 19:00:00', 1050, 2, 0, 1, 'deck-001', 'Gold-4', 'Gold-3', 'Standard', 'win', 'OpponentConceded', 1, 'Opponent_H', 'opp-011'),
-    ('match-012', 'event-std-007', 'Ranked Standard', '2024-10-14 18:30:00', 1250, 1, 2, 1, 'deck-002', 'Gold-3', 'Gold-4', 'Standard', 'loss', 'PlayerLost', 1, 'Opponent_I', 'opp-012')
+    ('match-012', 'event-std-007', 'Ranked Standard', '2024-10-14 18:30:00', 1250, 1, 2, 1, 'deck-002', 'Gold-3', 'Gold-4', 'Standard', 'loss', 'PlayerLost', 1, 'Opponent_I', 'opp-012'),
+
+    -- Constructed Traditional Standard ladder match (#1317 AC3)
+    -- format='TraditionalStandard' is the canonical Arena event ID for the Standard
+    -- ladder (verified from services/daemon/testdata/corpus/catalog/samples/json-key__Formats.json).
+    -- This closes the Constructed coverage gap flagged by Prof: the corpus was all
+    -- QuickDraft and Brawl; no TraditionalStandard match existed before this row.
+    -- Corpus daemon-emit: match-completed-constructed.json (match_id=11111111-0000-4000-8000-000000000500)
+    ('11111111-0000-4000-8000-000000000500', '11111111-0000-0000-0000-000000000025', 'TraditionalStandard', '2026-06-12 10:00:00', 1350, 2, 1, 1, NULL, 'Gold-2', 'Gold-1', 'TraditionalStandard', 'win', 'DamageDealt', 1, 'TestPlayer#00004', 'opp-100')
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================================
