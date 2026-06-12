@@ -24,13 +24,16 @@ func NewDeletionRepository(db DB) *DeletionRepository {
 }
 
 // CapturePreJobData returns the user's email address and all MTGA client_id
-// strings associated with the account.  These values must be captured BEFORE
-// any deletion so that Step 4a (TEXT-keyed deletes) and Step 6 (Mailchimp)
-// can proceed even after the accounts row is removed.
+// strings across ALL of the user's accounts.  These values must be captured
+// BEFORE any deletion so that Step 4a (TEXT-keyed deletes) and Step 6
+// (Mailchimp) can proceed even after the accounts rows are removed.
+//
+// accountIDs must be the complete set of accounts.id values owned by the user
+// — as returned by ResolveAllAccountIDs (#1333 fix: was single accountID).
 //
 // FM-5 (capture email before accounts delete) and the client_id ordering
 // hazard are both addressed here.
-func (r *DeletionRepository) CapturePreJobData(ctx context.Context, userID, accountID int64) (email string, clientIDs []string, err error) {
+func (r *DeletionRepository) CapturePreJobData(ctx context.Context, userID int64, accountIDs []int64) (email string, clientIDs []string, err error) {
 	// Capture email from users row.
 	const emailQ = `SELECT email FROM users WHERE id = $1`
 	if err := r.db.QueryRowContext(ctx, emailQ, userID).Scan(&email); err != nil {
@@ -40,10 +43,15 @@ func (r *DeletionRepository) CapturePreJobData(ctx context.Context, userID, acco
 		return "", nil, fmt.Errorf("CapturePreJobData: query email: %w", err)
 	}
 
-	// Capture all MTGA client_id strings for this account.
-	// accounts.client_id is TEXT — one per accounts row in the current schema.
-	const clientIDQ = `SELECT client_id FROM accounts WHERE id = $1 AND client_id IS NOT NULL`
-	rows, err := r.db.QueryContext(ctx, clientIDQ, accountID)
+	if len(accountIDs) == 0 {
+		return email, nil, nil
+	}
+
+	// Capture all MTGA client_id strings across ALL of the user's accounts.
+	// accounts.client_id is TEXT — one per accounts row.
+	// Uses ANY($1) with a BIGINT[] slice to avoid dynamic SQL.
+	const clientIDQ = `SELECT client_id FROM accounts WHERE id = ANY($1) AND client_id IS NOT NULL`
+	rows, err := r.db.QueryContext(ctx, clientIDQ, accountIDs)
 	if err != nil {
 		return "", nil, fmt.Errorf("CapturePreJobData: query client_ids: %w", err)
 	}
@@ -170,21 +178,28 @@ func (r *DeletionRepository) DeleteTextKeyedRows(ctx context.Context, clientIDs 
 }
 
 // AnonymizeConsentLog anonymizes consent_log rows in-place by nulling
-// ip_address_hash and metadata for the given account_id.
+// ip_address_hash and metadata for ALL of the user's account IDs.
+//
+// accountIDs is the complete set of accounts.id values owned by the user
+// (#1333 fix: was a single accountID — multi-account users had N-1 consent_log
+// rows left un-anonymized).
 //
 // This runs before the accounts hard-delete (Step 4e).  The ON DELETE SET NULL
-// cascade on consent_log.account_id (migration #885) then fires when the
+// cascade on consent_log.account_id (migration #885) then fires when each
 // accounts row is deleted, clearing the account_id FK reference.
 //
 // The consent_log rows are retained (not deleted) — they are compliance
 // evidence under Art.7(1) accountability and must not be erased (ADR-056).
-func (r *DeletionRepository) AnonymizeConsentLog(ctx context.Context, accountID int64) error {
+func (r *DeletionRepository) AnonymizeConsentLog(ctx context.Context, accountIDs []int64) error {
+	if len(accountIDs) == 0 {
+		return nil
+	}
 	const q = `
 		UPDATE consent_log
 		SET    ip_address_hash = NULL,
 		       metadata        = NULL
-		WHERE  account_id = $1`
-	if _, err := r.db.ExecContext(ctx, q, accountID); err != nil {
+		WHERE  account_id = ANY($1)`
+	if _, err := r.db.ExecContext(ctx, q, accountIDs); err != nil {
 		return fmt.Errorf("AnonymizeConsentLog: %w", err)
 	}
 	return nil
@@ -325,13 +340,14 @@ func (r *DeletionRepository) DeleteExplicitBigintRows(ctx context.Context, accou
 
 // AssertZeroResiduals queries information_schema.columns for every public base
 // table with an account_id or user_id column and asserts zero residual rows for
-// the erased accountID and clientIDs.
+// ALL of the erased accountIDs and clientIDs (#1333: was a single accountID).
 //
 // Coverage strategy (C2):
 //   - For each identity-keyed base table found, attempts a COUNT query using
-//     accountID (BIGINT) for tables whose account_id is a numeric type, and
+//     accountIDs (BIGINT[]) for tables whose account_id is a numeric type, and
 //     clientIDs (TEXT[]) for tables whose account_id is TEXT.
 //   - Skips the TEXT-keyed count when clientIDs is empty (C2 condition).
+//   - Skips the BIGINT-keyed count when accountIDs is empty.
 //
 // Retention exclusions (C1 / Ray ruling #1257):
 //   - deletion_audit_log     — compliance evidence; numeric ID, non-identifiable post-erasure.
@@ -343,7 +359,7 @@ func (r *DeletionRepository) DeleteExplicitBigintRows(ctx context.Context, accou
 // not fail-first — C2).  Identifiers are sanitized via
 // information_schema.columns (trusted system catalog) and quoted with
 // QuoteIdentifier to prevent SQL injection from schema names.
-func (r *DeletionRepository) AssertZeroResiduals(ctx context.Context, accountID int64, clientIDs []string) error {
+func (r *DeletionRepository) AssertZeroResiduals(ctx context.Context, accountIDs []int64, clientIDs []string) error {
 	// retainedTables are excluded from the sweep by Ray's retention ruling (#1257).
 	retainedTables := map[string]bool{
 		"deletion_audit_log":      true,
@@ -400,6 +416,10 @@ func (r *DeletionRepository) AssertZeroResiduals(ctx context.Context, accountID 
 		if isTextType && len(clientIDs) == 0 {
 			continue
 		}
+		// Skip BIGINT-keyed count when accountIDs is empty.
+		if !isTextType && len(accountIDs) == 0 {
+			continue
+		}
 
 		// QuoteIdentifier: table names come from information_schema (trusted catalog),
 		// but we still quote to handle any reserved-word names safely.
@@ -418,9 +438,9 @@ func (r *DeletionRepository) AssertZeroResiduals(ctx context.Context, accountID 
 				return fmt.Errorf("AssertZeroResiduals: count %s.%s (TEXT): %w", tc.tableName, tc.columnName, err)
 			}
 		} else {
-			// Numeric type — use BIGINT accountID.
-			q := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s = $1`, quotedTable, quotedCol)
-			if err := r.db.QueryRowContext(ctx, q, accountID).Scan(&count); err != nil {
+			// Numeric type — use BIGINT[] accountIDs with ANY($1).
+			q := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s = ANY($1)`, quotedTable, quotedCol)
+			if err := r.db.QueryRowContext(ctx, q, accountIDs).Scan(&count); err != nil {
 				if strings.Contains(err.Error(), "does not exist") {
 					continue
 				}
@@ -464,31 +484,43 @@ func (r *DeletionRepository) RecordJobComplete(ctx context.Context, jobID string
 // assigned job_id.  Called by the handler before dispatching the goroutine.
 //
 // Idempotency: if a concurrent DELETE /api/v1/account has already created an
-// in-flight job for this account (completed_at IS NULL), the unique partial
-// index idx_deletion_audit_log_active_per_account prevents a second row.
-// The INSERT uses ON CONFLICT DO NOTHING; if no row is returned, the caller
-// looks up and returns the existing in-flight job_id.
+// in-flight job for this user (completed_at IS NULL), the unique partial
+// index idx_deletion_audit_log_active_per_user prevents a second row (#1333:
+// the guard is now per-user, not per-account, because a single erasure request
+// must cover ALL of a user's accounts — the old per-account index was
+// semantically wrong for multi-account users).
+//
+// account_id in the row is set to the first accountID in accountIDs for
+// backward-compatible audit trail logging; all accountIDs are erased by the
+// cascade regardless.
 //
 // Returns (jobID, false, nil) when a new job is created.
 // Returns (existingJobID, true, nil) when a concurrent job is already active.
-func (r *DeletionRepository) CreateAuditLogEntry(ctx context.Context, clerkUserID string, userID, accountID int64) (jobID string, alreadyActive bool, err error) {
+func (r *DeletionRepository) CreateAuditLogEntry(ctx context.Context, clerkUserID string, userID int64, accountIDs []int64) (jobID string, alreadyActive bool, err error) {
+	// Use the first accountID for the audit log row (backward-compatible).
+	// When accountIDs is empty (user with no accounts), use 0 as sentinel.
+	var firstAccountID int64
+	if len(accountIDs) > 0 {
+		firstAccountID = accountIDs[0]
+	}
+
 	const insertQ = `
 		INSERT INTO deletion_audit_log (clerk_user_id, user_id, account_id, requested_at)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (account_id) WHERE completed_at IS NULL DO NOTHING
+		ON CONFLICT (user_id) WHERE completed_at IS NULL DO NOTHING
 		RETURNING job_id`
 
-	row := r.db.QueryRowContext(ctx, insertQ, clerkUserID, userID, accountID, time.Now().UTC())
+	row := r.db.QueryRowContext(ctx, insertQ, clerkUserID, userID, firstAccountID, time.Now().UTC())
 	if err := row.Scan(&jobID); err != nil {
 		if err != sql.ErrNoRows {
 			return "", false, fmt.Errorf("CreateAuditLogEntry: insert: %w", err)
 		}
-		// Conflict — an in-flight job exists.  Look it up.
+		// Conflict — an in-flight job exists for this user.  Look it up.
 		const lookupQ = `
 			SELECT job_id FROM deletion_audit_log
-			WHERE  account_id = $1 AND completed_at IS NULL
+			WHERE  user_id = $1 AND completed_at IS NULL
 			LIMIT  1`
-		if err2 := r.db.QueryRowContext(ctx, lookupQ, accountID).Scan(&jobID); err2 != nil {
+		if err2 := r.db.QueryRowContext(ctx, lookupQ, userID).Scan(&jobID); err2 != nil {
 			return "", false, fmt.Errorf("CreateAuditLogEntry: lookup active job: %w", err2)
 		}
 		return jobID, true, nil
@@ -496,33 +528,48 @@ func (r *DeletionRepository) CreateAuditLogEntry(ctx context.Context, clerkUserI
 	return jobID, false, nil
 }
 
-// ResolveUserAndAccount resolves a Clerk user ID to the internal users.id and
-// accounts.id.  It satisfies the handlers.userAndAccountResolver interface so
-// AccountDeletionHandler can use DeletionRepository as its single dependency.
+// ResolveAllAccountIDs resolves a Clerk user ID to the internal users.id and
+// ALL accounts.id values owned by that user.  It replaces the LIMIT 1 path
+// (ResolveUserAndAccount) for the erasure handler so that ALL of the user's
+// accounts — and all their account-scoped child data — are erased in a single
+// GDPR Art.17 request (#1333).
 //
-// The lookup uses users.clerk_user_id to find users.id, then accounts.user_id
-// to find accounts.id.  Both lookups are scoped to the authenticated principal
-// — no cross-tenant reads are possible.
+// Returns (userID, []accountIDs, nil).  accountIDs contains every accounts.id
+// row where accounts.user_id = users.id.  It is the caller's responsibility to
+// assert len(accountIDs) > 0 before proceeding.
 //
-// Returns (0, 0, sql.ErrNoRows-wrapped error) when either row is not found.
-func (r *DeletionRepository) ResolveUserAndAccount(ctx context.Context, clerkUserID string) (userID, accountID int64, err error) {
+// Returns a non-nil error when the user is not found (sql.ErrNoRows-wrapped)
+// or when a DB error occurs.  Returns (userID, nil, nil) when the user exists
+// but has no accounts rows — callers must handle this gracefully.
+func (r *DeletionRepository) ResolveAllAccountIDs(ctx context.Context, clerkUserID string) (userID int64, accountIDs []int64, err error) {
 	const userQ = `SELECT id FROM users WHERE clerk_user_id = $1`
 	if err := r.db.QueryRowContext(ctx, userQ, clerkUserID).Scan(&userID); err != nil {
 		if err == sql.ErrNoRows {
-			return 0, 0, fmt.Errorf("ResolveUserAndAccount: user not found for clerk_user_id %s", clerkUserID)
+			return 0, nil, fmt.Errorf("ResolveAllAccountIDs: user not found for clerk_user_id %s", clerkUserID)
 		}
-		return 0, 0, fmt.Errorf("ResolveUserAndAccount: query user: %w", err)
+		return 0, nil, fmt.Errorf("ResolveAllAccountIDs: query user: %w", err)
 	}
 
-	const accountQ = `SELECT id FROM accounts WHERE user_id = $1 LIMIT 1`
-	if err := r.db.QueryRowContext(ctx, accountQ, userID).Scan(&accountID); err != nil {
-		if err == sql.ErrNoRows {
-			return 0, 0, fmt.Errorf("ResolveUserAndAccount: account not found for user_id %d", userID)
+	// Fetch ALL accounts rows for this user — no LIMIT.
+	const accountsQ = `SELECT id FROM accounts WHERE user_id = $1 ORDER BY id`
+	rows, err := r.db.QueryContext(ctx, accountsQ, userID)
+	if err != nil {
+		return 0, nil, fmt.Errorf("ResolveAllAccountIDs: query accounts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return 0, nil, fmt.Errorf("ResolveAllAccountIDs: scan account id: %w", err)
 		}
-		return 0, 0, fmt.Errorf("ResolveUserAndAccount: query account: %w", err)
+		accountIDs = append(accountIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, nil, fmt.Errorf("ResolveAllAccountIDs: rows: %w", err)
 	}
 
-	return userID, accountID, nil
+	return userID, accountIDs, nil
 }
 
 // GetJobStatus returns the status of an erasure job by job_id, scoped to the

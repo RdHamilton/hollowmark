@@ -62,15 +62,17 @@ func (e *deletionRateEntry) allow() (ok bool, retryAfter int) {
 	return true, 0
 }
 
-// userAndAccountResolver resolves a Clerk user ID to internal database IDs.
+// userAndAccountResolver resolves a Clerk user ID to the internal users.id and
+// ALL accounts.id values owned by that user (#1333 fix: was single accountID).
 type userAndAccountResolver interface {
-	ResolveUserAndAccount(ctx context.Context, clerkUserID string) (userID, accountID int64, err error)
+	ResolveAllAccountIDs(ctx context.Context, clerkUserID string) (userID int64, accountIDs []int64, err error)
 }
 
 // erasureJobStarter creates the audit log entry and dispatches the background
-// erasure goroutine.  Returns the job_id for the 202 response body.
+// erasure goroutine across all of the user's accounts.  Returns the job_id for
+// the 202 response body.
 type erasureJobStarter interface {
-	StartErasureJob(ctx context.Context, userID, accountID int64) (jobID string, err error)
+	StartErasureJob(ctx context.Context, userID int64, accountIDs []int64) (jobID string, err error)
 }
 
 // AccountDeletionHandler handles DELETE /api/v1/account (Art.17 erasure entry
@@ -146,16 +148,16 @@ func (h *AccountDeletionHandler) Delete(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	userID, accountID, err := h.resolver.ResolveUserAndAccount(r.Context(), clerkUserID)
+	userID, accountIDs, err := h.resolver.ResolveAllAccountIDs(r.Context(), clerkUserID)
 	if err != nil {
-		log.Printf("[account_deletion] ResolveUserAndAccount clerk_user_id=%s error=%v", clerkUserID, err)
+		log.Printf("[account_deletion] ResolveAllAccountIDs clerk_user_id=%s error=%v", clerkUserID, err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	jobID, err := h.starter.StartErasureJob(r.Context(), userID, accountID)
+	jobID, err := h.starter.StartErasureJob(r.Context(), userID, accountIDs)
 	if err != nil {
-		log.Printf("[account_deletion] StartErasureJob user_id=%d account_id=%d error=%v", userID, accountID, err)
+		log.Printf("[account_deletion] StartErasureJob user_id=%d accounts=%d error=%v", userID, len(accountIDs), err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}

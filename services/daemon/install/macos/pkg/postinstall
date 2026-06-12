@@ -98,8 +98,13 @@ if [[ "${CHANNEL}" == "stable" ]]; then
   PLIST_LABEL_LEGACY="com.mtga-companion.daemon"
 fi
 
-# OS keychain service (matches keychain.go ServiceNameNew).
-KEYCHAIN_SERVICE="com.vaultmtg.daemon${LABEL_SUFFIX}"
+# OS keychain service (matches keychain.go ServiceNameNew / common.sh KEYCHAIN_SERVICE).
+# ADR-022 Phase 3 (v0.3.9): the LIVE keychain service is com.hollowmark.daemon —
+# NOT com.vaultmtg.daemon.  keychain.go ServiceNameNew = "com.hollowmark.daemon";
+# ServiceNameLegacy = "com.vaultmtg.daemon" is a READ-ONLY upgrade fallback.
+# postinstall must target the hollowmark namespace for any keychain write/delete.
+# This mirrors common.sh:73 ("com.hollowmark.daemon${LABEL_SUFFIX}") exactly.
+KEYCHAIN_SERVICE="com.hollowmark.daemon${LABEL_SUFFIX}"
 
 # Per-user paths (all relative to the real user's home).
 PLIST_DIR="${REAL_HOME}/Library/LaunchAgents"
@@ -203,6 +208,70 @@ PYEOF
   else
     echo "[postinstall] cloud_api_url unchanged — preserving existing config"
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# 2b. Belt-and-suspenders stale auth clear (#1330 / 2026-06-12 incident).
+#
+#     On EVERY install/update, unconditionally clear the keychain credentials
+#     and the auth fields in daemon.json so the daemon's startup
+#     ProbeTokenLiveness probe (#3238 Fix A) runs against a clean slate.
+#     The probe itself decides whether PKCE re-auth is needed — the installer
+#     cannot probe the BFF from postinstall context.
+#
+#     Two service names are cleared to cover all field installs:
+#       com.hollowmark.daemon — ServiceNameNew  (ADR-022 Phase 3, current)
+#       com.vaultmtg.daemon   — ServiceNameLegacy (pre-Phase-3 upgrades)
+#
+#     Preserved by this block:
+#       - archives/ directory and its contents (user's local match archive)
+#       - account_id, daemon_id  (identity fields; re-auth reuses them)
+#       - sync_enabled, log_path, and all other non-auth config fields
+#       - The config file itself (only field values are patched)
+#
+#     All steps use || true — a fresh install (no keychain entry, no config
+#     auth fields) is a no-op and must not fail.
+#
+#     KEYCHAIN_SERVICE_LEGACY is the read-only fallback service name from
+#     keychain.go ServiceNameLegacy.  It does not follow the channel suffix
+#     because the legacy name was never channel-suffixed in the field.
+# ---------------------------------------------------------------------------
+KEYCHAIN_SERVICE_LEGACY="com.vaultmtg.daemon"
+
+if [[ -f "${CONFIG_FILE}" ]]; then
+  echo "[postinstall] clearing stale auth state (#1330 — belt-and-suspenders heal)"
+
+  # Clear both keychain service names.  Errors (entry absent) are swallowed with
+  # || true so this is idempotent on fresh installs and post-uninstall states.
+  security delete-generic-password \
+    -s "${KEYCHAIN_SERVICE}" \
+    -a "${KEYCHAIN_ACCOUNT}" 2>/dev/null || true
+  security delete-generic-password \
+    -s "${KEYCHAIN_SERVICE_LEGACY}" \
+    -a "${KEYCHAIN_ACCOUNT}" 2>/dev/null || true
+
+  # Zero out auth fields in daemon.json while preserving every other field.
+  # python3 is guaranteed present on macOS 11+.
+  python3 - "${CONFIG_FILE}" <<'PYEOF' || true
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        data = json.load(f)
+    # Remove auth fields; silently no-op if they were already absent.
+    data.pop('keychain', None)
+    data.pop('api_key', None)
+    data.pop('daemon_jwt', None)
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+        f.write('\n')
+except Exception as e:
+    print(f"[postinstall] WARNING: could not patch daemon.json for stale auth clear: {e}", file=sys.stderr)
+PYEOF
+
+  echo "[postinstall] stale auth cleared (keychain entries removed; keychain/api_key/daemon_jwt zeroed)"
+else
+  echo "[postinstall] no existing daemon.json — fresh install, no stale auth to clear"
 fi
 
 # ---------------------------------------------------------------------------

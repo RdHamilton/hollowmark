@@ -276,11 +276,11 @@ func TestUserRepository_UpdateEmail_ErasureCascadeSeesSyncedEmail(t *testing.T) 
 	}
 
 	// CapturePreJobData reads users.email — it must see the synced value.
-	// We pass accountID=0 (no accounts row), which will produce zero clientIDs
-	// but still reads users.email first (that is the path under test).
+	// We pass an empty accountIDs slice (no accounts rows), which will produce
+	// zero clientIDs but still reads users.email first (that is the path under test).
 	//
 	// We only care that the returned email equals syncedEmail.
-	capturedEmail, _, err := deletionRepo.CapturePreJobData(context.Background(), u.ID, 0)
+	capturedEmail, _, err := deletionRepo.CapturePreJobData(context.Background(), u.ID, nil)
 	if err != nil {
 		// An error here is expected (no accounts row for accountID=0), but the
 		// email value is captured before the accounts query.  If the error

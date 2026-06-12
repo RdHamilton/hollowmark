@@ -2073,6 +2073,6 @@ func buildAccountDeletionHandler(
 		return nil
 	}
 
-	// resolver uses the DeletionRepository's ResolveUserAndAccount method.
+	// resolver uses the DeletionRepository's ResolveAllAccountIDs method (#1333).
 	return handlers.NewAccountDeletionHandler(db, erasureSvc)
 }

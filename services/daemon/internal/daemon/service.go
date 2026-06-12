@@ -732,6 +732,16 @@ func (s *Service) keychainRefresherAdapter() dispatch.Refresher {
 				// dispatch timeout. Matches the existing bff_rejected pattern
 				// at service.go:1166.
 				go s.dispatchAuthFailed(context.Background(), classifyPKCEError(err))
+				// Fix C (#1328): set authPaused=true so the for-loop in main.go
+				// (NeedsFirstRunAuth || authPaused) surfaces "Retry Setup" in the
+				// tray. This ensures the user can always manually re-auth after any
+				// reactive 401 failure — not just on startup failures.
+				// authPaused outranks keychainErr in computeAuthStatus (RC5), so
+				// the tray will show "setup_required" rather than "keychain_error".
+				s.authPaused.Store(true)
+				if s.trayHooks.SetSetupRequired != nil {
+					s.trayHooks.SetSetupRequired(true)
+				}
 				// Set sentinel so computeAuthStatus routes to "keychain_error"
 				// at the next heartbeat tick. Do NOT clear the keychain (Ray Q5).
 				s.setKeychainErr(ErrReauthFailed)
@@ -797,6 +807,48 @@ var ErrSetupRequired = errors.New("keychain: api key not found — setup require
 //
 // The keychain is NOT cleared on PKCE failure — per Ray's Q5 answer (#2135).
 var ErrReauthFailed = errors.New("reauth: PKCE flow failed")
+
+// ProbeTokenLiveness issues a GET /api/v1/health/daemon against bffBaseURL
+// using token as the bearer credential and reports whether the token is live.
+//
+// Returns (true, nil) when the BFF responds with 200 — the token is valid.
+// Returns (false, nil) when the BFF responds with 401 or 403 — the token is
+// stale, revoked, or issued for a different Clerk instance (the incident cause).
+// Returns (true, nil) for any 5xx response — a server-side error does not imply
+// the token is invalid; assume valid to avoid spurious PKCE flows during BFF
+// downtime.
+//
+// Call this at daemon startup after reading the keychain token, before entering
+// the main event loop (#1326 Fix A). On (false, nil): treat as NeedsFirstRunAuth
+// and enter the PKCE re-registration flow.
+func ProbeTokenLiveness(ctx context.Context, bffBaseURL, token string) (live bool, err error) {
+	url := strings.TrimRight(bffBaseURL, "/") + "/api/v1/health/daemon"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false, fmt.Errorf("probe token liveness: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		// Network error: assume token is still valid; BFF may be transiently
+		// unreachable. Do not trigger PKCE on a connectivity blip.
+		return true, nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		// Token explicitly rejected by the BFF — re-auth required.
+		return false, nil
+	default:
+		// 4xx other than 401/403, 5xx, redirects: assume token is valid.
+		return true, nil
+	}
+}
 
 // keychainMaxRetries is the number of keychain retry attempts before the daemon
 // gives up and exits. Exposed as a var so tests can override it.

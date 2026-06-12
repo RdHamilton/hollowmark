@@ -41,8 +41,12 @@ export default function Collection() {
   const [sets, setSets] = useState<gui.SetInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // totalCount = UniqueCards (all owned, no filter) — "Total Cards:" header
   const [totalCount, setTotalCount] = useState(0);
+  // filterCount = cards matching current filter — "Cards in Set:" and "Showing X of Y"
   const [filterCount, setFilterCount] = useState(0);
+  // totalPages is server-computed
+  const [totalPages, setTotalPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageJumpInput, setPageJumpInput] = useState<string>('1');
   const [showSetCompletion, setShowSetCompletion] = useState(false);
@@ -66,7 +70,7 @@ export default function Collection() {
     sortDesc: false,
   });
 
-  // Debounced search term
+  // Debounced search term — debounce before triggering an API call
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
 
   useEffect(() => {
@@ -77,7 +81,6 @@ export default function Collection() {
   }, [filters.searchTerm]);
 
   const loadCollection = useCallback(async (isAutoRefresh = false) => {
-    // Prevent multiple simultaneous requests
     if (isLoadingRef.current) {
       return;
     }
@@ -85,7 +88,6 @@ export default function Collection() {
     isLoadingRef.current = true;
     isAutoRefreshingRef.current = isAutoRefresh;
 
-    // Only show loading spinner for user-initiated loads, not auto-refresh
     if (!isAutoRefresh) {
       setLoading(true);
     }
@@ -96,23 +98,30 @@ export default function Collection() {
         rarity: filters.rarity,
         colors: filters.colors,
         owned_only: filters.ownedOnly,
+        // Server-side search + sort (#1325)
+        search: debouncedSearchTerm || undefined,
+        sort_by: filters.sortBy,
+        sort_desc: filters.sortDesc,
+        // Pagination (#1325)
+        page: currentPage,
+        limit: ITEMS_PER_PAGE,
       };
 
       const response = await collection.getCollectionWithMetadata(apiFilter);
-      // Note: REST API doesn't support search/sort/pagination server-side
-      // The component handles this with client-side filtering
-      // Normalize to array to prevent crashes when API returns null/undefined
       const normalizedCards = Array.isArray(response?.cards) ? response.cards : [];
       setCards(normalizedCards);
-      setTotalCount(normalizedCards.length);
-      setFilterCount(normalizedCards.length);
+      // totalCount and filterCount come from the server response, not array.length.
+      // Defensive fallbacks guard against partial mocks in tests.
+      setTotalCount(response?.totalCount ?? 0);
+      setFilterCount(response?.filterCount ?? 0);
+      setTotalPages(response?.totalPages ?? 1);
 
       // Analytics: feature_collection_viewed — once per mount when data is non-empty
       if (normalizedCards.length > 0 && !viewedFiredRef.current) {
         viewedFiredRef.current = true;
         trackEvent({
           name: 'feature_collection_viewed',
-          properties: { card_count: normalizedCards.length },
+          properties: { card_count: response.totalCount },
         });
       }
 
@@ -122,27 +131,23 @@ export default function Collection() {
       const downloadId = 'collection-card-lookup';
 
       if (unknownFetched > 0 && unknownRemaining > 0) {
-        // Cards were successfully fetched and more remain - continue auto-refresh
         const totalUnknown = unknownRemaining + unknownFetched;
         const progress = Math.round(((totalUnknown - unknownRemaining) / totalUnknown) * 100);
 
         startDownload(downloadId, `Fetching card info from Scryfall...`);
         updateProgress(downloadId, progress);
 
-        // Auto-refresh to continue fetching remaining cards
         if (!autoRefreshRef.current) {
           autoRefreshRef.current = true;
           autoRefreshTimeoutRef.current = setTimeout(() => {
             autoRefreshRef.current = false;
             autoRefreshTimeoutRef.current = null;
-            loadCollection(true); // Pass true to indicate auto-refresh
+            loadCollection(true);
           }, 500);
         }
       } else if (unknownFetched > 0) {
-        // All cards fetched, complete the download
         completeDownload(downloadId);
       }
-      // If unknownFetched === 0, don't auto-refresh (all lookups failed or no cards to fetch)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load collection');
       console.error('Failed to load collection:', err);
@@ -151,12 +156,16 @@ export default function Collection() {
       isAutoRefreshingRef.current = false;
       setLoading(false);
     }
-  }, [filters.setCode, filters.rarity, filters.colors, filters.ownedOnly, startDownload, updateProgress, completeDownload]);
+  }, [
+    filters.setCode, filters.rarity, filters.colors, filters.ownedOnly,
+    filters.sortBy, filters.sortDesc,
+    debouncedSearchTerm, currentPage,
+    startDownload, updateProgress, completeDownload,
+  ]);
 
   const loadSets = useCallback(async () => {
     try {
       const setInfo = await cardsApi.getAllSetInfo();
-      // Normalize to array to prevent crashes when API returns null/undefined
       setSets(Array.isArray(setInfo) ? setInfo : []);
     } catch (err) {
       console.error('Failed to load sets:', err);
@@ -172,13 +181,12 @@ export default function Collection() {
     }
   }, []);
 
-  // Load collection and sets on mount
+  // Load collection, sets, and value on mount
   useEffect(() => {
     loadCollection();
     loadSets();
     loadCollectionValue();
 
-    // Cleanup: clear auto-refresh timeout on unmount
     return () => {
       if (autoRefreshTimeoutRef.current) {
         clearTimeout(autoRefreshTimeoutRef.current);
@@ -188,14 +196,9 @@ export default function Collection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Reload collection when filters change (but not on mount).
-  // loadCollection is recreated by useCallback whenever its filter deps change
-  // (filters.setCode, filters.rarity, filters.colors, filters.ownedOnly), so
-  // depending on loadCollection here guarantees we always call the freshest
-  // closure — the one that captures the current filter values.  Without
-  // loadCollection in the dep array the effect calls a stale closure and the
-  // server-side filters (set_code, rarity, colors, owned_only) silently have
-  // no effect.  This was the root cause of bug #1974.
+  // Reload collection when filters (server-side ones) or page changes.
+  // loadCollection captures all its deps via useCallback — this effect fires
+  // whenever any server-side filter or the page number changes.
   const isInitialMount = useRef(true);
   useEffect(() => {
     if (isInitialMount.current) {
@@ -205,7 +208,7 @@ export default function Collection() {
     loadCollection();
   }, [loadCollection]);
 
-  // Reset page when filters change
+  // Reset to page 1 when filters change (not on page navigation itself)
   useEffect(() => {
     setCurrentPage(1);
   }, [debouncedSearchTerm, filters.setCode, filters.rarity, filters.colors, filters.ownedOnly, filters.sortBy, filters.sortDesc]);
@@ -222,70 +225,6 @@ export default function Collection() {
         : [...prev.colors, color],
     }));
   };
-
-  // Process cards: filter by search, sort, and paginate
-  const processedCards = useMemo(() => {
-    let result = [...cards];
-
-    // Filter by search term (client-side)
-    if (debouncedSearchTerm) {
-      const searchLower = debouncedSearchTerm.toLowerCase();
-      result = result.filter(
-        (card) =>
-          card.name?.toLowerCase().includes(searchLower) ||
-          card.setCode?.toLowerCase().includes(searchLower)
-      );
-    }
-
-    // Sort
-    const rarityOrder: Record<string, number> = {
-      mythic: 4,
-      rare: 3,
-      uncommon: 2,
-      common: 1,
-    };
-
-    result.sort((a, b) => {
-      let comparison = 0;
-      switch (filters.sortBy) {
-        case 'name':
-          comparison = (a.name || '').localeCompare(b.name || '');
-          break;
-        case 'quantity':
-          comparison = (a.quantity || 0) - (b.quantity || 0);
-          break;
-        case 'rarity':
-          comparison =
-            (rarityOrder[a.rarity?.toLowerCase() || 'common'] || 0) -
-            (rarityOrder[b.rarity?.toLowerCase() || 'common'] || 0);
-          break;
-        case 'cmc':
-          comparison = (a.cmc || 0) - (b.cmc || 0);
-          break;
-        case 'price':
-          comparison = (a.priceUsd || 0) - (b.priceUsd || 0);
-          break;
-        default:
-          comparison = 0;
-      }
-      return filters.sortDesc ? -comparison : comparison;
-    });
-
-    return result;
-  }, [cards, debouncedSearchTerm, filters.sortBy, filters.sortDesc]);
-
-  // Update filter count when processed cards change
-  useEffect(() => {
-    setFilterCount(processedCards.length);
-  }, [processedCards.length]);
-
-  // Paginate
-  const paginatedCards = useMemo(() => {
-    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-    return processedCards.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-  }, [processedCards, currentPage]);
-
-  const totalPages = Math.ceil(processedCards.length / ITEMS_PER_PAGE);
 
   // Keep page-jump input in sync when page changes via First/Prev/Next/Last
   useEffect(() => {
@@ -343,12 +282,12 @@ export default function Collection() {
           <div className="collection-stats-summary" data-testid="collection-stats">
             <span className="stat-item">
               <span className="stat-label">Cards in Set:</span>
-              <span className="stat-value">{filterCount}</span>
+              <span className="stat-value">{filterCount.toLocaleString()}</span>
             </span>
             <span className="stat-separator">|</span>
             <span className="stat-item">
               <span className="stat-label">Total Cards:</span>
-              <span className="stat-value">{totalCount}</span>
+              <span className="stat-value">{totalCount.toLocaleString()}</span>
             </span>
             {collectionValue && collectionValue.totalValueUsd > 0 && (
               <>
@@ -485,7 +424,7 @@ export default function Collection() {
 
           {/* Result Count */}
           <div className="filter-results">
-            Showing {filterCount} of {totalCount} cards
+            Showing {filterCount.toLocaleString()} of {totalCount.toLocaleString()} cards
           </div>
         </div>
       </div>
@@ -510,7 +449,7 @@ export default function Collection() {
       )}
 
       {/* Card Grid */}
-      {processedCards.length === 0 ? (
+      {cards.length === 0 ? (
         <div className="empty-state" data-testid="collection-empty">
           <div className="empty-icon">!</div>
           <h2>No Cards Found</h2>
@@ -523,7 +462,7 @@ export default function Collection() {
       ) : (
         <>
           <div className="card-grid" data-testid="collection-card-grid">
-            {paginatedCards.map((card) => {
+            {cards.map((card) => {
               // Check if we have a real card image (not the card back placeholder)
               const isCardBackPlaceholder = card.imageUri?.includes('back.png');
               const hasImage = card.imageUri && card.imageUri !== '' && !isCardBackPlaceholder;
@@ -540,7 +479,6 @@ export default function Collection() {
                         style={{ width: '100%', borderRadius: '12px' }}
                         onError={(e) => {
                           const target = e.target as HTMLImageElement;
-                          // Hide broken image and show fallback info
                           target.style.display = 'none';
                           const parent = target.parentElement;
                           if (parent && !parent.querySelector('.card-info-fallback')) {
@@ -582,7 +520,7 @@ export default function Collection() {
             })}
           </div>
 
-          {/* Pagination */}
+          {/* Pagination — totalPages is server-computed from filterCount/limit */}
           {totalPages > 1 && (
             <div className="pagination">
               <button

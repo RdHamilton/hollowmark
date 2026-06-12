@@ -53,12 +53,15 @@ function createMockSetInfo(overrides: Record<string, unknown> = {}): gui.SetInfo
   });
 }
 
-// Helper to create mock collection response
-function createMockCollectionResponse(cards: gui.CollectionCard[]) {
+// Helper to create mock collection response.
+// totalPages defaults to 1; set it > 1 when testing multi-page behaviour.
+function createMockCollectionResponse(cards: gui.CollectionCard[], totalPages = 1) {
   return {
     cards,
     totalCount: cards.length,
     filterCount: cards.length,
+    totalPages,
+    page: 1,
     unknownCardsRemaining: 0,
     unknownCardsFetched: 0,
   };
@@ -562,8 +565,9 @@ describe('Collection', () => {
     }
 
     it('should show pagination when multiple pages exist', async () => {
-      const mockCards = createManyCards(75); // 2 pages
-      mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+      // totalPages=2 tells the component to show pagination controls
+      const mockCards = createManyCards(50); // 1 page of cards; server says 2 total pages
+      mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards, 2));
       mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
       mockCardsApi.getAllSetInfo.mockResolvedValue([]);
 
@@ -581,8 +585,8 @@ describe('Collection', () => {
     });
 
     it('should disable first/previous buttons on first page', async () => {
-      const mockCards = createManyCards(75); // 2 pages
-      mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+      const mockCards = createManyCards(50);
+      mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards, 2));
       mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
       mockCardsApi.getAllSetInfo.mockResolvedValue([]);
 
@@ -597,8 +601,8 @@ describe('Collection', () => {
     });
 
     it('should navigate to next page when clicking next', async () => {
-      const mockCards = createManyCards(75); // 2 pages
-      mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+      const mockCards = createManyCards(50); // server says 2 pages
+      mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards, 2));
       mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
       mockCardsApi.getAllSetInfo.mockResolvedValue([]);
 
@@ -637,8 +641,9 @@ describe('Collection', () => {
 
     describe('Page-jump input (#2014)', () => {
       it('AC1: user can jump to a specific page by typing and pressing Enter', async () => {
-        const mockCards = createManyCards(300); // 6 pages of 50
-        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+        // Server says totalPages=6; component renders pagination controls
+        const mockCards = createManyCards(50); // 1 page of cards
+        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards, 6));
         mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
         mockCardsApi.getAllSetInfo.mockResolvedValue([]);
 
@@ -662,8 +667,8 @@ describe('Collection', () => {
       });
 
       it('AC2: out-of-range value resets to current page without navigation', async () => {
-        const mockCards = createManyCards(150); // 3 pages of 50
-        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+        const mockCards = createManyCards(50); // server says 3 pages
+        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards, 3));
         mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
         mockCardsApi.getAllSetInfo.mockResolvedValue([]);
 
@@ -688,8 +693,8 @@ describe('Collection', () => {
       });
 
       it('AC3: blurring the input triggers navigation', async () => {
-        const mockCards = createManyCards(150); // 3 pages
-        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+        const mockCards = createManyCards(50); // server says 3 pages
+        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards, 3));
         mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
         mockCardsApi.getAllSetInfo.mockResolvedValue([]);
 
@@ -712,8 +717,8 @@ describe('Collection', () => {
       });
 
       it('AC5: First/Previous/Next/Last controls still work after page-jump is added', async () => {
-        const mockCards = createManyCards(75); // 2 pages
-        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+        const mockCards = createManyCards(50); // server says 2 pages
+        mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards, 2));
         mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
         mockCardsApi.getAllSetInfo.mockResolvedValue([]);
 
@@ -1163,13 +1168,17 @@ describe('Collection', () => {
       expect(options).toContain('Price (Low)');
     });
 
-    it('should sort cards by price when price sort is selected', async () => {
+    // Sort is now server-side (#1325): the component sends sort_by/sort_desc to
+    // the API instead of sorting a local array. This test verifies the correct
+    // API call is made, not the DOM order (which depends on what the server returns).
+    it('should send sort_by=price,sort_desc=true to API when price-desc sort is selected', async () => {
       const mockCards = [
         createMockCollectionCard({ cardId: 1, arenaId: 1, name: 'Cheap Card', priceUsd: 0.25 }),
         createMockCollectionCard({ cardId: 2, arenaId: 2, name: 'Expensive Card', priceUsd: 10.00 }),
-        createMockCollectionCard({ cardId: 3, arenaId: 3, name: 'Medium Card', priceUsd: 2.50 }),
       ];
-      mockCollection.getCollectionWithMetadata.mockResolvedValue(createMockCollectionResponse(mockCards));
+      mockCollection.getCollectionWithMetadata
+        .mockResolvedValueOnce(createMockCollectionResponse(mockCards))
+        .mockResolvedValueOnce(createMockCollectionResponse(mockCards));
       mockCollection.getCollectionStats.mockResolvedValue(createMockCollectionStats());
       mockCardsApi.getAllSetInfo.mockResolvedValue([]);
 
@@ -1187,14 +1196,13 @@ describe('Collection', () => {
 
       await vi.advanceTimersByTimeAsync(100);
 
-      // With Price (High) sort, Expensive Card should be first in the card grid
-      // Filter to only card images (excluding color icons)
+      // API must be called a second time with server-side sort params
       await waitFor(() => {
-        const expensiveCard = screen.getByRole('img', { name: 'Expensive Card' });
-        const cheapCard = screen.getByRole('img', { name: 'Cheap Card' });
-        // Expensive should appear before Cheap in DOM order
-        expect(expensiveCard.compareDocumentPosition(cheapCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(mockCollection.getCollectionWithMetadata).toHaveBeenCalledTimes(2);
       });
+      expect(mockCollection.getCollectionWithMetadata).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sort_by: 'price', sort_desc: true })
+      );
     });
   });
 

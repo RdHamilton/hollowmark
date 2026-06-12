@@ -48,9 +48,11 @@ import (
 
 // PreJobDataSource is satisfied by the deletion repository's CapturePreJobData
 // method.  It captures the email and all MTGA client_id strings associated
-// with the account before any row is deleted.
+// with ALL of the user's accounts before any row is deleted (#1333: was
+// single accountID — multi-account users had clientIDs from N-1 accounts
+// silently omitted).
 type PreJobDataSource interface {
-	CapturePreJobData(ctx context.Context, userID, accountID int64) (email string, clientIDs []string, err error)
+	CapturePreJobData(ctx context.Context, userID int64, accountIDs []int64) (email string, clientIDs []string, err error)
 }
 
 // UserSoftDeleter marks users.deleted_at synchronously — before the 202 is
@@ -77,11 +79,13 @@ type TextKeyedDeleter interface {
 }
 
 // ConsentLogAnonymizer anonymizes consent_log rows in-place by setting
-// ip_address_hash=NULL and metadata=NULL for the given account_id.
+// ip_address_hash=NULL and metadata=NULL for ALL of the user's account IDs
+// (#1333: was a single accountID — multi-account users had N-1 consent_log
+// rows left un-anonymized).
 // The ON DELETE SET NULL cascade on consent_log.account_id (migration #885)
-// then fires when the accounts row is deleted in Step 4e.
+// then fires when each accounts row is deleted in Step 4e.
 type ConsentLogAnonymizer interface {
-	AnonymizeConsentLog(ctx context.Context, accountID int64) error
+	AnonymizeConsentLog(ctx context.Context, accountIDs []int64) error
 }
 
 // WaitlistDeleter deletes waitlist_entries rows by email (CITEXT match).
@@ -137,11 +141,12 @@ type ExplicitBigintRowDeleter interface {
 }
 
 // ResidualSweeper queries information_schema.columns for every public base table
-// with an account_id or user_id column and asserts zero residual rows for the
-// erased account / clientIDs.
+// with an account_id or user_id column and asserts zero residual rows for ALL
+// of the erased accountIDs and clientIDs (#1333: was a single accountID —
+// multi-account users had N-1 accounts unchecked by the sweep).
 //
 // Coverage:
-//   - BIGINT/identity tables: WHERE account_id = $accountID
+//   - BIGINT/identity tables: WHERE account_id = ANY($accountIDs)
 //   - TEXT-keyed tables:      WHERE account_id = ANY($clientIDs) — skip if clientIDs empty
 //
 // Excluded (retained by design — Ray ruling #1257):
@@ -155,7 +160,7 @@ type ExplicitBigintRowDeleter interface {
 // ExplicitBigintRowDeleter and BEFORE ClerkDeleter so no irreversible external
 // delete occurs when residuals exist.
 type ResidualSweeper interface {
-	AssertZeroResiduals(ctx context.Context, accountID int64, clientIDs []string) error
+	AssertZeroResiduals(ctx context.Context, accountIDs []int64, clientIDs []string) error
 }
 
 // AuditLogger marks the deletion_audit_log row as completed.
@@ -236,16 +241,17 @@ type Deps struct {
 	Email emailpkg.Sender
 }
 
-// RunErasureCascade executes the full GDPR Art.17 erasure cascade for a single
-// account.  It is designed to be called in a background goroutine from the BFF
-// root context.
+// RunErasureCascade executes the full GDPR Art.17 erasure cascade for ALL of
+// a user's accounts.  It is designed to be called in a background goroutine
+// from the BFF root context.
 //
 // Parameters:
 //   - ctx: BFF root context (NOT the HTTP request context).
 //   - jobID: UUID of the deletion_audit_log row for this job.
 //   - clerkUserID: Clerk user id (used only for Step 5 Clerk API delete).
 //   - userID: internal users.id (BIGINT).
-//   - accountID: internal accounts.id (BIGINT).
+//   - accountIDs: ALL internal accounts.id values owned by userID (#1333 fix:
+//     was a single accountID — GDPR Art.17 requires erasing ALL accounts).
 //   - deps: injected collaborators.
 //
 // On any step failure the cascade halts and returns the error; the
@@ -254,8 +260,8 @@ type Deps struct {
 //
 // When deps.Reporter is non-nil, a Sentry alert is fired on the first step
 // failure with structured tags: step (short key e.g. "step4a"), job_id, and
-// account_id_hash (SHA-256 prefix of the accountID string — no raw PII).
-func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, accountID int64, deps Deps) error {
+// user_id_hash (SHA-256 prefix of the userID string — no raw PII).
+func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID int64, accountIDs []int64, deps Deps) error {
 	// Defensive nil guard: deps.DB must always be wired by the caller
 	// (buildAccountDeletionHandler in cmd/main.go).  A nil DB indicates a
 	// construction bug — fail loud with a clear error rather than panicking.
@@ -263,10 +269,10 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 		return fmt.Errorf("erasure: RunErasureCascade called with nil Deps.DB — cascade cannot proceed; this is a wiring bug in the caller")
 	}
 
-	// accountIDHash is the privacy-safe tag value used in Sentry alerts.
-	// It reuses the same identityhash.HashAccountID function used by PostHog
-	// emits throughout the BFF (FM-2 / I-10: single implementation).
-	accountIDHash := identityhash.HashAccountID(strconv.FormatInt(accountID, 10))
+	// userIDHash is the privacy-safe tag value used in Sentry alerts.
+	// Keyed on userID (the human identity) rather than any single accountID,
+	// since erasure now spans all accounts.
+	userIDHash := identityhash.HashAccountID(strconv.FormatInt(userID, 10))
 
 	// capturedEmail holds the Step-0 email address once CapturePreJobData
 	// succeeds.  It is written once (Step 0) and read by reportStepErr and the
@@ -298,9 +304,10 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	reportStepErr := func(stepKey, desc string, err error) error {
 		if deps.Reporter != nil {
 			deps.Reporter.ReportError(ctx, err, map[string]string{
-				"step":            stepKey,
-				"job_id":          jobID,
-				"account_id_hash": accountIDHash,
+				"step":          stepKey,
+				"job_id":        jobID,
+				"user_id_hash":  userIDHash,
+				"account_count": strconv.Itoa(len(accountIDs)),
 			})
 		}
 		// Send failure notification using the Step-0-captured address.
@@ -316,15 +323,15 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	//
 	// The TEXT-keyed tables (daemon_events, daemon_api_keys, etc.) are keyed by
 	// the MTGA client_id string, not by the internal accounts.id BIGINT.  Once
-	// the accounts row is deleted in Step 4e, these strings cannot be recovered
-	// from the DB.  We capture them here to use in Step 4a.
+	// the accounts rows are deleted in Step 4e, these strings cannot be recovered
+	// from the DB.  We capture them here — across ALL accounts — to use in Step 4a.
 	//
 	// The email address is also held in capturedEmail so the post-cascade email
 	// sends (success / failure paths) use the in-memory value — by terminal state
 	// the DB row is gone and a lookup would return nothing (ADR-076 §Consequences).
 	// -----------------------------------------------------------------------
 	var clientIDs []string
-	capturedEmail, clientIDs, err = deps.DB.CapturePreJobData(ctx, userID, accountID)
+	capturedEmail, clientIDs, err = deps.DB.CapturePreJobData(ctx, userID, accountIDs)
 	if err != nil {
 		return reportStepErr("step0", "capture pre-job data", err)
 	}
@@ -343,16 +350,15 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// -----------------------------------------------------------------------
 	// Step 2 — PostHog bulk-delete.
 	//
-	// The distinct_id is SHA-256(accountID string)[:16] — the same hash used
-	// by all PostHog emits in the BFF (identityhash.HashAccountID).  We pass
-	// accountIDHash computed above — both uses derive from the same accountID.
+	// The distinct_id is SHA-256(userID string)[:16] — keyed on the user (the
+	// human), not a single account, since PostHog tracks at the user level.
 	//
 	// Note: PostHog step precedes the DB sweep by ADR-056 hash-dependency
-	// design (the hash is derived from accountID which is available here).
+	// design (the hash is derived from userID which is available here).
 	// PostHog delete is re-runnable on re-trigger; it does not need to follow
 	// the sweep.
 	// -----------------------------------------------------------------------
-	if err := deps.PostHog.DeletePerson(ctx, accountIDHash); err != nil {
+	if err := deps.PostHog.DeletePerson(ctx, userIDHash); err != nil {
 		return reportStepErr("step2", "posthog bulk-delete", err)
 	}
 
@@ -363,20 +369,21 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// Step 4 — PostgreSQL explicit deletes (in FK-dependency order).
 	// -----------------------------------------------------------------------
 
-	// 4a — TEXT-keyed tables: delete BEFORE accounts row (ordering mandatory).
+	// 4a — TEXT-keyed tables: delete BEFORE accounts rows (ordering mandatory).
 	//
 	// Covers tables with TEXT account_id (MTGA client_id string, no FK):
 	//   daemon_events, daemon_api_keys, user_play_patterns, projection_errors.
 	// Also covers inventory_history when its account_id column is TEXT
 	// (incremental migration path via 000068). See TextKeyedDeleter doc.
+	// clientIDs aggregated from ALL accounts in Step 0.
 	if err := deps.DB.DeleteTextKeyedRows(ctx, clientIDs); err != nil {
 		return reportStepErr("step4a", "text-keyed delete", err)
 	}
 
-	// 4b — Anonymize consent_log in-place: null ip_address_hash + metadata.
-	// The accounts hard-delete (step4e) then fires the SET NULL cascade on
-	// consent_log.account_id (migration #885, coupled with #891).
-	if err := deps.DB.AnonymizeConsentLog(ctx, accountID); err != nil {
+	// 4b — Anonymize consent_log in-place for ALL accounts: null ip_address_hash
+	// + metadata.  The accounts hard-delete (step4e) then fires the SET NULL
+	// cascade on consent_log.account_id (migration #885).
+	if err := deps.DB.AnonymizeConsentLog(ctx, accountIDs); err != nil {
 		return reportStepErr("step4b", "anonymize consent_log", err)
 	}
 
@@ -386,41 +393,51 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	}
 
 	// 4d — Hard-delete users row; cascades to api_keys via users(id) FK.
+	// accounts rows are deleted per-account in step 4e below (accounts.user_id
+	// references users.id, so the users delete must NOT cascade accounts — it
+	// doesn't: accounts has ON DELETE CASCADE from users, so deleting users
+	// also deletes all accounts rows.  We still run 4e + 4-explicit per account
+	// for the BIGINT-child data before the user row is deleted.
+	//
+	// Ordering: delete account-scoped BIGINT children first (4e/4-explicit),
+	// THEN delete the users row (4d).  This avoids FK violations on tables that
+	// reference accounts(id) but cascade from accounts, not users.
+	//
+	// Account-scoped steps (4e + 4-explicit) loop over ALL accountIDs.
+	for _, accountID := range accountIDs {
+		// 4e — Hard-delete accounts row; fires ON DELETE CASCADE on BIGINT FK
+		// tables and SET NULL on consent_log.  game_plays has no FK CASCADE
+		// today (000120 deferred it); matches/player_stats/rank_history/
+		// collection_history gained FKs in 000119 but were absent at the P1
+		// incident.  Step 4-explicit covers those gaps defense-in-depth.
+		if err := deps.DB.HardDeleteAccount(ctx, accountID); err != nil {
+			return reportStepErr("step4e", fmt.Sprintf("hard-delete account %d", accountID), err)
+		}
+
+		// 4-explicit — Defense-in-depth explicit DELETE of BIGINT-keyed tables
+		// that are cascade-unreachable at some schema versions (#1257).
+		//
+		// Runs AFTER HardDeleteAccount (4e) so FK cascades have already fired;
+		// the explicit DELETEs are idempotent no-ops when cascade covered rows.
+		// Tables: matches, player_stats, rank_history, collection_history,
+		// game_plays (no FK today), inventory_history (BIGINT FK path on
+		// fresh-init 000054; data_type-gated in the repo method).
+		if err := deps.DB.DeleteExplicitBigintRows(ctx, accountID); err != nil {
+			return reportStepErr("step4explicit", fmt.Sprintf("explicit bigint-keyed delete account %d", accountID), err)
+		}
+	}
+
+	// Hard-delete the users row AFTER all account-scoped deletes (#1333
+	// ordering: children before parent).
 	if err := deps.DB.HardDeleteUser(ctx, userID); err != nil {
 		return reportStepErr("step4d", "hard-delete user", err)
-	}
-
-	// 4e — Hard-delete accounts row; fires ON DELETE CASCADE on BIGINT FK tables
-	// and SET NULL on consent_log.  game_plays has no FK CASCADE today (000120
-	// deferred it); matches/player_stats/rank_history/collection_history gained
-	// FKs in 000119 but were absent at the P1 incident.  Step 4-explicit covers
-	// those gaps defense-in-depth.
-	if err := deps.DB.HardDeleteAccount(ctx, accountID); err != nil {
-		return reportStepErr("step4e", "hard-delete account", err)
-	}
-
-	// -----------------------------------------------------------------------
-	// Step 4-explicit — Defense-in-depth explicit DELETE of BIGINT-keyed tables
-	// that are cascade-unreachable at some schema versions (#1257).
-	//
-	// Runs AFTER HardDeleteAccount (4e) so FK cascades have already fired; the
-	// explicit DELETEs are idempotent no-ops when cascade already covered the
-	// rows.  Ensures erasure completeness regardless of schema version
-	// (pre-119 staging, fresh-init, incremental prod path).
-	//
-	// Tables: matches, player_stats, rank_history, collection_history (defense-
-	// in-depth for 000119 gap), game_plays (no FK today), inventory_history
-	// (BIGINT FK path on fresh-init 000054; data_type-gated in the repo method).
-	// -----------------------------------------------------------------------
-	if err := deps.DB.DeleteExplicitBigintRows(ctx, accountID); err != nil {
-		return reportStepErr("step4explicit", "explicit bigint-keyed delete", err)
 	}
 
 	// -----------------------------------------------------------------------
 	// Step 4-sweep — Residual sweep.
 	//
 	// Queries information_schema for every public base table with an account_id
-	// or user_id column and asserts zero rows remain for the erased account and
+	// or user_id column and asserts zero rows remain for ALL erased accounts and
 	// clientIDs.  Excluded (retained by design, Ray ruling #1257):
 	//   deletion_audit_log, restriction_audit_log, dsr_access_log,
 	//   rectification_audit_log.
@@ -430,7 +447,7 @@ func RunErasureCascade(ctx context.Context, jobID, clerkUserID string, userID, a
 	// can identify and re-run the job.  Step 5 (Clerk) and Step 8 (complete)
 	// are NOT called — no irreversible external action on residual state.
 	// -----------------------------------------------------------------------
-	if err := deps.DB.AssertZeroResiduals(ctx, accountID, clientIDs); err != nil {
+	if err := deps.DB.AssertZeroResiduals(ctx, accountIDs, clientIDs); err != nil {
 		return reportStepErr("step4sweep", "residual sweep", err)
 	}
 

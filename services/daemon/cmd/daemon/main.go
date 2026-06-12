@@ -247,6 +247,65 @@ func main() {
 		}
 	}
 
+	// ── Step 2c: startup token-liveness probe (#1326 Fix A) ──────────────────
+	// In keychain mode, the stored token may be stale (revoked key, Clerk instance
+	// cutover, account deletion) without the daemon knowing — NeedsFirstRunAuth only
+	// checks keychain PRESENCE, not validity. A stale token passes presence but will
+	// be rejected by the BFF at ingest time, causing events to be buffered under the
+	// wrong identity (the root cause of the 2026-06-12 P0 incident, #198).
+	//
+	// Before entering the main event loop, probe the BFF /api/v1/health/daemon with
+	// the stored key. On 401/403: treat as NeedsRegistration and run PKCE now.
+	// On 200: proceed normally. On 5xx/network error: assume valid (BFF may be down).
+	//
+	// Only run when:
+	//   - keychain mode is active (cfg.Keychain == true),
+	//   - auth is NOT already paused (no-op if we know we need PKCE),
+	//   - the daemon is not in the first-run NeedsFirstRunAuth path (that already gates on keychain presence),
+	//   - cfg.CloudAPIURL is known.
+	keychainGetFn := func() (string, error) { return keychain.GetForService(keychainService) }
+	if cfg.Keychain && !dState.AuthPaused && !cfg.NeedsFirstRunAuth(keychainGetFn) && cfg.CloudAPIURL != "" {
+		if storedKey, kcErr := keychainGetFn(); kcErr == nil && storedKey != "" {
+			probeCtx, probeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			live, probeErr := daemon.ProbeTokenLiveness(probeCtx, cfg.CloudAPIURL, storedKey)
+			probeCancel()
+			if probeErr != nil {
+				log.Printf("[mtga-daemon] startup probe: transport error (BFF unreachable?) — skipping re-auth: %v", probeErr)
+			} else if !live {
+				log.Printf("[mtga-daemon] startup probe: stored key rejected by BFF (401/403) — treating as NeedsRegistration, starting PKCE")
+				// Force a full PKCE re-registration to obtain a fresh key and
+				// resolve the correct AccountID from the live Clerk identity.
+				// This is the automatic self-heal path: zero user terminal commands required.
+				if err := runPKCEAuth(cfg, *cfgPath, keychainService); err != nil {
+					log.Printf("[mtga-daemon] startup probe: PKCE re-auth failed: %v", err)
+					// Treat as a failed first-run attempt — increment paused counter.
+					dState.AuthAttempts++
+					if dState.AuthAttempts >= maxAuthAttempts {
+						dState.AuthPaused = true
+						log.Printf("[mtga-daemon] startup probe: auth attempt cap reached (%d/%d) — setting auth_paused=true",
+							dState.AuthAttempts, maxAuthAttempts)
+					}
+					if saveErr := daemonstate.Save(statePath, dState); saveErr != nil {
+						log.Printf("[mtga-daemon] warn: could not persist daemon-state.json after probe reauth: %v", saveErr)
+					}
+					if config.EnvWithFallback("VAULTMTG_DAEMON_HEADLESS", "MTGA_DAEMON_HEADLESS") == "1" {
+						stopLaunchAgent()
+						os.Exit(1)
+					}
+				} else {
+					log.Printf("[mtga-daemon] startup probe: re-auth succeeded — fresh identity written to daemon.json")
+					dState.AuthAttempts = 0
+					dState.AuthPaused = false
+					if saveErr := daemonstate.Save(statePath, dState); saveErr != nil {
+						log.Printf("[mtga-daemon] warn: could not persist daemon-state.json after probe reauth success: %v", saveErr)
+					}
+				}
+			} else {
+				log.Printf("[mtga-daemon] startup probe: key is live — proceeding with stored identity")
+			}
+		}
+	}
+
 	// ── Step 3: PKCE auth flow if no valid credentials ─────────────────────────
 	// RC2 (CRITICAL CORRECTNESS): auth_paused is checked BEFORE NeedsFirstRunAuth.
 	// If auth_paused is true, skip the initial PKCE attempt entirely — the daemon
@@ -259,8 +318,6 @@ func main() {
 	//     menu bar. The onReady goroutine re-checks NeedsFirstRunAuth and shows
 	//     StatusSetupRequired + "Retry Setup…" so the user can retry without a
 	//     daemon restart (#2132).
-	keychainGetFn := func() (string, error) { return keychain.GetForService(keychainService) }
-
 	if !dState.AuthPaused && cfg.NeedsFirstRunAuth(keychainGetFn) && cfg.CloudAPIURL != "" {
 		log.Printf("[mtga-daemon] first-run: no API key detected — starting PKCE auth flow")
 		if err := runPKCEAuth(cfg, *cfgPath, keychainService); err != nil {
