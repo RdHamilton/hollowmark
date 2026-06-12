@@ -84,6 +84,23 @@ func ParseInventoryEntry(entry *LogEntry) (*contract.InventoryUpdatedPayload, er
 		}
 	}
 
+	// MasteryPass is a nested object inside InventoryInfo (#1338). It carries
+	// the player's mastery pass progression. Absent in older Arena versions —
+	// missing key is not an error; Mastery stays nil.
+	if mpRaw, ok := invMap["MasteryPass"].(map[string]interface{}); ok {
+		mi := &contract.MasteryInfo{}
+		if v, ok := mpRaw["CurrentLevel"].(float64); ok {
+			mi.Level = int(v)
+		}
+		if v, ok := mpRaw["PassType"].(string); ok {
+			mi.PassType = v
+		}
+		if v, ok := mpRaw["MaxLevel"].(float64); ok {
+			mi.Max = int(v)
+		}
+		p.Mastery = mi
+	}
+
 	// DeckSummaries is a TOP-LEVEL sibling of InventoryInfo in the Arena login
 	// blob (Arena 2026.60+). It carries the full deck library headers without
 	// card lists. Absent in older Arena versions — missing key is not an error.

@@ -104,6 +104,13 @@ type deckSummaryStore interface {
 	UpsertDeckSummary(ctx context.Context, u repository.DeckSummaryUpsert) error
 }
 
+// masteryStore writes mastery pass state to the accounts table (#1338).
+// It targets the mastery_level, mastery_pass, and mastery_max columns from
+// migration 000013.
+type masteryStore interface {
+	UpsertMastery(ctx context.Context, u repository.MasteryUpsert) error
+}
+
 // draftDeckCreator creates a deck row from a completed draft session's picks.
 // It is implemented by *repository.DecksRepository.
 type draftDeckCreator interface {
@@ -189,6 +196,7 @@ type Worker struct {
 	quests        questStore
 	decks         deckStore
 	deckSummaries deckSummaryStore
+	mastery       masteryStore
 	gamePlays     gamePlayStore
 	cardPlays     cardPlayStore
 	gameRows      gameRowWriter
@@ -273,6 +281,14 @@ func (w *Worker) WithDraftPickReader(reader draftPickReader) *Worker {
 // for each entry in the payload's Decks slice without touching deck_cards.
 func (w *Worker) WithDeckSummaryStore(store deckSummaryStore) *Worker {
 	w.deckSummaries = store
+	return w
+}
+
+// WithMasteryStore wires the mastery pass store into w and returns w.
+// When wired, projectInventoryUpdated calls UpsertMastery when the payload
+// carries a non-nil Mastery field (#1338).
+func (w *Worker) WithMasteryStore(store masteryStore) *Worker {
+	w.mastery = store
 	return w
 }
 
@@ -1020,6 +1036,22 @@ func (w *Worker) projectInventoryUpdated(ctx context.Context, row *repository.Da
 				// being projected. The raw payload is preserved in daemon_events.
 				log.Printf("[projection] projectInventoryUpdated id=%d: UpsertDeckSummary deck_id=%s: %v", row.ID, d.DeckID, upsertErr)
 			}
+		}
+	}
+
+	// Fan out to UpsertMastery when the payload carries mastery pass data (#1338).
+	// Only fires when the masteryStore is wired and the payload has a non-nil
+	// Mastery field. Soft failure: a mastery write error is logged and does not
+	// prevent the inventory upsert from being marked projected.
+	if w.mastery != nil && p.Mastery != nil {
+		if masteryErr := w.mastery.UpsertMastery(ctx, repository.MasteryUpsert{
+			AccountID:    accountID,
+			MasteryLevel: p.Mastery.Level,
+			MasteryPass:  p.Mastery.PassType,
+			MasteryMax:   p.Mastery.Max,
+			UpdatedAt:    row.OccurredAt,
+		}); masteryErr != nil {
+			log.Printf("[projection] projectInventoryUpdated id=%d: UpsertMastery: %v", row.ID, masteryErr)
 		}
 	}
 

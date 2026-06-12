@@ -8,6 +8,8 @@ github.com/RdHamilton/hollowmark/services/contract v0.1.6 h1:glW5w865eC0krRvBkj/
 github.com/RdHamilton/hollowmark/services/contract v0.1.6/go.mod h1:igWu4d2NyV0XnN2TJAjOuCYho5A/A0icgl85c1B6zP0=
 github.com/RdHamilton/hollowmark/services/contract v0.1.7 h1:7uv+M7SPMjIVT2io0k5BujYx1u6mZVCNW+zlji2J+dk=
 github.com/RdHamilton/hollowmark/services/contract v0.1.7/go.mod h1:igWu4d2NyV0XnN2TJAjOuCYho5A/A0icgl85c1B6zP0=
+github.com/RdHamilton/hollowmark/services/contract v0.1.8 h1:1ON/O/Mwt2qxwFv+y5zK6A1IvSsq3opNSRtNKN46hOk=
+github.com/RdHamilton/hollowmark/services/contract v0.1.8/go.mod h1:igWu4d2NyV0XnN2TJAjOuCYho5A/A0icgl85c1B6zP0=
 github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260610005103-d9eac5eb008e h1:9xUgujfLvPZHr9Hxe6XO9ylN23yCZ7gZy3PZrXIXpS4=
 github.com/RdHamilton/hollowmark/services/daemon v0.0.0-20260610005103-d9eac5eb008e/go.mod h1:gB6tqzk/qjDkoqtSwMSOa1PoV8HUQsxvv83vJwJI2Mw=
 github.com/aws/aws-sdk-go-v2 v1.41.11 h1:9PRf7jyTMEUM6fuNRAJa2mO/skJfrF50rENJwf2LXqw=
