@@ -377,6 +377,168 @@ fi
 pass "Phase 1 — provision-env + provision-db-url ran; required keys present, DB_SECRET_ARN/BFF_DB_RESOLVE_FROM_SM absent (C5), DATABASE_URL spliced from SM"
 
 # ===========================================================================
+# Phase 1b: provision-prod-env.sh (ADR-075 D3 manifest-driven prod provisioner)
+#
+# Exercises the new manifest-driven prod provisioner end-to-end with the same
+# SSM/STS/SM stub infrastructure as Phase 1.  Key contract assertions:
+#
+#   C1  All required prod env keys are written to the env file.
+#   C2  DB_SECRET_ARN and BFF_DB_RESOLVE_FROM_SM must NOT appear (#2461 / C5).
+#   C3  DATABASE_URL carries inline credentials spliced from Secrets Manager.
+#   C4  DAEMON_JWT_SECRET must NOT be written (bootstrap-carried on prod).
+#   C5  staging-only keys (CLERK_PUBLISHABLE_KEY, RESEND_API_KEY, etc.) must
+#       NOT appear (manifest scope filter working correctly).
+#   C6  New keys BFF_TOS_VERSION + BFF_PRIVACY_POLICY_VERSION are written
+#       (added by #1157, absent from legacy chain — regression guard).
+#
+# The env file is reset to empty before this phase so assertions are clean.
+# ===========================================================================
+info "Phase 1b — provision-prod-env (manifest-driven, SSM/STS/SM stubbed)..."
+
+# Reset the env file to empty for a clean Phase 1b run.
+: > "$STUB_ENV_FILE"
+chmod 600 "$STUB_ENV_FILE"
+
+# Install provision-lib.sh and ssm-key-manifest.sh to /tmp/ so the script
+# can source them (mirrors what the deploy-bff.yml S3 cp chain does on EC2).
+cp "${REPO_ROOT}/scripts/deploy/provision-lib.sh"   /tmp/provision-lib.sh
+cp "${REPO_ROOT}/scripts/deploy/ssm-key-manifest.sh" /tmp/ssm-key-manifest.sh
+
+# The Phase 1 aws stub already handles ssm get-parameter, sts assume-role,
+# sts get-caller-identity, and secretsmanager get-secret-value with the
+# correct tab-separated output shape.  Re-install it (overwrite) to reset
+# the session-name state file before Phase 1b.
+cat > "$STUB_AWS" <<'AWSSTUB_PHASE1B'
+#!/usr/bin/env bash
+# Phase 1b aws CLI stub — same contract as Phase 1 but with extended SSM
+# coverage for all prod manifest keys.  Session-name state is persisted
+# under $STUB_AWS_STATE_DIR so the identity-verify gate in
+# provision-prod-env.sh sees an ARN matching the expected pattern.
+
+if [[ "$1" == "ssm" && "$2" == "get-parameter" ]]; then
+    NAME=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in --name) NAME="$2"; shift 2 ;; *) shift ;; esac
+    done
+    case "$NAME" in
+        */ALLOWED_ORIGINS)             echo "http://localhost:3000" ;;
+        */CLERK_SECRET_KEY)            echo "sk_live_stub" ;;
+        */CLERK_FRONTEND_API)          echo "https://clerk.stub" ;;
+        */sentry-dsn-bff)              echo "https://sentry.stub/1" ;;
+        */posthog-api-key)             echo "phc_stub" ;;
+        */posthog-host)                echo "https://app.posthog.com" ;;
+        */BFF_DAEMON_LATEST_VERSION)   echo "0.4.2" ;;
+        */BFF_DAEMON_RELEASED_AT)      echo "2026-06-11T00:00:00Z" ;;
+        */analytics-pii-salt)          echo "stub-pii-salt" ;;
+        */internal-svc-secret)         echo "stub-internal-svc-secret" ;;
+        */posthog-personal-api-key)    echo "phx_stub" ;;
+        */posthog-project-id)          echo "12345" ;;
+        */mailchimp-api-key)           echo "stub-mailchimp-key" ;;
+        */mailchimp-list-id)           echo "stub-list-id" ;;
+        */BFF_TOS_VERSION)             echo "2026-01-01" ;;
+        */BFF_PRIVACY_POLICY_VERSION)  echo "2026-01-01" ;;
+        # DB params (read before assume-role under instance role)
+        */app-db-secret-arn)           echo "arn:aws:secretsmanager:us-east-1:000000000000:secret:stub-app" ;;
+        */db-endpoint)                 echo "127.0.0.1" ;;
+        */db-name)                     echo "deploy_test_db" ;;
+        *)                             echo "stub_value" ;;
+    esac
+    exit 0
+fi
+
+if [[ "$1" == "sts" && "$2" == "assume-role" ]]; then
+    SESSION=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --role-session-name) SESSION="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    if [[ -z "$SESSION" ]]; then
+        echo "STUB(phase1b): sts assume-role missing --role-session-name" >&2
+        exit 1
+    fi
+    printf '%s' "$SESSION" > "${STUB_AWS_STATE_DIR}/last_session_name"
+    printf 'ASIA_STUB_ACCESS_KEY_ID_XXXXXXXX\tstub_secret_access_key_value_XXXXXXXXXXXXXXXXXXXX\tstub_session_token_value_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n'
+    exit 0
+fi
+
+if [[ "$1" == "sts" && "$2" == "get-caller-identity" ]]; then
+    SESSION=""
+    if [[ -f "${STUB_AWS_STATE_DIR}/last_session_name" ]]; then
+        SESSION=$(cat "${STUB_AWS_STATE_DIR}/last_session_name")
+    fi
+    if [[ -z "$SESSION" ]]; then
+        echo "STUB(phase1b): sts get-caller-identity called before assume-role (no session-name state)" >&2
+        exit 1
+    fi
+    printf 'arn:aws:sts::901347789205:assumed-role/vaultmtg-staging-deploy-provisioner/%s\n' "$SESSION"
+    exit 0
+fi
+
+if [[ "$1" == "secretsmanager" && "$2" == "get-secret-value" ]]; then
+    printf '{"username":"deploy_test","password":"deploy_test"}\n'
+    exit 0
+fi
+
+echo "STUB(phase1b): unhandled aws command: $*" >&2
+exit 1
+AWSSTUB_PHASE1B
+chmod +x "$STUB_AWS"
+
+PROVISION_PROD="${SCRATCH}/provision-prod-env-test.sh"
+cp "${REPO_ROOT}/scripts/deploy/provision-prod-env.sh" "$PROVISION_PROD"
+chmod +x "$PROVISION_PROD"
+
+sh "$PROVISION_PROD"
+
+# C1: all required prod env keys must be present.
+PROD_REQUIRED_KEYS="ALLOWED_ORIGINS DATABASE_URL AWS_DEFAULT_REGION CLERK_SECRET_KEY \
+    CLERK_FRONTEND_API SENTRY_DSN POSTHOG_API_KEY POSTHOG_HOST \
+    BFF_DAEMON_LATEST_VERSION BFF_DAEMON_RELEASED_AT ANALYTICS_PII_SALT \
+    INTERNAL_SVC_SECRET POSTHOG_PERSONAL_API_KEY POSTHOG_PROJECT_ID \
+    MAILCHIMP_API_KEY MAILCHIMP_LIST_ID BFF_TOS_VERSION BFF_PRIVACY_POLICY_VERSION"
+for key in $PROD_REQUIRED_KEYS; do
+    if ! grep -q "^${key}=" "$STUB_ENV_FILE"; then
+        fail "Phase 1b C1 — required key not written: ${key}"
+    fi
+done
+
+# C2: DB_SECRET_ARN and BFF_DB_RESOLVE_FROM_SM must NOT appear.
+for forbidden in DB_SECRET_ARN BFF_DB_RESOLVE_FROM_SM; do
+    if grep -q "^${forbidden}=" "$STUB_ENV_FILE"; then
+        fail "Phase 1b C2 — env file MUST NOT contain ${forbidden}= (re-enables runtime SM, reproduces #2461 crash-loop)"
+    fi
+done
+
+# C3: DATABASE_URL must carry spliced credentials.
+if ! grep -q "^DATABASE_URL=postgresql://deploy_test:deploy_test@" "$STUB_ENV_FILE"; then
+    fail "Phase 1b C3 — DATABASE_URL did not splice deploy_test:deploy_test from stubbed SM (rendered: $(grep ^DATABASE_URL= "$STUB_ENV_FILE" || echo '<absent>'))"
+fi
+
+# C4: DAEMON_JWT_SECRET must NOT be written (bootstrap-carried on prod).
+if grep -q "^DAEMON_JWT_SECRET=" "$STUB_ENV_FILE"; then
+    fail "Phase 1b C4 — DAEMON_JWT_SECRET must NOT be written by prod provisioner (bootstrap-carried)"
+fi
+
+# C5: staging-only keys must NOT appear.
+STAGING_ONLY_KEYS="CLERK_PUBLISHABLE_KEY RESEND_API_KEY DISCORD_BOT_TOKEN DISCORD_GUILD_ID CRISP_WEBSITE_ID PORT"
+for key in $STAGING_ONLY_KEYS; do
+    if grep -q "^${key}=" "$STUB_ENV_FILE"; then
+        fail "Phase 1b C5 — staging-only key must NOT appear in prod env: ${key}"
+    fi
+done
+
+# C6: new keys from #1157 must be present (regression guard vs legacy chain).
+for key in BFF_TOS_VERSION BFF_PRIVACY_POLICY_VERSION; do
+    if ! grep -q "^${key}=" "$STUB_ENV_FILE"; then
+        fail "Phase 1b C6 — #1157 key missing from prod env (was absent from legacy chain): ${key}"
+    fi
+done
+
+pass "Phase 1b — provision-prod-env manifest-driven: all C1-C6 contract assertions passed"
+
+# ===========================================================================
 # Phase 2: stage-binary.sh (S3 stubbed via aws PATH overlay)
 # ===========================================================================
 info "Phase 2 — stage-binary (S3 stubbed with fake binary)..."
