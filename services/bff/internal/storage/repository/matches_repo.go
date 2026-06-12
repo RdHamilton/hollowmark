@@ -532,6 +532,22 @@ func (r *MatchesRepository) GamesByMatchID(ctx context.Context, accountID int64,
 	return out, rows.Err()
 }
 
+// HasCapturedGameResults reports whether the daemon wrote at least one
+// match_game_results row for this match. This is the correct signal for the
+// Games endpoint to distinguish "captured but projection pending"
+// (capturedResults=true) from "never captured at all" (capturedResults=false).
+// The query is account-scoped to prevent cross-tenant leaks.
+func (r *MatchesRepository) HasCapturedGameResults(ctx context.Context, accountID int64, matchID string) (bool, error) {
+	const q = `
+		SELECT EXISTS(
+			SELECT 1 FROM match_game_results
+			WHERE account_id = $1 AND match_id = $2
+		)`
+	var exists bool
+	err := r.db.QueryRowContext(ctx, q, accountID, matchID).Scan(&exists)
+	return exists, err
+}
+
 // StatsAggregate is the row returned by a single stats query — match counts +
 // game counts. Win rate is computed in the handler so the repo stays SQL-only.
 type StatsAggregate struct {

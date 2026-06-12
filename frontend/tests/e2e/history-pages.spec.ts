@@ -333,13 +333,14 @@ test.describe('History: /match-history — detail drill-down', () => {
     });
   }
 
-  /** Mock the games endpoint to return empty (detail modal loads cleanly). */
+  /** Mock the games endpoint to return empty (detail modal loads cleanly).
+   * The BFF now returns {data:{games:[],capturedResults:false}} (#1342). */
   async function mockMatchGames(page: Page, matchId: string): Promise<void> {
     await page.route(`**/api/v1/matches/${matchId}/games`, (route) => {
       void route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify([]),
+        body: JSON.stringify({ data: { games: [], capturedResults: false } }),
       });
     });
   }
