@@ -2,10 +2,24 @@
   "archetypes": [
     {
       "archetype_id": "55555555-0000-0000-0000-000000000001",
-      "name": "Test Archetype A",
+      "name": "Mono White Aggro",
       "format": "Standard",
-      "win_rate": 0.52,
-      "games_played": 100
+      "win_rate": 0.56,
+      "games_played": 4821
+    },
+    {
+      "archetype_id": "55555555-0000-0000-0000-000000000002",
+      "name": "Izzet Prowess",
+      "format": "Standard",
+      "win_rate": 0.54,
+      "games_played": 3912
+    },
+    {
+      "archetype_id": "55555555-0000-0000-0000-000000000003",
+      "name": "Domain Ramp",
+      "format": "Standard",
+      "win_rate": 0.51,
+      "games_played": 2987
     }
   ]
 }
