@@ -6,8 +6,7 @@
 // Tests use MockSender.
 //
 // The From address is always no-reply@hollowmark.app (technical sender domain,
-// ADR-076 §Decision).  User-facing copy uses "VaultMTG" per D16 brand-reveal
-// deferral.
+// ADR-076 §Decision).  User-facing display copy uses "Hollowmark" (#1362).
 package email
 
 import "context"
@@ -20,11 +19,11 @@ import "context"
 // (callers may pass a nil Sender when the SES client is not configured).
 type Sender interface {
 	// SendDeletionComplete sends a confirmation email to toEmail notifying the
-	// user that their VaultMTG account deletion has completed.
+	// user that their Hollowmark account deletion has completed.
 	SendDeletionComplete(ctx context.Context, toEmail string) error
 
 	// SendDeletionFailed sends a notification email to toEmail informing the
-	// user that their VaultMTG account deletion could not be completed and they
+	// user that their Hollowmark account deletion could not be completed and they
 	// should contact support.
 	SendDeletionFailed(ctx context.Context, toEmail string) error
 }
