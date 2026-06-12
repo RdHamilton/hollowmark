@@ -325,8 +325,8 @@ func TestDraftsExport17Lands_HappyPath(t *testing.T) {
 }
 
 // TestDraftsExport17Lands_ExportedFromBrand verifies that the exported_from
-// metadata field in the 17Lands export payload carries the VaultMTG brand
-// string (AC2 — ADR-022 Phase 1 rename).
+// metadata field in the 17Lands export payload carries the Hollowmark brand
+// string (AC2 — #1362 desktop-app display string rename).
 func TestDraftsExport17Lands_ExportedFromBrand(t *testing.T) {
 	now := time.Now().UTC()
 	reader := &stubDraftsReader{
@@ -354,8 +354,8 @@ func TestDraftsExport17Lands_ExportedFromBrand(t *testing.T) {
 	if metadata == nil {
 		t.Fatal("metadata field missing from export")
 	}
-	if got := metadata["exported_from"]; got != "VaultMTG" {
-		t.Errorf("exported_from: want %q, got %q", "VaultMTG", got)
+	if got := metadata["exported_from"]; got != "Hollowmark" {
+		t.Errorf("exported_from: want %q, got %q", "Hollowmark", got)
 	}
 }
 

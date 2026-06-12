@@ -478,7 +478,7 @@ func (h *DraftsHandler) Export17Lands(w http.ResponseWriter, r *http.Request) {
 		"picks":      buildSeventeenLandsPicks(picks),
 		"metadata": map[string]any{
 			"exported_at":   time.Now().UTC().Format(time.RFC3339),
-			"exported_from": "VaultMTG",
+			"exported_from": "Hollowmark",
 		},
 	}
 	writeMatchesJSON(w, map[string]any{
