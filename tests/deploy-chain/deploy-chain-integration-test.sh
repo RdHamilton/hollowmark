@@ -961,6 +961,223 @@ AWSSTUB_AFTER_C8
 chmod +x "$STUB_AWS"
 
 # ===========================================================================
+# Phase 1e: full-manifest prod-SSM-read-under-provisioner guard (C9)
+#
+# This is the regression guard for the THIRD v0.4.3.2 deploy failure
+# (docs/status/ray-incident-9ntxqv.md): the manifest loop called write_param()
+# for EVERY "both" and "prod-only" key, and write_param calls
+# aws ssm get-parameter.  Those calls execute AFTER sts:AssumeRole, so they
+# run under vaultmtg-staging-deploy-provisioner, which has no
+# ssm:GetParameter permission on /vaultmtg/app/production/*.  ALLOWED_ORIGINS
+# was the first key the loop reached and returned AccessDeniedException; ALL
+# subsequent prod keys (CLERK_SECRET_KEY, CLERK_FRONTEND_API, SENTRY_DSN,
+# MAILCHIMP_API_KEY, MAILCHIMP_LIST_ID, POSTHOG_API_KEY, POSTHOG_HOST,
+# BFF_DAEMON_LATEST_VERSION, BFF_DAEMON_RELEASED_AT, ANALYTICS_PII_SALT,
+# INTERNAL_SVC_SECRET, POSTHOG_PERSONAL_API_KEY, POSTHOG_PROJECT_ID,
+# BFF_TOS_VERSION, BFF_PRIVACY_POLICY_VERSION) would have failed identically.
+#
+# Fix (Option A): ALL prod SSM reads must be pre-fetched in Step 1 under the
+# EC2 instance role, BEFORE assume-role.  The manifest loop must write
+# pre-fetched VALUES, not trigger new SSM reads.
+#
+# Test approach: install a stub that sets a C9_PROVISIONER_ASSUMED_FLAG when
+# sts:AssumeRole completes, then returns poison (exit 1) for ANY
+# aws ssm get-parameter call on a /vaultmtg/app/production/* path that arrives
+# AFTER that flag is set.  If the fix is complete, the script runs to exit 0
+# with zero prod SSM reads post-assume-role.  If any key was missed, the stub
+# kills the run and the test asserts the script exited 0 -- which it won't,
+# producing a clear FAIL with the offending key path printed to stderr.
+# ===========================================================================
+info "Phase 1e — C9 full-manifest prod-SSM-read-under-provisioner guard (ALL prod keys must be pre-fetched in Step 1)..."
+
+# Reset env file and stub state for a clean run.
+: > "$STUB_ENV_FILE"
+chmod 600 "$STUB_ENV_FILE"
+rm -f "${STUB_AWS_STATE_DIR}/last_session_name"
+C9_PROVISIONER_ASSUMED_FLAG="${SCRATCH}/c9-provisioner-assumed"
+rm -f "$C9_PROVISIONER_ASSUMED_FLAG"
+export C9_PROVISIONER_ASSUMED_FLAG
+
+cat > "$STUB_AWS" <<AWSSTUB_C9
+#!/usr/bin/env bash
+# C9 aws CLI stub — poisons ANY /vaultmtg/app/production/* ssm get-parameter
+# call that arrives AFTER sts:AssumeRole.  Before assume-role, all prod SSM
+# reads are served normally (instance-role Step 1 pre-fetch).
+#
+# This catches the Option A regression class: if any "both" or "prod-only"
+# manifest key is left in the write_param loop (which runs post-assume-role),
+# this stub returns exit 1 with the offending key path in stderr so the
+# exact missed key is visible in CI output.
+
+if [[ "\$1" == "ssm" && "\$2" == "get-parameter" ]]; then
+    NAME=""
+    while [[ \$# -gt 0 ]]; do
+        case "\$1" in --name) NAME="\$2"; shift 2 ;; *) shift ;; esac
+    done
+    # After assume-role: any /vaultmtg/app/production/* read is the regression.
+    if [[ -f "${C9_PROVISIONER_ASSUMED_FLAG}" ]]; then
+        case "\$NAME" in
+            /vaultmtg/app/production/*)
+                echo "STUB(c9) POISON: prod SSM path '\$NAME' fetched AFTER sts assume-role -- this key must be pre-fetched in Step 1 under the EC2 instance role (Option A regression; see ray-incident-9ntxqv.md)" >&2
+                exit 1
+                ;;
+        esac
+    fi
+    # Serve all SSM reads (pre- and post-assume-role for non-prod paths).
+    case "\$NAME" in
+        */ALLOWED_ORIGINS)             echo "http://localhost:3000" ;;
+        */CLERK_SECRET_KEY)            echo "sk_live_stub" ;;
+        */CLERK_FRONTEND_API)          echo "https://clerk.stub" ;;
+        */sentry-dsn-bff)              echo "https://sentry.stub/1" ;;
+        */posthog-api-key)             echo "phc_stub" ;;
+        */posthog-host)                echo "https://app.posthog.com" ;;
+        */BFF_DAEMON_LATEST_VERSION)   echo "0.4.2" ;;
+        */BFF_DAEMON_RELEASED_AT)      echo "2026-06-11T00:00:00Z" ;;
+        */analytics-pii-salt)          echo "stub-pii-salt" ;;
+        */internal-svc-secret)         echo "stub-internal-svc-secret" ;;
+        */posthog-personal-api-key)    echo "phx_stub" ;;
+        */posthog-project-id)          echo "12345" ;;
+        */mailchimp-api-key)           echo "stub-mailchimp-key" ;;
+        */mailchimp-list-id)           echo "stub-list-id" ;;
+        */BFF_TOS_VERSION)             echo "2026-01-01" ;;
+        */BFF_PRIVACY_POLICY_VERSION)  echo "2026-01-01" ;;
+        */app-db-secret-arn)           echo "arn:aws:secretsmanager:us-east-1:000000000000:secret:stub-app" ;;
+        */db-endpoint)                 echo "127.0.0.1" ;;
+        */db-name)                     echo "deploy_test_db" ;;
+        *)                             echo "stub_value" ;;
+    esac
+    exit 0
+fi
+
+if [[ "\$1" == "secretsmanager" && "\$2" == "get-secret-value" ]]; then
+    printf '{"username":"deploy_test","password":"deploy_test"}\n'
+    exit 0
+fi
+
+if [[ "\$1" == "sts" && "\$2" == "assume-role" ]]; then
+    SESSION=""
+    while [[ \$# -gt 0 ]]; do
+        case "\$1" in
+            --role-session-name) SESSION="\$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    if [[ -z "\$SESSION" ]]; then
+        echo "STUB(c9): sts assume-role missing --role-session-name" >&2
+        exit 1
+    fi
+    # Mark provisioner assumed — all subsequent /vaultmtg/app/production/* SSM reads are poisoned.
+    touch "${C9_PROVISIONER_ASSUMED_FLAG}"
+    printf '%s' "\$SESSION" > "${STUB_AWS_STATE_DIR}/last_session_name"
+    printf 'ASIA_STUB_ACCESS_KEY_ID_XXXXXXXX\tstub_secret_access_key_value_XXXXXXXXXXXXXXXXXXXX\tstub_session_token_value_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n'
+    exit 0
+fi
+
+if [[ "\$1" == "sts" && "\$2" == "get-caller-identity" ]]; then
+    SESSION=""
+    if [[ -f "${STUB_AWS_STATE_DIR}/last_session_name" ]]; then
+        SESSION=\$(cat "${STUB_AWS_STATE_DIR}/last_session_name")
+    fi
+    if [[ -z "\$SESSION" ]]; then
+        echo "STUB(c9): sts get-caller-identity called before assume-role (no session-name state)" >&2
+        exit 1
+    fi
+    printf 'arn:aws:sts::901347789205:assumed-role/vaultmtg-staging-deploy-provisioner/%s\n' "\$SESSION"
+    exit 0
+fi
+
+echo "STUB(c9): unhandled aws command: \$*" >&2
+exit 1
+AWSSTUB_C9
+chmod +x "$STUB_AWS"
+
+C9_EXIT=0
+C9_OUTPUT=""
+C9_OUTPUT=$(sh "${SCRATCH}/provision-prod-env-test.sh" 2>&1) || C9_EXIT=$?
+
+if [[ "$C9_EXIT" -ne 0 ]]; then
+    fail "Phase 1e C9 — provision-prod-env.sh exited ${C9_EXIT} with the full-manifest poison stub: at least one 'both'/'prod-only' manifest key is still being read from prod SSM after sts:AssumeRole (Option A incomplete). Stub output:
+${C9_OUTPUT}"
+fi
+
+pass "Phase 1e C9 — full-manifest guard: zero /vaultmtg/app/production/* SSM reads occurred after sts:AssumeRole (all prod keys pre-fetched in Step 1 under instance role)"
+
+# Restore stub for subsequent phases.
+cat > "$STUB_AWS" <<'AWSSTUB_AFTER_C9'
+#!/usr/bin/env bash
+# Restored aws CLI stub for use by Phase 2 onwards.
+
+if [[ "$1" == "ssm" && "$2" == "get-parameter" ]]; then
+    NAME=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in --name) NAME="$2"; shift 2 ;; *) shift ;; esac
+    done
+    case "$NAME" in
+        */ALLOWED_ORIGINS)             echo "http://localhost:3000" ;;
+        */CLERK_SECRET_KEY)            echo "sk_live_stub" ;;
+        */CLERK_FRONTEND_API)          echo "https://clerk.stub" ;;
+        */sentry-dsn-bff)              echo "https://sentry.stub/1" ;;
+        */posthog-api-key)             echo "phc_stub" ;;
+        */posthog-host)                echo "https://app.posthog.com" ;;
+        */BFF_DAEMON_LATEST_VERSION)   echo "0.4.2" ;;
+        */BFF_DAEMON_RELEASED_AT)      echo "2026-06-11T00:00:00Z" ;;
+        */analytics-pii-salt)          echo "stub-pii-salt" ;;
+        */internal-svc-secret)         echo "stub-internal-svc-secret" ;;
+        */posthog-personal-api-key)    echo "phx_stub" ;;
+        */posthog-project-id)          echo "12345" ;;
+        */mailchimp-api-key)           echo "stub-mailchimp-key" ;;
+        */mailchimp-list-id)           echo "stub-list-id" ;;
+        */BFF_TOS_VERSION)             echo "2026-01-01" ;;
+        */BFF_PRIVACY_POLICY_VERSION)  echo "2026-01-01" ;;
+        */app-db-secret-arn)           echo "arn:aws:secretsmanager:us-east-1:000000000000:secret:stub-app" ;;
+        */db-endpoint)                 echo "127.0.0.1" ;;
+        */db-name)                     echo "deploy_test_db" ;;
+        *)                             echo "stub_value" ;;
+    esac
+    exit 0
+fi
+
+if [[ "$1" == "sts" && "$2" == "assume-role" ]]; then
+    SESSION=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --role-session-name) SESSION="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    if [[ -z "$SESSION" ]]; then
+        echo "STUB(after-c9): sts assume-role missing --role-session-name" >&2
+        exit 1
+    fi
+    printf '%s' "$SESSION" > "${STUB_AWS_STATE_DIR}/last_session_name"
+    printf 'ASIA_STUB_ACCESS_KEY_ID_XXXXXXXX\tstub_secret_access_key_value_XXXXXXXXXXXXXXXXXXXX\tstub_session_token_value_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n'
+    exit 0
+fi
+
+if [[ "$1" == "sts" && "$2" == "get-caller-identity" ]]; then
+    SESSION=""
+    if [[ -f "${STUB_AWS_STATE_DIR}/last_session_name" ]]; then
+        SESSION=$(cat "${STUB_AWS_STATE_DIR}/last_session_name")
+    fi
+    if [[ -z "$SESSION" ]]; then
+        echo "STUB(after-c9): sts get-caller-identity called before assume-role (no session-name state)" >&2
+        exit 1
+    fi
+    printf 'arn:aws:sts::901347789205:assumed-role/vaultmtg-staging-deploy-provisioner/%s\n' "$SESSION"
+    exit 0
+fi
+
+if [[ "$1" == "secretsmanager" && "$2" == "get-secret-value" ]]; then
+    printf '{"username":"deploy_test","password":"deploy_test"}\n'
+    exit 0
+fi
+
+echo "STUB(after-c9): unhandled aws command: $*" >&2
+exit 1
+AWSSTUB_AFTER_C9
+chmod +x "$STUB_AWS"
+
+# ===========================================================================
 # Phase 2: stage-binary.sh (S3 stubbed via aws PATH overlay)
 # ===========================================================================
 info "Phase 2 — stage-binary (S3 stubbed with fake binary)..."
@@ -1313,6 +1530,7 @@ echo "  Phase 1 — provision-env + provision-db-url (SSM stubbed)"
 echo "  Phase 1b — provision-prod-env manifest-driven C1-C6"
 echo "  Phase 1c — credential-isolation C7 (ambient creds cleared before Step 1)"
 echo "  Phase 1d — write_database_url no-SSM/SM-read-under-provisioner C8"
+echo "  Phase 1e — full-manifest prod-SSM-under-provisioner C9 (ALL prod keys pre-fetched in Step 1)"
 echo "  Phase 2 — stage-binary (S3 stubbed)"
 echo "  Phase 3 — run-migrations + grant (real Postgres)"
 echo "  Phase 4 — restart-bff (systemctl stubbed)"

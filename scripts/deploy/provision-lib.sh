@@ -12,6 +12,7 @@
 #
 # Functions exported by this library:
 #   write_param KEY SSM_PATH [--with-decryption]
+#   write_param_value KEY VALUE
 #   write_database_url DB_SECRET_JSON_VALUE DB_ENDPOINT_VALUE DB_NAME_VALUE
 #
 # shellcheck disable=SC2034  # REGION / ENV_FILE are set by the caller.
@@ -50,6 +51,36 @@ write_param() {
 
   printf '%s=%s\n' "$key" "$VALUE" >> "$ENV_FILE"
   echo "${key} provisioned."
+}
+
+# ---------------------------------------------------------------------------
+# write_param_value ENV_KEY VALUE
+#
+# Writes KEY=VALUE to $ENV_FILE from a pre-fetched value.  Performs ZERO
+# SSM reads -- the caller is responsible for fetching the value under the
+# correct AWS identity (the EC2 instance role) BEFORE any sts:AssumeRole.
+#
+# This is the companion to write_param for production provisioning:
+# provision-prod-env.sh pre-fetches all prod SSM values in Step 1 (under the
+# EC2 instance role) and then passes them by value here.  The provisioner
+# role (vaultmtg-staging-deploy-provisioner) has no ssm:GetParameter on
+# /vaultmtg/app/production/*, so any SSM read after assume-role would fail
+# with AccessDeniedException.
+#
+# Aborts with exit 1 if VALUE is empty (guards against silent pre-fetch
+# failures where a Step 1 SSM read returned empty instead of raising an error).
+# ---------------------------------------------------------------------------
+write_param_value() {
+  local key="$1"
+  local value="$2"
+
+  if [ -z "$value" ]; then
+    echo "ERROR: pre-fetched value for ${key} is empty (Step 1 SSM read failed or returned nothing)." >&2
+    exit 1
+  fi
+
+  printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  echo "${key} provisioned (pre-fetched value)."
 }
 
 # ---------------------------------------------------------------------------
