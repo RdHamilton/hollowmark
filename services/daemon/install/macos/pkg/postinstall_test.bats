@@ -1072,3 +1072,152 @@ assert d.get('sync_enabled') == True, \
 print('PASS: account_id, daemon_id, sync_enabled all preserved after stale auth clear')
 "
 }
+
+# ---------------------------------------------------------------------------
+# §6b — launchd liveness check (ADR-083 SH-2 / tickets#1355)
+#
+# After launchctl bootstrap, postinstall verifies launchd has actually
+# registered the service with a live PID using:
+#   launchctl print gui/<uid>/<label>
+# and checks for a "pid" field in the output.
+#
+# Behaviour under test:
+#   24. First print shows PID — logged as "launchd service live" + exits 0.
+#   25. First print has no PID; retry fires; second print shows PID —
+#       logged as "launchd service live (retry)" + exits 0.
+#   26. Both print calls return no PID — WARNING logged but exits 0 (installer
+#       MUST NOT fail; Apple PKG rolls back on non-zero exit).
+#
+# Strategy: the launchctl stub in _make_stub_dir already records calls and
+# always succeeds. These tests override it with a smarter stub that returns
+# different output on the first vs subsequent "print" subcommand invocations,
+# using a call-count file in BATS_TEST_TMPDIR. All other subcommands
+# (bootstrap, bootout, enable, list, asuser) still exit 0 silently.
+# ---------------------------------------------------------------------------
+
+# 24. launchd liveness check: first print shows PID → logged as live, exits 0
+@test "launchd liveness (§6b): exits 0 and logs live when first launchctl print shows pid" {
+  local lc_calls="${BATS_TEST_TMPDIR}/launchctl_calls_24"
+
+  # launchctl stub: "print" subcommand returns a pid line immediately.
+  # All other subcommands succeed silently.
+  cat > "${STUB_DIR}/launchctl" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "${lc_calls}"
+case "\${*}" in
+  *print*)
+    printf '\tpid = 12345\n'
+    printf '\tstate = running\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+  chmod +x "${STUB_DIR}/launchctl"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${TMP_SCRIPT}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"launchd service live"* ]]
+}
+
+# 25. launchd liveness: first print has no PID; retry fires; second print shows PID → exits 0
+@test "launchd liveness (§6b): retries once and exits 0 when second launchctl print shows pid" {
+  local lc_calls="${BATS_TEST_TMPDIR}/launchctl_calls_25"
+  local print_count="${BATS_TEST_TMPDIR}/launchctl_print_count_25"
+  echo "0" > "${print_count}"
+
+  # First "print" invocation returns no PID; second returns a PID.
+  cat > "${STUB_DIR}/launchctl" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "${lc_calls}"
+case "\${*}" in
+  *print*)
+    count=\$(cat "${print_count}" 2>/dev/null || echo 0)
+    count=\$(( count + 1 ))
+    echo "\${count}" > "${print_count}"
+    if [ "\${count}" -eq 1 ]; then
+      printf '\tstate = spawning\n'
+      exit 0
+    else
+      printf '\tpid = 12345\n'
+      printf '\tstate = running\n'
+      exit 0
+    fi
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+  chmod +x "${STUB_DIR}/launchctl"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${TMP_SCRIPT}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"launchd service live"* ]]
+  # A retry message must be present.
+  [[ "${output}" == *"retry"* ]]
+  # Exactly 2 print calls must have been made.
+  local count
+  count=$(cat "${print_count}")
+  echo "launchctl print call count: ${count}"
+  [ "${count}" -eq 2 ]
+}
+
+# 26. launchd liveness: both print calls return no PID → WARNING logged, exits 0 (non-fatal)
+@test "launchd liveness (§6b): exits 0 with warning when both launchctl print calls show no pid" {
+  local lc_calls="${BATS_TEST_TMPDIR}/launchctl_calls_26"
+  local print_count="${BATS_TEST_TMPDIR}/launchctl_print_count_26"
+  echo "0" > "${print_count}"
+
+  # Both "print" invocations return output with no PID.
+  cat > "${STUB_DIR}/launchctl" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "${lc_calls}"
+case "\${*}" in
+  *print*)
+    count=\$(cat "${print_count}" 2>/dev/null || echo 0)
+    count=\$(( count + 1 ))
+    echo "\${count}" > "${print_count}"
+    printf '\tstate = spawning\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+  chmod +x "${STUB_DIR}/launchctl"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${TMP_SCRIPT}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  # Non-fatal: installer must exit 0 even when launchd check fails.
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"WARNING"* ]]
+  # Both attempts must have been made before giving up.
+  local count
+  count=$(cat "${print_count}")
+  echo "launchctl print call count: ${count}"
+  [ "${count}" -eq 2 ]
+}
