@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 64" width="300" height="64">
+  <title>Hollowmark wordmark</title>
+  
+  <g transform="translate(4,10) scale(0.68)" fill="none" stroke="#4A90D9" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M16,12 V52"></path>
+    <path d="M48,12 V52"></path>
+    <path d="M16,32 h12 l4,-5 l4,5 h12"></path>
+  </g>
+  <text x="54" y="46" font-family="&#39;Cormorant Garamond&#39;, Georgia, serif" font-style="italic" font-size="34" font-weight="600" letter-spacing="-0.62" fill="#4A90D9">Hollowmark</text>
+</svg>

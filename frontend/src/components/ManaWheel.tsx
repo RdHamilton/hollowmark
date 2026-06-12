@@ -1,5 +1,5 @@
 /**
- * ManaWheel — five-color pentagon with a center V-mark "vault".
+ * ManaWheel — five-color pentagon with the Hollowmark center mark (02 Watermark).
  *
  * Ported from the marketing ui_kit:
  *   vault-mtg-docs/engineering/design/rebranding/Ray Hamilton Engineering Design System/
@@ -8,7 +8,12 @@
  * Usage in the SPA: loading/empty state only (not decorative chrome).
  * The five color orbs stay canonical — W top, U upper-right, B lower-right,
  * R lower-left, G upper-left. Only the accent (pentagon, star connections,
- * center V-mark, halo) changes; default is Vault Sapphire #4A90D9.
+ * center mark, halo) changes; default is Vault Sapphire #4A90D9.
+ *
+ * Center glyph: 02 Watermark — two verticals + broken crossbar with center notch.
+ * Source geometry: 64x64 viewBox, paths from logo-hollowmark-mark.svg.
+ * Rendered via translate(240,300) scale(1.6) translate(-32,-32) to fit the
+ * 80px-radius center circle in the 480x600 viewport.
  */
 
 import React from 'react';
@@ -40,7 +45,7 @@ function hexToRgba(hex: string, alpha: number): string {
 const ManaWheel: React.FC<ManaWheelProps> = ({
   color = '#4A90D9',
   size = 160,
-  ariaLabel = 'VaultMTG five-color mana wheel',
+  ariaLabel = 'Hollowmark five-color mana wheel',
 }) => {
   // Unique IDs so multiple instances on the same page don't share gradient IDs
   const safeColorId = color.replace('#', '');
@@ -176,14 +181,19 @@ const ManaWheel: React.FC<ManaWheelProps> = ({
         <ellipse cx={G[0] - 12} cy={G[1] - 12} rx="9" ry="5" />
       </g>
 
-      {/* Center vault — V mark in accent color */}
+      {/* Center mark — 02 Watermark: two verticals + broken crossbar with center notch */}
       <circle cx="240" cy="300" r="80" fill={`url(#${vGlowId})`} />
-      <g transform="translate(240, 300) scale(1.6) translate(-32, -32)">
-        <path
-          fill={color}
-          fillRule="evenodd"
-          d="M 8 10 L 22 10 L 32 38 L 42 10 L 56 10 L 32 56 Z M 19 27 L 45 27 L 45 31 L 19 31 Z"
-        />
+      <g
+        transform="translate(240, 300) scale(1.6) translate(-32, -32)"
+        stroke={color}
+        strokeWidth="3.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      >
+        <path d="M16,12 V52" />
+        <path d="M48,12 V52" />
+        <path d="M16,32 h12 l4,-5 l4,5 h12" />
       </g>
     </svg>
   );

@@ -125,16 +125,23 @@ describe('Layout Component', () => {
 
       const brand = screen.getByTestId('nav-brand');
       expect(brand).toBeInTheDocument();
-      // #1020: wordmark updated from VaultMTG → Hollowmark
-      expect(brand).toHaveTextContent('Hollowmark');
       // Brand lockup links back to home
       expect(brand).toHaveAttribute('href', '/home');
-      // aria-label updated to match Hollowmark
+      // aria-label on the link still identifies the destination
       expect(brand).toHaveAttribute('aria-label', 'Hollowmark home');
-      // Orb mark rendered at ≥32px per design spec
-      const mark = brand.querySelector('img');
-      expect(mark).toHaveAttribute('width', '32');
-      expect(mark).toHaveAttribute('height', '32');
+      // Wordmark lockup: single img with alt="Hollowmark" (mark + logotype in one SVG)
+      const wordmark = brand.querySelector('img');
+      expect(wordmark).not.toBeNull();
+      expect(wordmark).toHaveAttribute('alt', 'Hollowmark');
+      expect(wordmark).toHaveAttribute('height', '32');
+      // Wordmark must use the Hollowmark asset (title: "Hollowmark wordmark").
+      // Vite inlines SVGs as data-URIs — either percent-encoded or base64.
+      // Decode to the raw SVG string and assert the title is present.
+      const wordmarkSrc = wordmark?.getAttribute('src') ?? '';
+      const decoded = wordmarkSrc.startsWith('data:image/svg+xml;base64,')
+        ? atob(wordmarkSrc.slice('data:image/svg+xml;base64,'.length))
+        : decodeURIComponent(wordmarkSrc.replace(/^data:image\/svg\+xml,/, ''));
+      expect(decoded).toMatch(/hollowmark/i);
     });
 
     it('should apply active treatment class to the current tab', () => {
