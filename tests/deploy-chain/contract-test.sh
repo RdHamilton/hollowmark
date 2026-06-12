@@ -625,11 +625,12 @@ echo
 #       fetch in the corresponding PROVISION_CMD sequence in deploy-bff.yml
 #       -- without the fetch, the file is in S3 but never on the EC2 /tmp/.
 #
-# Scope: scripts/deploy/provision-staging-env.sh and the production
-# provision scripts (provision-env.sh, provision-db-url.sh).  These are
-# the scripts that run ON EC2 and may source helper files.  The stage-binary,
-# restart, and healthcheck scripts are included if they source any /tmp/ file
-# beyond deploy-env.sh (which C9 already covers).
+# Scope: scripts/deploy/provision-staging-env.sh, provision-prod-env.sh
+# (ADR-075 D3), and the legacy production scripts (provision-env.sh,
+# provision-db-url.sh).  These are the scripts that run ON EC2 and may
+# source helper files.  The stage-binary, restart, and healthcheck scripts
+# are included if they source any /tmp/ file beyond deploy-env.sh (which C9
+# already covers).
 #
 # deploy-env.sh itself is excluded from the upload/fetch assertions because
 # it is uploaded via a dedicated `aws s3 cp` command (not via the sync) and
@@ -651,6 +652,7 @@ if [[ "$c11_ok" -eq 1 ]]; then
   # to the infra-scripts/ S3 prefix, not scripts/.
   PROVISION_SCRIPTS=(
     "${DEPLOY_SCRIPTS_DIR}/provision-staging-env.sh"
+    "${DEPLOY_SCRIPTS_DIR}/provision-prod-env.sh"
     "${DEPLOY_SCRIPTS_DIR}/provision-env.sh"
     "${DEPLOY_SCRIPTS_DIR}/provision-db-url.sh"
     "${DEPLOY_SCRIPTS_DIR}/stage-binary.sh"
