@@ -162,3 +162,79 @@ jobs:
           GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
           GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
         run: go test -v -race ./replay/...
+
+  # AC9 5×-determinism gate (ADR-052 ticket #1314).
+  #
+  # Runs TestAC9Layer5FiveRunDeterminism: replays the committed daemon-emit corpus
+  # 5 times with DROP SCHEMA public CASCADE between runs and asserts byte-identical
+  # BFF surface responses across all 5 runs.
+  #
+  # RULE-INFRA-01: continue-on-error: true until this gate has been soaked on
+  # main (AC4). Promotion-to-required follow-on tracked in hollowmark-tickets.
+  # Flip this to false (and register as a required check) only after ≥2
+  # consecutive green main runs — same flip pattern as #695 (layer5-api-reconcile).
+  #
+  # Separate job rationale: TestAC9Layer5FiveRunDeterminism MUST NOT match the
+  # existing -run TestLayer5 filter (bff-layer5.yml:157 is continue-on-error:false).
+  # A never-soaked gate in the hard-fail job would block merges on day 1, violating
+  # AC4 and RULE-INFRA-01. The separate job boundary is the correct isolation.
+  layer5-ac9-determinism:
+    name: Layer-5 AC9 5x Determinism Gate
+    needs: detect-changes
+    if: needs.detect-changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    # RULE-INFRA-01: soft-fail until soaked. Promotion ticket filed per AC4.
+    continue-on-error: true
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: mtga
+          POSTGRES_PASSWORD: mtga
+          POSTGRES_DB: mtga_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Download daemon module dependencies
+        working-directory: services/daemon
+        env:
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        run: go mod download
+
+      - name: Download BFF module dependencies
+        working-directory: services/bff
+        env:
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        run: go mod download
+
+      - name: Run AC9 5x-determinism gate
+        # DATABASE_URL provided by the postgres service container above.
+        # POSTGRES_USER: mtga is the bootstrap superuser (postgres-image default),
+        # which is required for DROP SCHEMA public CASCADE between runs.
+        # No LAYER5_CORPUS_SNAPSHOT_DIR needed — seeds from committed daemon-emit corpus.
+        # -run TestAC9 matches TestAC9Layer5FiveRunDeterminism and nothing else.
+        working-directory: services/bff
+        env:
+          DATABASE_URL: postgres://mtga:mtga@localhost:5432/mtga_test?sslmode=disable
+          CI: "true"
+          GONOSUMDB: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+          GOPRIVATE: github.com/RdHamilton/vault-mtg,github.com/RdHamilton/hollowmark
+        run: go test -v -race -tags layer5 -run TestAC9 -timeout 300s ./...
