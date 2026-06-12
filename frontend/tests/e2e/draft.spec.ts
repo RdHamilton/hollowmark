@@ -383,9 +383,11 @@ test.describe('#1349 Draft Resume State — Case B awaiting-data', () => {
     // Approved Prof copy (REQ-2)
     await expect(page.getByText(/Connected — waiting on Arena's first pack/i)).toBeVisible();
 
-    // Set + event line (REQ-3: EventName · SetCode shown in the active-draft header)
-    await expect(page.getByText(/Quick Draft/i)).toBeVisible();
-    await expect(page.getByText(/BLB/i)).toBeVisible();
+    // Set + event line (REQ-3: EventName · SetCode shown in the active-draft header span)
+    // Scope to the .draft-event span to avoid strict-mode violations when EventName
+    // also appears in sub-components (e.g. FormatInsights archetype title).
+    await expect(page.locator('.draft-event')).toHaveText(/Quick Draft/i);
+    await expect(page.locator('.draft-info .draft-set')).toHaveText(/BLB/i);
 
     // Draft History must NOT be visible (we are in the active-draft view, not history)
     await expect(page.getByRole('heading', { name: 'Draft History' })).not.toBeVisible();
