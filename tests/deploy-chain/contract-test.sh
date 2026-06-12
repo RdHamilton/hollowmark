@@ -291,14 +291,37 @@ check_credential_free_dburl() {
   return 1
 }
 
-# Both prod (post-migration) and staging (#2461): the provisioner splices
+# Both prod (post-migration) and staging (#2461): the deploy chain splices
 # fresh RDS credentials into DATABASE_URL via aws secretsmanager get-secret-value
 # + jq, so the BFF binary never calls SM at startup. The URL shape is
 # postgresql://%s:%s@%s:%s/%s?%s (user, pass, host, port, db, ssl) with the
 # user/pass values URL-encoded via jq @uri. Verify both halves of that
 # contract here.
+#
+# Split-caller model (PR #3272 / ray-incident-3qvtcn Option A):
+#   write_database_url in provision-lib.sh is now a pure URL formatter -- it
+#   receives pre-fetched values and does ZERO SSM/SM reads.  The SM call
+#   (secretsmanager get-secret-value) moved to the caller
+#   (provision-staging-env.sh) so that the pre-fetch runs under the EC2
+#   instance role BEFORE sts:AssumeRole, which has the right IAM grants.
+#   The two-file check below enforces that the SM call still exists in the
+#   staging deploy chain -- just in the caller rather than the formatter.
+#
+# check_inline_dburl FILE LABEL [SM_CALLER_FILE]
+#   FILE           -- the script that constructs the postgresql:// URL
+#   LABEL          -- human label for failure messages
+#   SM_CALLER_FILE -- optional: if provided, secretsmanager get-secret-value
+#                     is asserted in SM_CALLER_FILE rather than FILE (split-
+#                     caller model).  jq @uri is still asserted in FILE.
 check_inline_dburl() {
-  local f="$1" label="$2"
+  local f="$1" label="$2" sm_caller="${3:-}"
+  local sm_file
+  if [[ -n "$sm_caller" ]]; then
+    sm_file="$sm_caller"
+  else
+    sm_file="$f"
+  fi
+
   if [[ ! -f "$f" ]]; then
     fail "$label: missing file $f"
     return 1
@@ -307,8 +330,12 @@ check_inline_dburl() {
     fail "$label: DATABASE_URL shape in $(basename "$f") is not the inline-credential template postgresql://%s:%s@%s:%s/%s?%s"
     return 1
   fi
-  if ! grep -qE 'secretsmanager get-secret-value' "$f"; then
-    fail "$label: $(basename "$f") emits inline-credential DATABASE_URL but never calls aws secretsmanager get-secret-value (#2461 splice broken)"
+  if [[ ! -f "$sm_file" ]]; then
+    fail "$label: SM caller file missing: $sm_file"
+    return 1
+  fi
+  if ! grep -qE 'secretsmanager get-secret-value' "$sm_file"; then
+    fail "$label: $(basename "$sm_file") never calls aws secretsmanager get-secret-value (#2461 splice broken)"
     return 1
   fi
   if ! grep -qE 'jq[[:space:]]+.*@uri' "$f"; then
@@ -320,18 +347,20 @@ check_inline_dburl() {
 
 c4_ok=1
 check_inline_dburl "$PROD_DBURL_FILE"          "production"  || c4_ok=0
-# Since ADR-075 D3 (#1074), the staging inline-credential splice logic lives
-# in provision-lib.sh (write_database_url), sourced by provision-staging-env.sh
-# at deploy time.  Check either file for the splice pattern -- the contract is
-# that the splice happens somewhere in the staging deploy chain, not necessarily
-# inline in provision-staging-env.sh itself.
+# Since ADR-075 D3 (#1074), the staging URL construction lives in
+# provision-lib.sh (write_database_url), sourced by provision-staging-env.sh.
+# Since PR #3272 (ray-incident-3qvtcn Option A), write_database_url is a pure
+# formatter -- it receives pre-fetched values and does zero SM reads.  The SM
+# call lives in provision-staging-env.sh (Step 1 pre-assume-role block).
+# Pass provision-staging-env.sh as the SM_CALLER_FILE so the contract test
+# enforces that the SM call is still in the staging deploy chain.
 PROVISION_LIB_FILE="${DEPLOY_SCRIPTS_DIR}/provision-lib.sh"
 if [[ -f "$PROVISION_LIB_FILE" ]]; then
-  # provision-lib.sh is the canonical home of write_database_url post-#1074.
-  check_inline_dburl "$PROVISION_LIB_FILE"         "staging (via provision-lib.sh)" || c4_ok=0
+  check_inline_dburl "$PROVISION_LIB_FILE" "staging (via provision-lib.sh)" \
+    "$STAGING_PROVISION_FILE" || c4_ok=0
 else
   # Fallback: pre-#1074 inline splice in provision-staging-env.sh.
-  check_inline_dburl "$STAGING_PROVISION_FILE"     "staging" || c4_ok=0
+  check_inline_dburl "$STAGING_PROVISION_FILE" "staging" || c4_ok=0
 fi
 
 # ADR-024 / #2223: provision-db-url.sh MUST fetch the app-role secret
