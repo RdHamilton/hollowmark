@@ -384,7 +384,13 @@ func main() {
 		draftRatingsHandler = handlers.NewDraftRatingsHandler(draftRatingsRepo, cfg)
 
 		daemonEventsRepo := repository.NewDaemonEventsRepository(sqlDB)
-		ingestHandler = ingestHandler.WithRepository(daemonEventsRepo)
+
+		// ADR-084 §2: nudge channel (buffered, cap 1) lets ingest kick the
+		// projection worker within milliseconds instead of waiting 30 s for the
+		// ticker.  Created here so both ingestHandler and the projection worker
+		// (started below) share the same channel ends.
+		projectionNudge := make(chan struct{}, 1)
+		ingestHandler = ingestHandler.WithRepository(daemonEventsRepo).WithProjectionNudge(projectionNudge)
 
 		accountRepo := repository.NewAccountRepository(sqlDB).WithAnalyticsClient(analyticsClient)
 		matchesRepo := repository.NewMatchesRepository(sqlDB)
@@ -724,7 +730,12 @@ func main() {
 			worker.WithDeckSummaryStore(deckProjectorRepo)
 			// Wire mastery pass fan-out from inventory.updated (#1338).
 			worker.WithMasteryStore(repository.NewAccountMasteryRepository(sqlDB))
-			go worker.Run(projCtx)
+			// ADR-084 §1: publish coalesced readmodel.updated SSE notifications
+			// after each projection pass so clients refetch immediately.
+			worker.WithNotifier(broker)
+			// ADR-084 §2: run with nudge channel so ingest wakes projection
+			// within ms instead of waiting for the 30 s ticker.
+			go worker.RunWithNudge(projCtx, projectionNudge)
 		} else {
 			log.Println("BFF_PROJECTION_DISABLED=true — projection worker not started.")
 		}

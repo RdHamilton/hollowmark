@@ -54,10 +54,11 @@ type DaemonEventInserter interface {
 // When a DaemonEventInserter is wired, each event is also persisted to the
 // database before broadcasting.
 type IngestHandler struct {
-	broadcaster EventBroadcaster
-	repo        DaemonEventInserter
-	gapDetector *GapDetector
-	analytics   *analytics.Client
+	broadcaster     EventBroadcaster
+	repo            DaemonEventInserter
+	gapDetector     *GapDetector
+	analytics       *analytics.Client
+	projectionNudge chan<- struct{} // optional; non-blocking kick to the projection worker (ADR-084 §2)
 }
 
 // NewIngestHandler creates an IngestHandler that broadcasts received events
@@ -79,10 +80,30 @@ func NewIngestHandler(broadcaster EventBroadcaster) *IngestHandler {
 // NewIngestHandler call-sites.
 func (h *IngestHandler) WithRepository(repo DaemonEventInserter) *IngestHandler {
 	return &IngestHandler{
-		broadcaster: h.broadcaster,
-		repo:        repo,
-		gapDetector: h.gapDetector,
-		analytics:   h.analytics,
+		broadcaster:     h.broadcaster,
+		repo:            repo,
+		gapDetector:     h.gapDetector,
+		analytics:       h.analytics,
+		projectionNudge: h.projectionNudge,
+	}
+}
+
+// WithProjectionNudge returns a copy of h with a non-blocking nudge channel
+// wired for the projection worker (ADR-084 §2).  After each event is persisted,
+// the handler sends a non-blocking kick on nudge so the projection worker runs
+// within milliseconds of ingest rather than waiting up to 30 s for the ticker.
+// The channel must be the write end of the buffered-capacity-1 channel passed
+// to projection.Worker.RunWithNudge.
+//
+// Ingest never blocks: the send is guarded by select/default so a full channel
+// (nudge already pending) is silently dropped.
+func (h *IngestHandler) WithProjectionNudge(nudge chan<- struct{}) *IngestHandler {
+	return &IngestHandler{
+		broadcaster:     h.broadcaster,
+		repo:            h.repo,
+		gapDetector:     h.gapDetector,
+		analytics:       h.analytics,
+		projectionNudge: nudge,
 	}
 }
 
@@ -94,10 +115,11 @@ func (h *IngestHandler) WithPostHogClient(client analytics.PostHogEnqueuer) *Ing
 // WithAnalyticsClient wires an analytics.Client into the handler.
 func (h *IngestHandler) WithAnalyticsClient(c *analytics.Client) *IngestHandler {
 	return &IngestHandler{
-		broadcaster: h.broadcaster,
-		repo:        h.repo,
-		gapDetector: h.gapDetector,
-		analytics:   c,
+		broadcaster:     h.broadcaster,
+		repo:            h.repo,
+		gapDetector:     h.gapDetector,
+		analytics:       c,
+		projectionNudge: h.projectionNudge,
 	}
 }
 
@@ -227,6 +249,14 @@ func (h *IngestHandler) processEvent(ctx context.Context, userID int64, event co
 				"account_id_hash", hashAccountID(event.AccountID),
 				"err", err,
 			)
+		} else if h.projectionNudge != nil {
+			// ADR-084 §2: non-blocking kick to the projection worker so it
+			// runs within milliseconds of ingest rather than waiting for the
+			// 30 s ticker.  select/default guarantees ingest never blocks.
+			select {
+			case h.projectionNudge <- struct{}{}:
+			default:
+			}
 		}
 	}
 
