@@ -5,7 +5,7 @@ import { getMatchHistory } from '@/services/api/bffMatchHistory';
 import type { MatchHistoryItem } from '@/services/api/bffMatchHistory';
 import { matches as matchesApi } from '@/services/api';
 import { models } from '@/types/models';
-import { EventsOn } from '@/services/websocketClient';
+import { useReadModelUpdates } from '@/hooks/useReadModelUpdates';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ColorIdentity from '../components/ColorIdentity';
 import EmptyState from '../components/EmptyState';
@@ -155,13 +155,12 @@ const BffMatchHistory = () => {
     loadFirstPage();
   }, [loadFirstPage]);
 
-  // Refresh the first page when BFF emits match.completed over SSE.
-  // The BFF broker publishes contract.DaemonEvent.Type names; the correct event
-  // name is "match.completed" (not "stats:updated" which is never emitted).
-  useEffect(() => {
-    const unsub = EventsOn('match.completed', loadFirstPage);
-    return unsub;
-  }, [loadFirstPage]);
+  // Rewired per ADR-084: readmodel.updated matches domain replaces the
+  // match.completed dot-vocabulary listener which raced the projection layer
+  // (root cause 1 of the live-update failure, ADR-084 §Context).
+  useReadModelUpdates({
+    onMatches: loadFirstPage,
+  });
 
   const handleNext = () => {
     if (!hasMore || !nextCursorTS || !nextCursorID) return;

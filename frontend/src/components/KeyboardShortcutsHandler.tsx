@@ -15,7 +15,7 @@ const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
  * - Cmd/Ctrl + 4: Decks
  * - Cmd/Ctrl + 5: Charts
  * - Cmd/Ctrl + 6: Settings
- * - Cmd/Ctrl + R: Refresh current page
+ * - Cmd/Ctrl + R: Refresh current page data
  * - Cmd/Ctrl + ,: Settings (macOS standard)
  */
 const KeyboardShortcutsHandler = () => {
@@ -69,9 +69,12 @@ const KeyboardShortcutsHandler = () => {
             break;
           case 'r':
           case 'R':
-            // Refresh current page by emitting a stats:updated event
-            // This will trigger data reload in most pages
-            EventsEmit('stats:updated');
+            // Rewired per ADR-084: emit readmodel.updated for all domains so
+            // every active page subscriber reloads its data.
+            // Previously emitted stats:updated (colon-vocabulary, no server emitter).
+            EventsEmit('readmodel.updated', {
+              domains: ['matches', 'drafts', 'quests', 'collection', 'decks', 'inventory', 'mastery'],
+            });
             handled = true;
             break;
           case ',':

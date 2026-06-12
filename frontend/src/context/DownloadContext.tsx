@@ -1,5 +1,4 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { EventsOn } from '@/services/websocketClient';
 
 // Download state types
 export type DownloadStatus = 'idle' | 'downloading' | 'complete' | 'error';
@@ -180,77 +179,11 @@ export const DownloadProvider = ({ children }: DownloadProviderProps) => {
     });
   }, []);
 
-  // Handle progress event data (shared between download: and task: events)
-  const handleProgressEvent = useCallback((rawData: unknown) => {
-    const data = rawData as { id: string; description?: string; title?: string; detail?: string; progress: number };
-    // Support both 'description' (download events) and 'title'/'detail' (task events)
-    const description = data.description || data.title || data.detail || 'Syncing...';
-
-    setState((prev) => {
-      const existing = prev.tasks.find((t) => t.id === data.id);
-      if (!existing) {
-        // Create new task
-        const newTask: DownloadTask = {
-          id: data.id,
-          description,
-          progress: Math.min(100, Math.max(0, data.progress)),
-          status: 'downloading',
-        };
-        return {
-          tasks: [...prev.tasks, newTask],
-          activeTask: prev.activeTask || newTask,
-        };
-      } else {
-        // Update existing task progress
-        const taskIndex = prev.tasks.findIndex((t) => t.id === data.id);
-        const newTasks = [...prev.tasks];
-        newTasks[taskIndex] = {
-          ...newTasks[taskIndex],
-          description: description || newTasks[taskIndex].description,
-          progress: Math.min(100, Math.max(0, data.progress)),
-        };
-        const shouldUpdateActive = !prev.activeTask || prev.activeTask.id === data.id;
-        return {
-          tasks: newTasks,
-          activeTask: shouldUpdateActive ? newTasks[taskIndex] : prev.activeTask,
-        };
-      }
-    });
-  }, []);
-
-  // Listen for download progress WebSocket events (supports both download: and task: prefixes)
-  useEffect(() => {
-    // Listen for download:* events (legacy)
-    const unsubscribeDownloadProgress = EventsOn('download:progress', handleProgressEvent);
-    const unsubscribeDownloadComplete = EventsOn('download:complete', (rawData: unknown) => {
-      const data = rawData as { id: string };
-      completeDownload(data.id);
-    });
-    const unsubscribeDownloadError = EventsOn('download:error', (rawData: unknown) => {
-      const data = rawData as { id: string; error: string };
-      failDownload(data.id, data.error);
-    });
-
-    // Listen for task:* events (used by card sync)
-    const unsubscribeTaskProgress = EventsOn('task:progress', handleProgressEvent);
-    const unsubscribeTaskComplete = EventsOn('task:complete', (rawData: unknown) => {
-      const data = rawData as { id: string };
-      completeDownload(data.id);
-    });
-    const unsubscribeTaskError = EventsOn('task:error', (rawData: unknown) => {
-      const data = rawData as { id: string; error: string };
-      failDownload(data.id, data.error);
-    });
-
-    return () => {
-      unsubscribeDownloadProgress?.();
-      unsubscribeDownloadComplete?.();
-      unsubscribeDownloadError?.();
-      unsubscribeTaskProgress?.();
-      unsubscribeTaskComplete?.();
-      unsubscribeTaskError?.();
-    };
-  }, [completeDownload, failDownload, handleProgressEvent]);
+  // download:* and task:* listeners removed per ADR-084 §G1 sweep — both event
+  // vocabularies had zero BFF server-side emitters since the Wails→REST migration.
+  // Download progress state is now managed imperatively via startDownload /
+  // updateProgress / completeDownload / failDownload called by the collection-sync
+  // and other callers directly through the context API.
 
   // Computed values - only count downloading tasks for progress
   const isDownloading = state.tasks.some((t) => t.status === 'downloading');

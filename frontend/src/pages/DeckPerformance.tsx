@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { RectangleStackIcon } from '@heroicons/react/24/outline';
-import { EventsOn } from '@/services/websocketClient';
+import { useReadModelUpdates } from '@/hooks/useReadModelUpdates';
 import { matches } from '@/services/api';
 import type { DeckPerformanceRow } from '@/services/api/matches';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -18,51 +18,30 @@ const DeckPerformance = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const loadDeckStats = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await matches.getDeckPerformance();
+      setDeckStats(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load deck statistics');
+      console.error('Error loading deck stats:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []); // no external deps — only stable setters and imported API fns
+
   useEffect(() => {
-    const loadDeckStats = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await matches.getDeckPerformance();
-        setDeckStats(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load deck statistics');
-        console.error('Error loading deck stats:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
+    void loadDeckStats();
+  }, [loadDeckStats]);
 
-    loadDeckStats();
-  }, []);
-
-  // Listen for real-time updates
-  useEffect(() => {
-    const loadDeckStats = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await matches.getDeckPerformance();
-        setDeckStats(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load deck statistics');
-        console.error('Error loading deck stats:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    const unsubscribe = EventsOn('stats:updated', () => {
-      console.log('Stats updated event received - reloading deck performance data');
-      void loadDeckStats();
-    });
-
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
-  }, []);
+  // Rewired per ADR-084: readmodel.updated matches/decks domain replaces
+  // the dead stats:updated colon-vocabulary listener (no server emitter).
+  useReadModelUpdates({
+    onMatches: () => { void loadDeckStats(); },
+    onDecks: () => { void loadDeckStats(); },
+  });
 
   const formatWinRate = (wins: number, total: number) => {
     if (total === 0) return '0.0%';

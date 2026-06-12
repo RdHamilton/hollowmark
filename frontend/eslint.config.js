@@ -19,6 +19,31 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // ADR-084 Fitness Function: colon-vocabulary SSE event guard.
+      // These event names had zero BFF server-side emitters since the Wails→REST migration.
+      // The readmodel.updated subscription (ADR-084) is the correct replacement.
+      // Also guards against re-introducing the dot-vocabulary race (match.completed).
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "CallExpression[callee.name='EventsOn'][arguments.0.value=/^(stats|quest|draft|rank|collection):updated$/]",
+          message: "Dead colon-vocabulary SSE listener (ADR-084). Use useReadModelUpdates with the appropriate domain callback instead.",
+        },
+        {
+          selector: "CallExpression[callee.name='EventsOn'][arguments.0.value=/^(download|task):(progress|complete|error)$/]",
+          message: "Dead colon-vocabulary SSE listener (ADR-084). Download/task progress is driven via context API, not SSE events.",
+        },
+        {
+          selector: "CallExpression[callee.name='EventsOn'][arguments.0.value='match.completed']",
+          message: "match.completed races the projection layer (ADR-084 root cause 1). Use useReadModelUpdates with onMatches instead.",
+        },
+        {
+          selector: "CallExpression[callee.name='EventsEmit'][arguments.0.value=/^(stats|quest|draft|rank|collection):updated$/]",
+          message: "Dead colon-vocabulary SSE emit (ADR-084). Use EventsEmit('readmodel.updated', { domains: [...] }) instead.",
+        },
+      ],
+    },
   },
   {
     // Storybook configuration & tooling files are not part of the app bundle,

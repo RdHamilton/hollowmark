@@ -382,8 +382,8 @@ describe('DeckPerformance', () => {
     });
   });
 
-  describe('Real-time Updates', () => {
-    it('reloads data when stats:updated event fires', async () => {
+  describe('Real-time Updates (ADR-084)', () => {
+    it('reloads data when readmodel.updated fires for the matches domain', async () => {
       mockMatches.getDeckPerformance.mockResolvedValue(makeDeckList());
 
       renderWithProvider(<DeckPerformance />);
@@ -399,7 +399,7 @@ describe('DeckPerformance', () => {
       ]);
 
       await act(async () => {
-        mockEventEmitter.emit('stats:updated', {});
+        mockEventEmitter.emit('readmodel.updated', { domains: ['matches'] });
       });
 
       await waitFor(() => {
@@ -421,7 +421,7 @@ describe('DeckPerformance', () => {
       const callCountAfterUnmount = mockMatches.getDeckPerformance.mock.calls.length;
 
       await act(async () => {
-        mockEventEmitter.emit('stats:updated', {});
+        mockEventEmitter.emit('readmodel.updated', { domains: ['matches'] });
       });
 
       expect(mockMatches.getDeckPerformance.mock.calls.length).toBe(callCountAfterUnmount);
