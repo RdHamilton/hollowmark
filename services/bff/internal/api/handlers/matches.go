@@ -41,6 +41,12 @@ type matchesListReader interface {
 	GetByID(ctx context.Context, accountID int64, matchID string) (*repository.MatchRow, error)
 	DistinctFormats(ctx context.Context, accountID int64) ([]string, error)
 	GamesByMatchID(ctx context.Context, accountID int64, matchID string) ([]repository.GameRow, error)
+	// HasCapturedGameResults reports whether the daemon wrote at least one
+	// match_game_results row for this match. Used by the Games endpoint to
+	// distinguish "captured but not yet projected" (capturedResults=true) from
+	// "never captured" (capturedResults=false) so the SPA can show accurate
+	// empty-state copy (ticket #1342).
+	HasCapturedGameResults(ctx context.Context, accountID int64, matchID string) (bool, error)
 	AggregateStats(ctx context.Context, accountID int64, f repository.MatchFilter) (repository.StatsAggregate, error)
 	FormatDistribution(ctx context.Context, accountID int64, f repository.MatchFilter) ([]repository.FormatStatsRow, error)
 	PerformanceByHour(ctx context.Context, accountID int64, f repository.MatchFilter) ([]repository.HourBucket, error)
@@ -473,6 +479,16 @@ type gameResponse struct {
 	CreatedAt       time.Time `json:"CreatedAt"`
 }
 
+// gameListResponse is the wire shape for GET /matches/:id/games (ticket #1342).
+// CapturedResults=true when match_game_results rows exist for the match — i.e.
+// the daemon captured per-game data even if the projection has not yet
+// materialised the games rows. The SPA uses this to show "still processing"
+// copy instead of "never captured" when games is empty.
+type gameListResponse struct {
+	Games           []gameResponse `json:"games"`
+	CapturedResults bool           `json:"capturedResults"`
+}
+
 // performanceMetricsResponse mirrors models.PerformanceMetrics. Only the
 // duration aggregates are meaningful here; per-game timings are omitted
 // because the games table does not always carry duration_seconds.
@@ -625,14 +641,18 @@ type compareTimePeriodsRequest struct {
 // ─── Games ───────────────────────────────────────────────────────────────────
 
 // Games handles GET /api/v1/matches/{matchId}/games. Returns the games
-// belonging to the match, scoped to the authenticated user.
+// belonging to the match wrapped in a gameListResponse envelope. The
+// capturedResults flag tells the SPA whether the daemon wrote per-game data
+// for this match (even if the projection has not yet materialised the games
+// rows), allowing it to distinguish "still processing" from "never captured"
+// (#1342).
 func (h *MatchesHandler) Games(w http.ResponseWriter, r *http.Request) {
 	accountID, found, ok := h.resolveAccount(w, r, "Games")
 	if !ok {
 		return
 	}
 	if !found {
-		writeMatchesJSON(w, []gameResponse{})
+		writeMatchesJSON(w, gameListResponse{Games: []gameResponse{}, CapturedResults: false})
 		return
 	}
 	matchID := strings.TrimSpace(chi.URLParam(r, "matchId"))
@@ -646,6 +666,19 @@ func (h *MatchesHandler) Games(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	// If games rows are present the daemon has already captured and projected
+	// per-game data, so capturedResults is trivially true.  When games is
+	// empty we check match_game_results to distinguish "captured but projection
+	// pending" from "never captured at all".
+	captured := len(rows) > 0
+	if !captured {
+		captured, err = h.matches.HasCapturedGameResults(r.Context(), accountID, matchID)
+		if err != nil {
+			log.Printf("[MatchesHandler.Games] HasCapturedGameResults accountID=%d matchID=%s: %v", accountID, matchID, err)
+			writeJSONError(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+	}
 	out := make([]gameResponse, 0, len(rows))
 	for _, g := range rows {
 		out = append(out, gameResponse{
@@ -658,7 +691,7 @@ func (h *MatchesHandler) Games(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:       g.CreatedAt,
 		})
 	}
-	writeMatchesJSON(w, out)
+	writeMatchesJSON(w, gameListResponse{Games: out, CapturedResults: captured})
 }
 
 // ─── Stats / Trends / Distribution / Performance / Matchup / Archetypes ─────

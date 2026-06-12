@@ -47,6 +47,9 @@ type stubMatchesReader struct {
 	games    []repository.GameRow
 	gamesErr error
 
+	hasCaptured    bool
+	hasCapturedErr error
+
 	statsAgg repository.StatsAggregate
 	statsErr error
 	statsCap repository.MatchFilter
@@ -93,6 +96,10 @@ func (s *stubMatchesReader) DistinctFormats(_ context.Context, _ int64) ([]strin
 
 func (s *stubMatchesReader) GamesByMatchID(_ context.Context, _ int64, _ string) ([]repository.GameRow, error) {
 	return s.games, s.gamesErr
+}
+
+func (s *stubMatchesReader) HasCapturedGameResults(_ context.Context, _ int64, _ string) (bool, error) {
+	return s.hasCaptured, s.hasCapturedErr
 }
 
 func (s *stubMatchesReader) AggregateStats(_ context.Context, _ int64, f repository.MatchFilter) (repository.StatsAggregate, error) {
@@ -441,32 +448,96 @@ func decodeMatchesEnvelope(t *testing.T, body []byte, into any) {
 	}
 }
 
+// gamesEnvelope is the expected wire shape of the Games endpoint response.
+type gamesEnvelope struct {
+	Games           []map[string]any `json:"games"`
+	CapturedResults bool             `json:"capturedResults"`
+}
+
+func gamesRequest(t *testing.T, matchID string) *http.Request {
+	t.Helper()
+	req := requestWithUserID(t, http.MethodGet, "/api/v1/matches/"+matchID+"/games", nil, 168)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("matchId", matchID)
+	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+}
+
+// TestMatchesGames_HappyPath: games present → both returned + capturedResults=true.
 func TestMatchesGames_HappyPath(t *testing.T) {
 	now := time.Now().UTC()
 	dur := 240
-	reader := &stubMatchesReader{games: []repository.GameRow{
-		{ID: 11, MatchID: "m1", GameNumber: 1, Result: "win", DurationSeconds: &dur, CreatedAt: now},
-		{ID: 12, MatchID: "m1", GameNumber: 2, Result: "loss", CreatedAt: now},
-	}}
+	reader := &stubMatchesReader{
+		games: []repository.GameRow{
+			{ID: 11, MatchID: "m1", GameNumber: 1, Result: "win", DurationSeconds: &dur, CreatedAt: now},
+			{ID: 12, MatchID: "m1", GameNumber: 2, Result: "loss", CreatedAt: now},
+		},
+		hasCaptured: true,
+	}
 	h := handlers.NewMatchesHandler(reader, &matchesAccountLookup{accountID: 7, found: true})
 
-	req := requestWithUserID(t, http.MethodGet, "/api/v1/matches/m1/games", nil, 168)
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("matchId", "m1")
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-
 	rr := httptest.NewRecorder()
-	h.Games(rr, req)
+	h.Games(rr, gamesRequest(t, "m1"))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
 	}
-	var data []map[string]any
-	decodeMatchesEnvelope(t, rr.Body.Bytes(), &data)
-	if len(data) != 2 {
-		t.Fatalf("len: %d", len(data))
+	var env gamesEnvelope
+	decodeMatchesEnvelope(t, rr.Body.Bytes(), &env)
+	if len(env.Games) != 2 {
+		t.Fatalf("games len: got %d, want 2", len(env.Games))
 	}
-	if data[0]["GameNumber"].(float64) != 1 {
-		t.Errorf("GameNumber: %v", data[0]["GameNumber"])
+	if env.Games[0]["GameNumber"].(float64) != 1 {
+		t.Errorf("GameNumber: %v", env.Games[0]["GameNumber"])
+	}
+	if !env.CapturedResults {
+		t.Errorf("capturedResults: got false, want true when games are present")
+	}
+}
+
+// TestMatchesGames_CapturedButNotProjected: match_game_results row exists but no games rows yet
+// → capturedResults=true, empty games list. This is the "still processing" state.
+func TestMatchesGames_CapturedButNotProjected(t *testing.T) {
+	reader := &stubMatchesReader{
+		games:       nil,
+		hasCaptured: true,
+	}
+	h := handlers.NewMatchesHandler(reader, &matchesAccountLookup{accountID: 7, found: true})
+
+	rr := httptest.NewRecorder()
+	h.Games(rr, gamesRequest(t, "m2"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	var env gamesEnvelope
+	decodeMatchesEnvelope(t, rr.Body.Bytes(), &env)
+	if len(env.Games) != 0 {
+		t.Errorf("games: got %d, want 0", len(env.Games))
+	}
+	if !env.CapturedResults {
+		t.Errorf("capturedResults: got false, want true (daemon captured but projection not yet run)")
+	}
+}
+
+// TestMatchesGames_NeverCaptured: no match_game_results row → capturedResults=false, empty games list.
+// This is the "keep VaultMTG running" state.
+func TestMatchesGames_NeverCaptured(t *testing.T) {
+	reader := &stubMatchesReader{
+		games:       nil,
+		hasCaptured: false,
+	}
+	h := handlers.NewMatchesHandler(reader, &matchesAccountLookup{accountID: 7, found: true})
+
+	rr := httptest.NewRecorder()
+	h.Games(rr, gamesRequest(t, "m3"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+	var env gamesEnvelope
+	decodeMatchesEnvelope(t, rr.Body.Bytes(), &env)
+	if len(env.Games) != 0 {
+		t.Errorf("games: got %d, want 0", len(env.Games))
+	}
+	if env.CapturedResults {
+		t.Errorf("capturedResults: got true, want false (daemon never captured for this match)")
 	}
 }
 
