@@ -19,12 +19,12 @@
     "FileSubType": "00"
   },
   "StringFileInfo": {
-    "CompanyName": "VaultMTG",
-    "FileDescription": "VaultMTG Daemon",
+    "CompanyName": "Hollowmark",
+    "FileDescription": "Hollowmark Daemon",
     "InternalName": "vaultmtg-daemon",
-    "LegalCopyright": "VaultMTG",
+    "LegalCopyright": "Hollowmark",
     "OriginalFilename": "vaultmtg-daemon.exe",
-    "ProductName": "VaultMTG Daemon"
+    "ProductName": "Hollowmark Daemon"
   },
   "VarFileInfo": {
     "Translation": {
