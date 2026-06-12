@@ -254,7 +254,10 @@ const MatchHistory = () => {
   }, [dateRange, customStartDate, customEndDate, cardFormat, queueType, result]);
 
   const formatTimestamp = (timestamp: unknown) => {
-    return new Date(String(timestamp)).toLocaleString();
+    return new Date(String(timestamp)).toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
   };
 
   const formatScore = (wins: number, losses: number) => {
