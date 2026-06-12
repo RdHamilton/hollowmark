@@ -204,6 +204,63 @@ func recoverSignalHandler(capture recovery.CaptureFunc) {
 	panic(r) // re-panic so the signal is not silently lost
 }
 
+// runSvcWithQuit runs the svc-run loop and calls quitFn ONLY on genuine
+// teardown exits — it is the extracted goroutine-funnel helper that fixes the
+// defect Ray found on PR #3269 (ADR-083 SH-1/SH-3).
+//
+// The defect: the goroutine previously held an unconditional `defer app.Quit()`
+// which fired on every goroutine return, including after a tray
+// runWithDegrade permanent-failure return (SetRunStopped). That routed the
+// SH-3 "stay alive" path straight into trayQuitShutdown → stopLaunchAgentFn()
+// = launchctl bootout, the exact opposite of SH-3.
+//
+// Correct teardown semantics:
+//   - Headless clean exit (svc.Run returns nil): call quitFn — unblocks the
+//     no-CGO app.Run stub that blocks on <-a.quit (#1354 headless-hang fix).
+//   - SIGTERM drain (ctx cancelled, runWithDegrade returns nil): call quitFn
+//     — unblocks app.Run so main() can exit cleanly (SH-2).
+//   - Tray permanent failure (runWithDegrade returns non-nil after all retries):
+//     do NOT call quitFn — process stays alive in the tray "stopped" state (SH-3).
+//   - Headless error: os.Exit via logAndExitHeadlessKeychain; quitFn never reached.
+//
+// quitFn is app.Quit in production; tests inject a spy.
+// hooks is app (*tray.App) in production; tests inject runDegradeStateRecorder.
+func runSvcWithQuit(
+	ctx context.Context,
+	svcRun func(context.Context) error,
+	hooks runDegradeHooks,
+	headless bool,
+	quitFn func(),
+) {
+	if headless {
+		if err := svcRun(ctx); err != nil {
+			// SH-5 (ADR-083): structured log line + Sentry breadcrumb.
+			// logShutdown does NOT flush; os.Exit bypasses defers so we
+			// flush explicitly here.
+			logShutdown(shutdownLogger, ReasonRunError, err)
+			sentryhook.Flush()
+			logAndExitHeadlessKeychain(log.Default(), os.Exit)
+		}
+		// Headless clean exit: call quitFn to unblock app.Run (no-CGO stub fix #1354).
+		quitFn()
+		return
+	}
+
+	// Tray path: degrade and retry (AC1–AC6, ADR-083 SH-3).
+	// runWithDegrade NEVER calls app.Quit or stopLaunchAgent itself.
+	// It returns nil on clean/ctx-cancel exit, non-nil on permanent failure.
+	if runErr := runWithDegrade(ctx, svcRun, hooks, 3, defaultBackoff); runErr != nil {
+		// Permanent failure: log the final error.
+		// runWithDegrade has already called hooks.SetRunStopped().
+		// DO NOT call quitFn — the process stays alive in the tray "stopped" state (SH-3).
+		logShutdown(shutdownLogger, ReasonRunError, runErr)
+		log.Printf("[mtga-daemon] run: all retries exhausted — daemon in stopped state: %v", runErr)
+		return
+	}
+	// Clean exit or ctx-cancel (SIGTERM drain): call quitFn so app.Run unblocks (SH-2).
+	quitFn()
+}
+
 func main() {
 	// ADR-049 Ticket 2: resolve the channel-scoped identity once at startup.
 	// All OS-level identifiers (keychain service, plist label, config dir) are
@@ -544,14 +601,10 @@ func main() {
 		app.SetStatus(tray.StatusConnected)
 		go func() {
 			defer recovery.RecoverGoroutine("daemon-run", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
-			// SH-2 (ADR-083): after the graceful drain completes (svc.Run returns),
-			// the daemon-run goroutine must call app.Quit() so app.Run unblocks and
-			// main() exits. Without this, the no-CGO headless stub's app.Run blocks
-			// on <-a.quit forever after cancel() fires the drain — the process hangs
-			// and is never reaped. The CGO/systray path handles exit via systray.Quit()
-			// in the tray loop; this defer covers the signal-induced drain path.
-			// app.Quit() is idempotent on both the no-CGO stub and systray.
-			defer app.Quit()
+			// NOTE: do NOT add a blanket defer app.Quit() here. app.Quit() routes
+			// through trayQuitShutdown → stopLaunchAgentFn() = launchctl bootout.
+			// Teardown is conditional on intent: runSvcWithQuit calls app.Quit only
+			// on genuine clean-exit/drain paths, NOT on tray permanent-failure (SH-3).
 			// ── Auth-failure / auth-paused retry loop (#2132, #2133) ──────────────
 			// Cases handled here:
 			//  (A) Step 3 PKCE failed non-headlessly → NeedsFirstRunAuth still true,
@@ -654,27 +707,12 @@ func main() {
 				}
 			}
 
-			// ── Normal daemon run loop ─────────────────────────────────────────
-			if err := svc.Run(ctx); err != nil {
-				// SH-5 (ADR-083): structured log line + Sentry breadcrumb at the
-				// run_error exit path. logShutdown does NOT call sentry.Flush —
-				// the headless path flushes explicitly (os.Exit bypasses defers);
-				// the tray path relies on the deferred flush in main().
-				logShutdown(shutdownLogger, ReasonRunError, err)
-				if headless {
-					// Headless path — flush Sentry before os.Exit so the SH-5
-					// breadcrumb is not dropped. defer in main() does not fire here
-					// because os.Exit bypasses it.
-					sentryhook.Flush()
-					// Log the canonical FATAL line and exit non-zero so the
-					// supervisor (launchd / systemd) respawns.
-					logAndExitHeadlessKeychain(log.Default(), os.Exit)
-				}
-				// ADR-083 SH-1: svc.Run errors do NOT call bootout.
-				// Cancel the context so the graceful drain fires; launchd
-				// KeepAlive=true will respawn the daemon.
-				cancel()
-			}
+			// ── Normal daemon run loop (ADR-083 SH-3) ────────────────────────
+			// runSvcWithQuit handles headless/tray branching and calls app.Quit
+			// ONLY on genuine teardown paths (clean exit / ctx-cancel drain).
+			// It does NOT call app.Quit on tray permanent-failure (SH-3: process
+			// stays alive in the tray "stopped" state).
+			runSvcWithQuit(ctx, svc.Run, app, headless, app.Quit)
 		}()
 	})
 }
