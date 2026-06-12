@@ -202,10 +202,10 @@ for script in "${CONSUMER_SCRIPTS[@]}"; do
       # declared in deploy-env.sh; they default inside the restart scripts).
       # STAGING_MTGA_SYNC_PASSWORD is operator-supplied at invocation time -- see hollowmark-tickets#1097
       FORCE_RESTART|BFF_PORT|BFF_STAGING_PORT|STAGING_MTGA_SYNC_PASSWORD) continue;;
-      # Manifest-loop iteration vars (provision-staging-env.sh loop over ssm-key-manifest.sh).
-      # These are shell local variables set via eval inside the loop body, not
-      # deploy-env.sh constants.  ADR-075 D3 / ticket #1074.
-      KEY_NAME|KEY_SCOPE|KEY_TYPE|SSM_VAR|SSM_PATH|MANIFEST_KEY_COUNT) continue;;
+      # Manifest-loop iteration vars (provision-staging-env.sh / provision-prod-env.sh
+      # loop over ssm-key-manifest.sh).  These are shell local variables set via eval
+      # inside the loop body, not deploy-env.sh constants.  ADR-075 D3 / ticket #1074.
+      KEY_NAME|KEY_SCOPE|KEY_TYPE|KEY_SSM_VAR|SSM_VAR|SSM_PATH|MANIFEST_KEY_COUNT) continue;;
       # MANIFEST_KEY_* is the eval-constructed variable prefix for manifest entries.
       # The regex extractor will surface MANIFEST_KEY_ as a ref; skip it.
       MANIFEST_KEY_) continue;;
