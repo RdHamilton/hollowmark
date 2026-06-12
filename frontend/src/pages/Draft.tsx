@@ -18,6 +18,7 @@ async function getDraftPacks(sessionId: string): Promise<models.DraftPackSession
 }
 
 import { EventsOn } from '@/services/websocketClient';
+import { useDraftEventStream } from '@/hooks/useDraftEventStream';
 import TierList from '../components/TierList';
 import { DraftGrade } from '../components/DraftGrade';
 import { WinRatePrediction } from '../components/WinRatePrediction';
@@ -134,6 +135,21 @@ const Draft: React.FC = () => {
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps -- loadActiveDraft and debouncedLoadActiveDraft are stable
     }, []);
+
+    // SSE implicit-start trigger (#1349): when a draft.pack or draft.started event arrives,
+    // call debouncedLoadActiveDraft() so Draft.tsx transitions from Draft History → Case B/C
+    // within one SSE cycle. This is a latency optimization only — the existing Wails
+    // draft:updated bridge (above) and poll-on-mount (line 119) are the primary recovery paths.
+    // REQ-1: only draft.pack and draft.started trigger the flip (not draft.pick — that event
+    // is not subscribed by useDraftEventStream).
+    const { latestEvent } = useDraftEventStream();
+    useEffect(() => {
+        if (!latestEvent) return;
+        if (latestEvent.type === 'draft.pack' || latestEvent.type === 'draft.started') {
+            debouncedLoadActiveDraft();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- debouncedLoadActiveDraft is stable
+    }, [latestEvent]);
 
     // Track which sessions we've already checked for stale ratings to prevent infinite loops
     const checkedSessionsRef = useRef<Set<string>>(new Set());
@@ -908,6 +924,22 @@ const Draft: React.FC = () => {
                             All Set Cards
                         </button>
                     </div>
+
+                    {/* Case B — awaiting Arena's first pack.
+                        Session is active but no picks or packs have been recorded yet.
+                        REQ-2: copy approved by Prof (Option 1).
+                        REQ-3: show EventName · SetCode only — no fabricated pack/pick position.
+                        This banner appears inside the active-draft view so CurrentPackPicker
+                        can still mount and transition once the daemon sends pack data. */}
+                    {state.session && state.picks.length === 0 && state.packs.length === 0 && (
+                        <div className="draft-awaiting-data" data-testid="draft-awaiting-data">
+                            <div className="loading-spinner"></div>
+                            <p>Connected — waiting on Arena's first pack.</p>
+                            <p className="draft-awaiting-hint">
+                                If this sits here for more than a few picks, switch to another screen in Arena and back.
+                            </p>
+                        </div>
+                    )}
 
                     {/* Current Pack Picker View — gated by live_draft_advisor_enabled */}
                     {showCurrentPack && state.session && showAdvisor && (

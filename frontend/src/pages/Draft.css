@@ -1019,3 +1019,38 @@
         min-width: 100%;
     }
 }
+
+/* Case B — awaiting first pack data (#1349) */
+.draft-awaiting-data {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: 16px;
+    padding: 40px 20px;
+    text-align: center;
+}
+
+.draft-awaiting-data p {
+    margin: 0;
+    font-size: 16px;
+    color: var(--fg);
+}
+
+.draft-awaiting-hint {
+    font-size: 13px;
+    color: var(--fg-muted, var(--fg-secondary));
+    max-width: 420px;
+}
+
+.draft-back-link {
+    margin-top: 8px;
+    font-size: 14px;
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.draft-back-link:hover {
+    text-decoration: underline;
+}
