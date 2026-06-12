@@ -2,6 +2,18 @@ name: E2E Smoke Tests
 
 on:
   workflow_dispatch:
+  # Required status check: run the full @smoke suite on every PR targeting main
+  # so that download-path regressions, BFF routing changes, and install-flow
+  # breaks cannot merge without a gate (root cause of the #2731 regression).
+  #
+  # No path filter -- the job must always run on PRs so the required status
+  # check is always emitted.  A path-filtered required check never emits on
+  # filtered PRs and permanently blocks those PRs via branch protection.
+  # This matches the pattern used by chromatic.yml, bff-layer5.yml, and
+  # schema-000054-compat.yml: "no path filter — the required check must
+  # always be emitted."
+  pull_request:
+    branches: [ main ]
   # Safety-net: run smoke suite on every push to main so regressions surface
   # within minutes of merge rather than at the next release gate.
   # Root cause of run/26614819125: beta_invite_only and auth-status-panel
