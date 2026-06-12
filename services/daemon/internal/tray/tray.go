@@ -163,7 +163,7 @@ type App struct {
 	// TryAgain is signalled when the user clicks "Try Again" (keychain retry).
 	TryAgain chan struct{}
 	// RetrySetup is signalled when the user clicks "Retry Setup…". The handler
-	// opens https://vaultmtg.app/setup in the browser and re-runs the PKCE flow.
+	// opens https://hollowmark.app/setup in the browser and re-runs the PKCE flow.
 	// Buffered cap=1 so a second click before the first is handled is dropped.
 	RetrySetup chan struct{}
 	// InstallUpdate is signalled when the user clicks "Update available: vX.Y.Z".

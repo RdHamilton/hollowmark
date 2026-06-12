@@ -51,10 +51,10 @@ COMMON_SH="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)/common.sh"
   [ "${output}" = "/Applications/VaultMTG.app" ]
 }
 
-@test "stable: TRAY_LABEL is VaultMTG (bare)" {
+@test "stable: TRAY_LABEL is Hollowmark (bare)" {
   run bash -c "CHANNEL=stable source \"${COMMON_SH}\" && echo \"\$TRAY_LABEL\""
   [ "${status}" -eq 0 ]
-  [ "${output}" = "VaultMTG" ]
+  [ "${output}" = "Hollowmark" ]
 }
 
 @test "stable: CONFIG_DIR contains .vaultmtg (not .vaultmtg-staging)" {
@@ -97,10 +97,10 @@ COMMON_SH="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)/common.sh"
   [ "${output}" = "/Applications/VaultMTG Staging.app" ]
 }
 
-@test "staging: TRAY_LABEL is VaultMTG (Staging)" {
+@test "staging: TRAY_LABEL is Hollowmark (Staging)" {
   run bash -c "CHANNEL=staging source \"${COMMON_SH}\" && echo \"\$TRAY_LABEL\""
   [ "${status}" -eq 0 ]
-  [ "${output}" = "VaultMTG (Staging)" ]
+  [ "${output}" = "Hollowmark (Staging)" ]
 }
 
 @test "staging: CONFIG_DIR contains .vaultmtg-staging" {
@@ -174,7 +174,7 @@ COMMON_SH="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)/common.sh"
     [ \"\$PLIST_LABEL\" = 'com.vaultmtg.daemon' ] || { echo 'FAIL PLIST_LABEL'; exit 1; }
     [ \"\$KEYCHAIN_SERVICE\" = 'com.hollowmark.daemon' ] || { echo 'FAIL KEYCHAIN_SERVICE'; exit 1; }
     [ \"\$APP_BUNDLE_PATH\" = '/Applications/VaultMTG.app' ] || { echo 'FAIL APP_BUNDLE_PATH'; exit 1; }
-    [ \"\$TRAY_LABEL\" = 'VaultMTG' ] || { echo 'FAIL TRAY_LABEL'; exit 1; }
+    [ \"\$TRAY_LABEL\" = 'Hollowmark' ] || { echo 'FAIL TRAY_LABEL'; exit 1; }
     echo 'ALL_PASS'
   "
   [ "${status}" -eq 0 ]
@@ -189,7 +189,7 @@ COMMON_SH="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)/common.sh"
     [ \"\$PLIST_LABEL\" = 'com.vaultmtg.daemon.staging' ] || { echo 'FAIL PLIST_LABEL'; exit 1; }
     [ \"\$KEYCHAIN_SERVICE\" = 'com.hollowmark.daemon.staging' ] || { echo 'FAIL KEYCHAIN_SERVICE'; exit 1; }
     [ \"\$APP_BUNDLE_PATH\" = '/Applications/VaultMTG Staging.app' ] || { echo 'FAIL APP_BUNDLE_PATH'; exit 1; }
-    [ \"\$TRAY_LABEL\" = 'VaultMTG (Staging)' ] || { echo 'FAIL TRAY_LABEL'; exit 1; }
+    [ \"\$TRAY_LABEL\" = 'Hollowmark (Staging)' ] || { echo 'FAIL TRAY_LABEL'; exit 1; }
     echo 'ALL_PASS'
   "
   [ "${status}" -eq 0 ]
