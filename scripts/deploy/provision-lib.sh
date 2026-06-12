@@ -12,7 +12,7 @@
 #
 # Functions exported by this library:
 #   write_param KEY SSM_PATH [--with-decryption]
-#   write_database_url SSM_DB_SECRET_ARN SSM_DB_ENDPOINT SSM_DB_NAME
+#   write_database_url DB_SECRET_JSON_VALUE DB_ENDPOINT_VALUE DB_NAME_VALUE
 #
 # shellcheck disable=SC2034  # REGION / ENV_FILE are set by the caller.
 
@@ -53,11 +53,23 @@ write_param() {
 }
 
 # ---------------------------------------------------------------------------
-# write_database_url SSM_DB_SECRET_ARN_PATH SSM_DB_ENDPOINT_PATH SSM_DB_NAME_PATH
+# write_database_url DB_SECRET_JSON_VALUE DB_ENDPOINT_VALUE DB_NAME_VALUE
 #
-# Splices fresh RDS credentials into DATABASE_URL from Secrets Manager and
-# writes the complete URL to $ENV_FILE.  The caller must have already assumed
-# the scoped provisioner role; this function does NOT assume a role itself.
+# Splices pre-fetched RDS credentials into DATABASE_URL and writes the
+# complete URL to $ENV_FILE.
+#
+# IMPORTANT: this function does ZERO SSM or Secrets Manager reads.  All three
+# arguments must be pre-fetched by the caller under the appropriate AWS
+# identity (the EC2 instance role) BEFORE any sts:AssumeRole call.  Keeping
+# reads in the caller's pre-assume-role Step 1 block ensures they run under
+# the instance role, which has /vaultmtg/app/production/* read access that
+# the provisioner role intentionally does not have.
+#
+# Arguments:
+#   $1  DB_SECRET_JSON_VALUE  -- raw JSON string from secretsmanager
+#                                get-secret-value, e.g. '{"username":"u","password":"p"}'
+#   $2  DB_ENDPOINT_VALUE     -- RDS endpoint hostname
+#   $3  DB_NAME_VALUE         -- Postgres database name
 #
 # The URL shape is:
 #   postgresql://USER_ENC:PASS_ENC@ENDPOINT:PORT/NAME?sslmode=require
@@ -65,49 +77,24 @@ write_param() {
 # in rotated passwords do not break URL parsing.
 #
 # No credentials remain in shell variables after this function returns:
-# DB_SECRET_JSON, DB_USERNAME, DB_PASSWORD, DB_USERNAME_ENC, and
-# DB_PASSWORD_ENC are all unset before return.
+# DB_USERNAME, DB_PASSWORD, DB_USERNAME_ENC, and DB_PASSWORD_ENC are all
+# unset before return.
 #
 # Requires DB_PORT and DB_SSL_MODE to be set (sourced from deploy-env.sh).
 # ---------------------------------------------------------------------------
 write_database_url() {
-  local ssm_secret_arn_path="$1"
-  local ssm_endpoint_path="$2"
-  local ssm_name_path="$3"
+  local db_secret_json="$1"
+  local db_endpoint="$2"
+  local db_name="$3"
 
-  local DB_SECRET_ARN_VALUE DB_ENDPOINT DB_NAME DB_SECRET_JSON
   local DB_USERNAME DB_PASSWORD DB_USERNAME_ENC DB_PASSWORD_ENC
 
-  DB_SECRET_ARN_VALUE=$(aws ssm get-parameter \
-    --name "$ssm_secret_arn_path" \
-    --region "$REGION" \
-    --query Parameter.Value \
-    --output text)
-
-  DB_ENDPOINT=$(aws ssm get-parameter \
-    --name "$ssm_endpoint_path" \
-    --region "$REGION" \
-    --query Parameter.Value \
-    --output text)
-
-  DB_NAME=$(aws ssm get-parameter \
-    --name "$ssm_name_path" \
-    --region "$REGION" \
-    --query Parameter.Value \
-    --output text)
-
-  DB_SECRET_JSON=$(aws secretsmanager get-secret-value \
-    --secret-id "$DB_SECRET_ARN_VALUE" \
-    --region "$REGION" \
-    --query SecretString \
-    --output text)
-
-  DB_USERNAME=$(printf '%s' "$DB_SECRET_JSON" | jq -r '.username // empty')
-  DB_PASSWORD=$(printf '%s' "$DB_SECRET_JSON" | jq -r '.password // empty')
+  DB_USERNAME=$(printf '%s' "$db_secret_json" | jq -r '.username // empty')
+  DB_PASSWORD=$(printf '%s' "$db_secret_json" | jq -r '.password // empty')
 
   if [ -z "$DB_USERNAME" ] || [ -z "$DB_PASSWORD" ]; then
     echo "ERROR: RDS secret JSON missing username or password." >&2
-    unset DB_SECRET_JSON DB_USERNAME DB_PASSWORD
+    unset DB_USERNAME DB_PASSWORD
     exit 1
   fi
 
@@ -118,9 +105,9 @@ write_database_url() {
 
   printf 'DATABASE_URL=postgresql://%s:%s@%s:%s/%s?%s\n' \
     "$DB_USERNAME_ENC" "$DB_PASSWORD_ENC" \
-    "$DB_ENDPOINT" "$DB_PORT" "$DB_NAME" "$DB_SSL_MODE" \
+    "$db_endpoint" "$DB_PORT" "$db_name" "$DB_SSL_MODE" \
     >> "$ENV_FILE"
 
-  unset DB_SECRET_JSON DB_USERNAME DB_PASSWORD DB_USERNAME_ENC DB_PASSWORD_ENC
-  echo "DATABASE_URL provisioned (credentials spliced from Secrets Manager under provisioner role)."
+  unset DB_USERNAME DB_PASSWORD DB_USERNAME_ENC DB_PASSWORD_ENC
+  echo "DATABASE_URL provisioned (credentials spliced from pre-fetched Secrets Manager value)."
 }
