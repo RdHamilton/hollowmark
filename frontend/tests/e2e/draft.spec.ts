@@ -368,39 +368,36 @@ test.describe('#1349 Draft Resume State — Case B awaiting-data', () => {
     });
   });
 
-  test('@smoke lands on awaiting-data state when navigating to /draft with active session but no picks', async ({ page }) => {
+  test('@smoke shows inline awaiting-data banner when navigating to /draft with active session but no picks', async ({ page }) => {
     // Must set up routes BEFORE page.goto so BFF calls are intercepted from mount
     await setupCaseBRoutes(page);
 
     await page.goto('/draft');
 
-    // Case B heading must be visible (REQ-2 copy)
-    await expect(page.getByRole('heading', { name: 'Draft in progress' })).toBeVisible({ timeout: 10000 });
+    // The active-draft view renders (Draft Assistant heading is visible)
+    await expect(page.getByRole('heading', { name: 'Draft Assistant' })).toBeVisible({ timeout: 10000 });
+
+    // Inline Case B awaiting-data banner is present (REQ-2 copy)
+    await expect(page.locator('[data-testid="draft-awaiting-data"]')).toBeVisible();
 
     // Approved Prof copy (REQ-2)
     await expect(page.getByText(/Connected — waiting on Arena's first pack/i)).toBeVisible();
 
-    // Set + event line (REQ-3: EventName · SetCode)
+    // Set + event line (REQ-3: EventName · SetCode shown in the active-draft header)
     await expect(page.getByText(/Quick Draft/i)).toBeVisible();
     await expect(page.getByText(/BLB/i)).toBeVisible();
 
-    // Full active-draft view must NOT be visible
-    await expect(page.getByRole('heading', { name: 'Draft Assistant' })).not.toBeVisible();
-
-    // Draft History must NOT be visible
+    // Draft History must NOT be visible (we are in the active-draft view, not history)
     await expect(page.getByRole('heading', { name: 'Draft History' })).not.toBeVisible();
-
-    // "Back to Home" link present
-    await expect(page.getByRole('link', { name: /Back to Home/i })).toBeVisible();
   });
 
-  test('transitions from Case B to Case C when picks arrive via draft:updated', async ({ page }) => {
+  test('transitions from Case B to Case C — inline awaiting banner disappears when picks arrive via draft:updated', async ({ page }) => {
     await setupCaseBRoutes(page);
 
     await page.goto('/draft');
 
-    // Confirm Case B is rendered
-    await expect(page.getByRole('heading', { name: 'Draft in progress' })).toBeVisible({ timeout: 10000 });
+    // Confirm Case B inline banner is rendered
+    await expect(page.locator('[data-testid="draft-awaiting-data"]')).toBeVisible({ timeout: 10000 });
 
     // Now update the picks route to return one pick
     await page.route('**/api/v1/drafts/*/picks', async (route) => {
@@ -430,11 +427,11 @@ test.describe('#1349 Draft Resume State — Case B awaiting-data', () => {
       window.dispatchEvent(new CustomEvent('wails:draft:updated'));
     });
 
-    // After the reload, picks.length > 0 → Case C (Draft Assistant heading)
-    await expect(page.getByRole('heading', { name: 'Draft Assistant' })).toBeVisible({ timeout: 5000 });
+    // After the reload, picks.length > 0 → Case C: awaiting banner is gone
+    await expect(page.locator('[data-testid="draft-awaiting-data"]')).not.toBeVisible({ timeout: 5000 });
 
-    // Case B heading must be gone
-    await expect(page.getByRole('heading', { name: 'Draft in progress' })).not.toBeVisible();
+    // Draft Assistant heading is still visible (active draft view stayed mounted)
+    await expect(page.getByRole('heading', { name: 'Draft Assistant' })).toBeVisible();
 
     // URL must still be /draft (REQ-4: no navigate() away)
     expect(page.url()).toContain('/draft');

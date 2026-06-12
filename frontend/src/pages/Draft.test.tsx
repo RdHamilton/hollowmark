@@ -192,7 +192,7 @@ describe('Draft Component', () => {
   describe('Active Draft Display', () => {
     it('should load and display an active draft session', async () => {
       const session = createMockDraftSession();
-      // Case C requires at least one pick (#1349: zero picks → Case B awaiting-data)
+      // Include at least one pick so the awaiting-data inline banner is not shown (#1349)
       const picks = [createMockDraftPick()];
       const packs: models.DraftPackSession[] = [];
       const setCards = [createMockSetCard()];
@@ -876,8 +876,10 @@ describe('Draft Component', () => {
 
   describe('#1349 Draft Resume State (Case A / B / C)', () => {
     // Test 1 — Case B: active session exists but zero picks and zero packs.
-    // Render guard: session && picks.length===0 && packs.length===0 → "awaiting data"
-    it('Case B: shows awaiting-data state when active session has no picks and no packs', async () => {
+    // The awaiting-data banner renders inline inside the active-draft view
+    // (not as a full-page early return — that was the original bug that broke
+    // CurrentPackPicker tests when picks=0).
+    it('Case B: shows inline awaiting-data banner when active session has no picks and no packs', async () => {
       const session = createMockDraftSession({
         EventName: 'Quick Draft',
         SetCode: 'BLB',
@@ -891,25 +893,27 @@ describe('Draft Component', () => {
 
       render(<Draft />);
 
-      // Case B heading and approved Prof copy (REQ-2)
+      // Active-draft view renders (Draft Assistant heading is visible)
       await waitFor(() => {
-        expect(screen.getByText('Draft in progress')).toBeInTheDocument();
+        expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
       });
+
+      // Inline awaiting-data banner and approved Prof copy (REQ-2) must be present
+      expect(screen.getByTestId('draft-awaiting-data')).toBeInTheDocument();
       expect(screen.getByText(/Connected — waiting on Arena's first pack/i)).toBeInTheDocument();
 
-      // Set + event line shown (REQ-3: EventName · SetCode)
-      expect(screen.getByText(/Quick Draft/i)).toBeInTheDocument();
-      expect(screen.getByText(/BLB/i)).toBeInTheDocument();
+      // Set + event line shown (REQ-3: EventName · SetCode visible in active-draft header)
+      // Use getAllByText since EventName / SetCode may appear in multiple sub-components
+      expect(screen.getAllByText(/Quick Draft/i).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText(/BLB/i).length).toBeGreaterThanOrEqual(1);
 
-      // Draft History grid must NOT be visible
+      // Draft History grid must NOT be visible (we are in the active-draft view)
       expect(screen.queryByText('Draft History')).not.toBeInTheDocument();
-
-      // Full active-draft view must NOT be visible (its heading is "Draft Assistant")
-      expect(screen.queryByText('Draft Assistant')).not.toBeInTheDocument();
     });
 
     // Test 2 — Case B → Case C transition: first pick arrives after initial render.
-    it('Case B → Case C: transitions to active-draft view when first pick data arrives', async () => {
+    // The inline awaiting-data banner disappears once picks.length > 0.
+    it('Case B → Case C: inline awaiting banner disappears when first pick data arrives', async () => {
       const session = createMockDraftSession({
         EventName: 'Quick Draft',
         SetCode: 'BLB',
@@ -924,9 +928,9 @@ describe('Draft Component', () => {
 
       render(<Draft />);
 
-      // Confirm we're in Case B
+      // Confirm we're in Case B (inline banner visible, Draft Assistant heading present)
       await waitFor(() => {
-        expect(screen.getByText('Draft in progress')).toBeInTheDocument();
+        expect(screen.getByTestId('draft-awaiting-data')).toBeInTheDocument();
       });
 
       // Now picks arrive: update mock so next loadActiveDraft call returns one pick
@@ -936,15 +940,15 @@ describe('Draft Component', () => {
       // Fire draft:updated event — this triggers debouncedLoadActiveDraft
       mockEventEmitter.emit('draft:updated');
 
-      // Case B heading should disappear; active-draft heading should appear
+      // Case B inline banner should disappear; Draft Assistant heading must still be present
       await waitFor(() => {
-        expect(screen.queryByText('Draft in progress')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('draft-awaiting-data')).not.toBeInTheDocument();
         expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
       }, { timeout: 3000 });
     });
 
-    // Test 3 — Case A regression guard: no active session → shows Draft History, not "Draft in progress"
-    it('Case A regression: shows Draft History (not "Draft in progress") when no active session exists', async () => {
+    // Test 3 — Case A regression guard: no active session → shows Draft History, not Case B awaiting banner
+    it('Case A regression: shows Draft History (not awaiting-data banner) when no active session exists', async () => {
       mockDrafts.getActiveDraftSessions.mockResolvedValue([]);
       mockDrafts.getCompletedDraftSessions.mockResolvedValue([]);
 
@@ -954,8 +958,8 @@ describe('Draft Component', () => {
         expect(screen.getByText('Draft History')).toBeInTheDocument();
       });
 
-      // Case B heading must be absent (regression guard)
-      expect(screen.queryByText('Draft in progress')).not.toBeInTheDocument();
+      // Case B awaiting-data banner must be absent (no active session)
+      expect(screen.queryByTestId('draft-awaiting-data')).not.toBeInTheDocument();
     });
   });
 });

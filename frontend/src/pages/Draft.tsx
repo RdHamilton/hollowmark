@@ -864,35 +864,6 @@ const Draft: React.FC = () => {
         );
     }
 
-    // Case B — active session exists but no picks and no packs yet.
-    // The daemon has opened the session (draft.started written) but the first
-    // pack data has not arrived yet. Show an awaiting-data state rather than a
-    // blank active-draft view.
-    // REQ-2: copy = "Connected — waiting on Arena's first pack" (Prof option 1)
-    // REQ-3: show EventName · SetCode only — no fabricated pack/pick position
-    // REQ-4: SSE trigger above is reload-only (debouncedLoadActiveDraft), never navigate()
-    if (state.session && state.picks.length === 0 && state.packs.length === 0) {
-        return (
-            <div className="draft-container" data-testid="draft-awaiting-data">
-                <div className="draft-header">
-                    <h1>Draft in progress</h1>
-                    <div className="draft-info">
-                        <span className="draft-event">{state.session.EventName}</span>
-                        <span className="draft-set">{state.session.SetCode}</span>
-                    </div>
-                </div>
-                <div className="draft-awaiting-data">
-                    <div className="loading-spinner"></div>
-                    <p>Connected — waiting on Arena's first pack.</p>
-                    <p className="draft-awaiting-hint">
-                        If this sits here for more than a few picks, switch to another screen in Arena and back.
-                    </p>
-                    <a href="/" className="draft-back-link">← Back to Home</a>
-                </div>
-            </div>
-        );
-    }
-
     // Active draft view - all hooks have been called at the top already
     console.log('[Draft] Rendering active draft. DisplayCards:', displayCards.length, 'Picks:', state.picks.length);
 
@@ -953,6 +924,22 @@ const Draft: React.FC = () => {
                             All Set Cards
                         </button>
                     </div>
+
+                    {/* Case B — awaiting Arena's first pack.
+                        Session is active but no picks or packs have been recorded yet.
+                        REQ-2: copy approved by Prof (Option 1).
+                        REQ-3: show EventName · SetCode only — no fabricated pack/pick position.
+                        This banner appears inside the active-draft view so CurrentPackPicker
+                        can still mount and transition once the daemon sends pack data. */}
+                    {state.session && state.picks.length === 0 && state.packs.length === 0 && (
+                        <div className="draft-awaiting-data" data-testid="draft-awaiting-data">
+                            <div className="loading-spinner"></div>
+                            <p>Connected — waiting on Arena's first pack.</p>
+                            <p className="draft-awaiting-hint">
+                                If this sits here for more than a few picks, switch to another screen in Arena and back.
+                            </p>
+                        </div>
+                    )}
 
                     {/* Current Pack Picker View — gated by live_draft_advisor_enabled */}
                     {showCurrentPack && state.session && showAdvisor && (
