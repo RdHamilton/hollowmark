@@ -97,6 +97,13 @@ type deckStore interface {
 	UpsertDeck(ctx context.Context, u repository.DeckUpsert) error
 }
 
+// deckSummaryStore writes deck header rows from DeckSummaries login-blob entries.
+// It deliberately omits any deck_cards write — see UpsertDeckSummary docs and
+// Ray's amendment 1 on #1337.
+type deckSummaryStore interface {
+	UpsertDeckSummary(ctx context.Context, u repository.DeckSummaryUpsert) error
+}
+
 // draftDeckCreator creates a deck row from a completed draft session's picks.
 // It is implemented by *repository.DecksRepository.
 type draftDeckCreator interface {
@@ -171,22 +178,23 @@ func isPermanent(err error) bool {
 
 // Worker projects pending daemon_events rows into their destination tables.
 type Worker struct {
-	events     daemonEventStore
-	accounts   accountStore
-	matches    matchStore
-	drafts     draftStore
-	draftDecks draftDeckCreator
-	draftPicks draftPickReader
-	collection collectionStore
-	inventory  inventoryStore
-	quests     questStore
-	decks      deckStore
-	gamePlays  gamePlayStore
-	cardPlays  cardPlayStore
-	gameRows   gameRowWriter
-	counters   counterStore
-	dlq        dlqStore
-	analytics  *analytics.Client
+	events        daemonEventStore
+	accounts      accountStore
+	matches       matchStore
+	drafts        draftStore
+	draftDecks    draftDeckCreator
+	draftPicks    draftPickReader
+	collection    collectionStore
+	inventory     inventoryStore
+	quests        questStore
+	decks         deckStore
+	deckSummaries deckSummaryStore
+	gamePlays     gamePlayStore
+	cardPlays     cardPlayStore
+	gameRows      gameRowWriter
+	counters      counterStore
+	dlq           dlqStore
+	analytics     *analytics.Client
 }
 
 // NewWorker returns a Worker wired with the provided stores.
@@ -257,6 +265,14 @@ func (w *Worker) WithDraftDeckCreator(creator draftDeckCreator) *Worker {
 // new deck from draft_picks.
 func (w *Worker) WithDraftPickReader(reader draftPickReader) *Worker {
 	w.draftPicks = reader
+	return w
+}
+
+// WithDeckSummaryStore wires the deck-summary (header-only) store into w and
+// returns w.  When wired, projectInventoryUpdated fans out to UpsertDeckSummary
+// for each entry in the payload's Decks slice without touching deck_cards.
+func (w *Worker) WithDeckSummaryStore(store deckSummaryStore) *Worker {
+	w.deckSummaries = store
 	return w
 }
 
@@ -972,7 +988,7 @@ func (w *Worker) projectInventoryUpdated(ctx context.Context, row *repository.Da
 		return fmt.Errorf("resolve account: %w", err)
 	}
 
-	return w.inventory.UpsertInventory(ctx, repository.InventoryUpsert{
+	if err := w.inventory.UpsertInventory(ctx, repository.InventoryUpsert{
 		AccountID:          accountID,
 		Gems:               p.Gems,
 		Gold:               p.Gold,
@@ -982,7 +998,32 @@ func (w *Worker) projectInventoryUpdated(ctx context.Context, row *repository.Da
 		WildCardRares:      p.WildCardRares,
 		WildCardMythics:    p.WildCardMythics,
 		UpdatedAt:          row.OccurredAt,
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Fan out to UpsertDeckSummary for each deck in the login-blob DeckSummaries
+	// array (#1337). This uses the header-only path that never touches deck_cards
+	// (Ray amendment 1). Only fires when the deckSummaries store is wired and the
+	// payload carries at least one deck.
+	if w.deckSummaries != nil && len(p.Decks) > 0 {
+		for _, d := range p.Decks {
+			if upsertErr := w.deckSummaries.UpsertDeckSummary(ctx, repository.DeckSummaryUpsert{
+				DeckID:    d.DeckID,
+				AccountID: accountID,
+				Name:      d.Name,
+				Format:    d.Format,
+				UpdatedAt: row.OccurredAt,
+			}); upsertErr != nil {
+				// Soft failure: log and continue so a single bad deck row does not
+				// prevent the rest of the fan-out or the inventory upsert from
+				// being projected. The raw payload is preserved in daemon_events.
+				log.Printf("[projection] projectInventoryUpdated id=%d: UpsertDeckSummary deck_id=%s: %v", row.ID, d.DeckID, upsertErr)
+			}
+		}
+	}
+
+	return nil
 }
 
 // --- quest.progress projector ---
