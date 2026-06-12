@@ -421,6 +421,11 @@ func main() {
 		// Tell launchd the stop was intentional so it does not immediately
 		// respawn the process per KeepAlive=true in the plist. On non-macOS
 		// platforms stopLaunchAgent is a no-op.
+		//
+		// SH-5 (ADR-083): tag the reason before unregistering from launchd.
+		// sentryhook.Flush is deferred in main(); the breadcrumb will be sent
+		// when the deferred flush fires after app.Run returns.
+		logShutdown(log.Default(), ReasonTrayQuit, nil)
 		stopLaunchAgent()
 		cancel()
 	})
@@ -447,6 +452,9 @@ func main() {
 	go func() {
 		defer recovery.RecoverGoroutine("signal-handler", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 		<-sigCh
+		// SH-5 (ADR-083): tag the signal reason before delegating to app.Quit.
+		// The breadcrumb is flushed by the deferred sentryhook.Flush in main().
+		logShutdown(log.Default(), ReasonSIGTERM, nil)
 		app.Quit()
 	}()
 
@@ -563,10 +571,18 @@ func main() {
 
 			// ── Normal daemon run loop ─────────────────────────────────────────
 			if err := svc.Run(ctx); err != nil {
+				// SH-5 (ADR-083): tag the exit reason before any shutdown action.
+				// logShutdown does NOT call sentry.Flush — the headless path calls
+				// sentryhook.Flush explicitly below (os.Exit bypasses defers);
+				// the tray path relies on the deferred flush in main().
+				logShutdown(log.Default(), ReasonRunError, err)
 				if headless {
-					// Headless path — log the canonical FATAL line and exit
-					// non-zero so the supervisor (launchd / systemd) respawns.
-					// NeedsFirstRunAuth will trigger PKCE on the next boot.
+					// Headless path — flush Sentry before os.Exit so the SH-5
+					// breadcrumb is not dropped. defer in main() does not fire here
+					// because os.Exit bypasses it.
+					sentryhook.Flush()
+					// Log the canonical FATAL line and exit non-zero so the
+					// supervisor (launchd / systemd) respawns.
 					logAndExitHeadlessKeychain(log.Default(), os.Exit)
 				}
 				log.Printf("[mtga-daemon] fatal: %v", err)
