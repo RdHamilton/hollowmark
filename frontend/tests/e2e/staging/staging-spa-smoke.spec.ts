@@ -135,41 +135,185 @@ function requireAuthOrFail(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Assert no blank screen and no visible React error boundary on the current page.
+ * Assert that the page is in a genuinely healthy state — not merely that it
+ * rendered *something*, but that it did NOT render an error or failure UI.
  *
- * A "blank screen" is defined as a page whose #root element has no child nodes
- * after the React tree has had time to mount. An "error boundary" is detected
- * by looking for elements with `.react-error-boundary` class or
- * `data-testid="error-boundary"` attribute.
+ * ## Why the old checks were insufficient (#722)
+ *
+ * The original three checks all passed trivially on error-state pages:
+ *   1. `document.body.children.length > 0` — error UI is still DOM content.
+ *   2. `.react-error-boundary` / `[data-testid="error-boundary"]` — none of the
+ *      three problem routes (/decks, /collection, /charts/result-breakdown) use
+ *      React's error boundary mechanism; they handle errors in local state and
+ *      render custom error UI with CSS classes like `.error-state`.
+ *   3. ARIA landmark / `#root` present — `#root` is always present. The former
+ *      landmark check also matched `[data-testid]`, which is present even on
+ *      error pages (e.g. `data-testid="collection-error"`).
+ *
+ * ## What this function now checks
+ *
+ * Universal checks (every route):
+ *   - No blank screen (body children > 0 — unchanged)
+ *   - No React error boundary (unchanged — belt-and-suspenders)
+ *   - At least one ARIA landmark present (unchanged — basic mount verification)
+ *   - `[data-testid="config-error-screen"]` NOT visible — ADR-077 boot-level
+ *     ConfigErrorScreen; its presence means /config.json failed to load before
+ *     the SPA mounted (no page content loaded successfully).
+ *   - `.error-state` NOT visible — shared CSS class used by the ErrorState
+ *     component (ResultBreakdown) and the inline error branches of Decks and
+ *     Collection.
+ *   - `[data-testid="collection-error"]` NOT visible — Collection's error branch
+ *     testid, present when the Collection API call fails.
+ *   - Known error-message text patterns NOT present — catches error UI that does
+ *     not use the standard CSS class, or future pages with different patterns.
+ *
+ * Route-specific positive checks:
+ *   Assert that the expected healthy-state container IS present so that a page
+ *   stuck on a spinner (rendering neither error nor healthy content) also fails.
+ *   - /decks          → `.decks-page` must be visible
+ *   - /collection     → `[data-testid="collection-page"]` must be visible
+ *                       (only rendered on the healthy path; error path renders
+ *                       `[data-testid="collection-error"]` instead)
+ *   - /charts/result-breakdown → `.page-container` must be visible (outermost
+ *                       wrapper always rendered regardless of data/error/empty)
+ *
+ * ## ci-smoke account context
+ *
+ * The ci-smoke account has no match/draft data on staging. Data-bearing surfaces
+ * (/decks, /collection, /charts/result-breakdown) may legitimately render their
+ * empty-state variant ("No Decks Yet", "No Cards Found", "No performance data").
+ * An empty-state IS a healthy outcome. These assertions do NOT require data rows
+ * to be present; they only require that the error UI is absent.
  */
 async function assertPageIsHealthy(page: Page, route: string): Promise<void> {
-  // 1. Page must have some content
+  // -------------------------------------------------------------------------
+  // 1. Page must have some content (unchanged — basic mount check)
+  // -------------------------------------------------------------------------
   const bodyChildren = await page.evaluate(() => document.body.children.length);
   expect(
     bodyChildren,
     `Route ${route}: blank screen — document.body has no children`,
   ).toBeGreaterThan(0);
 
-  // 2. No visible React error boundary
+  // -------------------------------------------------------------------------
+  // 2. No visible React error boundary (unchanged — belt-and-suspenders)
+  // -------------------------------------------------------------------------
   const errorBoundary = page.locator('.react-error-boundary, [data-testid="error-boundary"]');
   await expect(
     errorBoundary,
     `Route ${route}: React error boundary is visible`,
   ).not.toBeVisible();
 
-  // 3. At least one ARIA landmark or known root element is present
+  // -------------------------------------------------------------------------
+  // 3. At least one ARIA landmark present (updated — dropped [data-testid] from
+  //    the landmark list; it matched error-state testids and made this a no-op)
+  // -------------------------------------------------------------------------
   const hasLandmark = await page.evaluate(() => {
     const landmarks = [
       'main', 'nav', 'header', 'footer', 'aside',
       '[role="main"]', '[role="navigation"]', '[role="banner"]',
-      '#root', '[data-testid]',
+      '#root',
     ];
     return landmarks.some((selector) => document.querySelector(selector) !== null);
   });
   expect(
     hasLandmark,
-    `Route ${route}: no ARIA landmark or known data-testid found — page may not have mounted`,
+    `Route ${route}: no ARIA landmark found — page may not have mounted`,
   ).toBe(true);
+
+  // -------------------------------------------------------------------------
+  // 4. ConfigErrorScreen (ADR-077) must NOT be visible (#722)
+  //
+  // Rendered before the SPA mounts when /config.json fails to load.
+  // If this is visible, no page rendered at all — it is a boot-level failure.
+  // -------------------------------------------------------------------------
+  await expect(
+    page.locator('[data-testid="config-error-screen"]'),
+    `Route ${route}: ConfigErrorScreen is visible — /config.json failed to load before SPA mount`,
+  ).not.toBeVisible();
+
+  // -------------------------------------------------------------------------
+  // 5. Generic error-state UI must NOT be visible (#722)
+  //
+  // .error-state — shared CSS class used by:
+  //   ErrorState component (ResultBreakdown, others)
+  //   Inline error branch of Decks ("decks-page error-state")
+  //   Inline error branch of Collection ("collection-page error-state")
+  //
+  // [data-testid="collection-error"] — Collection's error branch; present when
+  //   the GET /api/v1/collection call fails or returns a non-OK status.
+  // -------------------------------------------------------------------------
+  await expect(
+    page.locator('.error-state').first(),
+    `Route ${route}: .error-state is visible — page rendered an error branch (API failure or CORS error)`,
+  ).not.toBeVisible();
+
+  await expect(
+    page.locator('[data-testid="collection-error"]'),
+    `Route ${route}: [data-testid="collection-error"] is visible — Collection API call failed`,
+  ).not.toBeVisible();
+
+  // -------------------------------------------------------------------------
+  // 6. Known error-message text must NOT be present (#722)
+  //
+  // Belt-and-suspenders: catches error UI that does not use .error-state (e.g.
+  // a component that renders error copy in a plain div, or a future page with a
+  // different error pattern). Visibility-checked so hidden retry toasts don't
+  // fail the assertion.
+  // -------------------------------------------------------------------------
+  const errorTextPatterns = [
+    'Error Loading Decks',
+    'Error Loading Collection',
+    'Failed to load performance metrics',
+    'Failed to fetch',
+    'Something went wrong',
+  ];
+  for (const pattern of errorTextPatterns) {
+    await expect(
+      page.getByText(pattern, { exact: false }),
+      `Route ${route}: error text "${pattern}" is visible`,
+    ).not.toBeVisible();
+  }
+
+  // -------------------------------------------------------------------------
+  // 7. Route-specific positive health checks (#722)
+  //
+  // Assert that the healthy-state container for the route IS present.
+  // A page stuck on a loading spinner (rendering neither error nor content)
+  // also fails here.
+  // -------------------------------------------------------------------------
+  if (route === '/decks') {
+    // .decks-page is always the root wrapper (healthy, error, and loading states
+    // all use it). Its presence proves the Decks component mounted beyond a
+    // blank screen. The .error-state check above already asserts the co-class
+    // "decks-page error-state" is absent.
+    await expect(
+      page.locator('.decks-page'),
+      `Route ${route}: .decks-page container not found — Decks component did not render`,
+    ).toBeVisible();
+  }
+
+  if (route === '/collection') {
+    // [data-testid="collection-page"] is ONLY present on the healthy render path.
+    // The error branch renders [data-testid="collection-error"] instead; the
+    // loading branch renders [data-testid="collection-loading"]. Neither has
+    // "collection-page". Asserting its presence proves a successful data load
+    // (or an authenticated empty state — both are healthy).
+    await expect(
+      page.locator('[data-testid="collection-page"]'),
+      `Route ${route}: [data-testid="collection-page"] not found — Collection rendered its error or loading branch`,
+    ).toBeVisible();
+  }
+
+  if (route === '/charts/result-breakdown') {
+    // .page-container is the outermost wrapper of ResultBreakdown, present on
+    // ALL render paths (loading, error, empty, data). Its absence means the
+    // component did not mount at all (e.g. routing error, blank shell).
+    await expect(
+      page.locator('.page-container'),
+      `Route ${route}: .page-container not found — ResultBreakdown component did not render`,
+    ).toBeVisible();
+  }
 }
 
 /**
