@@ -354,12 +354,11 @@ func TestLayer5Hermetic_MatchHistoryList(t *testing.T) {
 		return
 	}
 
-	// AC2: min_row_count — the manifest's min_row_count (12) was measured against
-	// the full 36-file raw-log corpus replay.  The thin committed corpus in
-	// daemon-emit/ has one match-completed.json fixture and therefore projects
-	// exactly 1 match.  We assert >= 1 here (same pattern as quest-list line
-	// ~647); the manifest's value is retained as the full-corpus reference that
-	// will apply once the committed corpus is expanded to match the raw-log set.
+	// AC2: min_row_count — the manifest's min_row_count (14) reflects the committed
+	// daemon-emit/ corpus after #1317 hardening (12 from 36-log snapshot + brawl-loss
+	// REAL + 2-1 synthetic).  The thin committed corpus projects the daemon-emit
+	// fixtures via hermetic replay; we assert >= 1 here (same pattern as quest-list
+	// line ~647); the manifest's value is the full reference for Mode A.
 	_ = minRowCount // full-corpus reference; hermetic CI uses thin-corpus threshold below
 	if len(data) < 1 {
 		l5HermeticSurfaceErrorf(t, "match-list", "len(data)", "match-list.json",

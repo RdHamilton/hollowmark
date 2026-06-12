@@ -122,15 +122,15 @@ test.describe('Mode B — Surface 1: Game Timeline (match-detail-timeline.json)'
 //
 // Manifest: match-list.json
 //   expected_empty: false
-//   min_row_count: 12, first_row: { format: "QuickDraft_SOS_20260526", result: "win" }
-//   corpus_match_count: 12
+//   min_row_count: 14, first_row: { format: "QuickDraft_SOS_20260526", result: "win" }
+//   corpus_match_count: 14  (updated #1317: +brawl-loss REAL + 2-1 synthetic)
 //
 // Mode B: navigates to /match-history, waits for the REAL BFF
 // GET /api/v1/history/matches, asserts the table renders with rows.
 // Manifest: data_key "data" — SPA reads response.data, not response.matches.
 
 test.describe('Mode B — Surface 2: Match History (match-list.json)', () => {
-  test('match history table renders from seeded BFF — at least 12 rows visible', async ({ page }) => {
+  test('match history table renders from seeded BFF — at least 14 rows visible', async ({ page }) => {
     await setClerkSignedIn(page);
     await page.goto('/match-history', { waitUntil: 'domcontentloaded' });
 
@@ -155,7 +155,7 @@ test.describe('Mode B — Surface 2: Match History (match-list.json)', () => {
     const table = page.locator('[data-testid="match-history-table"]');
     await expect(
       table,
-      'Surface 2 — match-history-table must be visible when BFF returns 12 seeded rows (manifest: match-list.json, min_row_count: 12)',
+      'Surface 2 — match-history-table must be visible when BFF returns seeded rows (manifest: match-list.json, min_row_count: 14)',
     ).toBeVisible({ timeout: 20_000 });
 
     // The empty state must not be showing.
@@ -170,8 +170,8 @@ test.describe('Mode B — Surface 2: Match History (match-list.json)', () => {
     const count = await rows.count();
     expect(
       count,
-      `Surface 2 — match history must render at least 12 rows from the seeded corpus (manifest: corpus_match_count: 12). Got: ${count}`,
-    ).toBeGreaterThanOrEqual(12);
+      `Surface 2 — match history must render at least 14 rows from the seeded corpus (manifest: corpus_match_count: 14). Got: ${count}`,
+    ).toBeGreaterThanOrEqual(14);
   });
 });
 
