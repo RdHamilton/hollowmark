@@ -53,8 +53,27 @@ type InventoryBooster struct {
 	Count       int    `json:"count"`
 }
 
+// DeckSummary carries the identity and format of a single deck as reported by
+// the DeckSummaries array in the Arena login blob (top-level sibling of
+// InventoryInfo). It intentionally carries no card list — that comes from the
+// separate DeckUpsertDeckV2 event which the daemon parses via ParseDeckEntry.
+// Used by InventoryUpdatedPayload.Decks (additive field, #1337).
+type DeckSummary struct {
+	DeckID string `json:"deck_id"`
+	Name   string `json:"name"`
+	// Format is the value of the Attribute with name=="Format" in the summary's
+	// Attributes array, e.g. "Standard", "Alchemy", "Historic". Empty when the
+	// Attribute is absent.
+	Format string `json:"format"`
+}
+
 // InventoryUpdatedPayload is embedded in a DaemonEvent with Type "inventory.updated".
-// It carries the player's current gem/gold/wildcard counts and booster holdings.
+// It carries the player's current gem/gold/wildcard counts, booster holdings,
+// and — when parsed from a login blob — the full deck header library (Decks).
+//
+// Decks is additive: older daemon versions that do not populate it will produce
+// an empty slice; the BFF projection worker skips the fan-out when Decks is
+// empty. No contract version bump required (JSON omitempty on the wire).
 type InventoryUpdatedPayload struct {
 	Gems               int                `json:"gems"`
 	Gold               int                `json:"gold"`
@@ -64,6 +83,11 @@ type InventoryUpdatedPayload struct {
 	WildCardRares      int                `json:"wild_card_rares"`
 	WildCardMythics    int                `json:"wild_card_mythics"`
 	Boosters           []InventoryBooster `json:"boosters"`
+	// Decks carries the player's full deck library headers from the Arena login
+	// blob DeckSummaries array. Populated by the daemon's ParseInventoryEntry
+	// when DeckSummaries is present (Arena 2026.60+). Omitted from the wire
+	// payload when empty so older BFF versions ignore it gracefully.
+	Decks []DeckSummary `json:"decks,omitempty"`
 }
 
 // QuestProgressPayload is embedded in a DaemonEvent with Type "quest.progress".

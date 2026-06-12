@@ -24,6 +24,19 @@ type DeckUpsert struct {
 	UpdatedAt time.Time
 }
 
+// DeckSummaryUpsert holds the fields written to the decks table from a
+// DeckSummaries fan-out in an inventory.updated event. It intentionally carries
+// no Cards field — UpsertDeckSummary never touches deck_cards.
+type DeckSummaryUpsert struct {
+	DeckID    string
+	AccountID int64
+	Name      string
+	// Format is the Arena deck format string (e.g. "Standard", "Alchemy").
+	// When empty, the existing format value in the decks row is preserved.
+	Format    string
+	UpdatedAt time.Time
+}
+
 // DeckProjectorRepository writes deck snapshots to the decks and deck_cards tables.
 type DeckProjectorRepository struct {
 	db DB
@@ -106,5 +119,44 @@ func (r *DeckProjectorRepository) UpsertDeck(ctx context.Context, u DeckUpsert) 
 		return fmt.Errorf("commit deck upsert: %w", err)
 	}
 
+	return nil
+}
+
+// UpsertDeckSummary writes (or updates) the decks header row from a
+// DeckSummaries login-blob entry. It NEVER touches deck_cards — this is the
+// key invariant distinguishing it from UpsertDeck.
+//
+// Format is only overwritten when u.Format is non-empty; an empty value leaves
+// whatever format is already stored on the row (Ray amendment 2).
+//
+// No transaction is needed: this is a single-row upsert.
+func (r *DeckProjectorRepository) UpsertDeckSummary(ctx context.Context, u DeckSummaryUpsert) error {
+	// Two SQL paths: non-empty format overwrites; empty format coalesces to
+	// the existing value so a summary with no Format attribute never clobbers
+	// a format we learned from a full DeckUpsertDeckV2 event.
+	const upsertWithFormat = `
+		INSERT INTO decks (id, account_id, name, format, created_at, modified_at, source)
+		VALUES ($1, $2, $3, $4, $5, $5, 'arena')
+		ON CONFLICT (id) DO UPDATE
+			SET name        = EXCLUDED.name,
+			    format      = EXCLUDED.format,
+			    modified_at = EXCLUDED.modified_at`
+
+	const upsertNoFormat = `
+		INSERT INTO decks (id, account_id, name, format, created_at, modified_at, source)
+		VALUES ($1, $2, $3, COALESCE((SELECT format FROM decks WHERE id = $1), 'Unknown'), $4, $4, 'arena')
+		ON CONFLICT (id) DO UPDATE
+			SET name        = EXCLUDED.name,
+			    modified_at = EXCLUDED.modified_at`
+
+	var err error
+	if u.Format != "" {
+		_, err = r.db.ExecContext(ctx, upsertWithFormat, u.DeckID, u.AccountID, u.Name, u.Format, u.UpdatedAt)
+	} else {
+		_, err = r.db.ExecContext(ctx, upsertNoFormat, u.DeckID, u.AccountID, u.Name, u.UpdatedAt)
+	}
+	if err != nil {
+		return fmt.Errorf("upsert deck summary deck_id=%s: %w", u.DeckID, err)
+	}
 	return nil
 }
