@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { MemoryRouter } from 'react-router-dom';
+import hollowmarkWordmark from '@/assets/logo-hollowmark-wordmark.svg';
 import './Layout.css';
 import './AuthBar.css';
 import './DaemonHealthIndicator.css';
@@ -87,7 +88,8 @@ function NavShell({
       <div className="tab-bar" data-testid="nav-tab-bar">
         <div className="tab-bar-left">
           <a href="/home" className="nav-brand" data-testid="nav-brand" aria-label="Hollowmark home">
-            <span className="nav-brand-wordmark">Hollowmark</span>
+            {/* Hollowmark wordmark lockup: mark + logotype in one SVG (02 Watermark + Cormorant italic) */}
+            <img src={hollowmarkWordmark} alt="Hollowmark" height={32} className="nav-brand-wordmark" />
           </a>
           <div className="tab-links">
             {NAV_LINKS.map(({ label, href }) => (
