@@ -10,19 +10,22 @@
       "fields": {
         "response_shape": "cursor_paginated",
         "data_key": "data",
-        "min_row_count": 12,
+        "min_row_count": 15,
         "first_row": {
           "format": "QuickDraft_SOS_20260526",
           "result": "win",
           "player_wins": 1,
           "opponent_wins": 0
         },
-        "corpus_match_count": 12
+        "corpus_match_count": 15,
+        "includes_loss": true,
+        "includes_non_1_0_score": true,
+        "includes_constructed": true
       }
     }
   ],
   "corpus_promotion": {
-    "promoted_at": "2026-06-02",
-    "note": "test"
+    "promoted_at": "2026-06-11",
+    "note": "#1317 AC1/AC4/AC3 hardening: +Brawl REAL loss (Jhixiaus/Kaito vs Kyle/Etali 2026-06-11) +2-1 multi-game synthetic +TraditionalStandard constructed synthetic (AC3, Prof gap); corpus grows 12→14→15 matches"
   }
 }

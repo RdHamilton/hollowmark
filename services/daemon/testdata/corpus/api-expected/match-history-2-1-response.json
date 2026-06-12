@@ -1,0 +1,15 @@
+{
+  "Matches": [
+    {
+      "ID": "11111111-0000-4000-8000-000000000400",
+      "Format": "QuickDraft_SOS_20260526",
+      "Result": "win",
+      "PlayerWins": 2,
+      "OpponentWins": 1
+    }
+  ],
+  "HasMore": false,
+  "NextCursorTS": "",
+  "NextCursorID": "",
+  "Limit": 20
+}

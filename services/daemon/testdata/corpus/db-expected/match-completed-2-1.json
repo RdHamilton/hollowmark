@@ -1,0 +1,12 @@
+{
+  "ID": "11111111-0000-4000-8000-000000000400",
+  "AccountID": 1,
+  "EventID": "11111111-0000-0000-0000-000000000020",
+  "EventName": "",
+  "Format": "QuickDraft_SOS_20260526",
+  "Result": "win",
+  "PlayerWins": 2,
+  "OpponentWins": 1,
+  "OpponentName": "TestPlayer#00002",
+  "PlayerTeamID": 1
+}

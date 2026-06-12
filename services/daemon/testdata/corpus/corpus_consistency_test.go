@@ -82,6 +82,35 @@ var matchPairings = []matchPair{
 		dbExpected:  "db-expected/match-completed-brawl.json",
 		apiExpected: "api-expected/match-history-brawl-response.json",
 	},
+	{
+		// Brawl LOSS fixture (#1317 AC1): REAL-DERIVED from Jhixiaus/Kaito vs Kyle/Etali
+		// capture (2026-06-11). winningTeamId=2 (opponent), result=loss.
+		// Closes the win-only blindspot: a win/loss-inversion bug passes the harness
+		// unchallenged without this fixture. Also promotes Brawl to REAL provenance
+		// ahead of Ranked Brawl launch.
+		daemonEmit:  "daemon-emit/match-completed-brawl-loss.json",
+		dbExpected:  "db-expected/match-completed-brawl-loss.json",
+		apiExpected: "api-expected/match-history-brawl-loss-response.json",
+	},
+	{
+		// 2-1 multi-game fixture (#1317 AC4): SYNTHETIC. Exercises player_wins=2 /
+		// opponent_wins=1 path and ResultReason_DamageDealt (non-Concede, closes AC6).
+		// game 2 lost to DamageDealt; games 1+3 won by Concede / DamageDealt.
+		daemonEmit:  "daemon-emit/match-completed-2-1.json",
+		dbExpected:  "db-expected/match-completed-2-1.json",
+		apiExpected: "api-expected/match-history-2-1-response.json",
+	},
+	{
+		// Constructed Traditional Standard ladder fixture (#1317 AC3): SYNTHETIC.
+		// Closes the Constructed coverage gap flagged by Prof — the corpus was
+		// all QuickDraft and Brawl; no TraditionalStandard match existed.
+		// format="TraditionalStandard" is the canonical Arena event ID for the
+		// Standard ladder (verified from catalog/samples/json-key__Formats.json).
+		// 2-1 result with ResultReason_DamageDealt (non-Concede for all game entries).
+		daemonEmit:  "daemon-emit/match-completed-constructed.json",
+		dbExpected:  "db-expected/match-completed-constructed.json",
+		apiExpected: "api-expected/match-history-constructed-response.json",
+	},
 	// daemon-emit/match-completed-missing-id.json intentionally has no pair:
 	// the projection worker dead-letters events with no match_id and writes
 	// nothing to the match table. There is nothing to assert consistency against.
