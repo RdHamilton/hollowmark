@@ -433,3 +433,35 @@ events:
       - name: format
         type: string
         pii_class: none
+
+  # D7.2 — projection-time duplicate-account detection (ticket #1335).
+  # Emitted by GetOrCreateByClientID when an INSERT succeeds but the post-insert
+  # count reveals the user now has more than one accounts row.
+  # Operational=true so it bypasses the Art.18 halt check (system observability).
+  - name: account_duplicate_detected
+    category: system
+    trigger_surface: bff
+    consent_category: necessary
+    properties:
+      - name: account_id_hash
+        type: string
+        pii_class: pseudonymous
+        description: "SHA-256 hex[:16] of accounts.account_id_hash — never a raw id."
+      - name: duplicate_count
+        type: number
+        pii_class: none
+        description: "Total number of accounts rows for this user after the duplicate insert."
+
+  # D7.1 — daily canary alert (ticket #1335).
+  # Emitted by the background canary worker when CheckDuplicateAccounts finds any
+  # user with more than one accounts row.
+  # Operational=true so it always fires regardless of halt flags.
+  - name: account_duplicate_canary_triggered
+    category: system
+    trigger_surface: bff
+    consent_category: necessary
+    properties:
+      - name: affected_user_count
+        type: number
+        pii_class: none
+        description: "Number of distinct user_ids that have more than one accounts row."

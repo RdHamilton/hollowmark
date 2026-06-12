@@ -72,6 +72,10 @@ export const Events = {
   CLONE_DECK: 'clone_deck',
   /** Category: feature_use | Surface: bff | Consent: analytics */
   EXPORT_DECK: 'export_deck',
+  /** Category: system | Surface: bff | Consent: necessary */
+  ACCOUNT_DUPLICATE_DETECTED: 'account_duplicate_detected',
+  /** Category: system | Surface: bff | Consent: necessary */
+  ACCOUNT_DUPLICATE_CANARY_TRIGGERED: 'account_duplicate_canary_triggered',
 } as const;
 
 export type EventName = (typeof Events)[keyof typeof Events];
@@ -119,6 +123,8 @@ export const EventConsentCategory: Record<EventName, ConsentCategory> = {
   'delete_deck': 'analytics',
   'clone_deck': 'analytics',
   'export_deck': 'analytics',
+  'account_duplicate_detected': 'necessary',
+  'account_duplicate_canary_triggered': 'necessary',
 };
 
 /**
