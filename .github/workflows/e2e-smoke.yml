@@ -255,9 +255,8 @@ jobs:
         if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           echo "changed=true" >> "$GITHUB_OUTPUT"
         else
-          changed=$(git diff --name-only HEAD^1 HEAD 2>/dev/null | grep -E \
-            '^frontend/src/|^frontend/tests/e2e/|^services/bff/|^services/daemon/testdata/corpus/layer5-expected/|^frontend/tests/e2e/fixtures/test-data\.sql' \
-            | wc -l)
+          changed=$(git diff --name-only HEAD^1 HEAD 2>/dev/null | grep -cE \
+            '^frontend/src/|^frontend/tests/e2e/|^services/bff/|^services/daemon/testdata/corpus/layer5-expected/|^frontend/tests/e2e/fixtures/test-data\.sql')
           if [ "$changed" -gt 0 ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
