@@ -230,6 +230,80 @@ func (h *CardsHandler) Search(w http.ResponseWriter, r *http.Request) {
 	writeMatchesJSON(w, setCardRowsToResponse(rows))
 }
 
+// knownBasicLands is a static fallback for the five basic land types.
+// Basic lands frequently lack rows in set_cards (their arena_ids vary across
+// printings and the sync Lambda may not populate them all). Arena arena IDs
+// 81716–81720 are the canonical IDs used by the SPA's draft deck editor
+// (DeckList.tsx, DeckBuilder.tsx). When a CardByArenaID lookup returns nil
+// for one of these IDs we return a synthetic row so the deck editor renders
+// the card name and a Scryfall image rather than "Unknown Card". Fixes #1361.
+//
+// Scryfall image URLs use a representative printing from a widely-available
+// set (OTJ basics). The small-art URL uses the art_crop size for the hover
+// thumbnail; the normal URL is used for the full card image.
+var knownBasicLands = map[int]repository.SetCardRow{
+	81716: {
+		ArenaID:       81716,
+		CardID:        81716,
+		Name:          "Plains",
+		SetCode:       "OTJ",
+		TypeLine:      "Basic Land — Plains",
+		Colors:        `["W"]`,
+		Rarity:        "common",
+		ImageURL:      "https://cards.scryfall.io/normal/front/9/5/95f5f87b-0d80-4c3b-90f3-4d0e83fefd5e.jpg",
+		ImageURLSmall: "https://cards.scryfall.io/small/front/9/5/95f5f87b-0d80-4c3b-90f3-4d0e83fefd5e.jpg",
+		ImageURLArt:   "https://cards.scryfall.io/art_crop/front/9/5/95f5f87b-0d80-4c3b-90f3-4d0e83fefd5e.jpg",
+	},
+	81717: {
+		ArenaID:       81717,
+		CardID:        81717,
+		Name:          "Island",
+		SetCode:       "OTJ",
+		TypeLine:      "Basic Land — Island",
+		Colors:        `["U"]`,
+		Rarity:        "common",
+		ImageURL:      "https://cards.scryfall.io/normal/front/b/3/b3621e11-9adf-451a-ba97-94a21a72f6ea.jpg",
+		ImageURLSmall: "https://cards.scryfall.io/small/front/b/3/b3621e11-9adf-451a-ba97-94a21a72f6ea.jpg",
+		ImageURLArt:   "https://cards.scryfall.io/art_crop/front/b/3/b3621e11-9adf-451a-ba97-94a21a72f6ea.jpg",
+	},
+	81718: {
+		ArenaID:       81718,
+		CardID:        81718,
+		Name:          "Swamp",
+		SetCode:       "OTJ",
+		TypeLine:      "Basic Land — Swamp",
+		Colors:        `["B"]`,
+		Rarity:        "common",
+		ImageURL:      "https://cards.scryfall.io/normal/front/6/b/6b56b9b0-7766-49d8-9e5b-a4e4d6d1a47b.jpg",
+		ImageURLSmall: "https://cards.scryfall.io/small/front/6/b/6b56b9b0-7766-49d8-9e5b-a4e4d6d1a47b.jpg",
+		ImageURLArt:   "https://cards.scryfall.io/art_crop/front/6/b/6b56b9b0-7766-49d8-9e5b-a4e4d6d1a47b.jpg",
+	},
+	81719: {
+		ArenaID:       81719,
+		CardID:        81719,
+		Name:          "Mountain",
+		SetCode:       "OTJ",
+		TypeLine:      "Basic Land — Mountain",
+		Colors:        `["R"]`,
+		Rarity:        "common",
+		ImageURL:      "https://cards.scryfall.io/normal/front/3/3/33b42a8e-08eb-4dda-bfdc-d94de89e7c76.jpg",
+		ImageURLSmall: "https://cards.scryfall.io/small/front/3/3/33b42a8e-08eb-4dda-bfdc-d94de89e7c76.jpg",
+		ImageURLArt:   "https://cards.scryfall.io/art_crop/front/3/3/33b42a8e-08eb-4dda-bfdc-d94de89e7c76.jpg",
+	},
+	81720: {
+		ArenaID:       81720,
+		CardID:        81720,
+		Name:          "Forest",
+		SetCode:       "OTJ",
+		TypeLine:      "Basic Land — Forest",
+		Colors:        `["G"]`,
+		Rarity:        "common",
+		ImageURL:      "https://cards.scryfall.io/normal/front/9/a/9a3fd61c-8ec1-4e12-bbdd-66c41a7f5f80.jpg",
+		ImageURLSmall: "https://cards.scryfall.io/small/front/9/a/9a3fd61c-8ec1-4e12-bbdd-66c41a7f5f80.jpg",
+		ImageURLArt:   "https://cards.scryfall.io/art_crop/front/9/a/9a3fd61c-8ec1-4e12-bbdd-66c41a7f5f80.jpg",
+	},
+}
+
 // GetByArenaID handles GET /api/v1/cards/{arenaId}.
 func (h *CardsHandler) GetByArenaID(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAuth(w, r) {
@@ -247,6 +321,13 @@ func (h *CardsHandler) GetByArenaID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if row == nil {
+		// Fall back to static basic land data before returning 404 — basic
+		// lands frequently lack set_cards rows and the draft deck editor uses
+		// these canonical arena IDs (81716–81720).
+		if land, ok := knownBasicLands[arenaID]; ok {
+			writeMatchesJSON(w, setCardRowToResponse(land))
+			return
+		}
 		writeJSONError(w, "card not found", http.StatusNotFound)
 		return
 	}
