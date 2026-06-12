@@ -204,7 +204,8 @@ func isPermanent(err error) bool {
 // transientErr wraps an error to signal that the failure is recoverable —
 // the worker should leave the row pending rather than calling MarkProjected,
 // so the next tick retries it. Only opt-in projectors return transient().
-// Currently only projectGamePlayEvent returns it (for FK 23503 violations).
+// Projectors that return transient(): projectGamePlayEvent (FK 23503 violation
+// on games.match_id) and projectMatch (draft session not yet projected, NB-1).
 type transientErr struct {
 	cause error
 }
@@ -770,6 +771,14 @@ func (w *Worker) projectMatch(ctx context.Context, row *repository.DaemonEventRo
 
 	// Resolve the draft session ID for this match (ADR-051).
 	// Path 1: daemon supplied it directly — validate ownership.
+	//   - session exists: link it.
+	//   - session does not exist yet: draft.started has not been projected yet
+	//     (out-of-order arrival, NB-1). Return transient() so the row stays
+	//     pending and retries on the next tick. Once draft.started projects the
+	//     session row, SessionExists returns true and the linkage is applied.
+	//     TTL ceiling: received_at + transientRetryTTL — same RC2 rule as #1340
+	//     (based on received_at, not occurred_at, so daemon replays are safe).
+	//   - SessionExists DB error: plain error (not transient — don't mask DB issues).
 	// Path 2: attempt time-window inference when the event_name looks like a draft.
 	// Path 3: leave nil (non-draft match or ambiguous inference).
 	var draftSessionID *string
@@ -778,7 +787,21 @@ func (w *Worker) projectMatch(ctx context.Context, row *repository.DaemonEventRo
 		if existsErr != nil {
 			log.Printf("[projection] projectMatch id=%d: SessionExists: %v — ignoring DraftSessionID", row.ID, existsErr)
 		} else if !exists {
-			log.Printf("[projection] projectMatch id=%d: DraftSessionID %q not found for account — ignoring", row.ID, *p.DraftSessionID)
+			// draft.started not yet projected — defer this event for retry.
+			//
+			// TTL (RC2): base ceiling on received_at, NOT occurred_at. Daemon
+			// replays carry old occurred_at but fresh received_at; using
+			// occurred_at would DLQ recoverable events on first failure.
+			if time.Since(row.ReceivedAt) > transientRetryTTL {
+				log.Printf("[projection] projectMatch id=%d: DraftSessionID %q not found after TTL (received_at=%v) — escalating to DLQ",
+					row.ID, *p.DraftSessionID, row.ReceivedAt)
+				return permanent(fmt.Errorf("draft_session_id %q not found after %v (received_at TTL): draft.started never projected",
+					*p.DraftSessionID, transientRetryTTL))
+			}
+			log.Printf("[projection] projectMatch id=%d: DraftSessionID %q not found — draft.started not yet projected, deferring for retry",
+				row.ID, *p.DraftSessionID)
+			return transient(fmt.Errorf("draft session %q not yet projected (out-of-order: match.completed before draft.started)",
+				*p.DraftSessionID))
 		} else {
 			draftSessionID = p.DraftSessionID
 		}
