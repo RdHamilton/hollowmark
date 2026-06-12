@@ -40,11 +40,16 @@ export default defineConfig({
   //     additional fixtures/env vars not present in this step.
   //   staging-spa-smoke — belongs to playwright.staging-spa.config.ts only.
   //
-  //   multi-device-433 — authenticated BFF tests that require CLERK_SECRET_KEY
-  //     (Backend API sign-in-token flow).  This config injects CLERK_SECRET_KEY
-  //     so multi-device-433 CAN run here; it is excluded only because it belongs
-  //     to a separate CI step (e2e-staging-auth-smoke.yml) to keep this suite
-  //     focused on the core /matches + /events + /healthz contract.
+  //   multi-device-433 — authenticated BFF tests using the Backend-API
+  //     sign-in-token chain.  CLERK_SECRET_KEY is injected by the BFF smoke
+  //     step, so this spec now runs as part of the generic sweep alongside
+  //     staging-smoke.spec.ts and wildcard-advisor-424.spec.ts.  The former
+  //     dedicated CI step that explicitly passed the file path (tickets#1150)
+  //     has been removed because testIgnore in Playwright v1.x takes precedence
+  //     over explicitly-passed CLI file arguments — the file was silently
+  //     excluded even when named directly, causing "No tests found" exit 1 on
+  //     every staging deploy since the step was wired (50+ consecutive failures).
+  //     Fix: remove from testIgnore and let the generic sweep collect it.
   //   prof-visual-capture — screenshot capture driven by prof-visual-capture.yml;
   //     requires CLERK_SECRET_KEY + SCREENSHOT_DIR.  Collected here by mistake
   //     since the spec was added after the original exclusion list was written.
@@ -59,8 +64,6 @@ export default defineConfig({
     /projection-golden-smoke/,
     /staging-spa-smoke/,
     /draft-ratings-.*-verify/,
-    // Requires CLERK_SECRET_KEY — not injected by this step; runs in auth step.
-    /multi-device-433/,
     // Requires CLERK_SECRET_KEY + SCREENSHOT_DIR — dedicated workflow step only.
     /prof-visual-capture/,
   ],
