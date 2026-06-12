@@ -14,9 +14,10 @@
 # Credential model (mirrors provision-db-url.sh, per ADR-022 sect4A.7):
 #   1. The EC2 instance role (mtga-companion-ec2-role-production) is the AWS
 #      calling identity for the SSM RunShellScript session.
-#   2. The three prod DB SSM params are read BEFORE assuming the provisioner
-#      role, because the provisioner role's SSM grant does NOT cover
-#      /vaultmtg/app/production/* -- only the instance role does.
+#   2. The three prod DB SSM params AND the Secrets Manager secret are ALL read
+#      BEFORE assuming the provisioner role, because the provisioner role's SSM
+#      grant does NOT cover /vaultmtg/app/production/* -- only the instance role
+#      does.  The secret JSON is kept in DB_SECRET_JSON for Step 3.
 #   3. This script then sts:AssumeRoles into
 #      vaultmtg-staging-deploy-provisioner (the only role with
 #      secretsmanager:GetSecretValue on the RDS-managed credential).
@@ -28,9 +29,13 @@
 #      aws CLI calls to the provisioner role.
 #   5. An EXIT trap clears the credentials after the env file is written.
 #
-# DATABASE_URL: provisioner-side fetch + credential splice via write_database_url()
-#   (from provision-lib.sh).  Reads SSM_PROD_APP_DB_SECRET_ARN (vaultmtg_app
-#   DML-only credential) so the BFF connects as the least-privilege role.
+# DATABASE_URL: Step 1 pre-fetches all DB values (SSM params + SM secret) under
+#   the instance role.  write_database_url() in provision-lib.sh assembles the
+#   URL from those passed VALUES -- it performs ZERO SSM/SM reads itself.
+#   This design means every prod SSM/SM read happens exactly once, in Step 1,
+#   under the instance role.  Step 2's assume-role is unaffected.
+#   Uses SSM_PROD_APP_DB_SECRET_ARN (vaultmtg_app DML-only credential) so the
+#   BFF connects as the least-privilege role.
 #   run-migrations.sh independently uses SSM_PROD_DB_SECRET_ARN (master credential).
 #   DB_SECRET_ARN and BFF_DB_RESOLVE_FROM_SM are deliberately NOT written
 #   (prevents the #2461 crash-loop regression -- contract test C5).
@@ -86,15 +91,19 @@ unset AWS_PROFILE
 unset AWS_CREDENTIAL_EXPIRATION
 
 # ---------------------------------------------------------------------------
-# Step 1: Read production DB SSM params under the EC2 instance role.
+# Step 1: Read ALL production DB values under the EC2 instance role.
 #
-# These three params live under /vaultmtg/app/production/*, which the
-# instance role can read but the provisioner role cannot.  They MUST be
-# read BEFORE the assume-role below.
+# These params live under /vaultmtg/app/production/*, which the instance role
+# can read but the provisioner role cannot.  ALL reads (SSM params + the
+# Secrets Manager secret) MUST happen here, BEFORE the assume-role below.
 #
 # Uses SSM_PROD_APP_DB_SECRET_ARN (vaultmtg_app application credential,
 # not the master credential) so DATABASE_URL connects as the least-privilege
 # DML-only role.  Mirrors provision-db-url.sh step 1 exactly.
+#
+# The resulting DB_SECRET_JSON, DB_ENDPOINT, and DB_NAME are passed by value
+# to write_database_url() in Step 3; that function performs no further AWS
+# reads, so the provisioner role's lack of prod SSM/SM access is irrelevant.
 # ---------------------------------------------------------------------------
 DB_SECRET_ARN_VALUE=$(aws ssm get-parameter \
   --name "$SSM_PROD_APP_DB_SECRET_ARN" \
@@ -122,6 +131,20 @@ if [ -z "$DB_SECRET_ARN_VALUE" ] || [ -z "$DB_ENDPOINT" ] || [ -z "$DB_NAME" ]; 
   exit 1
 fi
 
+# Fetch the RDS application-credential JSON from Secrets Manager under the
+# instance role.  This value is passed to write_database_url() in Step 3;
+# no further SM read is performed after the assume-role.
+DB_SECRET_JSON=$(aws secretsmanager get-secret-value \
+  --secret-id "$DB_SECRET_ARN_VALUE" \
+  --region "$REGION" \
+  --query SecretString \
+  --output text)
+
+if [ -z "$DB_SECRET_JSON" ]; then
+  echo "ERROR: secretsmanager get-secret-value returned empty for ARN '${DB_SECRET_ARN_VALUE}'." >&2
+  exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # Step 2: Assume the scoped provisioner role.
 #
@@ -135,6 +158,7 @@ cleanup_creds() {
   unset AWS_ACCESS_KEY_ID
   unset AWS_SECRET_ACCESS_KEY
   unset AWS_SESSION_TOKEN
+  unset DB_SECRET_JSON
 }
 trap cleanup_creds EXIT
 
@@ -200,14 +224,13 @@ chmod 600 "$ENV_FILE"
 printf 'AWS_DEFAULT_REGION=%s\n' "$REGION" >> "$ENV_FILE"
 echo "AWS_DEFAULT_REGION provisioned."
 
-# DATABASE_URL: provisioner-side fetch + credential splice.
-#
-# write_database_url() reads the three SSM DB params under the provisioner
-# role credentials, fetches the JSON secret from Secrets Manager, and writes
-# the complete DATABASE_URL to ENV_FILE.
+# DATABASE_URL: assemble from pre-fetched values (all read in Step 1 above,
+# under the EC2 instance role).  write_database_url() performs ZERO SSM/SM
+# reads -- it builds the URL entirely from the passed arguments.
 # NOTE: DB_SECRET_ARN and BFF_DB_RESOLVE_FROM_SM are deliberately NOT written
 # (prevents the #2461 crash-loop regression; contract test C5).
-write_database_url "$SSM_PROD_APP_DB_SECRET_ARN" "$SSM_PROD_DB_ENDPOINT" "$SSM_PROD_DB_NAME"
+write_database_url "$DB_SECRET_JSON" "$DB_ENDPOINT" "$DB_NAME"
+unset DB_SECRET_JSON
 
 # Manifest-driven provisioning loop (ADR-075 D3).
 #
