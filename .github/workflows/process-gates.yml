@@ -18,6 +18,10 @@ on:
       - '.gitignore'
       - 'LICENSE'
   pull_request:
+    # #142: Include 'edited' so that pr-checklist-gate re-runs when the PR
+    # body is updated after the initial open (e.g. agent REST PATCH or manual
+    # body edit). Also include 'reopened' for completeness.
+    types: [opened, synchronize, reopened, edited]
     branches: [ main ]
 
 concurrency:
@@ -104,6 +108,17 @@ jobs:
   # Gate #6 — Pre-Review Checklist presence check
   # Fails if the PR body does not contain "## Pre-Review Checklist".
   # Only runs on pull_request events (skip on push to main).
+  #
+  # #142 fix: fetch the PR body at runtime via `gh pr view` instead of
+  # reading ${{ github.event.pull_request.body }}.  The event snapshot is
+  # captured once at workflow dispatch time, so a re-run of a stale
+  # `opened` trigger (or any run before the first `edited` fires) sees the
+  # placeholder body that was set when the PR was first created.  The
+  # runtime fetch always reads the current body from the GitHub REST API.
+  #
+  # No checkout step exists in this job — `gh` would fail with "not a git
+  # repository" when resolving the repo context.  Setting GH_REPO avoids
+  # the checkout requirement (gh uses the env var directly).
   # ---------------------------------------------------------------------------
   pr-checklist-gate:
     name: PR body — Pre-Review Checklist present
@@ -120,11 +135,19 @@ jobs:
       !startsWith(github.head_ref, 'dependabot/')
 
     steps:
-      - name: Check for Pre-Review Checklist header
+      - name: Fetch PR body and check for Pre-Review Checklist header
         env:
-          PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          if echo "$PR_BODY" | grep -q "## Pre-Review Checklist"; then
+          # Fetch the current PR body from the API (not the event snapshot).
+          # GH_REPO is required because this job has no checkout step, so gh
+          # cannot infer the repository from the local git remote.
+          gh pr view "$PR_NUMBER" --json body --jq .body > /tmp/pr_body.txt
+          echo "PR body bytes: $(wc -c < /tmp/pr_body.txt)"
+
+          if grep -q "## Pre-Review Checklist" /tmp/pr_body.txt; then
             echo "Pre-Review Checklist header found. Gate: PASS"
           else
             echo "ERROR: PR body is missing the '## Pre-Review Checklist' section."
