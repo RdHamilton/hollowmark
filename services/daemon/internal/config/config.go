@@ -389,7 +389,12 @@ func (c *Config) validate() error {
 	if c.CloudAPIURL == "" {
 		return fmt.Errorf("cloud_api_url is required (set VAULTMTG_DAEMON_CLOUD_API_URL or MTGA_DAEMON_CLOUD_API_URL, or provide config file)")
 	}
-	if c.SyncEnabled && c.APIKey == "" && c.DaemonJWT == "" {
+	// Suppress the spurious "without authentication" warning when keychain mode is
+	// active (#1326 AC5): in keychain mode the API key lives in the OS keychain, so
+	// the absence of a plaintext api_key or daemon_jwt is the expected, correct state
+	// — not a misconfiguration. The warning is still correct and useful for non-keychain
+	// installs where sync_enabled is true but no credential has been configured at all.
+	if c.SyncEnabled && !c.Keychain && c.APIKey == "" && c.DaemonJWT == "" {
 		log.Printf("[config] warning: sync_enabled is true but neither api_key nor daemon_jwt is set; events will be sent without authentication")
 	}
 	// Validate and clamp GRE flush threshold.
