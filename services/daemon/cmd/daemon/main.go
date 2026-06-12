@@ -56,6 +56,7 @@ import (
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/keychain"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/migrate"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/pkce"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/recovery"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/sentryhook"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/tray"
 
@@ -198,8 +199,16 @@ func main() {
 	// Flush on graceful exit so in-flight events do not drop. Mirrors the BFF
 	// pattern (services/bff/cmd/main.go). 2s timeout matches sentryhook.FlushTimeout.
 	defer sentryhook.Flush()
-	// Top-level panic safety net: any panic that escapes the goroutines below
-	// is captured and re-raised so the launchd / NSSM restart loop still kicks in.
+	// Main-goroutine panic safety net: captures any panic that occurs on THIS
+	// goroutine (main), reports it to Sentry, flushes, and re-panics so the
+	// launchd / NSSM supervisor still sees a non-zero exit and respawns.
+	//
+	// NOTE: This recover() covers the main goroutine ONLY. Go's panic/recover
+	// semantics are strictly per-goroutine — a panic in any spawned goroutine
+	// (poller, localapi, tray-loop, batch-buffer, etc.) will NOT be caught here;
+	// it will crash the entire process unless that goroutine has its own deferred
+	// recover. Long-lived goroutines in this binary use recovery.RecoverGoroutine
+	// for that purpose.
 	defer func() {
 		if r := recover(); r != nil {
 			sentry.CurrentHub().Recover(r)
@@ -416,6 +425,7 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
+		defer recovery.RecoverGoroutine("signal-handler", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 		<-sigCh
 		app.Quit()
 	}()
@@ -428,6 +438,7 @@ func main() {
 	app.Run(func() {
 		app.SetStatus(tray.StatusConnected)
 		go func() {
+			defer recovery.RecoverGoroutine("daemon-run", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 			// ── Auth-failure / auth-paused retry loop (#2132, #2133) ──────────────
 			// Cases handled here:
 			//  (A) Step 3 PKCE failed non-headlessly → NeedsFirstRunAuth still true,

@@ -16,6 +16,8 @@ import (
 
 	"fyne.io/systray"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/install"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/recovery"
+	"github.com/getsentry/sentry-go"
 )
 
 // NSApplicationActivationPolicy values, mirrored from AppKit so the
@@ -510,6 +512,7 @@ func (a *App) NotifySyncResult(err error) {
 }
 
 func (a *App) loop() {
+	defer recovery.RecoverGoroutine("tray-loop", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 	for {
 		select {
 		case <-a.miCheckForUpdates.ClickedCh:

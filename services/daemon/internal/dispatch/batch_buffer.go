@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/RdHamilton/hollowmark/services/contract"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/recovery"
+	"github.com/getsentry/sentry-go"
 )
 
 // isErrReauthRequired reports whether err wraps ErrReauthRequired.
@@ -129,6 +131,7 @@ func (b *BatchBuffer) Close(_ context.Context) {
 
 // run is the background goroutine body.  It owns all calls to FlushFn.
 func (b *BatchBuffer) run() {
+	defer recovery.RecoverGoroutine("batch-buffer", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 	defer b.wg.Done()
 
 	ticker := time.NewTicker(b.cfg.Interval)
