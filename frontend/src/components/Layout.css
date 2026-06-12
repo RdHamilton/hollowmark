@@ -29,10 +29,6 @@
   text-decoration: none;
 }
 
-.nav-brand-mark {
-  display: block;
-}
-
 .nav-brand-wordmark {
   font-family: var(--font-display);
   font-weight: 700;
