@@ -8,7 +8,7 @@
 --   000062_add_is_draft_active (is_draft_active column on sets)
 --   000065_add_sync_hashes (sync_hashes)
 --   000088_add_sets_seventeenlands_code (seventeenlands_code column on sets)
---   000125_set_cards_arena_id_source (arena_id_source column on set_cards)
+--   000126_set_cards_arena_id_source (arena_id_source column on set_cards)
 
 -- Set cards: per-set card cache from Scryfall (migration 000014).
 -- This is the canonical card-metadata table. The cards table was retired in
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS set_cards (
     prices_updated_at TIMESTAMPTZ DEFAULT NULL,
     fetched_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- arena_id_source distinguishes Scryfall-sourced rows (full metadata) from
-    -- 17lands stub rows (name + arena_id only). Added in migration 000125.
+    -- 17lands stub rows (name + arena_id only). Added in migration 000126.
     arena_id_source   TEXT NOT NULL DEFAULT 'scryfall',
     UNIQUE(set_code, arena_id)
 );
