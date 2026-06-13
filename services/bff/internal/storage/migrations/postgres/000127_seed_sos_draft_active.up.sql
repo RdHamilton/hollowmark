@@ -1,4 +1,4 @@
--- Migration 000125: Seed Secrets of Strixhaven (SOS) into the sets table
+-- Migration 000127: Seed Secrets of Strixhaven (SOS) into the sets table
 -- and mark it draft-active so the Card-Sync Lambda includes it in its rotation.
 --
 -- Root cause (hollowmark-tickets#1420, Defect B1): SOS was absent from the sets
