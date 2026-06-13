@@ -25,6 +25,7 @@
 package main
 
 /*
+#cgo LDFLAGS: -framework Security
 #include <Security/Authorization.h>
 #include <stdlib.h>
 

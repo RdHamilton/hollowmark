@@ -43,6 +43,20 @@ func main() {
 		return
 	}
 
+	// --authorize: perform the one-time admin authorization dialog for
+	// com.apple.TaskForPid-allow (ADR-059) and exit.  The daemon's tray
+	// "Grant Access" flow invokes this flag via triggerHelperAuthorization().
+	// AuthorizationCopyRights surfaces the system admin-password dialog; the
+	// grant is cached so subsequent --authorize calls are no-ops.
+	if len(os.Args) == 2 && os.Args[1] == "--authorize" {
+		if err := RequestOneTimeAuthorization(); err != nil {
+			fmt.Fprintf(os.Stderr, "authorization failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("authorization granted")
+		return
+	}
+
 	log.SetPrefix("[collection-helper] ")
 	log.SetFlags(log.Ldate | log.Ltime)
 

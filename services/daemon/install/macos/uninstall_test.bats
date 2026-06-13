@@ -625,19 +625,21 @@ LCEOF
 }
 
 # ---------------------------------------------------------------------------
-# collection-agent-helper uninstall (R3 — hollowmark-tickets#1286)
+# collection-agent-helper uninstall (R3 — hollowmark-tickets#1286; ADR-059)
 #
-# The .pkg now owns the helper. On uninstall the script must:
-#   1. Boot out the system launchd job com.vaultmtg.collection-helper
-#   2. Remove /Library/LaunchDaemons/com.vaultmtg.collection-helper.plist
-#   3. Remove the installed binary at HELPER_DEST_DIR/collection-helper
-#   4. Remove staged copies in SHARE_DIR (collection-helper + install/ subdirectory)
+# Under ADR-059 the helper runs as the logged-in user — NOT as a root system
+# LaunchDaemon.  The uninstall script performs best-effort legacy cleanup for
+# users upgrading from pre-ADR-059 installs, and removes the helper binary
+# from SHARE_DIR for all installs.
 #
-# All steps use || true — helper may never have been installed; uninstall.sh
-# must remain non-fatal so daemon uninstall never fails due to helper absence.
+# Steps (all best-effort — || true):
+#   1. Attempt launchctl bootout system/com.vaultmtg.collection-helper (legacy no-op on post-ADR-059)
+#   2. Remove /Library/LaunchDaemons/com.vaultmtg.collection-helper.plist (legacy no-op on post-ADR-059)
+#   3. Remove legacy install/ artifacts from SHARE_DIR (no-op on post-ADR-059)
+#   4. Remove the helper binary from SHARE_DIR/collection-helper (all installs)
 #
-# HELPER_LAUNCHDAEMONS_DIR and HELPER_DEST_DIR are env overrides so tests can
-# run without root (same pattern as INSTALL_DIR and APP_BUNDLE_PATH above).
+# HELPER_LAUNCHDAEMONS_DIR is an env override so tests can run without root.
+# SHARE_DIR is the canonical binary location (matches build-pkg.sh + locateHelperBinary()).
 # ---------------------------------------------------------------------------
 
 # Helper: a launchctl stub that also accepts system-domain bootout (the helper
@@ -690,18 +692,21 @@ EOF
   [[ "${output}" == *"com.vaultmtg.collection-helper"* ]]
 }
 
-# 17. collection-helper binary removed from HELPER_DEST_DIR on uninstall
-@test "helper uninstall: collection-helper binary removed from HELPER_DEST_DIR" {
+# 17. collection-helper binary removed from SHARE_DIR on uninstall (ADR-059)
+# Under ADR-059 the canonical binary location is SHARE_DIR/collection-helper,
+# not HELPER_DEST_DIR.  This test verifies the SHARE_DIR path is cleaned up.
+@test "helper uninstall: collection-helper binary removed from SHARE_DIR" {
   local stub_dir; stub_dir="$(_make_stub_dir_with_system_launchctl)"
   local install_dir; install_dir="$(mktemp -d)"
   local fake_home; fake_home="$(_make_fake_home "${install_dir}" \
     no-binary no-current-plist no-legacy-plist no-log no-config)"
   local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
   local fake_launchdaemons; fake_launchdaemons="$(mktemp -d)"
-  local fake_helper_dest; fake_helper_dest="$(mktemp -d)/VaultMTG"
-  mkdir -p "${fake_helper_dest}"
-  echo "fake helper binary" > "${fake_helper_dest}/collection-helper"
-  chmod +x "${fake_helper_dest}/collection-helper"
+
+  local fake_share; fake_share="$(mktemp -d)/vaultmtg"
+  mkdir -p "${fake_share}"
+  echo "fake helper binary" > "${fake_share}/collection-helper"
+  chmod +x "${fake_share}/collection-helper"
 
   run env \
     PATH="${stub_dir}:${PATH}" \
@@ -709,13 +714,13 @@ EOF
     INSTALL_DIR="${install_dir}" \
     APP_BUNDLE_PATH="${fake_app_dir}" \
     HELPER_LAUNCHDAEMONS_DIR="${fake_launchdaemons}" \
-    HELPER_DEST_DIR="${fake_helper_dest}" \
+    SHARE_DIR="${fake_share}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
 
   echo "output: ${output}"
   [ "${status}" -eq 0 ]
-  [ ! -f "${fake_helper_dest}/collection-helper" ]
+  [ ! -f "${fake_share}/collection-helper" ]
 }
 
 # 18. staged helper files removed from SHARE_DIR on uninstall
@@ -759,7 +764,7 @@ EOF
     no-binary no-current-plist no-legacy-plist no-log no-config)"
   local fake_app_dir; fake_app_dir="$(mktemp -d)/VaultMTG.app"
   local fake_launchdaemons; fake_launchdaemons="$(mktemp -d)"
-  local fake_helper_dest; fake_helper_dest="$(mktemp -d)/VaultMTG"
+  local fake_share; fake_share="$(mktemp -d)/vaultmtg"
 
   run env \
     PATH="${stub_dir}:${PATH}" \
@@ -767,7 +772,7 @@ EOF
     INSTALL_DIR="${install_dir}" \
     APP_BUNDLE_PATH="${fake_app_dir}" \
     HELPER_LAUNCHDAEMONS_DIR="${fake_launchdaemons}" \
-    HELPER_DEST_DIR="${fake_helper_dest}" \
+    SHARE_DIR="${fake_share}" \
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
     bash "${UNINSTALL_SH}"
 

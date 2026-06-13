@@ -25,11 +25,12 @@
 #   4. Removes the channel-appropriate binary from INSTALL_DIR.
 #   5. Removes the legacy binary (mtga-companion-daemon) if present (stable only).
 #   6. Removes the channel-appropriate .app bundle from /Applications.
-#   7. Removes the collection-agent-helper (hollowmark-tickets#1286):
-#      - Boots out com.vaultmtg.collection-helper from system launchd (|| true).
-#      - Removes HELPER_LAUNCHDAEMONS_DIR/com.vaultmtg.collection-helper.plist.
-#      - Removes installed binary from HELPER_DEST_DIR/collection-helper.
-#      - Removes staged copies from SHARE_DIR (collection-helper + install/).
+#   7. Removes the collection-agent-helper (hollowmark-tickets#1286; ADR-059):
+#      - Best-effort legacy: boots out com.vaultmtg.collection-helper from
+#        system launchd (|| true; no-op on post-ADR-059 installs).
+#      - Best-effort legacy: removes HELPER_LAUNCHDAEMONS_DIR plist (|| true).
+#      - Best-effort legacy: removes install/ artifacts from SHARE_DIR (|| true).
+#      - Removes the helper binary from SHARE_DIR/collection-helper.
 #      The helper is channel-agnostic (ADR-049 §R5: one shared helper identity).
 #      All helper steps are non-fatal — helper may never have been installed.
 #   8. (--purge only) Deletes the API key from the macOS Keychain.
@@ -187,60 +188,59 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Remove the collection-agent-helper (hollowmark-tickets#1286, R3).
+# 7. Remove the collection-agent-helper (hollowmark-tickets#1286, R3; ADR-059).
 #
-# The helper is a root system daemon (com.vaultmtg.collection-helper) installed
-# by the .pkg postinstall via install-helper.sh.  It is channel-agnostic — both
-# stable and staging plumb through the same system socket.  Every step here is
-# non-fatal (|| true) because the helper may never have been installed (e.g. the
-# user installed via a pre-#1286 .pkg, or clicked "Grant Access" was never shown).
+# Under ADR-059 the helper runs as the logged-in user — NOT as a root system
+# LaunchDaemon.  New installs (post-ADR-059) will have no LaunchDaemon plist,
+# no /Library/LaunchDaemons entry, and no install/ subdirectory under SHARE_DIR.
+#
+# For users upgrading from pre-ADR-059 installs the legacy root daemon may still
+# be present.  All LaunchDaemon cleanup below is best-effort (|| true) so it is
+# silent-safe on fresh ADR-059 installs where the artifacts never existed.
+#
+# Every step is non-fatal because:
+#   - The user may have installed via a pre-ADR-059 .pkg (has LaunchDaemon).
+#   - The user may have installed via a post-ADR-059 .pkg (no LaunchDaemon).
+#   - The user may never have clicked "Grant Access" (helper binary absent).
 #
 # HELPER_LAUNCHDAEMONS_DIR defaults to /Library/LaunchDaemons; override in tests.
-# HELPER_DEST_DIR defaults to /Library/Application Support/VaultMTG; override in tests.
 # SHARE_DIR is already set above from common.sh or the fallback.
 # ---------------------------------------------------------------------------
 HELPER_LABEL="com.vaultmtg.collection-helper"
 HELPER_LAUNCHDAEMONS_DIR="${HELPER_LAUNCHDAEMONS_DIR:-/Library/LaunchDaemons}"
 HELPER_PLIST="${HELPER_LAUNCHDAEMONS_DIR}/${HELPER_LABEL}.plist"
-HELPER_DEST_DIR="${HELPER_DEST_DIR:-/Library/Application Support/VaultMTG}"
-HELPER_BINARY="${HELPER_DEST_DIR}/collection-helper"
 # SHARE_DIR is already set: /usr/local/share/vaultmtg (from common.sh or postinstall constant)
 SHARE_DIR="${SHARE_DIR:-/usr/local/share/vaultmtg}"
 
-# Boot out the helper system launchd job (requires root — uninstall.sh is
-# expected to run with sudo).  The helper runs in the system domain so the
-# target is system/<label>, not gui/<uid>/<label>.
-echo "Checking for collection-agent-helper launchd job (${HELPER_LABEL})..."
+# --- Legacy best-effort: remove root LaunchDaemon if it exists (pre-ADR-059 installs). ---
+# Post-ADR-059 installs have no LaunchDaemon; these lines are silently skipped.
+echo "Checking for legacy collection-agent-helper LaunchDaemon (${HELPER_LABEL})..."
 launchctl bootout "system/${HELPER_LABEL}" 2>/dev/null || true
-
-# Remove helper plist from /Library/LaunchDaemons.
 if [[ -f "${HELPER_PLIST}" ]]; then
-  echo "Removing helper plist: ${HELPER_PLIST}"
+  echo "Removing legacy helper plist: ${HELPER_PLIST}"
   rm -f "${HELPER_PLIST}" 2>/dev/null || true
-  echo "Helper plist removed (com.vaultmtg.collection-helper)."
+  echo "Legacy helper plist removed."
 else
-  echo "Helper plist not found (${HELPER_PLIST}), skipping."
+  echo "Legacy helper plist not found (${HELPER_PLIST}) — skipping (expected on post-ADR-059 installs)."
 fi
 
-# Remove the installed helper binary.
-if [[ -f "${HELPER_BINARY}" ]]; then
-  echo "Removing helper binary: ${HELPER_BINARY}"
-  rm -f "${HELPER_BINARY}" 2>/dev/null || true
-else
-  echo "Helper binary not found (${HELPER_BINARY}), skipping."
-fi
-
-# Remove staged helper copies from SHARE_DIR.  These were placed by the .pkg
-# postinstall (via install-helper.sh) so locateHelperFiles() can find them.
-if [[ -f "${SHARE_DIR}/collection-helper" ]]; then
-  rm -f "${SHARE_DIR}/collection-helper" 2>/dev/null || true
-  echo "Removed staged helper from ${SHARE_DIR}/collection-helper."
-fi
+# --- Remove install/ artifacts if present (pre-ADR-059 installs only). ---
+# post-ADR-059 .pkg does not stage install-helper.sh or the plist file.
 if [[ -f "${SHARE_DIR}/install/install-helper.sh" ]]; then
   rm -f "${SHARE_DIR}/install/install-helper.sh" 2>/dev/null || true
+  echo "Removed legacy install-helper.sh from SHARE_DIR."
 fi
 if [[ -f "${SHARE_DIR}/install/com.vaultmtg.collection-helper.plist" ]]; then
   rm -f "${SHARE_DIR}/install/com.vaultmtg.collection-helper.plist" 2>/dev/null || true
+  echo "Removed legacy helper plist from SHARE_DIR."
+fi
+
+# --- Remove the helper binary from SHARE_DIR (all installs). ---
+if [[ -f "${SHARE_DIR}/collection-helper" ]]; then
+  rm -f "${SHARE_DIR}/collection-helper" 2>/dev/null || true
+  echo "Removed helper binary from ${SHARE_DIR}/collection-helper."
+else
+  echo "Helper binary not found at ${SHARE_DIR}/collection-helper — skipping."
 fi
 
 # ---------------------------------------------------------------------------
