@@ -62,18 +62,18 @@ func seedCardRating(t *testing.T, db *sql.DB, setCode, format, name string, cach
 // seedCard inserts a minimal set_cards row for testing the color/rarity JOIN.
 // set_cards.arena_id is TEXT (migration 000014); arenaID is converted to string.
 // The row is cleaned up via t.Cleanup.
-func seedCard(t *testing.T, db *sql.DB, arenaID int, colors, rarity string) {
+func seedCard(t *testing.T, db *sql.DB, setCode string, arenaID int, colors, rarity string) {
 	t.Helper()
 
 	arenaIDText := strconv.Itoa(arenaID)
 	_, err := db.ExecContext(
 		context.Background(), `
 		INSERT INTO set_cards (set_code, arena_id, scryfall_id, name, colors, rarity)
-		VALUES ('TST', $1, $2, 'Test Card', $3, $4)
+		VALUES ($1, $2, $3, 'Test Card', $4, $5)
 		ON CONFLICT (set_code, arena_id) DO UPDATE
 			SET colors  = EXCLUDED.colors,
 			    rarity  = EXCLUDED.rarity`,
-		arenaIDText, "test-scryfall-id-"+arenaIDText, colors, rarity,
+		setCode, arenaIDText, "test-scryfall-id-"+arenaIDText, colors, rarity,
 	)
 	if err != nil {
 		t.Fatalf("seedCard: %v", err)
@@ -82,8 +82,8 @@ func seedCard(t *testing.T, db *sql.DB, arenaID int, colors, rarity string) {
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(
 			context.Background(),
-			`DELETE FROM set_cards WHERE set_code = 'TST' AND arena_id = $1`,
-			arenaIDText,
+			`DELETE FROM set_cards WHERE set_code = $1 AND arena_id = $2`,
+			setCode, arenaIDText,
 		)
 	})
 }
@@ -191,7 +191,7 @@ func TestDraftRatingsRepository_GetRatings_ColorRarityFromCardsJoin(t *testing.T
 	seedCardRating(t, db, setCode, format, "Test Card", now)
 
 	// Seed a matching cards row so the JOIN can resolve color and rarity.
-	seedCard(t, db, 99901, `["R","G"]`, "rare")
+	seedCard(t, db, setCode, 99901, `["R","G"]`, "rare")
 
 	result, err := repo.GetRatings(context.Background(), setCode, format)
 	if err != nil {
@@ -527,7 +527,7 @@ func TestGetRatings_FullyResolved_NoSignal(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 
 	seedCardRating(t, db, setCode, format, "Test Card", now)
-	seedCard(t, db, 99901, `["R","G"]`, "rare")
+	seedCard(t, db, setCode, 99901, `["R","G"]`, "rare")
 
 	result, err := repo.GetRatings(context.Background(), setCode, format)
 	if err != nil {
