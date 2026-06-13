@@ -1162,7 +1162,7 @@ func (w *Worker) projectDraftPick(ctx context.Context, row *repository.DaemonEve
 		AccountID:  accountID,
 		StartTime:  row.OccurredAt,
 		Status:     "in_progress",
-		TotalPicks: 1, // GREATEST(1, current) effectively increments
+		TotalPicks: 1, // additive upsert: current + 1 per pick event
 	}); err != nil {
 		return err
 	}

@@ -10,9 +10,17 @@ import (
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
-// insertTestDraftSession inserts a minimal draft_sessions row for the given account.
-// The row (and any associated draft_match_results) is removed via t.Cleanup.
+// insertTestDraftSession inserts a minimal draft_sessions row for the given account
+// with status="completed".  The row (and any associated draft_match_results) is
+// removed via t.Cleanup.
 func insertTestDraftSession(t *testing.T, db *sql.DB, sessionID string, accountID int64, setCode string, startTime time.Time) {
+	t.Helper()
+	insertTestDraftSessionWithStatus(t, db, sessionID, accountID, setCode, startTime, "completed")
+}
+
+// insertTestDraftSessionWithStatus is the underlying helper that accepts an explicit
+// status value.  Use insertTestDraftSession for completed rows (the common case).
+func insertTestDraftSessionWithStatus(t *testing.T, db *sql.DB, sessionID string, accountID int64, setCode string, startTime time.Time, status string) {
 	t.Helper()
 
 	_, err := db.ExecContext(
@@ -20,10 +28,10 @@ func insertTestDraftSession(t *testing.T, db *sql.DB, sessionID string, accountI
 		`INSERT INTO draft_sessions
 			(id, account_id, event_name, set_code, draft_type, start_time, status)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		sessionID, accountID, "event-"+sessionID, setCode, "PremierDraft", startTime, "completed",
+		sessionID, accountID, "event-"+sessionID, setCode, "PremierDraft", startTime, status,
 	)
 	if err != nil {
-		t.Fatalf("insertTestDraftSession %q: %v", sessionID, err)
+		t.Fatalf("insertTestDraftSessionWithStatus %q status=%q: %v", sessionID, status, err)
 	}
 
 	t.Cleanup(func() {
@@ -258,7 +266,7 @@ func TestDraftSessionsRepository_UpsertDraftSession_InsertAndUpdate(t *testing.T
 		t.Fatalf("second UpsertDraftSession: %v", err)
 	}
 
-	// Verify status updated and total_picks is GREATEST(42, 0) = 42.
+	// Verify status updated and total_picks is 0 + 42 = 42 (additive upsert).
 	var status string
 	var picks int
 
@@ -277,6 +285,64 @@ func TestDraftSessionsRepository_UpsertDraftSession_InsertAndUpdate(t *testing.T
 
 	if picks != 42 {
 		t.Errorf("total_picks: want 42, got %d", picks)
+	}
+}
+
+// TestDraftSessionsRepository_UpsertDraftSession_TotalPicksAccumulates verifies
+// that each draft.pick event (TotalPicks=1 partial upsert) increments the
+// stored total rather than staying stuck at 1.  Before the #1424 fix, the
+// ON CONFLICT clause used GREATEST(EXCLUDED.total_picks, current) which
+// resolved to GREATEST(1, 1) = 1 on every subsequent pick.
+func TestDraftSessionsRepository_UpsertDraftSession_TotalPicksAccumulates(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "draft-picks-accum-acct")
+	sessionID := fmt.Sprintf("ds-picks-%d", accountID)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, sessionID)
+	})
+
+	// INSERT on draft.started — TotalPicks=0 (zero value, not a pick event).
+	if err := repo.UpsertDraftSession(context.Background(), repository.DraftSessionUpsert{
+		ID:        sessionID,
+		AccountID: accountID,
+		EventName: "QuickDraftEmblem_SOS_20260611",
+		SetCode:   "SOS",
+		DraftType: "QuickDraftEmblem",
+		StartTime: now,
+		Status:    "in_progress",
+	}); err != nil {
+		t.Fatalf("draft.started upsert: %v", err)
+	}
+
+	// Simulate 3 draft.pick events, each contributing TotalPicks=1.
+	for i := 0; i < 3; i++ {
+		if err := repo.UpsertDraftSession(context.Background(), repository.DraftSessionUpsert{
+			ID:         sessionID,
+			AccountID:  accountID,
+			StartTime:  now,
+			Status:     "in_progress",
+			TotalPicks: 1,
+		}); err != nil {
+			t.Fatalf("pick upsert %d: %v", i, err)
+		}
+	}
+
+	var picks int
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT total_picks FROM draft_sessions WHERE id = $1`,
+		sessionID,
+	).Scan(&picks); err != nil {
+		t.Fatalf("select total_picks: %v", err)
+	}
+
+	// Expect 0 (started) + 3×1 (picks) = 3.
+	if picks != 3 {
+		t.Errorf("total_picks: want 3, got %d (stuck-at-1 regression)", picks)
 	}
 }
 
@@ -739,5 +805,71 @@ func TestInsertDraftPick_Idempotent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected 1 pick row after idempotent insert, got %d", count)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Draft History view filter: completed-only (#1419 Defect E follow-on)
+// ---------------------------------------------------------------------------
+
+// TestDraftSessionsRepository_ListByAccountID_ExcludesInProgressSessions verifies
+// that the Draft History endpoint (backed by ListByAccountID) does NOT surface
+// in_progress drafts.  Before the #1419 fix, sessions created by draft.pack /
+// draft.pick events (status="in_progress") appeared in the Draft History table
+// while the player was still in-game, causing premature entries.
+//
+// The test inserts one completed and one in_progress session for the same account,
+// then asserts that ListByAccountID returns exactly the completed row, and that the
+// pagination total also reflects only the completed count.
+func TestDraftSessionsRepository_ListByAccountID_ExcludesInProgressSessions(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "draft-history-filter-test")
+	now := time.Now().UTC()
+
+	// Completed session — must appear in Draft History.
+	insertTestDraftSessionWithStatus(t, db, "ds-hist-done-"+fmt.Sprintf("%d", accountID), accountID, "SOS", now, "completed")
+	// In-progress session — must NOT appear in Draft History.
+	insertTestDraftSessionWithStatus(t, db, "ds-hist-wip-"+fmt.Sprintf("%d", accountID), accountID, "SOS", now.Add(-time.Minute), "in_progress")
+
+	rows, total, err := repo.ListByAccountID(context.Background(), accountID, "", 1, 100)
+	if err != nil {
+		t.Fatalf("ListByAccountID: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("total: want 1 (completed only), got %d", total)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows: want 1, got %d", len(rows))
+	}
+	// The returned row must be the completed one.
+	wantID := "ds-hist-done-" + fmt.Sprintf("%d", accountID)
+	if rows[0].ID != wantID {
+		t.Errorf("row ID: want %q, got %q", wantID, rows[0].ID)
+	}
+}
+
+// TestDraftSessionsRepository_ListByAccountID_SetCode_ExcludesInProgress verifies
+// the set-code-filtered path also excludes in_progress sessions.
+func TestDraftSessionsRepository_ListByAccountID_SetCode_ExcludesInProgress(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "draft-history-setfilter-test")
+	now := time.Now().UTC()
+
+	insertTestDraftSessionWithStatus(t, db, "ds-sf-done-"+fmt.Sprintf("%d", accountID), accountID, "SOS", now, "completed")
+	insertTestDraftSessionWithStatus(t, db, "ds-sf-wip-"+fmt.Sprintf("%d", accountID), accountID, "SOS", now.Add(-time.Minute), "in_progress")
+
+	rows, total, err := repo.ListByAccountID(context.Background(), accountID, "SOS", 1, 100)
+	if err != nil {
+		t.Fatalf("ListByAccountID SOS: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("total: want 1, got %d", total)
+	}
+	if len(rows) != 1 {
+		t.Errorf("rows: want 1, got %d", len(rows))
 	}
 }
