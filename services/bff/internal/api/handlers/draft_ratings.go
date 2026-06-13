@@ -30,13 +30,30 @@ func NewDraftRatingsHandler(repo DraftRatingsGetter, cfg *config.Config) *DraftR
 	return &DraftRatingsHandler{repo: repo, cfg: cfg}
 }
 
+// draftRatingsDataQuality is the typed degradation signal added to the response
+// body when set_cards metadata is absent or incomplete for the requested set.
+//
+// AC4: The field is present (non-nil) only when degraded — omitted entirely from
+// JSON when all card metadata resolved (omitempty pointer).  The Reason value
+// "degraded" mirrors the X-Cache-Degraded: "true" header vocabulary so callers
+// share one degradation dictionary across this endpoint.  SetCardsEmpty=true
+// indicates the ADR-085 defect-4 post-wipe condition (set_cards has zero rows
+// for this set_code).  UnresolvedCardCount is the number of draft_card_ratings
+// rows whose arena_id had no matching set_cards entry (color/rarity unavailable).
+type draftRatingsDataQuality struct {
+	Reason              string `json:"reason"`
+	SetCardsEmpty       bool   `json:"set_cards_empty,omitempty"`
+	UnresolvedCardCount int    `json:"unresolved_card_count,omitempty"`
+}
+
 // draftRatingsResponse is the JSON envelope returned to callers.
 type draftRatingsResponse struct {
-	SetCode      string            `json:"set_code"`
-	DraftFormat  string            `json:"draft_format"`
-	CachedAt     time.Time         `json:"cached_at"`
-	CardRatings  []cardRatingJSON  `json:"card_ratings"`
-	ColorRatings []colorRatingJSON `json:"color_ratings"`
+	SetCode      string                   `json:"set_code"`
+	DraftFormat  string                   `json:"draft_format"`
+	CachedAt     time.Time                `json:"cached_at"`
+	CardRatings  []cardRatingJSON         `json:"card_ratings"`
+	ColorRatings []colorRatingJSON        `json:"color_ratings"`
+	DataQuality  *draftRatingsDataQuality `json:"data_quality,omitempty"`
 }
 
 type cardRatingJSON struct {
@@ -65,6 +82,15 @@ type colorRatingJSON struct {
 //     is not enabled.
 //   - 404 when no rows exist for the requested set/format.
 //   - Never returns 5xx due to stale data alone.
+//
+// Data-quality signal (AC4):
+//   - data_quality field is omitted when all card metadata resolved (healthy path).
+//   - data_quality.reason="degraded" when set_cards is empty for this set_code
+//     (ADR-085 defect-4 post-wipe condition) or when ≥1 card_rating row has no
+//     matching set_cards entry (partial-sync / arena_id drift).
+//   - data_quality.set_cards_empty=true flags the systemic empty-table case.
+//   - data_quality.unresolved_card_count reports per-row NULL color/rarity count.
+//   - Vocabulary mirrors X-Cache-Degraded: "true" — one degradation vocabulary.
 func (h *DraftRatingsHandler) GetDraftRatings(w http.ResponseWriter, r *http.Request) {
 	setCode := chi.URLParam(r, "setCode")
 	format := chi.URLParam(r, "format")
@@ -103,6 +129,16 @@ func (h *DraftRatingsHandler) GetDraftRatings(w http.ResponseWriter, r *http.Req
 		SetCode:     result.SetCode,
 		DraftFormat: result.DraftFormat,
 		CachedAt:    result.CachedAt,
+	}
+
+	// Populate data_quality signal when set_cards metadata is absent or partial.
+	// Field is omitted (nil pointer, omitempty) on the fully-healthy path.
+	if result.SetCardsEmpty || result.UnresolvedCardCount > 0 {
+		resp.DataQuality = &draftRatingsDataQuality{
+			Reason:              "degraded",
+			SetCardsEmpty:       result.SetCardsEmpty,
+			UnresolvedCardCount: result.UnresolvedCardCount,
+		}
 	}
 
 	for _, c := range result.CardRatings {

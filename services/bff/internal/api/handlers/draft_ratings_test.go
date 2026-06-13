@@ -221,3 +221,139 @@ func TestDraftRatingsHandler_ExactThresholdBoundary_NotDegraded(t *testing.T) {
 		t.Errorf("expected no X-Cache-Degraded below threshold, got %q", v)
 	}
 }
+
+// ─── data_quality degradation signal handler unit tests ──────────────────────
+
+// makeResultWithDegradation builds a DraftRatingsResult with the given
+// SetCardsEmpty and UnresolvedCardCount fields set.
+func makeResultWithDegradation(cachedAt time.Time, setCardsEmpty bool, unresolvedCount int) *repository.DraftRatingsResult {
+	gihwr := 55.5
+
+	return &repository.DraftRatingsResult{
+		SetCode:             "DSK",
+		DraftFormat:         "PremierDraft",
+		CachedAt:            cachedAt,
+		SetCardsEmpty:       setCardsEmpty,
+		UnresolvedCardCount: unresolvedCount,
+		CardRatings: []repository.CardRating{
+			{ArenaID: 1, Name: "Test Card", GIHWR: &gihwr},
+		},
+		ColorRatings: []repository.ColorRating{},
+	}
+}
+
+// TestGetDraftRatings_DataQuality_AbsentWhenFullyResolved verifies that when all
+// cards resolve, the data_quality field is absent from the JSON response.
+func TestGetDraftRatings_DataQuality_AbsentWhenFullyResolved(t *testing.T) {
+	cachedAt := time.Now().UTC().Add(-1 * time.Hour)
+	stub := &stubRatingsGetter{result: makeResultWithDegradation(cachedAt, false, 0)}
+
+	h := handlers.NewDraftRatingsHandler(stub, freshCfg())
+	req, rr := buildDraftRequest(t, "DSK", "PremierDraft")
+
+	h.GetDraftRatings(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	var body map[string]json.RawMessage
+
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if _, ok := body["data_quality"]; ok {
+		t.Error("data_quality field must be absent when all cards resolved (omitempty)")
+	}
+}
+
+// TestGetDraftRatings_DataQuality_DegradedWhenSetCardsEmpty verifies that when
+// SetCardsEmpty=true, the response includes data_quality.reason="degraded" and
+// data_quality.set_cards_empty=true.
+func TestGetDraftRatings_DataQuality_DegradedWhenSetCardsEmpty(t *testing.T) {
+	cachedAt := time.Now().UTC().Add(-1 * time.Hour)
+	stub := &stubRatingsGetter{result: makeResultWithDegradation(cachedAt, true, 1)}
+
+	h := handlers.NewDraftRatingsHandler(stub, freshCfg())
+	req, rr := buildDraftRequest(t, "DSK", "PremierDraft")
+
+	h.GetDraftRatings(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	var body struct {
+		DataQuality *struct {
+			Reason              string `json:"reason"`
+			SetCardsEmpty       bool   `json:"set_cards_empty"`
+			UnresolvedCardCount int    `json:"unresolved_card_count"`
+		} `json:"data_quality"`
+	}
+
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.DataQuality == nil {
+		t.Fatal("data_quality field must be present when SetCardsEmpty=true")
+	}
+
+	if body.DataQuality.Reason != "degraded" {
+		t.Errorf("data_quality.reason: got %q, want %q", body.DataQuality.Reason, "degraded")
+	}
+
+	if !body.DataQuality.SetCardsEmpty {
+		t.Error("data_quality.set_cards_empty: expected true")
+	}
+
+	if body.DataQuality.UnresolvedCardCount != 1 {
+		t.Errorf("data_quality.unresolved_card_count: got %d, want 1", body.DataQuality.UnresolvedCardCount)
+	}
+}
+
+// TestGetDraftRatings_DataQuality_DegradedWhenUnresolvedCards verifies that when
+// UnresolvedCardCount>0 (partial sync), the response includes
+// data_quality.reason="degraded" with the count and set_cards_empty=false.
+func TestGetDraftRatings_DataQuality_DegradedWhenUnresolvedCards(t *testing.T) {
+	cachedAt := time.Now().UTC().Add(-1 * time.Hour)
+	stub := &stubRatingsGetter{result: makeResultWithDegradation(cachedAt, false, 3)}
+
+	h := handlers.NewDraftRatingsHandler(stub, freshCfg())
+	req, rr := buildDraftRequest(t, "DSK", "PremierDraft")
+
+	h.GetDraftRatings(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	var body struct {
+		DataQuality *struct {
+			Reason              string `json:"reason"`
+			SetCardsEmpty       bool   `json:"set_cards_empty"`
+			UnresolvedCardCount int    `json:"unresolved_card_count"`
+		} `json:"data_quality"`
+	}
+
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+
+	if body.DataQuality == nil {
+		t.Fatal("data_quality field must be present when UnresolvedCardCount>0")
+	}
+
+	if body.DataQuality.Reason != "degraded" {
+		t.Errorf("data_quality.reason: got %q, want %q", body.DataQuality.Reason, "degraded")
+	}
+
+	if body.DataQuality.SetCardsEmpty {
+		t.Error("data_quality.set_cards_empty: expected false (partial sync, not empty table)")
+	}
+
+	if body.DataQuality.UnresolvedCardCount != 3 {
+		t.Errorf("data_quality.unresolved_card_count: got %d, want 3", body.DataQuality.UnresolvedCardCount)
+	}
+}
