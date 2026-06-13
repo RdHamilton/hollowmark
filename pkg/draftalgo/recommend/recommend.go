@@ -27,6 +27,7 @@ package recommend
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/RdHamilton/hollowmark/pkg/draftalgo"
@@ -56,6 +57,14 @@ const splashHighGIHWRFloor = 66.0
 // "frequently available late" scarcity signal. 7.0 is a round number
 // that captures bulk rares and late-format filler.
 const highALSAFloor = 7.0
+
+// wubrgOrder maps a color character to its canonical WUBRG position (0=W, 4=G).
+// Used as the deterministic tiebreaker of last resort when frequency and quality
+// scores are equal. Non-WUBRG colors (e.g. colorless "C") are handled by the
+// caller using len(wubrgOrder) as a fallback, sorting them after all five colors.
+// Defined package-level so both sort sites in derivePoolColorsWithFreq and
+// detectTwoColorCommitment share one definition (#1397).
+var wubrgOrder = map[string]int{"W": 0, "U": 1, "B": 2, "R": 3, "G": 4}
 
 // Recommendation is one card recommendation entry.
 //
@@ -139,7 +148,7 @@ func Recommend(
 
 	// Phase B: derive pool colors fresh from pool card metas.
 	// Re-derived on every call — never cached (ADR-047 §3 + Prof D).
-	poolColors, colorFreq := derivePoolColorsWithFreq(pool, meta)
+	poolColors, colorFreq := derivePoolColorsWithFreq(format, pool, ratings, meta)
 	isCommitted, color1, color2 := detectTwoColorCommitment(colorFreq)
 	archetype := archetypeName(color1, color2)
 
@@ -229,38 +238,70 @@ func isLowConfidence(count *int) bool {
 //   - poolColors: dominant colors sorted by frequency descending (unique, deduped)
 //   - freq: the full frequency map used by detectTwoColorCommitment
 //
+// Tie-breaking is deterministic via a 3-key comparator (#1397):
+//  1. frequency DESC (primary)
+//  2. quality_sum DESC — sum of GIHWR across the color's pool cards (semantic tie-break)
+//  3. WUBRG position ASC — canonical fallback when quality data is absent or equal
+//
 // Re-derived from scratch on every call — never cached (ADR-047 §3 + Prof D).
-func derivePoolColorsWithFreq(pool []string, meta draftalgo.CardMetaLookup) ([]string, map[string]int) {
+func derivePoolColorsWithFreq(
+	format string,
+	pool []string,
+	ratings draftalgo.RatingsLookup,
+	meta draftalgo.CardMetaLookup,
+) ([]string, map[string]int) {
 	if meta == nil || len(pool) == 0 {
 		return nil, nil
 	}
 	freq := make(map[string]int)
+	qualitySum := make(map[string]float64)
 	for _, id := range pool {
 		cm, ok := meta.CardMetaByID(id)
 		if !ok {
 			continue
 		}
 		for _, c := range cm.Colors {
-			if c != "" {
-				freq[c]++
+			if c == "" {
+				continue
+			}
+			freq[c]++
+			if ratings != nil {
+				if gihwr, ok := ratings.GIHWR(id, format); ok {
+					qualitySum[c] += gihwr
+				}
 			}
 		}
 	}
-	// Return colors sorted by frequency descending (deduplicated).
-	// Pool is ≤42 cards, N is tiny — insertion sort is fine.
+	// Build a slice and sort with a deterministic 3-key comparator.
+	// Pool is ≤42 cards so N is tiny; sort.SliceStable is stable and correct.
 	type cv struct {
 		c string
 		n int
 	}
-	var sorted []cv
+	sorted := make([]cv, 0, len(freq))
 	for c, n := range freq {
 		sorted = append(sorted, cv{c, n})
 	}
-	for i := 1; i < len(sorted); i++ {
-		for j := i; j > 0 && sorted[j].n > sorted[j-1].n; j-- {
-			sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].n != sorted[j].n {
+			return sorted[i].n > sorted[j].n // freq DESC
 		}
-	}
+		qi := qualitySum[sorted[i].c]
+		qj := qualitySum[sorted[j].c]
+		if qi != qj {
+			return qi > qj // quality_sum DESC
+		}
+		// WUBRG fallback ASC — non-WUBRG colors sort after position 4.
+		oi, oki := wubrgOrder[sorted[i].c]
+		oj, okj := wubrgOrder[sorted[j].c]
+		if !oki {
+			oi = len(wubrgOrder)
+		}
+		if !okj {
+			oj = len(wubrgOrder)
+		}
+		return oi < oj
+	})
 	out := make([]string, 0, len(sorted))
 	for _, cv := range sorted {
 		out = append(out, cv.c)
@@ -274,6 +315,10 @@ func derivePoolColorsWithFreq(pool []string, meta draftalgo.CardMetaLookup) ([]s
 // second most).
 // ADR-047 §3 + Prof B: a 5G/2B pool is Simic-leaning, not Mono-Green —
 // we detect leaning two-color, not collapsing to the single leading color.
+//
+// Tie-breaking uses a 2-key comparator (#1397): freq DESC then WUBRG ASC.
+// Quality-sum is intentionally absent here — the archetype label needs
+// determinism, not quality-weighting. See plan §3c for the accepted tradeoff.
 func detectTwoColorCommitment(freq map[string]int) (committed bool, color1, color2 string) {
 	if len(freq) < 2 {
 		return false, "", ""
@@ -282,16 +327,25 @@ func detectTwoColorCommitment(freq map[string]int) (committed bool, color1, colo
 		c string
 		n int
 	}
-	var top []cv
+	top := make([]cv, 0, len(freq))
 	for c, n := range freq {
 		top = append(top, cv{c, n})
 	}
-	// Sort by count desc. Insertion sort — small N.
-	for i := 1; i < len(top); i++ {
-		for j := i; j > 0 && top[j].n > top[j-1].n; j-- {
-			top[j], top[j-1] = top[j-1], top[j]
+	// Sort with a deterministic 2-key comparator: freq DESC, WUBRG ASC.
+	sort.SliceStable(top, func(i, j int) bool {
+		if top[i].n != top[j].n {
+			return top[i].n > top[j].n // freq DESC
 		}
-	}
+		oi, oki := wubrgOrder[top[i].c]
+		oj, okj := wubrgOrder[top[j].c]
+		if !oki {
+			oi = len(wubrgOrder)
+		}
+		if !okj {
+			oj = len(wubrgOrder)
+		}
+		return oi < oj // WUBRG ASC
+	})
 	if len(top) < 2 {
 		return false, "", ""
 	}
