@@ -73,6 +73,156 @@ func TestClassifyEntry_DeckUpdatedStillClassified(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// draft.completed — EventGetCoursesV2 Courses[].CurrentModule=Complete (#1419)
+// ---------------------------------------------------------------------------
+
+// TestClassifyEntry_DraftCompleted_CoursesEnvelope_QuickDraft verifies that an
+// EventGetCoursesV2 response containing a QuickDraft course with
+// CurrentModule="Complete" is classified as "draft.completed".
+//
+// This is the primary completion signal for QuickDraft / bot-draft events:
+// Arena emits it after the player finishes all three rounds (or drops) and the
+// event reaches terminal state. The daemon had no classifier branch for this
+// envelope, causing draft_sessions to remain permanently in_progress and the
+// Draft History view to appear empty (Defect E, #1419).
+//
+// The fixture shape mirrors the real EventGetCoursesV2 response observed in
+// Ramone's Player.log: a top-level {"Courses": [...]} array where each element
+// carries InternalEventName and CurrentModule. We use the QuickDraftEmblem name
+// from the active SOS session as a real identifier.
+func TestClassifyEntry_DraftCompleted_CoursesEnvelope_QuickDraft(t *testing.T) {
+	// Real wire shape: EventGetCoursesV2 response where the QuickDraft course
+	// has reached CurrentModule="Complete". Other courses in the same payload
+	// may be in various states; only the draft course matters for this classifier.
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"Courses": []interface{}{
+				// Non-draft courses in the same payload (real data — should not trigger)
+				map[string]interface{}{
+					"CourseId":          "49bbc08b-814f-477d-8aef-9fdfd63ee187",
+					"InternalEventName": "SparkyStarterDeckDuel",
+					"CurrentModule":     "CreateMatch",
+				},
+				map[string]interface{}{
+					"CourseId":          "26c87c40-97fc-4235-b9c7-45ffdadac41f",
+					"InternalEventName": "Explorer_Ladder",
+					"CurrentModule":     "Complete",
+				},
+				// The QuickDraft course reaching terminal state — this is the trigger.
+				map[string]interface{}{
+					"CourseId":          "56c6eed8-bec8-4f4c-a8b5-b8beeb94ea1e",
+					"InternalEventName": "QuickDraftEmblem_SOS_20260611",
+					"CurrentModule":     "Complete",
+				},
+			},
+		},
+	}
+	assert.Equal(t, "draft.completed", ClassifyEntry(entry))
+}
+
+// TestClassifyEntry_DraftCompleted_CoursesEnvelope_PremierDraft verifies that a
+// PremierDraft course with CurrentModule="Complete" also classifies as
+// "draft.completed". PremierDraft uses the same Courses envelope shape.
+func TestClassifyEntry_DraftCompleted_CoursesEnvelope_PremierDraft(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"Courses": []interface{}{
+				map[string]interface{}{
+					"CourseId":          "aaaaaaaa-0000-0000-0000-000000000001",
+					"InternalEventName": "PremierDraft_SOS_20260526",
+					"CurrentModule":     "Complete",
+				},
+			},
+		},
+	}
+	assert.Equal(t, "draft.completed", ClassifyEntry(entry))
+}
+
+// TestClassifyEntry_DraftNotCompleted_CoursesEnvelope_NoDraftComplete verifies
+// that a Courses envelope where ALL draft-complete markers belong to
+// non-draft events does NOT classify as "draft.completed".
+//
+// Real fixture: the actual Courses array observed in Ramone's Player.log where
+// Explorer_Ladder, Alchemy_Ladder, Play, etc. are Complete but there is no draft
+// course in the payload at all.
+func TestClassifyEntry_DraftNotCompleted_CoursesEnvelope_NoDraftComplete(t *testing.T) {
+	// Real Courses payload from Ramone's Player.log — 0 draft courses.
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"Courses": []interface{}{
+				map[string]interface{}{
+					"CourseId":          "49bbc08b-814f-477d-8aef-9fdfd63ee187",
+					"InternalEventName": "SparkyStarterDeckDuel",
+					"CurrentModule":     "CreateMatch",
+				},
+				map[string]interface{}{
+					"CourseId":          "26c87c40-97fc-4235-b9c7-45ffdadac41f",
+					"InternalEventName": "Explorer_Ladder",
+					"CurrentModule":     "Complete",
+				},
+				map[string]interface{}{
+					"CourseId":          "18bc15ce-a17f-4a24-846c-d5b208ad77a7",
+					"InternalEventName": "Play",
+					"CurrentModule":     "Complete",
+				},
+				map[string]interface{}{
+					"CourseId":          "5e431093-bcae-415f-86c0-0243f7a14dca",
+					"InternalEventName": "Alchemy_Ladder",
+					"CurrentModule":     "Complete",
+				},
+			},
+		},
+	}
+	assert.NotEqual(t, "draft.completed", ClassifyEntry(entry))
+}
+
+// TestClassifyEntry_DraftNotCompleted_CoursesEnvelope_DraftInProgress verifies
+// that a Courses envelope where a draft course is present but NOT Complete does
+// NOT classify as "draft.completed". Guards against classifying mid-draft
+// EventGetCoursesV2 polls.
+func TestClassifyEntry_DraftNotCompleted_CoursesEnvelope_DraftInProgress(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"Courses": []interface{}{
+				map[string]interface{}{
+					"CourseId":          "56c6eed8-bec8-4f4c-a8b5-b8beeb94ea1e",
+					"InternalEventName": "QuickDraftEmblem_SOS_20260611",
+					"CurrentModule":     "CreateMatch", // still playing matches
+				},
+			},
+		},
+	}
+	assert.NotEqual(t, "draft.completed", ClassifyEntry(entry))
+}
+
+// TestClassifyEntry_DraftCompleted_SceneChange_Regression is a regression guard
+// for the existing scene-change path (fromSceneName="Draft"): it must continue
+// to fire "draft.completed" so no prior draft.completed signal path is broken.
+//
+// This scene-change fires when the player finishes picking cards and transitions
+// from the Draft scene to DeckBuilder. The Courses-based completion signal
+// (this defect's fix) fires later, when all rounds are complete — but the
+// scene-change path is preserved to avoid any regression.
+func TestClassifyEntry_DraftCompleted_SceneChange_Regression(t *testing.T) {
+	// Wire shape: [UnityCrossThreadLogger]Client.SceneChange JSON, prefix stripped
+	// by logreader.parseJSON leaving only the inner JSON object.
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"fromSceneName": "Draft",
+			"toSceneName":   "DeckBuilder",
+			"initiator":     "System",
+			"context":       "deck builder",
+		},
+	}
+	assert.Equal(t, "draft.completed", ClassifyEntry(entry))
+}
+
+// ---------------------------------------------------------------------------
 // BotDraft pack classifier — old vs new MTGA wire format (#1344, Defect 1)
 // ---------------------------------------------------------------------------
 

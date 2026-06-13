@@ -26,12 +26,14 @@ func IsMasteryEntry(entry *logreader.LogEntry) bool {
 // Precedence (highest to lowest):
 //  1. Draft events — Premier probes run first; BotDraft branches only match
 //     QuickDraft / bot-draft lines.
-//  2. Scene changes (draft.started / draft.completed).
-//  3. Match events — matchGameRoomStateChangedEvent path preferred over the
+//  2. EventGetCoursesV2 completion: Courses[].CurrentModule=Complete with a
+//     draft InternalEventName fires "draft.completed" (#1419 Defect E).
+//  3. Scene changes (draft.started / draft.completed).
+//  4. Match events — matchGameRoomStateChangedEvent path preferred over the
 //     legacy CurrentEventState path.
-//  4. Player authentication / rank.
-//  5. Inventory, quests, collection, deck, periodic rewards.
-//  6. GRE game-state messages.
+//  5. Player authentication / rank.
+//  6. Inventory, quests, collection, deck, periodic rewards.
+//  7. GRE game-state messages.
 func ClassifyEntry(entry *logreader.LogEntry) string {
 	// Premier pack: Draft.Notify line carries draftId + PackCards (comma string).
 	if _, hasDraftID := entry.JSON["draftId"]; hasDraftID {
@@ -73,6 +75,27 @@ func ClassifyEntry(entry *logreader.LogEntry) string {
 		// New format — PickInfo is a direct map key.
 		if _, hasPickInfo := req["PickInfo"]; hasPickInfo {
 			return "draft.pick"
+		}
+	}
+
+	// EventGetCoursesV2 draft completion: a Courses[] array response where at
+	// least one course has a draft InternalEventName AND CurrentModule="Complete".
+	// Arena emits this when a QuickDraft / PremierDraft event reaches terminal
+	// state (all rounds played or player dropped). This is the authoritative
+	// completion signal; the scene-change path below is preserved for the
+	// pack-picking-done transition but cannot reliably carry session context
+	// from a prior daemon invocation (#1419 Defect E).
+	if courses, ok := entry.JSON["Courses"].([]interface{}); ok {
+		for _, item := range courses {
+			c, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			mod, _ := c["CurrentModule"].(string)
+			name, _ := c["InternalEventName"].(string)
+			if mod == "Complete" && strings.Contains(name, "Draft") {
+				return "draft.completed"
+			}
 		}
 	}
 
