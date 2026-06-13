@@ -414,4 +414,114 @@ describe('BffDraftHistory', () => {
       });
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Win Rate column — divide-by-zero guard (#1425)
+  // --------------------------------------------------------------------------
+
+  describe('Win Rate column', () => {
+    it('renders Win Rate column header', async () => {
+      mockGetDraftHistory.mockResolvedValue(makeResponse({
+        total: 1,
+        drafts: [makeDraft()],
+      }));
+
+      renderComponent();
+
+      await waitFor(() => {
+        expect(screen.getByRole('table')).toBeInTheDocument();
+      });
+
+      const headers = screen.getAllByRole('columnheader');
+      const headerTexts = headers.map((h) => h.textContent);
+      expect(headerTexts).toContain('Win Rate');
+    });
+
+    it('shows "—" for a draft with 0 wins and 0 losses — never NaN%', async () => {
+      mockGetDraftHistory.mockResolvedValue(makeResponse({
+        total: 1,
+        drafts: [makeDraft({ wins: 0, losses: 0 })],
+      }));
+
+      renderComponent();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('draft-history-table')).toBeInTheDocument();
+      });
+
+      // Must not contain any NaN% or Infinity% string
+      expect(screen.queryByText(/NaN%/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Infinity%/)).not.toBeInTheDocument();
+      // Must show the placeholder
+      expect(screen.getByTestId('draft-win-rate-0')).toHaveTextContent('—');
+    });
+
+    it('shows correct percentage for a draft with games played', async () => {
+      // 3 wins, 2 losses → 3/5 = 60%
+      mockGetDraftHistory.mockResolvedValue(makeResponse({
+        total: 1,
+        drafts: [makeDraft({ wins: 3, losses: 2 })],
+      }));
+
+      renderComponent();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('draft-history-table')).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId('draft-win-rate-0')).toHaveTextContent('60%');
+    });
+
+    it('shows 100% for a draft with wins and 0 losses', async () => {
+      mockGetDraftHistory.mockResolvedValue(makeResponse({
+        total: 1,
+        drafts: [makeDraft({ wins: 7, losses: 0 })],
+      }));
+
+      renderComponent();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('draft-history-table')).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId('draft-win-rate-0')).toHaveTextContent('100%');
+    });
+
+    it('shows 0% for a draft with 0 wins and non-zero losses', async () => {
+      mockGetDraftHistory.mockResolvedValue(makeResponse({
+        total: 1,
+        drafts: [makeDraft({ wins: 0, losses: 3 })],
+      }));
+
+      renderComponent();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('draft-history-table')).toBeInTheDocument();
+      });
+
+      expect(screen.getByTestId('draft-win-rate-0')).toHaveTextContent('0%');
+    });
+
+    it('shows "—" for multiple 0-game drafts — no NaN% anywhere in the table', async () => {
+      mockGetDraftHistory.mockResolvedValue(makeResponse({
+        total: 3,
+        drafts: [
+          makeDraft({ id: 'seed-00', wins: 0, losses: 0 }),
+          makeDraft({ id: 'seed-01', wins: 2, losses: 1 }),
+          makeDraft({ id: 'seed-02', wins: 0, losses: 0 }),
+        ],
+      }));
+
+      renderComponent();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('draft-history-table')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByText(/NaN%/)).not.toBeInTheDocument();
+      expect(screen.getByTestId('draft-win-rate-0')).toHaveTextContent('—');
+      expect(screen.getByTestId('draft-win-rate-1')).toHaveTextContent('67%');
+      expect(screen.getByTestId('draft-win-rate-2')).toHaveTextContent('—');
+    });
+  });
 });

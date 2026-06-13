@@ -64,6 +64,14 @@ const BffDraftHistory = () => {
     navigate(`/draft-analytics?session=${draft.id}&set=${encodeURIComponent(draft.set_code)}`);
   };
 
+  // Returns the win-rate string for a draft row.
+  // Guards against divide-by-zero when no games have been played (#1425).
+  const formatWinRate = (wins: number, losses: number): string => {
+    const total = wins + losses;
+    if (total === 0) return '—';
+    return `${Math.round((wins / total) * 100)}%`;
+  };
+
   return (
     <div className="page-container">
       <div className="bff-draft-history-header">
@@ -99,10 +107,11 @@ const BffDraftHistory = () => {
                   <th>Set</th>
                   <th>Wins</th>
                   <th>Losses</th>
+                  <th>Win Rate</th>
                 </tr>
               </thead>
               <tbody>
-                {drafts.map((draft) => (
+                {drafts.map((draft, idx) => (
                   <tr
                     key={draft.id}
                     data-testid="draft-history-row"
@@ -113,6 +122,7 @@ const BffDraftHistory = () => {
                     <td>{draft.set_code}</td>
                     <td>{draft.wins}</td>
                     <td>{draft.losses}</td>
+                    <td data-testid={`draft-win-rate-${idx}`}>{formatWinRate(draft.wins, draft.losses)}</td>
                   </tr>
                 ))}
               </tbody>
