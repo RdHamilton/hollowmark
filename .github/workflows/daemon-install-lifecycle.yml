@@ -194,44 +194,46 @@ jobs:
           # operation unprivileged.  Mirrors _make_stub_dir in postinstall_test.bats.
           #
           # Written via python3 rather than a shell heredoc to guarantee the
-          # shebang lands at column 0.  YAML run: blocks indent every heredoc
-          # body line by the step's indentation level (10 spaces here), turning
-          # "#!/usr/bin/env bash" into "          #!/usr/bin/env bash" — which
-          # the kernel rejects as a bad interpreter.  That whitespace-in-shebang
-          # defect is the root cause of the #733 regression (#664 partial fix).
+          # shebang lands at column 0.  In a YAML block scalar (`run: |`), any
+          # heredoc body line indented less than the block's indent level (10
+          # spaces here) terminates the scalar prematurely.  Each body line must
+          # be at 10+ spaces; YAML strips the common 10-space indent before
+          # handing the text to the shell, so the Python source lands at col 0.
+          # The f.write() string literals are unaffected — the generated stub
+          # shebang is still written at column 0 inside the created file.
           python3 - "${STUB_DIR}/install" <<'PYEOF'
-import os, stat, sys
-path = sys.argv[1]
-with open(path, 'w') as f:
-    f.write(
-        '#!/usr/bin/env bash\n'
-        'positional=()\n'
-        'skip_next=0\n'
-        'is_dir=0\n'
-        'for arg in "$@"; do\n'
-        '  if [[ "${skip_next}" == "1" ]]; then\n'
-        '    skip_next=0\n'
-        '    continue\n'
-        '  fi\n'
-        '  case "${arg}" in\n'
-        '    -o) skip_next=1 ;;\n'
-        '    -m) skip_next=1 ;;\n'
-        '    -d) is_dir=1 ;;\n'
-        '    *)  positional+=("${arg}") ;;\n'
-        '  esac\n'
-        'done\n'
-        'count="${#positional[@]}"\n'
-        'last_idx=$(( count - 1 ))\n'
-        'target="${positional[${last_idx}]}"\n'
-        'if [[ "${is_dir}" == "1" ]]; then\n'
-        '  mkdir -p "${target}"\n'
-        'else\n'
-        '  mkdir -p "$(dirname "${target}")"\n'
-        '  touch "${target}"\n'
-        'fi\n'
-    )
-os.chmod(path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-PYEOF
+          import os, stat, sys
+          path = sys.argv[1]
+          with open(path, 'w') as f:
+              f.write(
+                  '#!/usr/bin/env bash\n'
+                  'positional=()\n'
+                  'skip_next=0\n'
+                  'is_dir=0\n'
+                  'for arg in "$@"; do\n'
+                  '  if [[ "${skip_next}" == "1" ]]; then\n'
+                  '    skip_next=0\n'
+                  '    continue\n'
+                  '  fi\n'
+                  '  case "${arg}" in\n'
+                  '    -o) skip_next=1 ;;\n'
+                  '    -m) skip_next=1 ;;\n'
+                  '    -d) is_dir=1 ;;\n'
+                  '    *)  positional+=("${arg}") ;;\n'
+                  '  esac\n'
+                  'done\n'
+                  'count="${#positional[@]}"\n'
+                  'last_idx=$(( count - 1 ))\n'
+                  'target="${positional[${last_idx}]}"\n'
+                  'if [[ "${is_dir}" == "1" ]]; then\n'
+                  '  mkdir -p "${target}"\n'
+                  'else\n'
+                  '  mkdir -p "$(dirname "${target}")"\n'
+                  '  touch "${target}"\n'
+                  'fi\n'
+              )
+          os.chmod(path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+          PYEOF
           # curl stub: return healthy JSON so liveness check passes.
           printf '#!/usr/bin/env bash\necho '"'"'{"status":"ok","auth_status":"setup_required"}'"'"'\n' \
             > "${STUB_DIR}/curl"

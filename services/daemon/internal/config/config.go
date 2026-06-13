@@ -16,6 +16,7 @@ package config
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/credstore"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/install"
 )
 
@@ -44,11 +46,22 @@ type Config struct {
 	// When Keychain is true this field should be empty — the key lives in the OS keychain.
 	APIKey string `json:"api_key,omitempty"`
 
-	// Keychain indicates that the daemon API key is stored in the OS keychain
-	// (go-keyring, account "api-key") rather than in this config file.
+	// Keychain indicates that the daemon API key is managed by the platform
+	// credential store rather than stored as plaintext in this config file.
 	// Set to true after a successful PKCE registration.
 	// When true, the APIKey field is not written to disk.
-	// See the package-level comment for the current vs. canonical keychain service name.
+	//
+	// JSON field name is "keychain" — intentionally unchanged from the legacy
+	// name (ADR-081 open-question ruling 2: renaming is a daemon.json schema
+	// change with its own back-compat surface, out of scope for this cut).
+	//
+	// Platform semantic:
+	//   darwin  — credential is stored in a 0600 file at
+	//             identity.CredentialFile (ConfigDir/credentials), NOT the
+	//             macOS Keychain Services. The Keychain was replaced because
+	//             errSecInteractionNotAllowed prevents headless reads under
+	//             launchd (ADR-081 §Motivation, #1345).
+	//   windows — credential is in Windows Credential Manager via go-keyring.
 	Keychain bool `json:"keychain,omitempty"`
 
 	// UserID is the BFF user ID associated with this daemon install.
@@ -179,38 +192,54 @@ func (c *Config) FilePath() string {
 // NeedsFirstRunAuth reports whether the daemon must run the PKCE browser-redirect
 // flow to acquire an API key.
 //
-// Returns true when:
+// Returns (true, nil) when:
 //   - No daemon.json exists (first install), OR
 //   - daemon.json exists but has neither Keychain:true nor a plaintext APIKey
 //     and no DaemonJWT (unconfigured stub), OR
-//   - Keychain is true but the keychain entry is missing or empty (reinstall
-//     where the OS keychain was wiped, e.g. after an OS reinstall).
+//   - Keychain is true but the credential store returns ErrNotFound (reinstall
+//     where the credential was wiped, e.g. after an OS reinstall).
 //
-// When the VAULTMTG_DAEMON_API_KEY (or legacy MTGA_DAEMON_API_KEY) env var is
-// set the caller already has a key — first-run auth is not needed.
+// Returns (false, credstore.ErrAccessDenied) when:
+//   - Keychain is true and the credential getter returns ErrAccessDenied.
+//     The caller MUST NOT treat this as first-run; instead it should enter an
+//     idle-degraded state (ADR-081 §Decision 3, #1345 R1). The root bug was
+//     collapsing ErrAccessDenied into "needs PKCE", causing a new device
+//     registration on every launchd boot.
+//
+// Returns (false, <err>) for any other unexpected getter error.
+//
+// Returns (false, nil) when a credential is present and readable.
 //
 // keychainGetter is called only when c.Keychain is true. In production, pass
-// keychain.Get. In tests, pass a func that returns the desired stub value.
-// This avoids a direct import of the keychain package from config (keeping the
-// dependency inverted) and makes the function fully testable without OS keychain access.
-func (c *Config) NeedsFirstRunAuth(keychainGetter func() (string, error)) bool {
+// credstore.Store.Get (or a thin wrapper). In tests, pass a func that returns
+// the desired stub value. This avoids a direct import of the credential store
+// from config (keeping the dependency inverted).
+func (c *Config) NeedsFirstRunAuth(keychainGetter func() (string, error)) (bool, error) {
 	if c.Keychain {
-		// Trust the sentinel only if the OS keychain entry is actually present
-		// and non-empty. A missing or empty entry means a reinstall wiped the
-		// keychain; re-run PKCE so the user re-authenticates.
 		key, err := keychainGetter()
-		if err != nil || key == "" {
-			return true
+		if err != nil {
+			if errors.Is(err, credstore.ErrNotFound) {
+				// Credential genuinely absent — fresh install or wiped credential.
+				// PKCE is needed.
+				return true, nil
+			}
+			// Any other error (access-denied, unexpected OS error) must NOT collapse
+			// into first-run. Propagate so the caller can distinguish the cases.
+			return false, err
 		}
-		return false
+		if key == "" {
+			// Getter returned no error but also no key — treat as missing.
+			return true, nil
+		}
+		return false, nil
 	}
 	if c.APIKey != "" {
-		return false
+		return false, nil
 	}
 	if c.DaemonJWT != "" {
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 // JWTNeedsRefresh reports whether the daemon should obtain a fresh JWT.
@@ -389,7 +418,12 @@ func (c *Config) validate() error {
 	if c.CloudAPIURL == "" {
 		return fmt.Errorf("cloud_api_url is required (set VAULTMTG_DAEMON_CLOUD_API_URL or MTGA_DAEMON_CLOUD_API_URL, or provide config file)")
 	}
-	if c.SyncEnabled && c.APIKey == "" && c.DaemonJWT == "" {
+	// Suppress the spurious "without authentication" warning when keychain mode is
+	// active (#1326 AC5): in keychain mode the API key lives in the OS keychain, so
+	// the absence of a plaintext api_key or daemon_jwt is the expected, correct state
+	// — not a misconfiguration. The warning is still correct and useful for non-keychain
+	// installs where sync_enabled is true but no credential has been configured at all.
+	if c.SyncEnabled && !c.Keychain && c.APIKey == "" && c.DaemonJWT == "" {
 		log.Printf("[config] warning: sync_enabled is true but neither api_key nor daemon_jwt is set; events will be sent without authentication")
 	}
 	// Validate and clamp GRE flush threshold.

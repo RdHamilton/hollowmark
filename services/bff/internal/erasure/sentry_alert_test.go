@@ -62,7 +62,7 @@ func (r *stubReporter) firstCall() (reportCall, bool) {
 //   - a non-nil error
 //   - a "step" tag matching the failing step name
 //   - a "job_id" tag matching the job UUID
-//   - an "account_id_hash" tag that is NOT the raw account ID string
+//   - a "user_id_hash" tag that is NOT the raw user ID string (#1333: was account_id_hash)
 //   - no "clerk_user_id" tag (no raw PII)
 func TestRunErasureCascade_SentryAlertOnStepFailure(t *testing.T) {
 	const (
@@ -86,7 +86,7 @@ func TestRunErasureCascade_SentryAlertOnStepFailure(t *testing.T) {
 		Reporter:  reporter,
 	}
 
-	err := erasure.RunErasureCascade(context.Background(), jobID, clerkUID, rawUserID, rawAcctID, deps)
+	err := erasure.RunErasureCascade(context.Background(), jobID, clerkUID, rawUserID, []int64{rawAcctID}, deps)
 	if err == nil {
 		t.Fatal("expected RunErasureCascade to return an error when step4a fails")
 	}
@@ -116,18 +116,19 @@ func TestRunErasureCascade_SentryAlertOnStepFailure(t *testing.T) {
 		t.Errorf("ReportError job_id tag: got %q, want %q", call.tags["job_id"], jobID)
 	}
 
-	// "account_id_hash" must be present and must NOT equal the raw account ID.
-	hash, ok := call.tags["account_id_hash"]
+	// "user_id_hash" must be present and must NOT equal the raw user ID (#1333:
+	// the tag is now keyed on userID, not a single accountID).
+	hash, ok := call.tags["user_id_hash"]
 	if !ok {
-		t.Error("ReportError tags missing \"account_id_hash\" key")
+		t.Error("ReportError tags missing \"user_id_hash\" key")
 	} else {
-		rawAcctStr := fmt.Sprintf("%d", rawAcctID)
-		if hash == rawAcctStr {
-			t.Errorf("account_id_hash must not be the raw account ID %q — PII leak", rawAcctStr)
+		rawUserStr := fmt.Sprintf("%d", rawUserID)
+		if hash == rawUserStr {
+			t.Errorf("user_id_hash must not be the raw user ID %q — PII leak", rawUserStr)
 		}
 		// Hash must be non-empty.
 		if hash == "" {
-			t.Error("account_id_hash must not be empty")
+			t.Error("user_id_hash must not be empty")
 		}
 	}
 
@@ -158,7 +159,7 @@ func TestRunErasureCascade_NoSentryAlertOnSuccess(t *testing.T) {
 		Reporter:  reporter,
 	}
 
-	err := erasure.RunErasureCascade(context.Background(), "job-ok-001", "clerk_uid_ok", int64(1), int64(1), deps)
+	err := erasure.RunErasureCascade(context.Background(), "job-ok-001", "clerk_uid_ok", int64(1), []int64{1}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error on clean cascade: %v", err)
 	}
@@ -203,7 +204,7 @@ func TestRunErasureCascade_SentryStepTagMatchesEachFailingStep(t *testing.T) {
 				Reporter:  reporter,
 			}
 
-			err := erasure.RunErasureCascade(context.Background(), "job-tt-001", "clerk_uid_tt", int64(5), int64(7), deps)
+			err := erasure.RunErasureCascade(context.Background(), "job-tt-001", "clerk_uid_tt", int64(5), []int64{7}, deps)
 			if err == nil {
 				t.Fatalf("step=%s: expected error, got nil", tc.injectStep)
 			}
@@ -282,7 +283,7 @@ func TestRunErasureCascade_SentryStepTagMatchesExternalFailures(t *testing.T) {
 			reporter := &stubReporter{}
 			deps := tc.makeDeps(reporter)
 
-			err := erasure.RunErasureCascade(context.Background(), "job-ext-001", "clerk_uid_ext", int64(3), int64(8), deps)
+			err := erasure.RunErasureCascade(context.Background(), "job-ext-001", "clerk_uid_ext", int64(3), []int64{8}, deps)
 			if err == nil {
 				t.Fatalf("%s: expected error, got nil", tc.name)
 			}
@@ -322,7 +323,7 @@ func TestService_StartErasureJob_SentryAlertViaGoroutine(t *testing.T) {
 		return "user_clerk_svc_test", true
 	})
 
-	_, err := svc.StartErasureJob(context.Background(), 1, 10)
+	_, err := svc.StartErasureJob(context.Background(), 1, []int64{10})
 	if err != nil {
 		t.Fatalf("StartErasureJob returned unexpected synchronous error: %v", err)
 	}

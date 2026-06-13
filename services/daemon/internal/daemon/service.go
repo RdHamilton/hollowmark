@@ -26,6 +26,7 @@ import (
 	"github.com/RdHamilton/hollowmark/services/contract"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/classify"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/config"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/credstore"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/dispatch"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/draftstate"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/gre"
@@ -35,6 +36,7 @@ import (
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/pkce"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/ratingsclient"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/recovery"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/updatecheck"
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
@@ -225,13 +227,20 @@ type Service struct {
 
 // New creates a Service from cfg.
 func New(cfg *config.Config) *Service {
-	// ADR-049 Ticket 2: use the channel-derived keychain service so the staging
-	// daemon reads/writes its own slot rather than clobbering the prod entry.
-	keychainService := install.Identity(install.Channel).KeychainService
-	keychainGetFn := func() (string, error) { return keychain.GetForService(keychainService) }
+	// ADR-049 Ticket 2: use the channel-derived identity so the staging daemon
+	// reads/writes its own credential slot rather than clobbering the prod entry.
+	identity := install.Identity(install.Channel)
+
+	// credStore is the platform credential backend (ADR-081):
+	//   darwin  — 0600 file at identity.CredentialFile with keychain migration.
+	//   windows — Windows Credential Manager via go-keyring.
+	// keychainGetFn wraps credStore.Get so the existing keychainGet field
+	// continues to work without changes to any non-call-site code.
+	cs := credstore.New(identity.CredentialFile, identity.KeychainService)
+	keychainGetFn := cs.Get
 
 	// Resolve the dispatcher bearer token in this priority order:
-	//   1. cfg.Keychain == true → load api_key from the OS keychain (PKCE path).
+	//   1. cfg.Keychain == true → load api_key from the credential store (PKCE path).
 	//   2. cfg.DaemonJWT (legacy HMAC daemon-JWT path).
 	//   3. cfg.APIKey plaintext (pre-keychain-migration legacy path).
 	// The PKCE path is the only one that works against the current BFF; the
@@ -244,7 +253,7 @@ func New(cfg *config.Config) *Service {
 		key, err := keychainGetFn()
 		if err != nil {
 			keychainErr = err
-			log.Printf("[daemon] warn: keychain.GetForService(%q) failed: %v — will retry on startup", keychainService, err)
+			log.Printf("[daemon] warn: credential store read failed: %v — will retry on startup", err)
 		}
 		token = key
 	case cfg.DaemonJWT != "":
@@ -713,6 +722,7 @@ func (s *Service) keychainRefresherAdapter() dispatch.Refresher {
 		// prevents concurrent goroutines so there is no goroutine-leak risk.
 		// (Sarah S-07 P1 fix — #2135)
 		go func() {
+			defer recovery.RecoverGoroutine("reauth", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 			defer s.reauthInProgress.Store(false)
 
 			sentry.AddBreadcrumb(&sentry.Breadcrumb{
@@ -732,6 +742,16 @@ func (s *Service) keychainRefresherAdapter() dispatch.Refresher {
 				// dispatch timeout. Matches the existing bff_rejected pattern
 				// at service.go:1166.
 				go s.dispatchAuthFailed(context.Background(), classifyPKCEError(err))
+				// Fix C (#1328): set authPaused=true so the for-loop in main.go
+				// (NeedsFirstRunAuth || authPaused) surfaces "Retry Setup" in the
+				// tray. This ensures the user can always manually re-auth after any
+				// reactive 401 failure — not just on startup failures.
+				// authPaused outranks keychainErr in computeAuthStatus (RC5), so
+				// the tray will show "setup_required" rather than "keychain_error".
+				s.authPaused.Store(true)
+				if s.trayHooks.SetSetupRequired != nil {
+					s.trayHooks.SetSetupRequired(true)
+				}
 				// Set sentinel so computeAuthStatus routes to "keychain_error"
 				// at the next heartbeat tick. Do NOT clear the keychain (Ray Q5).
 				s.setKeychainErr(ErrReauthFailed)
@@ -798,6 +818,48 @@ var ErrSetupRequired = errors.New("keychain: api key not found — setup require
 // The keychain is NOT cleared on PKCE failure — per Ray's Q5 answer (#2135).
 var ErrReauthFailed = errors.New("reauth: PKCE flow failed")
 
+// ProbeTokenLiveness issues a GET /api/v1/health/daemon against bffBaseURL
+// using token as the bearer credential and reports whether the token is live.
+//
+// Returns (true, nil) when the BFF responds with 200 — the token is valid.
+// Returns (false, nil) when the BFF responds with 401 or 403 — the token is
+// stale, revoked, or issued for a different Clerk instance (the incident cause).
+// Returns (true, nil) for any 5xx response — a server-side error does not imply
+// the token is invalid; assume valid to avoid spurious PKCE flows during BFF
+// downtime.
+//
+// Call this at daemon startup after reading the keychain token, before entering
+// the main event loop (#1326 Fix A). On (false, nil): treat as NeedsFirstRunAuth
+// and enter the PKCE re-registration flow.
+func ProbeTokenLiveness(ctx context.Context, bffBaseURL, token string) (live bool, err error) {
+	url := strings.TrimRight(bffBaseURL, "/") + "/api/v1/health/daemon"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false, fmt.Errorf("probe token liveness: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		// Network error: assume token is still valid; BFF may be transiently
+		// unreachable. Do not trigger PKCE on a connectivity blip.
+		return true, nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		// Token explicitly rejected by the BFF — re-auth required.
+		return false, nil
+	default:
+		// 4xx other than 401/403, 5xx, redirects: assume token is valid.
+		return true, nil
+	}
+}
+
 // keychainMaxRetries is the number of keychain retry attempts before the daemon
 // gives up and exits. Exposed as a var so tests can override it.
 var keychainMaxRetries = 3
@@ -811,27 +873,40 @@ var keychainMaxRetries = 3
 // correct — the AC was written before retryKeychain existed; code wins.
 var keychainRetryBase = 2 * time.Second
 
-// retryKeychain retries keychain.Get with linear backoff (2s/4s/8s), surfacing
-// the error state in the tray. Returns nil on success, ErrSetupRequired if the
-// error is permanent (ErrNotFound), or a generic error after all retries are
-// exhausted or the context is cancelled.
+// keychainAccessDeniedPollInterval is how often the idle-degraded loop retries
+// after exhausted ErrAccessDenied (R1, ADR-081 §Decision 3). Exposed as a var
+// so tests can use shorter durations.
+var keychainAccessDeniedPollInterval = 30 * time.Second
+
+// retryKeychain retries credential reads with linear backoff (2s/4s/8s),
+// surfacing the error state in the tray. Returns nil on success or when the
+// context is cancelled. Returns ErrSetupRequired if the error is permanent
+// (ErrNotFound).
 //
 // REV-1: ErrNotFound short-circuit is the FIRST statement — before any tray
 // state change. This ensures computeAuthStatus returns "setup_required" (not
 // "keychain_error") on the next heartbeat tick.
+//
+// R1 (ADR-081 / #1345): after retry exhaustion where ALL failures are
+// ErrAccessDenied, the function enters an idle-degraded loop rather than
+// returning an error. Returning an error would cause Run() → main.go:exit →
+// launchd respawn — a new exit loop. Instead the daemon idles with
+// SetKeychainError(true) set and polls until ctx is cancelled or TryAgain
+// fires + read succeeds. On ctx cancel it returns nil (not an error), so
+// main.go does not call os.Exit.
 func (s *Service) retryKeychain(ctx context.Context) error {
 	// ── REV-1: ErrNotFound short-circuit ──────────────────────────────────────
-	// ErrNotFound is permanent (key never stored / keychain wiped). Retrying
+	// ErrNotFound is permanent (key never stored / credential wiped). Retrying
 	// would loop forever. Clear keychainErr so computeAuthStatus routes to
 	// "setup_required" rather than "keychain_error", then return the sentinel
 	// without touching tray state. Launchd respawn + NeedsFirstRunAuth handles
 	// PKCE re-auth on the next boot.
-	if errors.Is(s.getKeychainErr(), keychain.ErrNotFound) {
+	if errors.Is(s.getKeychainErr(), keychain.ErrNotFound) || errors.Is(s.getKeychainErr(), credstore.ErrNotFound) {
 		s.setKeychainErr(nil)
 		return ErrSetupRequired
 	}
 
-	// ── Transient error: surface tray state and retry ─────────────────────────
+	// ── Transient / access-denied error: surface tray state and retry ─────────
 	if s.trayHooks.SetKeychainError != nil {
 		s.trayHooks.SetKeychainError(true)
 	}
@@ -841,13 +916,17 @@ func (s *Service) retryKeychain(ctx context.Context) error {
 		}
 	}()
 
+	// Track whether every failure in the retry loop was ErrAccessDenied so we
+	// know whether to enter the idle-degraded state after exhaustion.
+	allAccessDenied := true
+
 	for attempt := 1; attempt <= keychainMaxRetries; attempt++ {
 		backoff := keychainRetryBase * time.Duration(attempt)
 		log.Printf("[daemon] keychain retry %d/%d in %s", attempt, keychainMaxRetries, backoff)
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil // context cancelled — do not error out (R1 anti-respawn)
 		case <-s.trayHooks.TryAgain:
 			// User clicked Try Again — retry immediately, skipping backoff.
 			log.Printf("[daemon] keychain retry %d/%d triggered by user", attempt, keychainMaxRetries)
@@ -865,9 +944,56 @@ func (s *Service) retryKeychain(ctx context.Context) error {
 			}
 			return nil
 		}
+		if !errors.Is(err, credstore.ErrAccessDenied) {
+			allAccessDenied = false
+		}
 		log.Printf("[daemon] keychain retry %d/%d failed: %v", attempt, keychainMaxRetries, err)
 	}
 
+	// ── R1: idle-degraded path for exhausted ErrAccessDenied ──────────────────
+	// When every retry returned ErrAccessDenied (OS permission / ACL denial,
+	// the launchd headless scenario from #1345), we MUST NOT return an error.
+	// Returning an error routes to main.go → logAndExitHeadlessKeychain → os.Exit
+	// → launchd respawns → repeat (the "respawn loop" Ray's R1 is fixing).
+	//
+	// Instead: idle with SetKeychainError(true) active and emit telemetry.
+	// The daemon stays alive — it just doesn't dispatch any events. This mirrors
+	// the idleUntilMTGADetected anti-respawn precedent (service.go:1014).
+	//
+	// On TryAgain + successful read: recover and return nil.
+	// On context cancel: return nil (clean exit — supervisor does NOT respawn).
+	if allAccessDenied {
+		log.Printf("[daemon] credential access-denied after %d retries — entering idle-degraded state (no os.Exit, ADR-081 R1)", keychainMaxRetries)
+
+		if s.cfg.AccountID != "" {
+			go s.dispatchKeychainError(ctx, "access_denied")
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return nil // clean exit; launchd/NSSM does NOT respawn
+			case <-s.trayHooks.TryAgain:
+				log.Printf("[daemon] idle-degraded: TryAgain signal received — probing credential")
+			case <-time.After(keychainAccessDeniedPollInterval):
+				log.Printf("[daemon] idle-degraded: periodic credential probe")
+			}
+
+			key, err := s.keychainGet()
+			if err == nil && key != "" {
+				log.Printf("[daemon] idle-degraded: credential read succeeded — resuming normal operation")
+				s.setKeychainErr(nil)
+				s.dispatcher.SetToken(key)
+				if s.ratings != nil {
+					s.ratings.SetToken(key)
+				}
+				return nil
+			}
+			log.Printf("[daemon] idle-degraded: credential still unreadable: %v", err)
+		}
+	}
+
+	// ── Non-access-denied exhaustion: propagate for non-headless tray handling ─
 	// Dispatch daemon.keychain_error only when AccountID is non-empty (post-auth
 	// case B per Ray's OQ-1 verdict). Pre-auth keychain failures are unobservable
 	// via the BFF emission boundary — the event would have no api_key and never
@@ -1573,6 +1699,21 @@ func (s *Service) dispatchKeychainError(ctx context.Context, errorType string) {
 	}
 }
 
+// draftScenePayload is the enriched payload emitted for draft.started and
+// draft.completed events (#1344 PR-B). The BFF's projectDraftSession requires
+// session_id to be non-empty; without enrichment both scene-change events fall
+// through to raw entry.JSON (no session_id) and are permanently rejected.
+//
+// Fields match the BFF's draftPayload struct (worker.go) — ADDITIVE-ONLY,
+// no ADR-079 contract bump (payload fields are a superset of the existing
+// draftPayload contract; BFF already accepts all these fields).
+type draftScenePayload struct {
+	SessionID string `json:"session_id"`
+	EventName string `json:"event_name"` // CourseName, e.g. "QuickDraft_EOE_20260612"
+	SetCode   string `json:"set_code"`   // e.g. "EOE"
+	DraftType string `json:"draft_type"` // e.g. "QuickDraft"
+}
+
 // handleEntry classifies a log entry and dispatches it to the BFF.
 //
 // Concurrency: handleEntry is called from two goroutines:
@@ -1804,6 +1945,33 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 
 			payload = p
 		}
+	case "draft.started", "draft.completed":
+		// Enrich scene-change events with the active draftstate session so the
+		// BFF's projectDraftSession can identify the session (#1344 PR-B).
+		//
+		// Without enrichment both events fall through to entry.JSON
+		// ({fromSceneName, toSceneName, context} — no session_id) and
+		// projectDraftSession permanently rejects them. The practical result:
+		//   • draft.started  — session never opened via this event path.
+		//   • draft.completed — NO draft session ever transitions to
+		//     status=completed; all users see a perpetual ACTIVE DRAFT card.
+		//
+		// When no session is active (daemon restarted before any pack event),
+		// fall back to entry.JSON. The BFF will permanent-reject the entry
+		// (existing guard), which is correct — there is nothing to close.
+		if s.draftState != nil {
+			if sess, ok := s.draftState.Get("current"); ok {
+				payload = draftScenePayload{
+					SessionID: sess.ID,
+					EventName: sess.CourseName,
+					SetCode:   sess.SetCode,
+					DraftType: sess.Format,
+				}
+			}
+		}
+		if payload == nil {
+			payload = entry.JSON
+		}
 	case "greToClientEvent":
 		// GRE entries are never dispatched individually — they are buffered in
 		// the GRE session manager and flushed as a single "match.game_ended"
@@ -1828,9 +1996,12 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 
 	// Boundary events: force an immediate flush so the BFF receives the batch
 	// promptly without waiting for the next size or interval trigger.
-	// match.game_ended — game result just produced (player expects UI update).
-	// draft.pick       — pick made; grade-pick / win-probability must see it fast.
-	if eventType == "match.game_ended" || eventType == "draft.pick" {
+	// match.game_ended  — game result just produced (player expects UI update).
+	// draft.pick        — pick made; grade-pick / win-probability must see it fast.
+	// draft.started     — session opens; SPA draft panel must activate immediately.
+	// draft.completed   — session closes; Home ACTIVE DRAFT card must clear promptly.
+	switch eventType {
+	case "match.game_ended", "draft.pick", "draft.started", "draft.completed":
 		s.batchBuffer.FlushNow()
 	}
 

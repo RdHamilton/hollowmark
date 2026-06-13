@@ -311,6 +311,7 @@ func main() {
 		adminFleetHealthHandler           *handlers.AdminFleetHealthHandler
 		adminProjectionErrorsCountHandler *handlers.AdminProjectionErrorsCountHandler
 		adminDataFreshnessHandler         *handlers.AdminDataFreshnessHandler
+		adminBackfillDraftSessionsHandler *handlers.AdminBackfillDraftSessionsHandler
 		matchesHandler                    *handlers.MatchesHandler
 		collectionHandler                 *handlers.CollectionHandler
 		questsHandler                     *handlers.QuestsHandler
@@ -383,9 +384,15 @@ func main() {
 		draftRatingsHandler = handlers.NewDraftRatingsHandler(draftRatingsRepo, cfg)
 
 		daemonEventsRepo := repository.NewDaemonEventsRepository(sqlDB)
-		ingestHandler = ingestHandler.WithRepository(daemonEventsRepo)
 
-		accountRepo := repository.NewAccountRepository(sqlDB)
+		// ADR-084 §2: nudge channel (buffered, cap 1) lets ingest kick the
+		// projection worker within milliseconds instead of waiting 30 s for the
+		// ticker.  Created here so both ingestHandler and the projection worker
+		// (started below) share the same channel ends.
+		projectionNudge := make(chan struct{}, 1)
+		ingestHandler = ingestHandler.WithRepository(daemonEventsRepo).WithProjectionNudge(projectionNudge)
+
+		accountRepo := repository.NewAccountRepository(sqlDB).WithAnalyticsClient(analyticsClient)
 		matchesRepo := repository.NewMatchesRepository(sqlDB)
 		draftSessionsRepo := repository.NewDraftSessionsRepository(sqlDB)
 		deckListRepo := repository.NewDeckListRepository(sqlDB)
@@ -536,6 +543,10 @@ func main() {
 			draftRatingsRepo,
 			cfg.DraftRatingsStalenessThresholdHours,
 		)
+
+		// #1350 one-time backfill for stale in_progress draft_sessions rows.
+		// Protected by AdminTokenMiddl. POST /api/v1/admin/ops/backfill-draft-sessions.
+		adminBackfillDraftSessionsHandler = handlers.NewAdminBackfillDraftSessionsHandler(draftSessionsRepo)
 
 		// StatsHandler provides deck performance, win-rate trend, and format
 		// distribution analytics endpoints (issue #1513).
@@ -715,10 +726,24 @@ func main() {
 			worker.WithDraftDeckCreator(decksRepo)
 			worker.WithDraftPickReader(draftSessionsRepo)
 			worker.WithAnalyticsClient(analyticsClient)
-			go worker.Run(projCtx)
+			// Wire deck-summary (header-only) fan-out from inventory.updated (#1337).
+			worker.WithDeckSummaryStore(deckProjectorRepo)
+			// Wire mastery pass fan-out from inventory.updated (#1338).
+			worker.WithMasteryStore(repository.NewAccountMasteryRepository(sqlDB))
+			// ADR-084 §1: publish coalesced readmodel.updated SSE notifications
+			// after each projection pass so clients refetch immediately.
+			worker.WithNotifier(broker)
+			// ADR-084 §2: run with nudge channel so ingest wakes projection
+			// within ms instead of waiting for the 30 s ticker.
+			go worker.RunWithNudge(projCtx, projectionNudge)
 		} else {
 			log.Println("BFF_PROJECTION_DISABLED=true — projection worker not started.")
 		}
+
+		// D7.1 (ticket #1335): daily canary — detect users with more than one
+		// accounts row.  Fires at startup and then every 24 hours.  Uses projCtx
+		// so it exits cleanly on SIGTERM alongside the projection worker.
+		go runDuplicateAccountCanary(projCtx, accountRepo, analyticsClient)
 	} else {
 		log.Printf("WARN: no DATABASE_URL — API key auth unavailable (env=%s); guarded endpoints return 503", cfg.Env)
 	}
@@ -749,6 +774,15 @@ func main() {
 		log.Println("INTERNAL_SVC_SECRET not set — /internal/v1/* routes fail closed (development only).")
 	}
 
+	// Refuse to start if the ingest handler is wired but its auth middleware is
+	// not.  An unauthenticated ingest endpoint would allow event mis-attribution
+	// across accounts (ticket #1332, root-cause: duplicate-accounts P0).
+	// DaemonAPIKeyAuthMiddl is only non-nil when sqlDB is available, so this
+	// guard catches startup misconfigurations before any request is served.
+	if daemonAPIKeyAuthMiddl == nil {
+		log.Fatal("FATAL: DaemonAPIKeyAuthMiddl is nil — refusing to start without ingest auth guard (ticket #1332)")
+	}
+
 	r := BuildRouter(cfg, RouterDeps{
 		Broker:                            broker,
 		IngestHandler:                     ingestHandler,
@@ -765,6 +799,7 @@ func main() {
 		AdminFleetHealthHandler:           adminFleetHealthHandler,
 		AdminProjectionErrorsCountHandler: adminProjectionErrorsCountHandler,
 		AdminDataFreshnessHandler:         adminDataFreshnessHandler,
+		AdminBackfillDraftSessionsHandler: adminBackfillDraftSessionsHandler,
 		MatchesHandler:                    matchesHandler,
 		CollectionHandler:                 collectionHandler,
 		QuestsHandler:                     questsHandler,
@@ -884,6 +919,11 @@ type RouterDeps struct {
 	// Returns "fresh", "stale", or "no_data" with age_hours and threshold_hours.
 	// Protected by AdminTokenMiddl. Satisfies ticket #402 data-freshness AC.
 	AdminDataFreshnessHandler *handlers.AdminDataFreshnessHandler
+	// AdminBackfillDraftSessionsHandler serves
+	// POST /api/v1/admin/ops/backfill-draft-sessions — one-time idempotent
+	// backfill that closes stale in_progress draft_sessions rows (#1350).
+	// Protected by AdminTokenMiddl.
+	AdminBackfillDraftSessionsHandler *handlers.AdminBackfillDraftSessionsHandler
 	// MatchesHandler serves the Phase 2 /api/v1/matches/* surface that the
 	// SPA's daemonClient previously hit. Protected by DaemonAPIKeyAuth.
 	MatchesHandler *handlers.MatchesHandler
@@ -1242,6 +1282,14 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 	// feature flag flip. Protected by the same AdminTokenMiddl.
 	if deps.AdminDataFreshnessHandler != nil {
 		r.With(adminMiddl).Get("/api/v1/admin/data-freshness", deps.AdminDataFreshnessHandler.ServeHTTP)
+	}
+
+	// POST /api/v1/admin/ops/backfill-draft-sessions — one-time idempotent
+	// repair for stale in_progress draft_sessions rows (#1350). Must be
+	// invoked manually once in prod after the #1344 PR-B fix ships. Safe to
+	// re-run (returns 0 rows on subsequent calls).
+	if deps.AdminBackfillDraftSessionsHandler != nil {
+		r.With(adminMiddl).Post("/api/v1/admin/ops/backfill-draft-sessions", deps.AdminBackfillDraftSessionsHandler.ServeHTTP)
 	}
 
 	// ── Phase 2 — /api/v1/matches/* (camelCase API, full filter support) ─────
@@ -1732,15 +1780,20 @@ func BuildRouter(cfg *config.Config, deps RouterDeps) http.Handler {
 		}
 	}
 
-	// POST /api/v1/ingest/events — daemon api_key auth; falls back to unguarded
-	// in dev mode. Uses DaemonAPIKeyAuth (not the legacy APIKeyAuth) because the
+	// POST /api/v1/ingest/events — daemon api_key auth required.
+	// Uses DaemonAPIKeyAuth (not the legacy APIKeyAuth) because the
 	// PKCE-minted daemon api_key lives in daemon_api_keys, not api_keys.
 	// Mounted under /api/v1/ so nginx (which only forwards /api/v1/*) can reach it.
+	//
+	// Route is omitted entirely when DaemonAPIKeyAuthMiddl is nil — an
+	// unauthenticated ingest endpoint is never acceptable (ticket #1332).
+	// Startup validation in main() fatals before BuildRouter is reached, so
+	// the nil branch here is a defence-in-depth guard, not a runtime path.
 	if deps.IngestHandler != nil {
 		if deps.DaemonAPIKeyAuthMiddl != nil {
 			r.With(deps.DaemonAPIKeyAuthMiddl).Post("/api/v1/ingest/events", deps.IngestHandler.IngestEvent)
 		} else {
-			r.Post("/api/v1/ingest/events", deps.IngestHandler.IngestEvent)
+			log.Println("WARN: POST /api/v1/ingest/events disabled — DaemonAPIKeyAuthMiddl not initialised")
 		}
 	}
 
@@ -2073,6 +2126,63 @@ func buildAccountDeletionHandler(
 		return nil
 	}
 
-	// resolver uses the DeletionRepository's ResolveUserAndAccount method.
+	// resolver uses the DeletionRepository's ResolveAllAccountIDs method (#1333).
 	return handlers.NewAccountDeletionHandler(db, erasureSvc)
+}
+
+// duplicateAccountChecker is the subset of AccountRepository used by the canary.
+type duplicateAccountChecker interface {
+	CheckDuplicateAccounts(ctx context.Context) ([]repository.DuplicateAccountRow, error)
+}
+
+// runDuplicateAccountCanary is the D7.1 daily canary (ticket #1335).
+// It fires once at startup and then every 24 hours.  When duplicates are found
+// it logs at WARN level and emits an operational analytics event.
+// The function blocks until ctx is cancelled (SIGTERM).
+func runDuplicateAccountCanary(ctx context.Context, checker duplicateAccountChecker, ac *analytics.Client) {
+	const interval = 24 * time.Hour
+
+	check := func() {
+		dups, err := checker.CheckDuplicateAccounts(ctx)
+		if err != nil {
+			log.Printf("[WARN] canary: CheckDuplicateAccounts failed: %v", err)
+			return
+		}
+		if len(dups) == 0 {
+			log.Println("[INFO] canary: no duplicate accounts rows found")
+			return
+		}
+
+		log.Printf("[WARN] canary: %d user(s) have more than one accounts row — investigate immediately", len(dups))
+
+		if ac == nil {
+			return
+		}
+		if err := ac.Capture(
+			ctx,
+			"canary",
+			analytics.EventAccountDuplicateCanaryTriggered,
+			map[string]any{
+				"affected_user_count": int64(len(dups)),
+			},
+			analytics.CaptureOptions{Operational: true},
+		); err != nil {
+			log.Printf("[WARN] canary: analytics emit failed: %v", err)
+		}
+	}
+
+	// Run immediately on startup.
+	check()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			check()
+		}
+	}
 }

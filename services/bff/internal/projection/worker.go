@@ -14,6 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/RdHamilton/hollowmark/services/contract"
 
 	"github.com/RdHamilton/hollowmark/services/bff/internal/analytics"
@@ -24,12 +27,27 @@ import (
 const (
 	batchSize    = 100
 	tickInterval = 30 * time.Second
+
+	// transientRetryTTL is the maximum age (measured from received_at) a
+	// transient-pending event may remain in the queue before it is escalated
+	// to the DLQ. Using received_at (not occurred_at) ensures daemon log
+	// replays — which carry days-old occurred_at but fresh received_at —
+	// are not incorrectly DLQ'd on their first failure (RC2).
+	transientRetryTTL = 24 * time.Hour
 )
 
 // daemonEventStore is the subset of DaemonEventsRepository the worker uses.
 type daemonEventStore interface {
 	ListPendingProjection(ctx context.Context, limit int) ([]repository.DaemonEventRow, error)
+	// ListPendingProjectionAfter returns up to limit pending rows with
+	// (received_at, id) strictly greater than (afterTime, afterID).
+	// Used by runOnce to keyset-paginate past transient-pending rows within
+	// a single tick, preventing global livelock (RC1).
+	ListPendingProjectionAfter(ctx context.Context, afterTime time.Time, afterID int64, limit int) ([]repository.DaemonEventRow, error)
 	MarkProjected(ctx context.Context, id int64) error
+	// ResetProjected sets projected_at = NULL for the given row, returning it
+	// to the pending queue. Used by the ops backfill script (RC5).
+	ResetProjected(ctx context.Context, id int64) error
 }
 
 // accountStore resolves accounts.id from accounts.client_id (the raw MTGA string).
@@ -46,6 +64,12 @@ type matchStore interface {
 	// not exist yet — the match.completed event may not have been projected
 	// before match.game_ended arrives. The caller must treat 0 as indeterminate.
 	GetPlayerTeamIDForMatch(ctx context.Context, accountID int64, matchID string) (int, error)
+	// GetResultForMatch returns the match-level result ("win", "loss", "draw")
+	// stored on the matches row for (accountID, matchID). Returns ("", nil) when
+	// the match row does not yet exist — the caller must treat "" as indeterminate
+	// and fall back gracefully. Used by deriveGameResult when the GRE payload
+	// carries WinningTeamID=0 (no final-win signal from GRE).
+	GetResultForMatch(ctx context.Context, accountID int64, matchID string) (string, error)
 }
 
 // draftStore writes to the draft_sessions and draft_match_results tables.
@@ -89,6 +113,20 @@ type questStore interface {
 // deckStore writes deck snapshots to the decks and deck_cards tables.
 type deckStore interface {
 	UpsertDeck(ctx context.Context, u repository.DeckUpsert) error
+}
+
+// deckSummaryStore writes deck header rows from DeckSummaries login-blob entries.
+// It deliberately omits any deck_cards write — see UpsertDeckSummary docs and
+// Ray's amendment 1 on #1337.
+type deckSummaryStore interface {
+	UpsertDeckSummary(ctx context.Context, u repository.DeckSummaryUpsert) error
+}
+
+// masteryStore writes mastery pass state to the accounts table (#1338).
+// It targets the mastery_level, mastery_pass, and mastery_max columns from
+// migration 000013.
+type masteryStore interface {
+	UpsertMastery(ctx context.Context, u repository.MasteryUpsert) error
 }
 
 // draftDeckCreator creates a deck row from a completed draft session's picks.
@@ -163,24 +201,74 @@ func isPermanent(err error) bool {
 	return errors.As(err, &p)
 }
 
+// transientErr wraps an error to signal that the failure is recoverable —
+// the worker should leave the row pending rather than calling MarkProjected,
+// so the next tick retries it. Only opt-in projectors return transient().
+// Projectors that return transient(): projectGamePlayEvent (FK 23503 violation
+// on games.match_id) and projectMatch (draft session not yet projected, NB-1).
+type transientErr struct {
+	cause error
+}
+
+func (e *transientErr) Error() string { return e.cause.Error() }
+func (e *transientErr) Unwrap() error { return e.cause }
+
+// transient wraps err in transientErr so the worker leaves the row pending
+// instead of marking it projected. Returns nil when err is nil.
+func transient(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &transientErr{cause: err}
+}
+
+// isTransient reports whether err (or any error in its chain) is a transientErr.
+func isTransient(err error) bool {
+	var t *transientErr
+	return errors.As(err, &t)
+}
+
+// isFKViolation reports whether err is a PostgreSQL SQLSTATE 23503
+// (foreign_key_violation). Detection uses errors.As + pgconn.PgError —
+// never string matching, which does not work with pgx/v5 errors (RC3).
+func isFKViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.ForeignKeyViolation
+}
+
+// ReadModelNotifier is implemented by any type that can publish a coalesced
+// readmodel.updated SSE notification per (userID, domain) set.  The projection
+// worker calls it after MarkProjected succeeds so that any subscriber that
+// re-queries the read-model endpoints sees the newly projected rows.
+//
+// maxEventID is the maximum daemon_events.id projected in the pass for the
+// given user — it becomes the SSE frame's id: field so #1348 Last-Event-ID
+// replay composes correctly.
+type ReadModelNotifier interface {
+	PublishReadModelUpdated(userID int64, domains []string, maxEventID int64)
+}
+
 // Worker projects pending daemon_events rows into their destination tables.
 type Worker struct {
-	events     daemonEventStore
-	accounts   accountStore
-	matches    matchStore
-	drafts     draftStore
-	draftDecks draftDeckCreator
-	draftPicks draftPickReader
-	collection collectionStore
-	inventory  inventoryStore
-	quests     questStore
-	decks      deckStore
-	gamePlays  gamePlayStore
-	cardPlays  cardPlayStore
-	gameRows   gameRowWriter
-	counters   counterStore
-	dlq        dlqStore
-	analytics  *analytics.Client
+	events        daemonEventStore
+	accounts      accountStore
+	matches       matchStore
+	drafts        draftStore
+	draftDecks    draftDeckCreator
+	draftPicks    draftPickReader
+	collection    collectionStore
+	inventory     inventoryStore
+	quests        questStore
+	decks         deckStore
+	deckSummaries deckSummaryStore
+	mastery       masteryStore
+	gamePlays     gamePlayStore
+	cardPlays     cardPlayStore
+	gameRows      gameRowWriter
+	counters      counterStore
+	dlq           dlqStore
+	analytics     *analytics.Client
+	notifier      ReadModelNotifier // optional; wired via WithNotifier (ADR-084)
 }
 
 // NewWorker returns a Worker wired with the provided stores.
@@ -254,6 +342,22 @@ func (w *Worker) WithDraftPickReader(reader draftPickReader) *Worker {
 	return w
 }
 
+// WithDeckSummaryStore wires the deck-summary (header-only) store into w and
+// returns w.  When wired, projectInventoryUpdated fans out to UpsertDeckSummary
+// for each entry in the payload's Decks slice without touching deck_cards.
+func (w *Worker) WithDeckSummaryStore(store deckSummaryStore) *Worker {
+	w.deckSummaries = store
+	return w
+}
+
+// WithMasteryStore wires the mastery pass store into w and returns w.
+// When wired, projectInventoryUpdated calls UpsertMastery when the payload
+// carries a non-nil Mastery field (#1338).
+func (w *Worker) WithMasteryStore(store masteryStore) *Worker {
+	w.mastery = store
+	return w
+}
+
 // WithPostHogClient is deprecated. Use WithAnalyticsClient instead.
 func (w *Worker) WithPostHogClient(client analytics.PostHogEnqueuer) *Worker {
 	w.analytics = analytics.NewClient(client, analytics.NewNoopHaltChecker())
@@ -263,6 +367,14 @@ func (w *Worker) WithPostHogClient(client analytics.PostHogEnqueuer) *Worker {
 // WithAnalyticsClient wires an analytics.Client into the worker.
 func (w *Worker) WithAnalyticsClient(c *analytics.Client) *Worker {
 	w.analytics = c
+	return w
+}
+
+// WithNotifier wires a ReadModelNotifier into the worker (ADR-084).  When
+// wired, runOnce publishes a coalesced readmodel.updated SSE event per
+// (userID, domain) after each projection pass completes.
+func (w *Worker) WithNotifier(n ReadModelNotifier) *Worker {
+	w.notifier = n
 	return w
 }
 
@@ -287,16 +399,94 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
+// RunWithNudge starts the projection loop with a non-blocking ingest→worker
+// nudge channel (ADR-084 §2).  When a value is sent on nudge, runOnce fires
+// immediately without waiting for the 30 s ticker.  The ticker is retained as
+// the fallback so a missed nudge never starves projection.
+//
+// Ingest handlers must use sendNudge to send on the channel — never a direct
+// channel send — so the caller never blocks on a full channel.
+func (w *Worker) RunWithNudge(ctx context.Context, nudge <-chan struct{}) {
+	log.Println("[projection] worker started (with nudge)")
+
+	w.runOnce(ctx)
+
+	ticker := time.NewTicker(tickInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("[projection] worker stopped")
+			return
+		case <-nudge:
+			w.runOnce(ctx)
+		case <-ticker.C:
+			w.runOnce(ctx)
+		}
+	}
+}
+
+// sendNudge sends a non-blocking kick to the projection worker nudge channel.
+// If the channel is already full (a nudge is already pending) the send is
+// discarded — the worker will process the ingest on the pending nudge.
+// Ingest must NEVER block on the nudge channel (ADR-084 §2).
+func sendNudge(nudge chan<- struct{}) {
+	select {
+	case nudge <- struct{}{}:
+	default:
+	}
+}
+
 // RunOnce is exported for integration tests.
 func (w *Worker) RunOnce(ctx context.Context) {
 	w.runOnce(ctx)
 }
 
-// runOnce fetches up to batchSize pending events and projects each one.
+// domainsForEventType returns the read-model domain names dirtied by the given
+// event type (ADR-084 domain map).  Returns nil for event types that do not
+// dirty a known domain (unknown / daemon-internal events).
+//
+// inventory.updated fans out to ["inventory", "decks", "mastery"] because the
+// projection worker writes to all three tables from that single event type
+// (worker.go projectInventoryUpdated: UpsertInventory + UpsertDeckSummary fan-out
+// + UpsertMastery fan-out).  The notifier always emits all three regardless of
+// whether the optional mastery/deck stores are wired — the fan-out is
+// conditionally executed at projection time, but the domain contract is fixed.
+func domainsForEventType(eventType string) []string {
+	switch eventType {
+	case "match.completed", "match.game_ended":
+		return []string{"matches"}
+	case "draft.started", "draft.completed", "draft.pick":
+		return []string{"drafts"}
+	case "quest.progress", "quest.completed":
+		return []string{"quests"}
+	case "collection.updated":
+		return []string{"collection"}
+	case "deck.updated":
+		return []string{"decks"}
+	case "inventory.updated":
+		// inventory.updated dirtying inventory + decks (deck summaries fan-out,
+		// worker.go ~1145-1161) + mastery (mastery fan-out, worker.go ~1163-1177).
+		return []string{"inventory", "decks", "mastery"}
+	default:
+		return nil
+	}
+}
+
+// runOnce fetches pending events and projects each one, keyset-paginating
+// within a single tick to ensure transient-pending rows do not starve later
+// rows (RC1). Each page is batchSize rows; pagination continues until a page
+// returns fewer than batchSize rows (backlog drained).
+//
+// After the pass completes, if a ReadModelNotifier is wired, one coalesced
+// readmodel.updated SSE notification is published per (userID, domain) that
+// had at least one successfully projected row (ADR-084 §1).  The SSE id: field
+// carries the maximum daemon_events.id projected for that user.
 func (w *Worker) runOnce(ctx context.Context) {
 	start := time.Now()
 
-	var projected, skippedUnknown, skippedMalformed, errored, deadLettered int
+	var projected, skippedUnknown, skippedMalformed, errored, deadLettered, retryTransient int
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -304,36 +494,119 @@ func (w *Worker) runOnce(ctx context.Context) {
 		}
 
 		log.Printf(
-			"[projection] runOnce completed pending=%d projected=%d skipped_unknown=%d skipped_malformed=%d errored=%d dead_lettered=%d duration_ms=%d",
-			projected+skippedUnknown+skippedMalformed+errored+deadLettered,
-			projected, skippedUnknown, skippedMalformed, errored, deadLettered,
+			"[projection] runOnce completed pending=%d projected=%d skipped_unknown=%d skipped_malformed=%d errored=%d dead_lettered=%d retry_transient=%d duration_ms=%d",
+			projected+skippedUnknown+skippedMalformed+errored+deadLettered+retryTransient,
+			projected, skippedUnknown, skippedMalformed, errored, deadLettered, retryTransient,
 			time.Since(start).Milliseconds(),
 		)
 	}()
 
-	rows, err := w.events.ListPendingProjection(ctx, batchSize)
-	if err != nil {
-		log.Printf("[projection] ListPendingProjection: %v", err)
-		errored++
-		return
+	// ADR-084: coalescer tracks dirty domains and max event ID per user across
+	// the entire pass.  Populated only when a notifier is wired so there is no
+	// allocation overhead in unwired deployments.
+	//
+	// dirtyDomains: userID → set of domain names dirtied this pass.
+	// maxEventID:   userID → max daemon_events.id successfully marked projected.
+	var dirtyDomains map[int64]map[string]struct{}
+	var maxEventID map[int64]int64
+	if w.notifier != nil {
+		dirtyDomains = make(map[int64]map[string]struct{})
+		maxEventID = make(map[int64]int64)
 	}
 
-	for i := range rows {
-		row := rows[i]
+	// Keyset cursor: (lastReceivedAt, lastID) tracks the position after the
+	// last row processed so we can page past transient-pending rows in a single
+	// tick without re-fetching them (RC1 starvation guard).
+	var lastReceivedAt time.Time
+	var lastID int64
+	firstPage := true
 
-		outcome := w.projectRow(ctx, &row)
+	for {
+		var rows []repository.DaemonEventRow
+		var err error
 
-		switch outcome {
-		case outcomeProjected:
-			projected++
-		case outcomeSkippedUnknown:
-			skippedUnknown++
-		case outcomeSkippedMalformed:
-			skippedMalformed++
-		case outcomeErrored:
+		if firstPage {
+			rows, err = w.events.ListPendingProjection(ctx, batchSize)
+			firstPage = false
+		} else {
+			rows, err = w.events.ListPendingProjectionAfter(ctx, lastReceivedAt, lastID, batchSize)
+		}
+
+		if err != nil {
+			log.Printf("[projection] ListPendingProjection: %v", err)
 			errored++
-		case outcomeDeadLettered:
-			deadLettered++
+			return
+		}
+
+		if len(rows) == 0 {
+			break
+		}
+
+		for i := range rows {
+			row := rows[i]
+
+			// Advance the keyset cursor regardless of outcome.
+			// This ensures transient-pending rows are not re-fetched on the
+			// next page — we advance past them even when not marking projected.
+			if row.ReceivedAt.After(lastReceivedAt) ||
+				(row.ReceivedAt.Equal(lastReceivedAt) && row.ID > lastID) {
+				lastReceivedAt = row.ReceivedAt
+				lastID = row.ID
+			}
+
+			outcome := w.projectRow(ctx, &row)
+
+			switch outcome {
+			case outcomeProjected:
+				projected++
+			case outcomeSkippedUnknown:
+				skippedUnknown++
+			case outcomeSkippedMalformed:
+				skippedMalformed++
+			case outcomeErrored:
+				errored++
+			case outcomeDeadLettered:
+				deadLettered++
+			case outcomeRetryTransient:
+				retryTransient++
+			}
+
+			// ADR-084: record dirty domains for this row when it was successfully
+			// marked projected (any outcome except outcomeRetryTransient, which
+			// leaves the row pending and is not yet visible in the read model).
+			if w.notifier != nil && outcome != outcomeRetryTransient {
+				domains := domainsForEventType(row.EventType)
+				if len(domains) > 0 {
+					if dirtyDomains[row.UserID] == nil {
+						dirtyDomains[row.UserID] = make(map[string]struct{})
+					}
+					for _, d := range domains {
+						dirtyDomains[row.UserID][d] = struct{}{}
+					}
+					if row.ID > maxEventID[row.UserID] {
+						maxEventID[row.UserID] = row.ID
+					}
+				}
+			}
+		}
+
+		// If this page was full, there may be more rows — continue paginating.
+		// If it was short, the backlog is drained for this tick.
+		if len(rows) < batchSize {
+			break
+		}
+	}
+
+	// ADR-084 §1: publish one coalesced readmodel.updated notification per user
+	// after MarkProjected has committed for every row in the pass.  By
+	// construction this fires only after the read model is queryable.
+	if w.notifier != nil {
+		for userID, domainSet := range dirtyDomains {
+			domains := make([]string, 0, len(domainSet))
+			for d := range domainSet {
+				domains = append(domains, d)
+			}
+			w.notifier.PublishReadModelUpdated(userID, domains, maxEventID[userID])
 		}
 	}
 }
@@ -346,6 +619,11 @@ const (
 	outcomeSkippedMalformed
 	outcomeErrored
 	outcomeDeadLettered
+	// outcomeRetryTransient is returned when a projector detects a transient
+	// ordering failure (e.g. FK violation on games.match_id) and leaves the
+	// row pending for retry on the next tick. The row is NOT marked projected.
+	// Observable via the projection.retry_transient PostHog metric (RC4).
+	outcomeRetryTransient
 )
 
 // projectRow processes a single daemon_events row.
@@ -447,7 +725,16 @@ func (w *Worker) projectRow(ctx context.Context, row *repository.DaemonEventRow)
 		outcome = w.writeToDLQ(ctx, row, writeErr)
 	}
 
-	// Always mark projected so we don't re-scan this row.
+	// If the projector returned a transient error, leave the row pending so the
+	// next tick retries it (RC-core fix). Emit an observability metric (RC4).
+	// The received_at TTL check is done inside the projector so the DLQ path
+	// above takes precedence when TTL is exceeded.
+	if writeErr != nil && isTransient(writeErr) {
+		w.emitRetryTransient(ctx, row, writeErr)
+		return outcomeRetryTransient
+	}
+
+	// Mark projected for all other outcomes (projected, skipped, errored, DLQ).
 	if err := w.events.MarkProjected(ctx, row.ID); err != nil {
 		log.Printf("[projection] MarkProjected id=%d: %v", row.ID, err)
 		return outcomeErrored
@@ -493,6 +780,19 @@ func (w *Worker) writeToDLQ(ctx context.Context, row *repository.DaemonEventRow,
 	}, analytics.CaptureOptions{Operational: true})
 
 	return outcomeDeadLettered
+}
+
+// emitRetryTransient emits the projection.retry_transient PostHog operational
+// metric when a projector returns a transient error and the row is left pending.
+// account_id is hashed per I-10 — no raw PII is ever sent (RC4).
+// Operational:true — system health telemetry, GDPR §6(1)(f) carve-out.
+func (w *Worker) emitRetryTransient(ctx context.Context, row *repository.DaemonEventRow, projErr error) {
+	acctHash := hashAccountIDProjection(row.AccountID)
+	_ = w.analytics.Capture(ctx, acctHash, "projection.retry_transient", map[string]any{
+		"account_id_hash": acctHash,
+		"event_type":      row.EventType,
+		"error_message":   projErr.Error(),
+	}, analytics.CaptureOptions{Operational: true})
 }
 
 // hashAccountIDProjection returns a privacy-safe representation of accountID
@@ -611,6 +911,14 @@ func (w *Worker) projectMatch(ctx context.Context, row *repository.DaemonEventRo
 
 	// Resolve the draft session ID for this match (ADR-051).
 	// Path 1: daemon supplied it directly — validate ownership.
+	//   - session exists: link it.
+	//   - session does not exist yet: draft.started has not been projected yet
+	//     (out-of-order arrival, NB-1). Return transient() so the row stays
+	//     pending and retries on the next tick. Once draft.started projects the
+	//     session row, SessionExists returns true and the linkage is applied.
+	//     TTL ceiling: received_at + transientRetryTTL — same RC2 rule as #1340
+	//     (based on received_at, not occurred_at, so daemon replays are safe).
+	//   - SessionExists DB error: plain error (not transient — don't mask DB issues).
 	// Path 2: attempt time-window inference when the event_name looks like a draft.
 	// Path 3: leave nil (non-draft match or ambiguous inference).
 	var draftSessionID *string
@@ -619,7 +927,21 @@ func (w *Worker) projectMatch(ctx context.Context, row *repository.DaemonEventRo
 		if existsErr != nil {
 			log.Printf("[projection] projectMatch id=%d: SessionExists: %v — ignoring DraftSessionID", row.ID, existsErr)
 		} else if !exists {
-			log.Printf("[projection] projectMatch id=%d: DraftSessionID %q not found for account — ignoring", row.ID, *p.DraftSessionID)
+			// draft.started not yet projected — defer this event for retry.
+			//
+			// TTL (RC2): base ceiling on received_at, NOT occurred_at. Daemon
+			// replays carry old occurred_at but fresh received_at; using
+			// occurred_at would DLQ recoverable events on first failure.
+			if time.Since(row.ReceivedAt) > transientRetryTTL {
+				log.Printf("[projection] projectMatch id=%d: DraftSessionID %q not found after TTL (received_at=%v) — escalating to DLQ",
+					row.ID, *p.DraftSessionID, row.ReceivedAt)
+				return permanent(fmt.Errorf("draft_session_id %q not found after %v (received_at TTL): draft.started never projected",
+					*p.DraftSessionID, transientRetryTTL))
+			}
+			log.Printf("[projection] projectMatch id=%d: DraftSessionID %q not found — draft.started not yet projected, deferring for retry",
+				row.ID, *p.DraftSessionID)
+			return transient(fmt.Errorf("draft session %q not yet projected (out-of-order: match.completed before draft.started)",
+				*p.DraftSessionID))
 		} else {
 			draftSessionID = p.DraftSessionID
 		}
@@ -966,7 +1288,7 @@ func (w *Worker) projectInventoryUpdated(ctx context.Context, row *repository.Da
 		return fmt.Errorf("resolve account: %w", err)
 	}
 
-	return w.inventory.UpsertInventory(ctx, repository.InventoryUpsert{
+	if err := w.inventory.UpsertInventory(ctx, repository.InventoryUpsert{
 		AccountID:          accountID,
 		Gems:               p.Gems,
 		Gold:               p.Gold,
@@ -976,7 +1298,48 @@ func (w *Worker) projectInventoryUpdated(ctx context.Context, row *repository.Da
 		WildCardRares:      p.WildCardRares,
 		WildCardMythics:    p.WildCardMythics,
 		UpdatedAt:          row.OccurredAt,
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Fan out to UpsertDeckSummary for each deck in the login-blob DeckSummaries
+	// array (#1337). This uses the header-only path that never touches deck_cards
+	// (Ray amendment 1). Only fires when the deckSummaries store is wired and the
+	// payload carries at least one deck.
+	if w.deckSummaries != nil && len(p.Decks) > 0 {
+		for _, d := range p.Decks {
+			if upsertErr := w.deckSummaries.UpsertDeckSummary(ctx, repository.DeckSummaryUpsert{
+				DeckID:    d.DeckID,
+				AccountID: accountID,
+				Name:      d.Name,
+				Format:    d.Format,
+				UpdatedAt: row.OccurredAt,
+			}); upsertErr != nil {
+				// Soft failure: log and continue so a single bad deck row does not
+				// prevent the rest of the fan-out or the inventory upsert from
+				// being projected. The raw payload is preserved in daemon_events.
+				log.Printf("[projection] projectInventoryUpdated id=%d: UpsertDeckSummary deck_id=%s: %v", row.ID, d.DeckID, upsertErr)
+			}
+		}
+	}
+
+	// Fan out to UpsertMastery when the payload carries mastery pass data (#1338).
+	// Only fires when the masteryStore is wired and the payload has a non-nil
+	// Mastery field. Soft failure: a mastery write error is logged and does not
+	// prevent the inventory upsert from being marked projected.
+	if w.mastery != nil && p.Mastery != nil {
+		if masteryErr := w.mastery.UpsertMastery(ctx, repository.MasteryUpsert{
+			AccountID:    accountID,
+			MasteryLevel: p.Mastery.Level,
+			MasteryPass:  p.Mastery.PassType,
+			MasteryMax:   p.Mastery.Max,
+			UpdatedAt:    row.OccurredAt,
+		}); masteryErr != nil {
+			log.Printf("[projection] projectInventoryUpdated id=%d: UpsertMastery: %v", row.ID, masteryErr)
+		}
+	}
+
+	return nil
 }
 
 // --- quest.progress projector ---
@@ -1095,11 +1458,12 @@ func (w *Worker) projectDeckUpdated(ctx context.Context, row *repository.DaemonE
 // that out-of-order retransmissions of the same (match_id, game_number) do not
 // regress the stored state.
 //
-// Card plays (ADR-050): after inserting the per-game row, resolve games.id
-// from (match_id, game_number) and write each CardPlayEntry to game_plays.
-// If games.id cannot be resolved (match.completed not yet projected), log at
-// WARN and skip — the raw payload is preserved in daemon_events.payload for
-// retroactive projection (v0.3.8 follow-on, not a v0.3.7 gate).
+// Card plays (ADR-050): after inserting the per-game row, write each
+// CardPlayEntry to game_plays via InsertCardPlays.
+// UpsertGameRow creates the games anchor row required by the game_plays.game_id
+// FK. If UpsertGameRow returns a FK violation (SQLSTATE 23503) it means
+// match.completed has not yet been projected — return transient() so projectRow
+// leaves this row pending for retry on the next tick (fix for #1340).
 //
 // Counter projection (ADR-046 A2.1, vmt-t#613): if the payload carries
 // CounterChanges and the counterStore is wired, each entry is written to
@@ -1196,6 +1560,23 @@ func (w *Worker) projectGamePlayEvent(ctx context.Context, row *repository.Daemo
 			var upsertErr error
 			gameID, upsertErr = w.gameRows.UpsertGameRow(ctx, p.MatchID, p.GameNumber, gameResult)
 			if upsertErr != nil {
+				if isFKViolation(upsertErr) {
+					// FK 23503: games.match_id → matches.id not yet projected.
+					// match.completed arrives after match.game_ended in the
+					// common stream ordering — retry on the next tick.
+					//
+					// TTL (RC2): base the ceiling on received_at, NOT occurred_at.
+					// Daemon replays carry days-old occurred_at but fresh received_at;
+					// using occurred_at would DLQ recoverable events on first failure.
+					if time.Since(row.ReceivedAt) > transientRetryTTL {
+						log.Printf("[projection] projectGamePlayEvent id=%d: FK violation TTL exceeded (received_at=%v) — escalating to DLQ",
+							row.ID, row.ReceivedAt)
+						return permanent(fmt.Errorf("FK violation not resolved after %v (received_at TTL): %w", transientRetryTTL, upsertErr))
+					}
+					log.Printf("[projection] projectGamePlayEvent id=%d: FK violation on games.match_id=%q — leaving pending for retry (match.completed not yet projected)",
+						row.ID, p.MatchID)
+					return transient(upsertErr)
+				}
 				return fmt.Errorf("UpsertGameRow: %w", upsertErr)
 			}
 		}
@@ -1254,31 +1635,51 @@ func normaliseResult(s string) string {
 // deriveGameResult returns the per-game result ("win" or "loss") for a
 // match.game_ended event.
 //
-// It compares winningTeamID (from the event payload) against the
-// player_team_id stored in the matches row for (accountID, matchID).
-// When the match row does not yet exist (match.completed not yet projected),
-// player_team_id is 0 and the function falls back to "win" — the same value
-// the previous placeholder wrote — and logs a warning. A subsequent replay
-// after match.completed is projected will overwrite the stored value via the
-// ON CONFLICT UPDATE path.
+// GRE payloads always carry WinningTeamID=0 (no final-win signal from GRE).
+// The function therefore always calls GetPlayerTeamIDForMatch first.
+//
+// When winningTeamID is non-zero (future-proofing / non-GRE sources): compare
+// winningTeamID directly against player_team_id to derive the result.
+//
+// When winningTeamID is zero (the common GRE case): call GetResultForMatch to
+// obtain the match-level result stored by the match.completed projector, and
+// return it directly. This cross-reference is the correct derivation path —
+// the GRE payload alone is insufficient.
+//
+// If the match row does not yet exist (match.completed not yet projected),
+// both lookups return zero/empty; the function falls back to "win" and logs a
+// warning. A subsequent replay after match.completed is projected will
+// overwrite the stored value via the ON CONFLICT UPDATE path.
 func deriveGameResult(ctx context.Context, matches matchStore, accountID int64, matchID string, winningTeamID int, eventID int64) string {
-	if winningTeamID <= 0 {
-		log.Printf("[projection] projectGamePlayEvent id=%d: winning_team_id=0 on match.game_ended — cannot derive per-game result, defaulting to 'win'", eventID)
-		return "win"
-	}
-
 	playerTeamID, err := matches.GetPlayerTeamIDForMatch(ctx, accountID, matchID)
 	if err != nil {
 		log.Printf("[projection] projectGamePlayEvent id=%d: GetPlayerTeamIDForMatch: %v — defaulting to 'win'", eventID, err)
 		return "win"
 	}
-	if playerTeamID <= 0 {
-		log.Printf("[projection] projectGamePlayEvent id=%d: match row not yet projected for match_id=%q — defaulting to 'win'", eventID, matchID)
-		return "win"
+
+	if winningTeamID > 0 {
+		// Non-zero winning team from payload: compare directly.
+		if playerTeamID <= 0 {
+			log.Printf("[projection] projectGamePlayEvent id=%d: match row not yet projected for match_id=%q — defaulting to 'win'", eventID, matchID)
+			return "win"
+		}
+		if winningTeamID == playerTeamID {
+			return "win"
+		}
+		return "loss"
 	}
 
-	if winningTeamID == playerTeamID {
+	// winningTeamID==0: GRE has no final-win signal. Cross-reference the
+	// match-level result recorded by the match.completed projector.
+	matchResult, err := matches.GetResultForMatch(ctx, accountID, matchID)
+	if err != nil {
+		log.Printf("[projection] projectGamePlayEvent id=%d: GetResultForMatch: %v — defaulting to 'win'", eventID, err)
 		return "win"
 	}
-	return "loss"
+	if matchResult == "win" || matchResult == "loss" {
+		return matchResult
+	}
+
+	log.Printf("[projection] projectGamePlayEvent id=%d: match row not yet projected for match_id=%q (winning_team_id=0) — defaulting to 'win'", eventID, matchID)
+	return "win"
 }

@@ -54,10 +54,11 @@ type DaemonEventInserter interface {
 // When a DaemonEventInserter is wired, each event is also persisted to the
 // database before broadcasting.
 type IngestHandler struct {
-	broadcaster EventBroadcaster
-	repo        DaemonEventInserter
-	gapDetector *GapDetector
-	analytics   *analytics.Client
+	broadcaster     EventBroadcaster
+	repo            DaemonEventInserter
+	gapDetector     *GapDetector
+	analytics       *analytics.Client
+	projectionNudge chan<- struct{} // optional; non-blocking kick to the projection worker (ADR-084 §2)
 }
 
 // NewIngestHandler creates an IngestHandler that broadcasts received events
@@ -79,10 +80,30 @@ func NewIngestHandler(broadcaster EventBroadcaster) *IngestHandler {
 // NewIngestHandler call-sites.
 func (h *IngestHandler) WithRepository(repo DaemonEventInserter) *IngestHandler {
 	return &IngestHandler{
-		broadcaster: h.broadcaster,
-		repo:        repo,
-		gapDetector: h.gapDetector,
-		analytics:   h.analytics,
+		broadcaster:     h.broadcaster,
+		repo:            repo,
+		gapDetector:     h.gapDetector,
+		analytics:       h.analytics,
+		projectionNudge: h.projectionNudge,
+	}
+}
+
+// WithProjectionNudge returns a copy of h with a non-blocking nudge channel
+// wired for the projection worker (ADR-084 §2).  After each event is persisted,
+// the handler sends a non-blocking kick on nudge so the projection worker runs
+// within milliseconds of ingest rather than waiting up to 30 s for the ticker.
+// The channel must be the write end of the buffered-capacity-1 channel passed
+// to projection.Worker.RunWithNudge.
+//
+// Ingest never blocks: the send is guarded by select/default so a full channel
+// (nudge already pending) is silently dropped.
+func (h *IngestHandler) WithProjectionNudge(nudge chan<- struct{}) *IngestHandler {
+	return &IngestHandler{
+		broadcaster:     h.broadcaster,
+		repo:            h.repo,
+		gapDetector:     h.gapDetector,
+		analytics:       h.analytics,
+		projectionNudge: nudge,
 	}
 }
 
@@ -94,10 +115,11 @@ func (h *IngestHandler) WithPostHogClient(client analytics.PostHogEnqueuer) *Ing
 // WithAnalyticsClient wires an analytics.Client into the handler.
 func (h *IngestHandler) WithAnalyticsClient(c *analytics.Client) *IngestHandler {
 	return &IngestHandler{
-		broadcaster: h.broadcaster,
-		repo:        h.repo,
-		gapDetector: h.gapDetector,
-		analytics:   c,
+		broadcaster:     h.broadcaster,
+		repo:            h.repo,
+		gapDetector:     h.gapDetector,
+		analytics:       c,
+		projectionNudge: h.projectionNudge,
 	}
 }
 
@@ -189,6 +211,32 @@ func (h *IngestHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 // batch paths of IngestEvent so behavior is identical regardless of the wire
 // shape.
 func (h *IngestHandler) processEvent(ctx context.Context, userID int64, event contract.DaemonEvent) {
+	// Ingest-layer mismatch detection (#1336, ADR-080 D7.3).
+	// When the key-bound account_id (set by DaemonAPIKeyAuth) differs from the
+	// client-supplied event.AccountID, emit a WARN log and a metric.  This
+	// indicates a stale-config daemon dispatching events tagged with an old
+	// Clerk identity.  The event is NOT rejected here — this is observability
+	// only; the parking behaviour is the ADR-080 enforcement epic.
+	// Guard: absent key_bound_account_id means legacy APIKeyAuth path — skip.
+	if keyBoundAccountID, ok := bffmiddleware.KeyBoundAccountIDFromContext(ctx); ok {
+		if event.AccountID != keyBoundAccountID {
+			eventHash := identityhash.HashAccountID(event.AccountID)
+			boundHash := identityhash.HashAccountID(keyBoundAccountID)
+			slog.Warn(
+				"[ingest] account_id mismatch: event != key_bound",
+				"event_account_id_hash", eventHash,
+				"key_bound_account_id_hash", boundHash,
+				"user_id", userID,
+			)
+			_ = h.analytics.Capture(ctx, boundHash, analytics.EventDaemonAccountIdMismatch, map[string]any{
+				"account_id_hash":           boundHash,
+				"event_account_id_hash":     eventHash,
+				"key_bound_account_id_hash": boundHash,
+				"user_id":                   userID,
+			})
+		}
+	}
+
 	// Persist the event before broadcasting. A persistence failure is logged
 	// but does not drop the live event — the broadcast still proceeds so the
 	// frontend receives the event even when the database is degraded.
@@ -201,6 +249,14 @@ func (h *IngestHandler) processEvent(ctx context.Context, userID int64, event co
 				"account_id_hash", hashAccountID(event.AccountID),
 				"err", err,
 			)
+		} else if h.projectionNudge != nil {
+			// ADR-084 §2: non-blocking kick to the projection worker so it
+			// runs within milliseconds of ingest rather than waiting for the
+			// 30 s ticker.  select/default guarantees ingest never blocks.
+			select {
+			case h.projectionNudge <- struct{}{}:
+			default:
+			}
 		}
 	}
 

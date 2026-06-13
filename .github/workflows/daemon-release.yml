@@ -160,8 +160,8 @@ jobs:
         # Pick the SPA and setup-page URLs baked into the binary via
         # `-X main.DefaultSPAURL=<url>` and `-X main.DefaultSetupURL=<url>` (#637).
         # Pre-release tags ship the staging SPA/setup URLs; stable tags ship
-        # production; workflow_dispatch defaults to staging (same split as
-        # DefaultCloudAPIURL to keep all four env targets consistent).
+        # production (hollowmark.app); workflow_dispatch defaults to staging (same
+        # split as DefaultCloudAPIURL to keep all four env targets consistent).
         id: spa_urls
         run: |
           REF="${{ github.ref_name }}"
@@ -169,8 +169,8 @@ jobs:
             echo "spa_url=https://stg-app.vaultmtg.app" >> "$GITHUB_OUTPUT"
             echo "setup_url=https://stg.vaultmtg.app/setup" >> "$GITHUB_OUTPUT"
           elif [[ "$REF" == daemon/v* ]]; then
-            echo "spa_url=https://app.vaultmtg.app" >> "$GITHUB_OUTPUT"
-            echo "setup_url=https://vaultmtg.app/setup" >> "$GITHUB_OUTPUT"
+            echo "spa_url=https://app.hollowmark.app" >> "$GITHUB_OUTPUT"
+            echo "setup_url=https://hollowmark.app/setup" >> "$GITHUB_OUTPUT"
           else
             # workflow_dispatch on a branch — never touch prod from a snapshot.
             echo "spa_url=https://stg-app.vaultmtg.app" >> "$GITHUB_OUTPUT"
@@ -350,9 +350,9 @@ jobs:
           # Sentry disabled at runtime per sentryhook.Init contract. #1832.
           DEFAULT_SENTRY_DSN: ${{ steps.sentry_dsn.outputs.dsn }}
           # SPA URL baked into the binary via `-X main.DefaultSPAURL=` so the
-          # tray "Open VaultMTG" menu item opens the correct SPA environment.
+          # tray "Open Hollowmark" menu item opens the correct SPA environment.
           # Pre-release builds get stg-app.vaultmtg.app; stable builds get
-          # app.vaultmtg.app. #637.
+          # app.hollowmark.app. #637.
           DEFAULT_SPA_URL: ${{ steps.spa_urls.outputs.spa_url }}
           # Setup page URL baked into the binary via `-X main.DefaultSetupURL=`
           # so handleMissingConfig and the retry-setup loop open the correct
@@ -753,8 +753,8 @@ jobs:
             echo "spa_url=https://stg-app.vaultmtg.app" >> "$GITHUB_OUTPUT"
             echo "setup_url=https://stg.vaultmtg.app/setup" >> "$GITHUB_OUTPUT"
           elif [[ "$REF" == daemon/v* ]]; then
-            echo "spa_url=https://app.vaultmtg.app" >> "$GITHUB_OUTPUT"
-            echo "setup_url=https://vaultmtg.app/setup" >> "$GITHUB_OUTPUT"
+            echo "spa_url=https://app.hollowmark.app" >> "$GITHUB_OUTPUT"
+            echo "setup_url=https://hollowmark.app/setup" >> "$GITHUB_OUTPUT"
           else
             echo "spa_url=https://stg-app.vaultmtg.app" >> "$GITHUB_OUTPUT"
             echo "setup_url=https://stg.vaultmtg.app/setup" >> "$GITHUB_OUTPUT"

@@ -12,27 +12,26 @@ import (
 const (
 	// fromAddress is the RFC5321 envelope sender for all transactional email.
 	// Technical sender domain is hollowmark.app (ADR-076 §Decision + D13).
-	// User-facing copy uses "VaultMTG" per D16 brand-reveal deferral.
 	fromAddress = "no-reply@hollowmark.app"
 
-	subjectComplete = "Your VaultMTG account has been deleted"
-	subjectFailed   = "Action required: your VaultMTG account deletion could not be completed"
+	subjectComplete = "Your Hollowmark account has been deleted"
+	subjectFailed   = "Action required: your Hollowmark account deletion could not be completed"
 
 	bodyComplete = `Hi,
 
-Your VaultMTG account deletion request has been processed and your account data has been permanently deleted.
+Your Hollowmark account deletion request has been processed and your account data has been permanently deleted.
 
 If you have any questions, please contact us at support@vaultmtg.app.
 
-The VaultMTG Team`
+The Hollowmark Team`
 
 	bodyFailed = `Hi,
 
-We were unable to complete the deletion of your VaultMTG account. Our team has been alerted and will follow up.
+We were unable to complete the deletion of your Hollowmark account. Our team has been alerted and will follow up.
 
 If you need immediate assistance, please contact us at support@vaultmtg.app.
 
-The VaultMTG Team`
+The Hollowmark Team`
 )
 
 // sesv2API is the subset of the SES v2 client used by SESv2Sender.

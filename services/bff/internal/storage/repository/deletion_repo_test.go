@@ -304,7 +304,7 @@ func TestDeletionRepository_CapturePreJobData(t *testing.T) {
 
 	userID, accountID, clientID := seedDeletionUser(t, db)
 
-	email, clientIDs, err := repo.CapturePreJobData(context.Background(), userID, accountID)
+	email, clientIDs, err := repo.CapturePreJobData(context.Background(), userID, []int64{accountID})
 	if err != nil {
 		t.Fatalf("CapturePreJobData: %v", err)
 	}
@@ -799,8 +799,194 @@ func TestDeletionRepository_AssertZeroResiduals_PassesWhenClean(t *testing.T) {
 		t.Fatalf("HardDeleteAccount: %v", err)
 	}
 
-	if err := repo.AssertZeroResiduals(context.Background(), accountID, []string{clientID}); err != nil {
+	if err := repo.AssertZeroResiduals(context.Background(), []int64{accountID}, []string{clientID}); err != nil {
 		t.Errorf("AssertZeroResiduals after complete erasure returned error: %v (expected nil)", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// #1333 — GDPR multi-account erasure correctness tests (TDD RED → GREEN)
+//
+// A Clerk user can own >1 accounts row (the multi-account model introduced by
+// the 2026-06-12 incident).  ResolveUserAndAccount's LIMIT 1 silently left
+// N-1 accounts intact on erasure — a GDPR Art.17 compliance defect.
+//
+// These tests FAIL on the pre-fix code (LIMIT 1) and PASS after the fix.
+// ---------------------------------------------------------------------------
+
+// seedSecondAccount inserts a second accounts row for the given userID and
+// returns the new accountID and clientID.  Both rows belong to the same user.
+func seedSecondAccount(t *testing.T, db *sql.DB, userID int64) (accountID int64, clientID string) {
+	t.Helper()
+
+	suffix := fmt.Sprintf("%d_2", time.Now().UnixNano())
+	clientID = "client_del_second_" + suffix
+
+	err := db.QueryRowContext(context.Background(),
+		`INSERT INTO accounts (name, client_id, user_id) VALUES ($1, $2, $3) RETURNING id`,
+		clientID, clientID, userID).Scan(&accountID)
+	if err != nil {
+		t.Fatalf("seed second account: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM accounts WHERE id = $1`, accountID)
+	})
+
+	return accountID, clientID
+}
+
+// TestDeletionRepository_ResolveAllAccountIDs_MultiAccount verifies that
+// ResolveAllAccountIDs returns ALL accounts rows for a user — not just the
+// first one.  This is the TDD RED test for the LIMIT 1 fix (#1333).
+//
+// On the pre-fix code (LIMIT 1 in ResolveUserAndAccount), there is no
+// ResolveAllAccountIDs method and the single-account path is used — this
+// test documents the required new API.
+func TestDeletionRepository_ResolveAllAccountIDs_MultiAccount(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDeletionRepository(db)
+
+	// Seed one user with two accounts.
+	userID, accountID1, _ := seedDeletionUser(t, db)
+	accountID2, _ := seedSecondAccount(t, db, userID)
+
+	// Retrieve the clerk_user_id so we can call the resolver.
+	var clerkUserID string
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT clerk_user_id FROM users WHERE id = $1`, userID).Scan(&clerkUserID); err != nil {
+		t.Fatalf("fetch clerk_user_id: %v", err)
+	}
+
+	resolvedUserID, accountIDs, err := repo.ResolveAllAccountIDs(context.Background(), clerkUserID)
+	if err != nil {
+		t.Fatalf("ResolveAllAccountIDs: %v", err)
+	}
+
+	if resolvedUserID != userID {
+		t.Errorf("ResolveAllAccountIDs: got userID %d, want %d", resolvedUserID, userID)
+	}
+
+	// Must return BOTH accounts.
+	found1, found2 := false, false
+	for _, id := range accountIDs {
+		if id == accountID1 {
+			found1 = true
+		}
+		if id == accountID2 {
+			found2 = true
+		}
+	}
+	if !found1 || !found2 {
+		t.Errorf("ResolveAllAccountIDs: got accountIDs %v, want both %d and %d",
+			accountIDs, accountID1, accountID2)
+	}
+	if len(accountIDs) < 2 {
+		t.Errorf("ResolveAllAccountIDs: got %d accountIDs, want >= 2", len(accountIDs))
+	}
+}
+
+// TestDeletionRepository_MultiAccountErasure_AllAccountsErased is the core
+// GDPR correctness test for #1333.
+//
+// Scenario: one Clerk user owns two accounts rows.  Each account has a child
+// daemon_api_keys row (TEXT account_id, no FK — the "explicit" TEXT path).
+// After erasure via ResolveAllAccountIDs + a full cascade loop:
+//   - Both accounts rows must be gone
+//   - Both daemon_api_keys rows must be gone
+//   - The users row must be gone
+//
+// This test FAILS on the pre-fix code where only ONE account is resolved and
+// erased; the second account's data survives.
+func TestDeletionRepository_MultiAccountErasure_AllAccountsErased(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDeletionRepository(db)
+
+	// Seed: one user, two accounts.
+	userID, accountID1, clientID1 := seedDeletionUser(t, db)
+	accountID2, clientID2 := seedSecondAccount(t, db, userID)
+
+	// Seed a daemon_api_keys row for each account (TEXT-keyed, explicit path).
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	for i, cid := range []string{clientID1, clientID2} {
+		_, err := db.ExecContext(context.Background(),
+			`INSERT INTO daemon_api_keys (account_id, key_hash, key_prefix, device_id, platform, daemon_ver)
+			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			cid,
+			fmt.Sprintf("hash_multi_%d_%d", i, time.Now().UnixNano()),
+			"mpref",
+			fmt.Sprintf("00000000-0000-0000-0000-%012d", i+int(time.Now().UnixNano()%1e12)),
+			"macOS",
+			"0.4.3-test_"+suffix)
+		if err != nil {
+			t.Fatalf("seed daemon_api_keys for account %d: %v", i+1, err)
+		}
+		t.Cleanup(func() {
+			_, _ = db.ExecContext(context.Background(),
+				`DELETE FROM daemon_api_keys WHERE account_id = $1`, cid)
+		})
+	}
+
+	// Collect clientIDs from ALL accounts (simulating CapturePreJobData multi-account).
+	allClientIDs := []string{clientID1, clientID2}
+
+	// Execute the erasure steps across all accounts.
+	// Step 4a: delete TEXT-keyed rows for ALL clientIDs in one call.
+	if err := repo.DeleteTextKeyedRows(context.Background(), allClientIDs); err != nil {
+		t.Fatalf("DeleteTextKeyedRows (all accounts): %v", err)
+	}
+
+	// Step 4b: anonymize consent_log for ALL accounts in one call.
+	if err := repo.AnonymizeConsentLog(context.Background(), []int64{accountID1, accountID2}); err != nil {
+		t.Fatalf("AnonymizeConsentLog all accounts: %v", err)
+	}
+
+	// Step 4d: hard-delete users (must precede accounts delete due to FK).
+	if err := repo.HardDeleteUser(context.Background(), userID); err != nil {
+		t.Fatalf("HardDeleteUser: %v", err)
+	}
+
+	// Step 4e + 4-explicit: hard-delete EACH account and its BIGINT-keyed children.
+	for _, aid := range []int64{accountID1, accountID2} {
+		if err := repo.HardDeleteAccount(context.Background(), aid); err != nil {
+			t.Fatalf("HardDeleteAccount account %d: %v", aid, err)
+		}
+		if err := repo.DeleteExplicitBigintRows(context.Background(), aid); err != nil {
+			t.Fatalf("DeleteExplicitBigintRows account %d: %v", aid, err)
+		}
+	}
+
+	// Assert: zero daemon_api_keys rows remain for either client_id.
+	for i, cid := range []string{clientID1, clientID2} {
+		var count int
+		if err := db.QueryRowContext(context.Background(),
+			`SELECT COUNT(*) FROM daemon_api_keys WHERE account_id = $1`, cid).Scan(&count); err != nil {
+			t.Fatalf("count daemon_api_keys for account %d: %v", i+1, err)
+		}
+		if count != 0 {
+			t.Errorf("account %d: %d daemon_api_keys rows remain after erasure — GDPR Art.17 violation (LIMIT 1 bug)",
+				i+1, count)
+		}
+	}
+
+	// Assert: zero accounts rows remain for the user.
+	var accountCount int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM accounts WHERE user_id = $1`, userID).Scan(&accountCount); err != nil {
+		t.Fatalf("count accounts: %v", err)
+	}
+	if accountCount != 0 {
+		t.Errorf("%d accounts rows remain after full erasure (expected 0) — GDPR Art.17 violation", accountCount)
+	}
+
+	// Assert: users row is gone.
+	var userCount int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM users WHERE id = $1`, userID).Scan(&userCount); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if userCount != 0 {
+		t.Errorf("users row still exists after HardDeleteUser")
 	}
 }
 
@@ -836,7 +1022,7 @@ func TestDeletionRepository_AssertZeroResiduals_FailsWhenResidualsExist(t *testi
 	// tables for the clientID we left behind.
 	fakeAccountID := int64(999999999)
 
-	err = repo.AssertZeroResiduals(context.Background(), fakeAccountID, []string{textClientID})
+	err = repo.AssertZeroResiduals(context.Background(), []int64{fakeAccountID}, []string{textClientID})
 	if err == nil {
 		t.Error("AssertZeroResiduals returned nil when daemon_api_keys had a residual row — expected a non-nil error listing offending tables")
 	} else {

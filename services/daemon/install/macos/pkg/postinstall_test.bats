@@ -290,22 +290,23 @@ setup() {
 }
 
 # ---------------------------------------------------------------------------
-# 7. daemon.json: same-env reinstall — existing fields preserved, no overwrite
+# 7. daemon.json: same-env reinstall — non-auth fields preserved; auth fields cleared
 #
 #    When the existing cloud_api_url matches the baked-in value (same-env
-#    reinstall), the config is not overwritten and other fields are retained.
+#    reinstall), cloud_api_url and non-auth fields are retained.
+#    Auth fields (keychain, api_key, daemon_jwt) are unconditionally cleared
+#    by §2b so the daemon's ProbeTokenLiveness probe runs on next launch
+#    (#1330 stale-auth-clear, 2026-06-12 incident fix).
 # ---------------------------------------------------------------------------
-@test "daemon.json: same-env reinstall preserves existing fields" {
-  # Pre-create config with the SAME URL that TMP_SCRIPT bakes in so this is a
-  # same-env reinstall (no mismatch).  Extra fields must be preserved.
-  # _make_test_script defaults to https://staging-api.vaultmtg.app/api/v1.
+@test "daemon.json: same-env reinstall preserves non-auth fields and clears auth fields" {
   mkdir -p "${TEST_DIR}/.vaultmtg"
   python3 -c "
 import json
 print(json.dumps({
     'cloud_api_url': 'https://staging-api.vaultmtg.app/api/v1',
     'api_key': 'my-existing-key',
-    'sync_enabled': True
+    'sync_enabled': True,
+    'account_id': 'user_abc'
 }, indent=2))
 " > "${CONFIG_FILE}"
 
@@ -320,20 +321,24 @@ print(json.dumps({
   [ "${status}" -eq 0 ]
   [ -f "${CONFIG_FILE}" ]
 
-  # cloud_api_url is unchanged (same-env path).
+  # cloud_api_url and non-auth fields are preserved.
   python3 -c "
 import json
 with open('${CONFIG_FILE}') as f:
     d = json.load(f)
 assert d['cloud_api_url'] == 'https://staging-api.vaultmtg.app/api/v1', \
     'FAIL: cloud_api_url changed on same-env reinstall'
-assert d.get('api_key') == 'my-existing-key', \
-    'FAIL: api_key not preserved: ' + repr(d.get('api_key'))
 assert d.get('sync_enabled') == True, \
     'FAIL: sync_enabled not preserved'
-print('PASS: same-env reinstall preserved all fields')
+assert d.get('account_id') == 'user_abc', \
+    'FAIL: account_id not preserved'
+# Auth fields must be cleared by §2b stale-auth-clear (#1330).
+assert not d.get('api_key'), \
+    'FAIL: api_key not cleared by stale-auth-clear: ' + repr(d.get('api_key'))
+print('PASS: non-auth fields preserved; api_key cleared by stale-auth-clear')
 "
   [[ "${output}" == *"cloud_api_url unchanged"* ]]
+  [[ "${output}" == *"stale auth cleared"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -563,10 +568,11 @@ print(json.dumps(data, indent=2))
   echo "output: ${output}"
   [ "${status}" -eq 0 ]
 
-  # Security delete-generic-password must have been called (keychain cleared).
+  # Security delete-generic-password must have been called (cross-env + §2b stale-auth-clear).
+  # §2 targets KEYCHAIN_SERVICE (com.hollowmark.daemon); §2b also targets com.vaultmtg.daemon.
   [ -f "${security_calls}" ]
   grep -q "delete-generic-password" "${security_calls}"
-  grep -q "com.vaultmtg.daemon" "${security_calls}"
+  grep -q "com.hollowmark.daemon" "${security_calls}"
   grep -q "api-key" "${security_calls}"
 
   # cloud_api_url must now be the new (baked-in) value.
@@ -579,49 +585,50 @@ assert d['cloud_api_url'] == 'https://staging-api.vaultmtg.app/api/v1', \
 print('PASS: cloud_api_url updated to new value')
 "
 
-  # Other fields must be preserved by name.
+  # Non-auth identity fields (account_id, sync_enabled) are preserved by §2b.
+  # Auth fields (api_key, keychain, daemon_jwt) are cleared by §2b stale-auth-clear (#1330).
   python3 -c "
 import json
 with open('${CONFIG_FILE}') as f:
     d = json.load(f)
-assert d.get('api_key') == 'my-existing-api-key', \
-    'FAIL: api_key changed: ' + repr(d.get('api_key'))
+assert not d.get('api_key'), \
+    'FAIL: api_key not cleared by stale-auth-clear: ' + repr(d.get('api_key'))
 assert d.get('sync_enabled') == True, \
     'FAIL: sync_enabled changed: ' + repr(d.get('sync_enabled'))
 assert d.get('account_id') == 'user_abc123', \
     'FAIL: account_id changed: ' + repr(d.get('account_id'))
-print('PASS: api_key, sync_enabled, account_id all preserved after cross-env reinstall')
+print('PASS: api_key cleared; sync_enabled, account_id preserved after cross-env reinstall')
 "
 
   [[ "${output}" == *"cross-env reinstall detected"* ]]
   [[ "${output}" == *"keychain entry cleared"* ]]
   [[ "${output}" == *"cloud_api_url updated"* ]]
+  [[ "${output}" == *"stale auth cleared"* ]]
 }
 
-# 15. Same-env reinstall: when cloud_api_url is already correct, keychain is
-#     NOT cleared and no fields are modified.
+# 15. (Previously "ADR-011-C: same-env reinstall is byte-exact no-op")
 #
-# 16. ADR-011-C guard: same-env reinstall leaves daemon.json byte-for-byte
-#     identical — postinstall must not call json.dump or any write on the
-#     same-env path.  SHA256 comparison is the authoritative check.
-@test "ADR-011-C: same-env reinstall is a daemon.json byte-exact no-op" {
-  # Pre-create config with the same URL TMP_SCRIPT bakes in so this is a
-  # same-env reinstall.  Use a fixed JSON string so the SHA is deterministic.
+#     ADR-011-C is superseded by #1330: §2b stale-auth-clear ALWAYS writes
+#     daemon.json to remove auth fields, so the SHA WILL change when auth
+#     fields are present.  The relevant invariant is now:
+#       - Non-auth fields (cloud_api_url, account_id, sync_enabled) are preserved
+#       - Auth fields (keychain, api_key, daemon_jwt) are cleared
+#       - The file exits valid JSON after postinstall completes
+#
+#     The byte-exact SHA invariant no longer applies when auth fields were present.
+@test "ADR-011-C (updated #1330): same-env reinstall preserves non-auth fields and exits with valid JSON" {
   mkdir -p "${TEST_DIR}/.vaultmtg"
   python3 -c "
 import json
-# Produce compact, deterministic JSON matching what a previous install wrote.
 data = {
     'cloud_api_url': 'https://staging-api.vaultmtg.app/api/v1',
-    'api_key': 'preserve-me',
+    'keychain': True,
+    'api_key': '',
     'account_id': 'user_adr011c',
     'sync_enabled': True
 }
 print(json.dumps(data, indent=2))
 " > "${CONFIG_FILE}"
-
-  local sha_before
-  sha_before="$(shasum -a 256 "${CONFIG_FILE}" | cut -d' ' -f1)"
 
   run env \
     PATH="${STUB_DIR}:${PATH}" \
@@ -633,23 +640,32 @@ print(json.dumps(data, indent=2))
   echo "output: ${output}"
   [ "${status}" -eq 0 ]
 
-  local sha_after
-  sha_after="$(shasum -a 256 "${CONFIG_FILE}" | cut -d' ' -f1)"
-
-  if [ "${sha_before}" != "${sha_after}" ]; then
-    echo "FAIL: daemon.json SHA256 changed on same-env reinstall (ADR-011-C violated)"
-    echo "  before: ${sha_before}"
-    echo "  after:  ${sha_after}"
-    echo "  file contents:"
-    cat "${CONFIG_FILE}"
-    false
-  fi
-  echo "PASS: daemon.json SHA256 unchanged on same-env reinstall (ADR-011-C satisfied)"
+  # daemon.json must be valid JSON and non-auth fields preserved.
+  python3 -c "
+import json
+with open('${CONFIG_FILE}') as f:
+    d = json.load(f)
+assert d.get('cloud_api_url') == 'https://staging-api.vaultmtg.app/api/v1', \
+    'FAIL: cloud_api_url changed'
+assert d.get('account_id') == 'user_adr011c', \
+    'FAIL: account_id changed'
+assert d.get('sync_enabled') == True, \
+    'FAIL: sync_enabled changed'
+# Auth fields cleared by §2b.
+assert not d.get('keychain'), 'FAIL: keychain not cleared'
+assert not d.get('api_key'), 'FAIL: api_key not cleared'
+print('PASS: non-auth fields preserved; auth fields cleared; valid JSON')
+"
   [[ "${output}" == *"cloud_api_url unchanged"* ]]
+  [[ "${output}" == *"stale auth cleared"* ]]
 }
 
-@test "same-env reinstall: keychain NOT cleared when cloud_api_url is unchanged" {
-  local security_calls="${BATS_TEST_TMPDIR}/security_calls_15"
+@test "same-env reinstall: §2b stale-auth-clear always calls security delete and clears auth fields" {
+  # #1330: §2b runs UNCONDITIONALLY — security delete is always called (both service names)
+  # and auth fields are always zeroed, even on same-env reinstall.
+  # The §2 cross-env guard (cloud_api_url mismatch) is a separate path that does NOT
+  # gate the §2b stale-auth-clear.
+  local security_calls="${BATS_TEST_TMPDIR}/security_calls_17"
 
   cat > "${STUB_DIR}/security" <<EOF
 #!/usr/bin/env bash
@@ -658,20 +674,18 @@ exit 0
 EOF
   chmod +x "${STUB_DIR}/security"
 
-  # Pre-create config with the SAME URL that TMP_SCRIPT will bake in.
-  # _make_test_script uses https://staging-api.vaultmtg.app/api/v1 by default.
   mkdir -p "${TEST_DIR}/.vaultmtg"
   python3 -c "
 import json
 data = {
   'cloud_api_url': 'https://staging-api.vaultmtg.app/api/v1',
-  'api_key': 'original-key',
-  'sync_enabled': False
+  'keychain': True,
+  'api_key': '',
+  'sync_enabled': False,
+  'account_id': 'user_xyz'
 }
 print(json.dumps(data, indent=2))
 " > "${CONFIG_FILE}"
-  local original_content
-  original_content="$(cat "${CONFIG_FILE}")"
 
   run env \
     PATH="${STUB_DIR}:${PATH}" \
@@ -683,25 +697,24 @@ print(json.dumps(data, indent=2))
   echo "output: ${output}"
   [ "${status}" -eq 0 ]
 
-  # Security must NOT have been called for a keychain delete.
-  if [ -f "${security_calls}" ]; then
-    run grep "delete-generic-password" "${security_calls}"
-    [ "${status}" -ne 0 ]
-  fi
-
-  # Config must be unchanged.
-  local new_content
-  new_content="$(cat "${CONFIG_FILE}")"
+  # §2b always calls security delete for both service names.
+  [ -f "${security_calls}" ]
+  grep -q "delete-generic-password" "${security_calls}"
+  grep -q "com.hollowmark.daemon" "${security_calls}"
 
   python3 -c "
 import json
 with open('${CONFIG_FILE}') as f:
     d = json.load(f)
-assert d.get('api_key') == 'original-key', \
-    'FAIL: api_key changed on same-env reinstall: ' + repr(d.get('api_key'))
+# Auth fields cleared.
+assert not d.get('keychain'), 'FAIL: keychain not cleared'
+assert not d.get('api_key'), 'FAIL: api_key not cleared'
+# Non-auth fields preserved.
 assert d.get('sync_enabled') == False, \
-    'FAIL: sync_enabled changed on same-env reinstall: ' + repr(d.get('sync_enabled'))
-print('PASS: api_key and sync_enabled unchanged on same-env reinstall')
+    'FAIL: sync_enabled changed: ' + repr(d.get('sync_enabled'))
+assert d.get('account_id') == 'user_xyz', \
+    'FAIL: account_id changed: ' + repr(d.get('account_id'))
+print('PASS: auth fields cleared; non-auth fields preserved')
 "
 
   [[ "${output}" == *"cloud_api_url unchanged"* ]]
@@ -889,4 +902,322 @@ EOF
   echo "output: ${output}"
   # Must not fail — helper absent is not an error.
   [ "${status}" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# #1330 — stale auth clear on every install/update (belt-and-suspenders for
+# the 2026-06-12 incident where a stale Clerk-instance keychain key bypassed
+# first-run auth).
+#
+# Design:
+#   On EVERY install/update postinstall clears the auth state so the daemon's
+#   startup ProbeTokenLiveness (#3238 Fix A) runs unconditionally and decides
+#   whether PKCE re-auth is needed.  This is safe because:
+#     - archives/ dir is never touched
+#     - account_id and daemon_id are preserved in daemon.json
+#     - only keychain, api_key, daemon_jwt are cleared
+#
+#   Two keychain service names are cleared for full field coverage:
+#     com.hollowmark.daemon  — ServiceNameNew  (all current installs)
+#     com.vaultmtg.daemon    — ServiceNameLegacy (pre-ADR-022-Phase3 installs)
+#
+# Tests:
+#   21. Stale auth is cleared on install: security delete called for both
+#       com.hollowmark.daemon and com.vaultmtg.daemon / api-key; daemon.json
+#       keychain+api_key+daemon_jwt cleared; exits 0.
+#   22. Archives directory is preserved (not deleted or modified) by the auth clear.
+#   23. account_id and daemon_id fields are preserved after the auth clear.
+# ---------------------------------------------------------------------------
+
+# 21. stale-auth clear: security delete called for both keychain services; auth fields zeroed; exits 0
+@test "stale-auth clear: security delete-generic-password called for hollowmark+vaultmtg services and auth fields zeroed in daemon.json" {
+  local security_calls="${BATS_TEST_TMPDIR}/security_calls_21"
+
+  cat > "${STUB_DIR}/security" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "${security_calls}"
+exit 0
+EOF
+  chmod +x "${STUB_DIR}/security"
+
+  # Pre-create config with keychain=true, api_key, daemon_jwt set — simulates
+  # an install with stale Clerk-instance credentials from the incident.
+  mkdir -p "${TEST_DIR}/.vaultmtg"
+  python3 -c "
+import json
+data = {
+    'cloud_api_url': 'https://staging-api.vaultmtg.app/api/v1',
+    'keychain': True,
+    'api_key': '',
+    'daemon_jwt': 'stale.jwt.token',
+    'daemon_id': 'daemon-uuid-123',
+    'account_id': 'user_abc123',
+    'sync_enabled': True
+}
+print(json.dumps(data, indent=2))
+" > "${CONFIG_FILE}"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${TMP_SCRIPT}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+
+  # security must have been called for both service names.
+  [ -f "${security_calls}" ]
+  grep -q "delete-generic-password" "${security_calls}"
+  grep -q "com.hollowmark.daemon" "${security_calls}"
+  grep -q "com.vaultmtg.daemon" "${security_calls}"
+  grep -q "api-key" "${security_calls}"
+
+  # daemon.json: auth fields must be cleared; account_id and daemon_id preserved.
+  python3 -c "
+import json
+with open('${CONFIG_FILE}') as f:
+    d = json.load(f)
+assert not d.get('keychain'), \
+    'FAIL: keychain flag not cleared: ' + repr(d.get('keychain'))
+assert not d.get('api_key'), \
+    'FAIL: api_key not cleared: ' + repr(d.get('api_key'))
+assert not d.get('daemon_jwt'), \
+    'FAIL: daemon_jwt not cleared: ' + repr(d.get('daemon_jwt'))
+print('PASS: keychain, api_key, daemon_jwt all cleared')
+"
+
+  [[ "${output}" == *"stale auth cleared"* ]]
+}
+
+# 22. stale-auth clear: archives directory is preserved (not removed)
+@test "stale-auth clear: archives directory is preserved on install/update" {
+  # Pre-create config + archives dir with a fake snapshot.
+  mkdir -p "${TEST_DIR}/.vaultmtg/archives"
+  echo "fake log snapshot" > "${TEST_DIR}/.vaultmtg/archives/Player.log.2026-06-12.gz"
+  python3 -c "
+import json
+data = {
+    'cloud_api_url': 'https://staging-api.vaultmtg.app/api/v1',
+    'keychain': True,
+    'daemon_id': 'daemon-uuid-123',
+    'account_id': 'user_abc123',
+    'sync_enabled': True
+}
+print(json.dumps(data, indent=2))
+" > "${CONFIG_FILE}"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${TMP_SCRIPT}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+
+  # Archives dir and its contents must still exist.
+  [ -d "${TEST_DIR}/.vaultmtg/archives" ]
+  [ -f "${TEST_DIR}/.vaultmtg/archives/Player.log.2026-06-12.gz" ]
+}
+
+# 23. stale-auth clear: account_id and daemon_id are preserved after auth clear
+@test "stale-auth clear: account_id and daemon_id are preserved in daemon.json after auth clear" {
+  local security_calls="${BATS_TEST_TMPDIR}/security_calls_23"
+
+  cat > "${STUB_DIR}/security" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "${security_calls}"
+exit 0
+EOF
+  chmod +x "${STUB_DIR}/security"
+
+  mkdir -p "${TEST_DIR}/.vaultmtg"
+  python3 -c "
+import json
+data = {
+    'cloud_api_url': 'https://staging-api.vaultmtg.app/api/v1',
+    'keychain': True,
+    'api_key': '',
+    'daemon_jwt': 'stale.jwt.token',
+    'daemon_id': 'daemon-uuid-preserve-me',
+    'account_id': 'user_preserve_me',
+    'sync_enabled': True
+}
+print(json.dumps(data, indent=2))
+" > "${CONFIG_FILE}"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${TMP_SCRIPT}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+
+  python3 -c "
+import json
+with open('${CONFIG_FILE}') as f:
+    d = json.load(f)
+assert d.get('account_id') == 'user_preserve_me', \
+    'FAIL: account_id changed: ' + repr(d.get('account_id'))
+assert d.get('daemon_id') == 'daemon-uuid-preserve-me', \
+    'FAIL: daemon_id changed: ' + repr(d.get('daemon_id'))
+assert d.get('sync_enabled') == True, \
+    'FAIL: sync_enabled changed: ' + repr(d.get('sync_enabled'))
+print('PASS: account_id, daemon_id, sync_enabled all preserved after stale auth clear')
+"
+}
+
+# ---------------------------------------------------------------------------
+# §6b — launchd liveness check (ADR-083 SH-2 / tickets#1355)
+#
+# After launchctl bootstrap, postinstall verifies launchd has actually
+# registered the service with a live PID using:
+#   launchctl print gui/<uid>/<label>
+# and checks for a "pid" field in the output.
+#
+# Behaviour under test:
+#   24. First print shows PID — logged as "launchd service live" + exits 0.
+#   25. First print has no PID; retry fires; second print shows PID —
+#       logged as "launchd service live (retry)" + exits 0.
+#   26. Both print calls return no PID — WARNING logged but exits 0 (installer
+#       MUST NOT fail; Apple PKG rolls back on non-zero exit).
+#
+# Strategy: the launchctl stub in _make_stub_dir already records calls and
+# always succeeds. These tests override it with a smarter stub that returns
+# different output on the first vs subsequent "print" subcommand invocations,
+# using a call-count file in BATS_TEST_TMPDIR. All other subcommands
+# (bootstrap, bootout, enable, list, asuser) still exit 0 silently.
+# ---------------------------------------------------------------------------
+
+# 24. launchd liveness check: first print shows PID → logged as live, exits 0
+@test "launchd liveness (§6b): exits 0 and logs live when first launchctl print shows pid" {
+  local lc_calls="${BATS_TEST_TMPDIR}/launchctl_calls_24"
+
+  # launchctl stub: "print" subcommand returns a pid line immediately.
+  # All other subcommands succeed silently.
+  cat > "${STUB_DIR}/launchctl" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "${lc_calls}"
+case "\${*}" in
+  *print*)
+    printf '\tpid = 12345\n'
+    printf '\tstate = running\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+  chmod +x "${STUB_DIR}/launchctl"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${TMP_SCRIPT}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"launchd service live"* ]]
+}
+
+# 25. launchd liveness: first print has no PID; retry fires; second print shows PID → exits 0
+@test "launchd liveness (§6b): retries once and exits 0 when second launchctl print shows pid" {
+  local lc_calls="${BATS_TEST_TMPDIR}/launchctl_calls_25"
+  local print_count="${BATS_TEST_TMPDIR}/launchctl_print_count_25"
+  echo "0" > "${print_count}"
+
+  # First "print" invocation returns no PID; second returns a PID.
+  cat > "${STUB_DIR}/launchctl" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "${lc_calls}"
+case "\${*}" in
+  *print*)
+    count=\$(cat "${print_count}" 2>/dev/null || echo 0)
+    count=\$(( count + 1 ))
+    echo "\${count}" > "${print_count}"
+    if [ "\${count}" -eq 1 ]; then
+      printf '\tstate = spawning\n'
+      exit 0
+    else
+      printf '\tpid = 12345\n'
+      printf '\tstate = running\n'
+      exit 0
+    fi
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+  chmod +x "${STUB_DIR}/launchctl"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${TMP_SCRIPT}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"launchd service live"* ]]
+  # A retry message must be present.
+  [[ "${output}" == *"retry"* ]]
+  # Exactly 2 print calls must have been made.
+  local count
+  count=$(cat "${print_count}")
+  echo "launchctl print call count: ${count}"
+  [ "${count}" -eq 2 ]
+}
+
+# 26. launchd liveness: both print calls return no PID → WARNING logged, exits 0 (non-fatal)
+@test "launchd liveness (§6b): exits 0 with warning when both launchctl print calls show no pid" {
+  local lc_calls="${BATS_TEST_TMPDIR}/launchctl_calls_26"
+  local print_count="${BATS_TEST_TMPDIR}/launchctl_print_count_26"
+  echo "0" > "${print_count}"
+
+  # Both "print" invocations return output with no PID.
+  cat > "${STUB_DIR}/launchctl" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "${lc_calls}"
+case "\${*}" in
+  *print*)
+    count=\$(cat "${print_count}" 2>/dev/null || echo 0)
+    count=\$(( count + 1 ))
+    echo "\${count}" > "${print_count}"
+    printf '\tstate = spawning\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+  chmod +x "${STUB_DIR}/launchctl"
+
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    SUDO_USER="${REAL_USER}" \
+    BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR}" \
+    bash "${TMP_SCRIPT}"
+
+  echo "status: ${status}"
+  echo "output: ${output}"
+  # Non-fatal: installer must exit 0 even when launchd check fails.
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"WARNING"* ]]
+  # Both attempts must have been made before giving up.
+  local count
+  count=$(cat "${print_count}")
+  echo "launchctl print call count: ${count}"
+  [ "${count}" -eq 2 ]
 }

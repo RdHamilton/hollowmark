@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/config"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/credstore"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/daemon"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/daemonstate"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/dispatch"
@@ -56,6 +57,7 @@ import (
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/keychain"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/migrate"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/pkce"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/recovery"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/sentryhook"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/tray"
 
@@ -85,26 +87,26 @@ var DefaultCloudAPIURL = "http://localhost:8080/api/v1"
 // snapshot build). The DSN itself is never logged. Issue #1832.
 var DefaultSentryDSN = ""
 
-// DefaultSPAURL is the build-time default URL for the VaultMTG SPA, injected
+// DefaultSPAURL is the build-time default URL for the Hollowmark SPA, injected
 // via -ldflags -X main.DefaultSPAURL=<url>. The release workflow picks the value:
 //
-//	stable tags (daemon/v0.3.1)           -> https://app.vaultmtg.app
+//	stable tags (daemon/v0.3.1)           -> https://app.hollowmark.app
 //	pre-release tags (-rc/-alpha/-beta/-pre) -> https://stg-app.vaultmtg.app
 //
-// Used by tray.New(...) so the tray "Open VaultMTG" menu item opens the
+// Used by tray.New(...) so the tray "Open Hollowmark" menu item opens the
 // correct SPA environment. Local builds default to the production URL — release
 // workflow always overrides via -ldflags. Issue #637.
-var DefaultSPAURL = "https://app.vaultmtg.app"
+var DefaultSPAURL = "https://app.hollowmark.app"
 
 // DefaultSetupURL is the build-time default URL for the first-run setup page,
 // injected via -ldflags -X main.DefaultSetupURL=<url>. The release workflow
 // picks the value:
 //
-//	stable tags (daemon/v0.3.1)           -> https://vaultmtg.app/setup
+//	stable tags (daemon/v0.3.1)           -> https://hollowmark.app/setup
 //	pre-release tags (-rc/-alpha/-beta/-pre) -> https://stg.vaultmtg.app/setup
 //
 // Used by handleMissingConfig and the retry-setup loop. Issue #637.
-var DefaultSetupURL = "https://vaultmtg.app/setup"
+var DefaultSetupURL = "https://hollowmark.app/setup"
 
 // headlessKeychainFatalLog is the canonical FATAL log line emitted when the
 // daemon exits in headless mode because the keychain is unavailable after all
@@ -129,12 +131,150 @@ func logAndExitHeadlessKeychain(l *log.Logger, exitFn func(int)) {
 	exitFn(1)
 }
 
+// stopLaunchAgentFn is the injectable wrapper around stopLaunchAgent (ADR-083
+// SH-1). All production call sites call stopLaunchAgentFn() instead of
+// stopLaunchAgent() directly — this allows tests to replace it with a spy to
+// verify that only the tray-Quit path triggers launchctl bootout. The
+// production value is assigned once at package init and never changed at
+// runtime.
+var stopLaunchAgentFn = stopLaunchAgent
+
+// shutdownLogger is the logger used by handleSignalShutdown and
+// trayQuitShutdown to emit reason-tagged shutdown lines (ADR-083 SH-5).
+// Tests replace it to capture output without forking a subprocess.
+var shutdownLogger = log.Default()
+
+// handleSignalShutdown is called by the signal-handler goroutine on
+// SIGTERM/SIGINT. It:
+//  1. Calls logShutdown(ReasonSIGTERM) — structured log line + Sentry breadcrumb (SH-5).
+//  2. Cancels the daemon context so the graceful drain fires (SH-2).
+//  3. Does NOT call stopLaunchAgentFn — launchd KeepAlive=true must respawn
+//     the daemon after a signal-induced stop (SH-1 / SH-2).
+func handleSignalShutdown(cancel context.CancelFunc) {
+	logShutdown(shutdownLogger, ReasonSIGTERM, nil)
+	cancel()
+}
+
+// trayQuitShutdown is called by the tray onQuit callback — the ONLY sanctioned
+// bootout site (ADR-083 SH-1). It:
+//  1. Calls logShutdown(ReasonTrayQuit) — structured log line + Sentry breadcrumb (SH-5).
+//  2. Calls stopLaunchAgentFn() — the one call site that runs launchctl bootout,
+//     fully unregistering the daemon so KeepAlive=true does NOT respawn it.
+//  3. Cancels the daemon context so the graceful drain fires.
+func trayQuitShutdown(cancel context.CancelFunc) {
+	logShutdown(shutdownLogger, ReasonTrayQuit, nil)
+	stopLaunchAgentFn()
+	cancel()
+}
+
+// headlessAuthCapExit is called when headless mode exhausts the PKCE auth
+// attempt cap. It calls logShutdown(ReasonAuthCap) then exits WITHOUT calling
+// stopLaunchAgentFn — the respawned process sees auth_paused=true and idles
+// rather than looping into another bootout (ADR-083 SH-4).
+// exitFn defaults to os.Exit in production; tests supply a no-op.
+func headlessAuthCapExit(exitFn func(int)) {
+	logShutdown(shutdownLogger, ReasonAuthCap, nil)
+	exitFn(1)
+}
+
+// recoverSignalHandler is the deferred panic-recovery helper for the
+// signal-handler goroutine. Unlike recovery.RecoverGoroutine (which swallows
+// the panic after logging), this helper captures the panic via the Sentry
+// capture function AND then re-panics — preventing silent signal loss (Sarah
+// P2 #3256).
+//
+// Usage:
+//
+//	defer recoverSignalHandler(recovery.CaptureFn(sentry.CurrentHub().CaptureException))
+func recoverSignalHandler(capture recovery.CaptureFunc) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	var err error
+	switch v := r.(type) {
+	case error:
+		err = v
+	default:
+		err = fmt.Errorf("%v", v)
+	}
+	if capture != nil {
+		capture(err)
+	}
+	panic(r) // re-panic so the signal is not silently lost
+}
+
+// runSvcWithQuit runs the svc-run loop and calls quitFn ONLY on genuine
+// teardown exits — it is the extracted goroutine-funnel helper that fixes the
+// defect Ray found on PR #3269 (ADR-083 SH-1/SH-3).
+//
+// The defect: the goroutine previously held an unconditional `defer app.Quit()`
+// which fired on every goroutine return, including after a tray
+// runWithDegrade permanent-failure return (SetRunStopped). That routed the
+// SH-3 "stay alive" path straight into trayQuitShutdown → stopLaunchAgentFn()
+// = launchctl bootout, the exact opposite of SH-3.
+//
+// Correct teardown semantics:
+//   - Headless clean exit (svc.Run returns nil): call quitFn — unblocks the
+//     no-CGO app.Run stub that blocks on <-a.quit (#1354 headless-hang fix).
+//   - SIGTERM drain (ctx cancelled, runWithDegrade returns nil): call quitFn
+//     — unblocks app.Run so main() can exit cleanly (SH-2).
+//   - Tray permanent failure (runWithDegrade returns non-nil after all retries):
+//     do NOT call quitFn — process stays alive in the tray "stopped" state (SH-3).
+//   - Headless error: os.Exit via logAndExitHeadlessKeychain; quitFn never reached.
+//
+// quitFn is app.Quit in production; tests inject a spy.
+// hooks is app (*tray.App) in production; tests inject runDegradeStateRecorder.
+func runSvcWithQuit(
+	ctx context.Context,
+	svcRun func(context.Context) error,
+	hooks runDegradeHooks,
+	headless bool,
+	quitFn func(),
+) {
+	if headless {
+		if err := svcRun(ctx); err != nil {
+			// SH-5 (ADR-083): structured log line + Sentry breadcrumb.
+			// logShutdown does NOT flush; os.Exit bypasses defers so we
+			// flush explicitly here.
+			logShutdown(shutdownLogger, ReasonRunError, err)
+			sentryhook.Flush()
+			logAndExitHeadlessKeychain(log.Default(), os.Exit)
+		}
+		// Headless clean exit: call quitFn to unblock app.Run (no-CGO stub fix #1354).
+		quitFn()
+		return
+	}
+
+	// Tray path: degrade and retry (AC1–AC6, ADR-083 SH-3).
+	// runWithDegrade NEVER calls app.Quit or stopLaunchAgent itself.
+	// It returns nil on clean/ctx-cancel exit, non-nil on permanent failure.
+	if runErr := runWithDegrade(ctx, svcRun, hooks, 3, defaultBackoff); runErr != nil {
+		// Permanent failure: log the final error.
+		// runWithDegrade has already called hooks.SetRunStopped().
+		// DO NOT call quitFn — the process stays alive in the tray "stopped" state (SH-3).
+		logShutdown(shutdownLogger, ReasonRunError, runErr)
+		log.Printf("[mtga-daemon] run: all retries exhausted — daemon in stopped state: %v", runErr)
+		return
+	}
+	// Clean exit or ctx-cancel (SIGTERM drain): call quitFn so app.Run unblocks (SH-2).
+	quitFn()
+}
+
 func main() {
 	// ADR-049 Ticket 2: resolve the channel-scoped identity once at startup.
 	// All OS-level identifiers (keychain service, plist label, config dir) are
 	// derived from this identity so stable and staging daemons never collide.
 	identity := install.Identity(install.Channel)
 	keychainService := identity.KeychainService
+
+	// credStore is the platform credential backend (ADR-081):
+	//   darwin  — 0600 file at identity.CredentialFile (replaces macOS Keychain
+	//             which returns errSecInteractionNotAllowed under launchd, #1345).
+	//   windows — Windows Credential Manager via go-keyring (unchanged).
+	// All 10 credential call-sites in this file use credStore rather than
+	// calling keychain.{Get,Set,Delete}ForService directly.
+	credStore := credstore.New(identity.CredentialFile, keychainService)
 
 	defaultCfgPath := defaultConfigPath(identity)
 	cfgPath := flag.String("config", defaultCfgPath, "path to JSON config file")
@@ -198,8 +338,16 @@ func main() {
 	// Flush on graceful exit so in-flight events do not drop. Mirrors the BFF
 	// pattern (services/bff/cmd/main.go). 2s timeout matches sentryhook.FlushTimeout.
 	defer sentryhook.Flush()
-	// Top-level panic safety net: any panic that escapes the goroutines below
-	// is captured and re-raised so the launchd / NSSM restart loop still kicks in.
+	// Main-goroutine panic safety net: captures any panic that occurs on THIS
+	// goroutine (main), reports it to Sentry, flushes, and re-panics so the
+	// launchd / NSSM supervisor still sees a non-zero exit and respawns.
+	//
+	// NOTE: This recover() covers the main goroutine ONLY. Go's panic/recover
+	// semantics are strictly per-goroutine — a panic in any spawned goroutine
+	// (poller, localapi, tray-loop, batch-buffer, etc.) will NOT be caught here;
+	// it will crash the entire process unless that goroutine has its own deferred
+	// recover. Long-lived goroutines in this binary use recovery.RecoverGoroutine
+	// for that purpose.
 	defer func() {
 		if r := recover(); r != nil {
 			sentry.CurrentHub().Recover(r)
@@ -208,9 +356,9 @@ func main() {
 		}
 	}()
 
-	// ── Step 2: keychain migration (legacy plaintext api_key → OS keychain) ────
-	if err := migrateLegacyAPIKey(cfg, keychainService); err != nil {
-		log.Printf("[mtga-daemon] warn: keychain migration failed: %v", err)
+	// ── Step 2: credential migration (legacy plaintext api_key → credential store) ─
+	if err := migrateLegacyAPIKey(cfg, credStore); err != nil {
+		log.Printf("[mtga-daemon] warn: credential migration failed: %v", err)
 	}
 
 	// ── Step 2a: keychain service-name migration (vaultmtg → hollowmark shim) ─
@@ -219,7 +367,7 @@ func main() {
 	// keychain.Get() handles the copy-forward atomically; we emit telemetry when
 	// it reports a migration ran. The legacy entry is retained (not deleted here).
 	if migrated := migrateKeychainServiceName(cfg, Version); migrated {
-		dispatchKeychainMigrated(cfg, Version)
+		dispatchKeychainMigrated(cfg, Version, credStore)
 	}
 
 	// ── Step 2b: load daemon-state.json (#2133 — RC2 load order) ──────────────
@@ -247,6 +395,74 @@ func main() {
 		}
 	}
 
+	// ── Step 2c: startup token-liveness probe (#1326 Fix A) ──────────────────
+	// In keychain mode, the stored token may be stale (revoked key, Clerk instance
+	// cutover, account deletion) without the daemon knowing — NeedsFirstRunAuth only
+	// checks keychain PRESENCE, not validity. A stale token passes presence but will
+	// be rejected by the BFF at ingest time, causing events to be buffered under the
+	// wrong identity (the root cause of the 2026-06-12 P0 incident, #198).
+	//
+	// Before entering the main event loop, probe the BFF /api/v1/health/daemon with
+	// the stored key. On 401/403: treat as NeedsRegistration and run PKCE now.
+	// On 200: proceed normally. On 5xx/network error: assume valid (BFF may be down).
+	//
+	// Only run when:
+	//   - keychain mode is active (cfg.Keychain == true),
+	//   - auth is NOT already paused (no-op if we know we need PKCE),
+	//   - the daemon is not in the first-run NeedsFirstRunAuth path (that already gates on keychain presence),
+	//   - cfg.CloudAPIURL is known.
+	keychainGetFn := credStore.Get
+	firstRunNeeded, firstRunErr := cfg.NeedsFirstRunAuth(keychainGetFn)
+	if firstRunErr != nil {
+		// Credential access-denied or other non-first-run error (ADR-081 R1).
+		// Do NOT run PKCE — the daemon will enter idle-degraded state via
+		// retryKeychain once Run() is reached.
+		log.Printf("[mtga-daemon] warn: credential read error at startup: %v — skipping PKCE, entering degraded state", firstRunErr)
+	}
+	if cfg.Keychain && !dState.AuthPaused && !firstRunNeeded && firstRunErr == nil && cfg.CloudAPIURL != "" {
+		if storedKey, kcErr := keychainGetFn(); kcErr == nil && storedKey != "" {
+			probeCtx, probeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			live, probeErr := daemon.ProbeTokenLiveness(probeCtx, cfg.CloudAPIURL, storedKey)
+			probeCancel()
+			if probeErr != nil {
+				log.Printf("[mtga-daemon] startup probe: transport error (BFF unreachable?) — skipping re-auth: %v", probeErr)
+			} else if !live {
+				log.Printf("[mtga-daemon] startup probe: stored key rejected by BFF (401/403) — treating as NeedsRegistration, starting PKCE")
+				// Force a full PKCE re-registration to obtain a fresh key and
+				// resolve the correct AccountID from the live Clerk identity.
+				// This is the automatic self-heal path: zero user terminal commands required.
+				if err := runPKCEAuth(cfg, *cfgPath, keychainService, credStore); err != nil {
+					log.Printf("[mtga-daemon] startup probe: PKCE re-auth failed: %v", err)
+					// Treat as a failed first-run attempt — increment paused counter.
+					dState.AuthAttempts++
+					if dState.AuthAttempts >= maxAuthAttempts {
+						dState.AuthPaused = true
+						log.Printf("[mtga-daemon] startup probe: auth attempt cap reached (%d/%d) — setting auth_paused=true",
+							dState.AuthAttempts, maxAuthAttempts)
+					}
+					if saveErr := daemonstate.Save(statePath, dState); saveErr != nil {
+						log.Printf("[mtga-daemon] warn: could not persist daemon-state.json after probe reauth: %v", saveErr)
+					}
+					if config.EnvWithFallback("VAULTMTG_DAEMON_HEADLESS", "MTGA_DAEMON_HEADLESS") == "1" {
+						// ADR-083 SH-4: exit WITHOUT bootout so launchd KeepAlive
+						// respawns the daemon. The respawned process sees
+						// auth_paused=true and idles — no respawn loop.
+						headlessAuthCapExit(os.Exit)
+					}
+				} else {
+					log.Printf("[mtga-daemon] startup probe: re-auth succeeded — fresh identity written to daemon.json")
+					dState.AuthAttempts = 0
+					dState.AuthPaused = false
+					if saveErr := daemonstate.Save(statePath, dState); saveErr != nil {
+						log.Printf("[mtga-daemon] warn: could not persist daemon-state.json after probe reauth success: %v", saveErr)
+					}
+				}
+			} else {
+				log.Printf("[mtga-daemon] startup probe: key is live — proceeding with stored identity")
+			}
+		}
+	}
+
 	// ── Step 3: PKCE auth flow if no valid credentials ─────────────────────────
 	// RC2 (CRITICAL CORRECTNESS): auth_paused is checked BEFORE NeedsFirstRunAuth.
 	// If auth_paused is true, skip the initial PKCE attempt entirely — the daemon
@@ -259,11 +475,13 @@ func main() {
 	//     menu bar. The onReady goroutine re-checks NeedsFirstRunAuth and shows
 	//     StatusSetupRequired + "Retry Setup…" so the user can retry without a
 	//     daemon restart (#2132).
-	keychainGetFn := func() (string, error) { return keychain.GetForService(keychainService) }
-
-	if !dState.AuthPaused && cfg.NeedsFirstRunAuth(keychainGetFn) && cfg.CloudAPIURL != "" {
+	// Re-evaluate NeedsFirstRunAuth here: the probe block above may have changed
+	// cfg (new account/device IDs). Only run PKCE on confirmed ErrNotFound
+	// (genuine first-run), never on ErrAccessDenied (R1).
+	firstRunNeeded, firstRunErr = cfg.NeedsFirstRunAuth(keychainGetFn)
+	if !dState.AuthPaused && firstRunNeeded && firstRunErr == nil && cfg.CloudAPIURL != "" {
 		log.Printf("[mtga-daemon] first-run: no API key detected — starting PKCE auth flow")
-		if err := runPKCEAuth(cfg, *cfgPath, keychainService); err != nil {
+		if err := runPKCEAuth(cfg, *cfgPath, keychainService, credStore); err != nil {
 			fmt.Fprintf(os.Stderr, "auth error: %v\n", err)
 
 			// Increment attempt counter and check cap (RC3: no timer reset).
@@ -278,11 +496,10 @@ func main() {
 			}
 
 			if config.EnvWithFallback("VAULTMTG_DAEMON_HEADLESS", "MTGA_DAEMON_HEADLESS") == "1" {
-				// Headless: signal launchd the exit is intentional so KeepAlive=true
-				// does not trigger a rapid respawn loop (ThrottleInterval). os.Exit
-				// bypasses defers, so stopLaunchAgent is called explicitly.
-				stopLaunchAgent()
-				os.Exit(1)
+				// ADR-083 SH-4: exit WITHOUT bootout so launchd KeepAlive respawns
+				// the daemon. The respawned process sees auth_paused=true and idles
+				// rather than entering a bootout→respawn loop.
+				headlessAuthCapExit(os.Exit)
 			}
 			// Non-headless: fall through — the tray onReady goroutine handles the
 			// retry flow via NeedsFirstRunAuth + RetrySetup channel (#2132).
@@ -324,19 +541,20 @@ func main() {
 	// We capture cfgPath from the outer scope (set via -config flag) so the
 	// callback can persist the refreshed account_id / daemon_id if they change.
 	svc.WithReauthFunc(func(ctx context.Context) error {
-		return runInProcessReauth(ctx, cfg, *cfgPath, keychainService)
+		return runInProcessReauth(ctx, cfg, *cfgPath, keychainService, credStore)
 	})
 
 	log.Printf("[mtga-daemon] starting, cloud_api=%s", cfg.CloudAPIURL)
 
 	// systray.Run must own the main OS thread (macOS Cocoa requirement).
-	// onReady starts the daemon service in a goroutine; onQuit cancels the context.
+	// onReady starts the daemon service in a goroutine; onQuit calls
+	// trayQuitShutdown — the ONLY sanctioned launchctl bootout site (ADR-083 SH-1).
 	app := tray.New(DefaultSPAURL, Version, pkce.OpenBrowser, func() {
-		// Tell launchd the stop was intentional so it does not immediately
-		// respawn the process per KeepAlive=true in the plist. On non-macOS
-		// platforms stopLaunchAgent is a no-op.
-		stopLaunchAgent()
-		cancel()
+		// trayQuitShutdown is the ONLY sanctioned bootout site (ADR-083 SH-1).
+		// It logs reason=tray_quit (SH-5), calls stopLaunchAgentFn(), and cancels
+		// the context. The Sentry breadcrumb is flushed by the deferred
+		// sentryhook.Flush in main() when app.Run returns.
+		trayQuitShutdown(cancel)
 	})
 
 	svc.WithTray(daemon.TrayHooks{
@@ -355,12 +573,23 @@ func main() {
 		NotifyUpdateAvailable: app.NotifyUpdateAvailable,
 	})
 
-	// Handle OS signals: forward SIGTERM/SIGINT to systray so onQuit fires cleanly.
+	// Handle OS signals: on SIGTERM/SIGINT perform a graceful drain and exit
+	// WITHOUT calling launchctl bootout — launchd KeepAlive=true must respawn
+	// the daemon (ADR-083 SH-1 / SH-2). Only an explicit tray-Quit (above) runs
+	// bootout.
+	//
+	// Sarah P2 #3256: use recoverSignalHandler (capture-then-re-panic) instead
+	// of RecoverGoroutine (capture-then-swallow) so a panic in this goroutine is
+	// never silently lost.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
+		defer recoverSignalHandler(recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 		<-sigCh
-		app.Quit()
+		// handleSignalShutdown logs reason=sigterm (SH-5), cancels the context
+		// so the graceful drain fires (SH-2), and does NOT call stopLaunchAgentFn
+		// — launchd KeepAlive=true must respawn the daemon (SH-1 / SH-2).
+		handleSignalShutdown(cancel)
 	}()
 
 	// headless is true when the daemon is running without a display / tray
@@ -371,6 +600,11 @@ func main() {
 	app.Run(func() {
 		app.SetStatus(tray.StatusConnected)
 		go func() {
+			defer recovery.RecoverGoroutine("daemon-run", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
+			// NOTE: do NOT add a blanket defer app.Quit() here. app.Quit() routes
+			// through trayQuitShutdown → stopLaunchAgentFn() = launchctl bootout.
+			// Teardown is conditional on intent: runSvcWithQuit calls app.Quit only
+			// on genuine clean-exit/drain paths, NOT on tray permanent-failure (SH-3).
 			// ── Auth-failure / auth-paused retry loop (#2132, #2133) ──────────────
 			// Cases handled here:
 			//  (A) Step 3 PKCE failed non-headlessly → NeedsFirstRunAuth still true,
@@ -381,7 +615,18 @@ func main() {
 			//
 			// RC6: we block on app.RetrySetup (the RetrySetup channel from tray.App)
 			// which mirrors the existing TryAgain pattern — NOT SetReauthRequired.
-			for (cfg.NeedsFirstRunAuth(keychainGetFn) || dState.AuthPaused) && cfg.CloudAPIURL != "" {
+			for cfg.CloudAPIURL != "" {
+				loopNeeds, loopErr := cfg.NeedsFirstRunAuth(keychainGetFn)
+				if loopErr != nil {
+					// ErrAccessDenied (or other non-first-run error): do NOT run PKCE.
+					// retryKeychain will handle this via the idle-degraded path.
+					log.Printf("[mtga-daemon] credential access error in retry loop: %v — exiting PKCE loop", loopErr)
+					break
+				}
+				if !loopNeeds && !dState.AuthPaused {
+					break
+				}
+				_ = loopNeeds // loop body uses dState.AuthPaused separately
 				app.SetSetupRequired(true)
 
 				if headless {
@@ -416,7 +661,7 @@ func main() {
 					log.Printf("[mtga-daemon] retry setup: could not open browser: %v", err)
 				}
 
-				if err := runPKCEAuth(cfg, *cfgPath, keychainService); err != nil {
+				if err := runPKCEAuth(cfg, *cfgPath, keychainService, credStore); err != nil {
 					log.Printf("[mtga-daemon] retry setup: PKCE failed: %v — incrementing counter", err)
 
 					// Increment attempt counter and check cap again (RC3).
@@ -462,17 +707,12 @@ func main() {
 				}
 			}
 
-			// ── Normal daemon run loop ─────────────────────────────────────────
-			if err := svc.Run(ctx); err != nil {
-				if headless {
-					// Headless path — log the canonical FATAL line and exit
-					// non-zero so the supervisor (launchd / systemd) respawns.
-					// NeedsFirstRunAuth will trigger PKCE on the next boot.
-					logAndExitHeadlessKeychain(log.Default(), os.Exit)
-				}
-				log.Printf("[mtga-daemon] fatal: %v", err)
-				app.Quit()
-			}
+			// ── Normal daemon run loop (ADR-083 SH-3) ────────────────────────
+			// runSvcWithQuit handles headless/tray branching and calls app.Quit
+			// ONLY on genuine teardown paths (clean exit / ctx-cancel drain).
+			// It does NOT call app.Quit on tray permanent-failure (SH-3: process
+			// stays alive in the tray "stopped" state).
+			runSvcWithQuit(ctx, svc.Run, app, headless, app.Quit)
 		}()
 	})
 }
@@ -525,28 +765,28 @@ func handleMissingConfig(cfgPath string) {
 }
 
 // migrateLegacyAPIKey detects a plaintext api_key in the config file and migrates
-// it to the OS keychain, rewriting daemon.json with keychain:true.
+// it to the credential store, rewriting daemon.json with keychain:true.
 // This is a one-time, transparent upgrade per ADR-020 §Migration path.
-// keychainService is the channel-derived service name (ADR-049 Ticket 2).
-func migrateLegacyAPIKey(cfg *config.Config, keychainService string) error {
+// cs is the platform credential backend (ADR-081).
+func migrateLegacyAPIKey(cfg *config.Config, cs credstore.Store) error {
 	if cfg.Keychain || cfg.APIKey == "" || cfg.FilePath() == "" {
 		return nil // nothing to migrate
 	}
 
-	log.Printf("[mtga-daemon] migrating plaintext api_key to OS keychain")
+	log.Printf("[mtga-daemon] migrating plaintext api_key to credential store")
 
-	if err := keychain.SetForService(keychainService, cfg.APIKey); err != nil {
-		return fmt.Errorf("write to keychain: %w", err)
+	if err := cs.Set(cfg.APIKey); err != nil {
+		return fmt.Errorf("write to credential store: %w", err)
 	}
 
 	cfg.APIKey = ""
 	cfg.Keychain = true
 
 	if err := cfg.Save(); err != nil {
-		return fmt.Errorf("save config after keychain migration: %w", err)
+		return fmt.Errorf("save config after credential migration: %w", err)
 	}
 
-	log.Printf("[mtga-daemon] api_key migrated to OS keychain; daemon.json updated")
+	log.Printf("[mtga-daemon] api_key migrated to credential store; daemon.json updated")
 	return nil
 }
 
@@ -586,8 +826,9 @@ type keychainMigratedPayload struct {
 // dispatchKeychainMigrated sends the keychain.migrated telemetry event to the BFF
 // via a transient no-refresher dispatcher (same pattern as daemon.keychain_error).
 // This is best-effort — errors are logged and swallowed.
-// The event fires exactly once per install (idempotency is the Keychain entry).
-func dispatchKeychainMigrated(cfg *config.Config, daemonVersion string) {
+// The event fires exactly once per install (idempotency is the credential file).
+// cs is the platform credential backend (ADR-081).
+func dispatchKeychainMigrated(cfg *config.Config, daemonVersion string, cs credstore.Store) {
 	if cfg.CloudAPIURL == "" || cfg.AccountID == "" {
 		// Pre-auth: no dispatcher available yet. The telemetry event will not fire,
 		// which is acceptable — the migration still ran; only the metric is missed.
@@ -608,7 +849,7 @@ func dispatchKeychainMigrated(cfg *config.Config, daemonVersion string) {
 	// Transient dispatcher without a refresher, matching daemon.keychain_error pattern.
 	apiKey := ""
 	if cfg.Keychain {
-		if k, kErr := keychain.GetForService(install.Identity(install.Channel).KeychainService); kErr == nil {
+		if k, kErr := cs.Get(); kErr == nil {
 			apiKey = k
 		}
 	} else {
@@ -645,8 +886,8 @@ func dispatchKeychainMigrated(cfg *config.Config, daemonVersion string) {
 //     BFF mints a fresh identity (ADR-034 §3, ADR-036 I-3). One attempt only;
 //     if recovery fails, returns StatusSetupRequired and exits so launchd respawns.
 //
-// keychainService is the channel-derived OS keychain service name (ADR-049 Ticket 2).
-func runPKCEAuth(cfg *config.Config, cfgPath string, keychainService string) error {
+// cs is the platform credential backend (ADR-081) used to read/write the API key.
+func runPKCEAuth(cfg *config.Config, cfgPath string, keychainService string, cs credstore.Store) error {
 	clerkFrontendAPI := os.Getenv("CLERK_FRONTEND_API")
 	clientID := os.Getenv("CLERK_OAUTH_CLIENT_ID")
 	if clerkFrontendAPI == "" || clientID == "" {
@@ -690,9 +931,9 @@ func runPKCEAuth(cfg *config.Config, cfgPath string, keychainService string) err
 		// wiped by an OS reinstall even though daemon.json survived).
 		log.Printf("[mtga-daemon] device already registered; using existing keychain key")
 
-		existing, kcErr := keychain.GetForService(keychainService)
+		existing, kcErr := cs.Get()
 		if kcErr == nil && existing != "" {
-			// Keychain entry is intact. Write/refresh daemon.json with the account_id
+			// Credential is intact. Write/refresh daemon.json with the account_id
 			// and the BFF-authoritative device_id (ADR-028: daemon always persists the
 			// server-echoed value, even when it matches the cached value — idempotent).
 			cfg.Keychain = true
@@ -706,16 +947,16 @@ func runPKCEAuth(cfg *config.Config, cfgPath string, keychainService string) err
 
 			// Attach hashed account_id as Sentry user context (#1832).
 			sentryhook.SetUser(accountID)
-			log.Printf("[mtga-daemon] already-registered device — daemon.json refreshed, keychain untouched")
+			log.Printf("[mtga-daemon] already-registered device — daemon.json refreshed, credential untouched")
 			return nil
 		}
 
-		// Keychain entry is missing (OS keychain wiped after reinstall).
+		// Credential is missing (wiped after reinstall).
 		// Recovery path (ADR-034 §3, ADR-036 I-3):
 		//   1. Revoke the stale BFF row via DELETE /api/v1/daemons/{device_id}.
 		//   2. Re-register with an empty device_id — BFF mints a fresh identity.
 		// One attempt only. Failure exits with StatusSetupRequired so launchd respawns.
-		log.Printf("[mtga-daemon] keychain entry missing for registered device %s; attempting recovery", serverDeviceID)
+		log.Printf("[mtga-daemon] credential missing for registered device %s; attempting recovery", serverDeviceID)
 
 		if delErr := revokeFromBFF(ctx, cfg.CloudAPIURL, tok.AccessToken, serverDeviceID); delErr != nil {
 			log.Printf("[mtga-daemon] recovery: DELETE /api/v1/daemons/%s failed: %v; entering setup-required state", serverDeviceID, delErr)
@@ -732,8 +973,8 @@ func runPKCEAuth(cfg *config.Config, cfgPath string, keychainService string) err
 		}
 
 		log.Printf("[mtga-daemon] recovery: re-registered as device %s (account %s)", newDeviceID, newAccountID)
-		if err := keychain.SetForService(keychainService, newAPIKey); err != nil {
-			return fmt.Errorf("re-register recovery: store new API key in keychain: %w", err)
+		if err := cs.Set(newAPIKey); err != nil {
+			return fmt.Errorf("re-register recovery: store new API key in credential store: %w", err)
 		}
 
 		cfg.Keychain = true
@@ -752,9 +993,9 @@ func runPKCEAuth(cfg *config.Config, cfgPath string, keychainService string) err
 	}
 
 	// Fresh registration (201 Created + non-empty api_key).
-	log.Printf("[mtga-daemon] BFF registered (account_id=%s); storing key in OS keychain", accountID)
-	if err := keychain.SetForService(keychainService, apiKey); err != nil {
-		return fmt.Errorf("store API key in keychain: %w", err)
+	log.Printf("[mtga-daemon] BFF registered (account_id=%s); storing key in credential store", accountID)
+	if err := cs.Set(apiKey); err != nil {
+		return fmt.Errorf("store API key in credential store: %w", err)
 	}
 
 	// Write daemon.json with keychain:true, account_id, and the server-issued
@@ -897,8 +1138,8 @@ func revokeFromBFF(ctx context.Context, bffBaseURL, clerkJWT, deviceID string) e
 // are not set, the call returns an error and the daemon's keychainErr is set to
 // ErrReauthFailed so the user sees "Keychain unavailable" in the tray.
 //
-// keychainService is the channel-derived OS keychain service name (ADR-049 Ticket 2).
-func runInProcessReauth(ctx context.Context, cfg *config.Config, cfgPath string, keychainService string) error {
+// cs is the platform credential backend (ADR-081).
+func runInProcessReauth(ctx context.Context, cfg *config.Config, cfgPath string, keychainService string, cs credstore.Store) error {
 	clerkFrontendAPI := os.Getenv("CLERK_FRONTEND_API")
 	clientID := os.Getenv("CLERK_OAUTH_CLIENT_ID")
 	if clerkFrontendAPI == "" || clientID == "" {
@@ -949,10 +1190,10 @@ func runInProcessReauth(ctx context.Context, cfg *config.Config, cfgPath string,
 		return cfg.SaveTo(cfgPath)
 	}
 
-	// Fresh key issued: store in keychain and update daemon.json.
-	log.Printf("[mtga-daemon] in-process reauth: new API key issued; storing in keychain")
-	if err := keychain.SetForService(keychainService, apiKey); err != nil {
-		return fmt.Errorf("in-process reauth: store API key in keychain: %w", err)
+	// Fresh key issued: store in credential store and update daemon.json.
+	log.Printf("[mtga-daemon] in-process reauth: new API key issued; storing in credential store")
+	if err := cs.Set(apiKey); err != nil {
+		return fmt.Errorf("in-process reauth: store API key in credential store: %w", err)
 	}
 
 	cfg.Keychain = true
@@ -1213,13 +1454,15 @@ func runReplayEntryPoint(logFile, cfgPath string) int {
 		}
 	}
 
-	// Resolve the API key: keychain → config → headless pair.
-	// ADR-049 Ticket 2: use the channel-derived keychain service so replay mode
-	// reads from the correct slot (staging vs. prod).
+	// Resolve the API key: credential store → config → headless pair.
+	// ADR-049 Ticket 2: use the channel-derived identity so replay mode reads
+	// from the correct credential slot (staging vs. prod).
+	replayIdentity := install.Identity(install.Channel)
+	replayCS := credstore.New(replayIdentity.CredentialFile, replayIdentity.KeychainService)
 	apiKey := ""
 	accountID := cfg.AccountID
 	if cfg.Keychain {
-		if k, err := keychain.GetForService(install.Identity(install.Channel).KeychainService); err == nil {
+		if k, err := replayCS.Get(); err == nil {
 			apiKey = k
 		}
 	}

@@ -27,11 +27,42 @@ func (f *fakeEventStore) ListPendingProjection(_ context.Context, limit int) ([]
 	return f.pending, nil
 }
 
+// ListPendingProjectionAfter returns pending rows AFTER (afterTime, afterID).
+// The existing fakeEventStore has no cursor semantics — for simple unit tests
+// that do not exercise the keyset pagination path, we just return all pending
+// rows that haven't been projected (mimicking a DB result).
+func (f *fakeEventStore) ListPendingProjectionAfter(_ context.Context, afterTime time.Time, afterID int64, limit int) ([]repository.DaemonEventRow, error) {
+	var result []repository.DaemonEventRow
+	for i := range f.pending {
+		r := f.pending[i]
+		if r.ReceivedAt.After(afterTime) || (r.ReceivedAt.Equal(afterTime) && r.ID > afterID) {
+			result = append(result, r)
+			if len(result) == limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
 func (f *fakeEventStore) MarkProjected(_ context.Context, id int64) error {
 	if f.projectErr != nil {
 		return f.projectErr
 	}
 	f.projected = append(f.projected, id)
+	return nil
+}
+
+// ResetProjected removes id from the projected set (simulates projected_at=NULL).
+// Existing tests that don't use ResetProjected won't call this.
+func (f *fakeEventStore) ResetProjected(_ context.Context, id int64) error {
+	out := f.projected[:0]
+	for _, pid := range f.projected {
+		if pid != id {
+			out = append(out, pid)
+		}
+	}
+	f.projected = out
 	return nil
 }
 
@@ -49,6 +80,8 @@ type fakeMatchStore struct {
 	err          error
 	playerTeamID int
 	teamErr      error
+	matchResult  string
+	resultErr    error
 }
 
 func (f *fakeMatchStore) UpsertMatch(_ context.Context, m repository.MatchUpsert) error {
@@ -61,6 +94,10 @@ func (f *fakeMatchStore) UpsertMatch(_ context.Context, m repository.MatchUpsert
 
 func (f *fakeMatchStore) GetPlayerTeamIDForMatch(_ context.Context, _ int64, _ string) (int, error) {
 	return f.playerTeamID, f.teamErr
+}
+
+func (f *fakeMatchStore) GetResultForMatch(_ context.Context, _ int64, _ string) (string, error) {
+	return f.matchResult, f.resultErr
 }
 
 type fakeDraftStore struct {
@@ -3058,5 +3095,207 @@ func TestProjectDraftCompleted_WithoutDeckCreator_NoError(t *testing.T) {
 	}
 	if len(events.projected) != 1 || events.projected[0] != 803 {
 		t.Errorf("expected row 803 marked projected, got %v", events.projected)
+	}
+}
+
+// ─── Ticket #1341: deriveGameResult — WinningTeamID=0 cross-reference fix ────
+//
+// GRE payloads always carry WinningTeamID=0 (no final-win signal). The old code
+// returned "win" immediately when winningTeamID<=0, so every per-game result in
+// games.result was recorded as "win". The fix: always call GetPlayerTeamIDForMatch
+// and, when winningTeamID==0, call GetResultForMatch to obtain the match-level
+// result from the matches table.
+
+// TestDeriveGameResult_WinningTeamIDZero_PlayerLost verifies that when GRE sends
+// winningTeamID=0 and the matches table records a loss, the per-game result is
+// "loss" — not the fallback "win" (AC1, AC3).
+func TestDeriveGameResult_WinningTeamIDZero_PlayerLost(t *testing.T) {
+	now := time.Now().UTC()
+	// winning_team_id=0 simulates every real GRE payload (no final-win signal).
+	// GetResultForMatch returns "loss" — the match-level result stored after
+	// match.completed was projected.
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":        "match-1341-loss-001",
+		"game_number":     1,
+		"winning_team_id": 0,
+		"turn_count":      12,
+		"duration_secs":   360,
+		"partial":         false,
+		"life_changes":    []map[string]interface{}{},
+		"card_plays": []map[string]interface{}{
+			{"game_number": 1, "turn_number": 1, "phase": "main1", "arena_id": 90001, "player_type": "player", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	grw := &fakeGameRowWriter{}
+	cp := &fakeCardPlayStoreCapturing{}
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 1341, UserID: 1, AccountID: "acct-1341-loss", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 90}
+	// playerTeamID=1, matchResult="loss": player is on team 1, match-level result is loss.
+	matches := &fakeMatchStore{playerTeamID: 1, matchResult: "loss"}
+
+	w := NewWorker(events, accounts, matches, &fakeDraftStore{}, &fakeCollectionStore{}, &fakeInventoryStore{}, &fakeQuestStore{}, &fakeDeckStore{}, gp)
+	w.WithGameRowWriter(grw)
+	w.WithCardPlayStore(cp)
+
+	w.RunOnce(context.Background())
+
+	if len(grw.upserts) != 1 {
+		t.Fatalf("expected 1 UpsertGameRow call, got %d", len(grw.upserts))
+	}
+	if grw.upserts[0].result != "loss" {
+		t.Errorf("UpsertGameRow result: want %q (player lost — GRE winningTeamID=0 must cross-reference matches table), got %q",
+			"loss", grw.upserts[0].result)
+	}
+	if len(events.projected) != 1 || events.projected[0] != 1341 {
+		t.Errorf("expected row 1341 marked projected, got %v", events.projected)
+	}
+}
+
+// TestDeriveGameResult_WinningTeamIDZero_PlayerWon verifies that when GRE sends
+// winningTeamID=0 and the matches table records a win, the per-game result is
+// "win" (AC2, AC3).
+func TestDeriveGameResult_WinningTeamIDZero_PlayerWon(t *testing.T) {
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":        "match-1341-win-001",
+		"game_number":     1,
+		"winning_team_id": 0,
+		"turn_count":      9,
+		"duration_secs":   240,
+		"partial":         false,
+		"life_changes":    []map[string]interface{}{},
+		"card_plays": []map[string]interface{}{
+			{"game_number": 1, "turn_number": 1, "phase": "main1", "arena_id": 90002, "player_type": "player", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	grw := &fakeGameRowWriter{}
+	cp := &fakeCardPlayStoreCapturing{}
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 1342, UserID: 1, AccountID: "acct-1341-win", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 91}
+	matches := &fakeMatchStore{playerTeamID: 1, matchResult: "win"}
+
+	w := NewWorker(events, accounts, matches, &fakeDraftStore{}, &fakeCollectionStore{}, &fakeInventoryStore{}, &fakeQuestStore{}, &fakeDeckStore{}, gp)
+	w.WithGameRowWriter(grw)
+	w.WithCardPlayStore(cp)
+
+	w.RunOnce(context.Background())
+
+	if len(grw.upserts) != 1 {
+		t.Fatalf("expected 1 UpsertGameRow call, got %d", len(grw.upserts))
+	}
+	if grw.upserts[0].result != "win" {
+		t.Errorf("UpsertGameRow result: want %q, got %q", "win", grw.upserts[0].result)
+	}
+}
+
+// TestDeriveGameResult_WinningTeamIDZero_MatchNotProjected_FallsBackToWin verifies
+// that when GRE sends winningTeamID=0 and the matches table has no result yet
+// (match.completed not yet projected), the worker falls back to "win" without
+// error — same safe default as before (AC3 edge case).
+func TestDeriveGameResult_WinningTeamIDZero_MatchNotProjected_FallsBackToWin(t *testing.T) {
+	now := time.Now().UTC()
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":        "match-1341-notprojected-001",
+		"game_number":     1,
+		"winning_team_id": 0,
+		"turn_count":      7,
+		"duration_secs":   180,
+		"partial":         false,
+		"life_changes":    []map[string]interface{}{},
+		"card_plays": []map[string]interface{}{
+			{"game_number": 1, "turn_number": 1, "phase": "main1", "arena_id": 90003, "player_type": "player", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	grw := &fakeGameRowWriter{}
+	cp := &fakeCardPlayStoreCapturing{}
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 1343, UserID: 1, AccountID: "acct-1341-noproj", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 92}
+	// playerTeamID=0 AND matchResult="" simulates match.completed not yet projected.
+	matches := &fakeMatchStore{playerTeamID: 0, matchResult: ""}
+
+	w := NewWorker(events, accounts, matches, &fakeDraftStore{}, &fakeCollectionStore{}, &fakeInventoryStore{}, &fakeQuestStore{}, &fakeDeckStore{}, gp)
+	w.WithGameRowWriter(grw)
+	w.WithCardPlayStore(cp)
+
+	w.RunOnce(context.Background())
+
+	if len(grw.upserts) != 1 {
+		t.Fatalf("expected 1 UpsertGameRow call, got %d", len(grw.upserts))
+	}
+	// Fallback: "win" when match not yet projected (indeterminate).
+	if grw.upserts[0].result != "win" {
+		t.Errorf("UpsertGameRow result fallback: want %q, got %q", "win", grw.upserts[0].result)
+	}
+	if len(events.projected) != 1 || events.projected[0] != 1343 {
+		t.Errorf("expected row 1343 marked projected, got %v", events.projected)
+	}
+}
+
+// TestDeriveGameResult_WinningTeamIDNonZero_StillUsed verifies that when GRE
+// sends a non-zero winningTeamID (AC4 future-proofing), it is still used
+// directly to derive the result without calling GetResultForMatch.
+func TestDeriveGameResult_WinningTeamIDNonZero_StillUsed(t *testing.T) {
+	now := time.Now().UTC()
+	// winning_team_id=2 is non-zero: player on team 1 → player lost.
+	payload := makePayload(t, map[string]interface{}{
+		"match_id":        "match-1341-nzwinner-001",
+		"game_number":     1,
+		"winning_team_id": 2,
+		"turn_count":      10,
+		"duration_secs":   300,
+		"partial":         false,
+		"life_changes":    []map[string]interface{}{},
+		"card_plays": []map[string]interface{}{
+			{"game_number": 1, "turn_number": 1, "phase": "main1", "arena_id": 90004, "player_type": "player", "action_type": "play_card", "zone_from": "hand", "zone_to": "battlefield"},
+		},
+	})
+
+	gp := &fakeGamePlayStoreCapturing{}
+	grw := &fakeGameRowWriter{}
+	cp := &fakeCardPlayStoreCapturing{}
+
+	events := &fakeEventStore{
+		pending: []repository.DaemonEventRow{
+			{ID: 1344, UserID: 1, AccountID: "acct-1341-nzwin", EventType: "match.game_ended", Payload: payload, OccurredAt: now, Sequence: 1},
+		},
+	}
+	accounts := &fakeAccountStore{accountID: 93}
+	// playerTeamID=1: winningTeamID=2 ≠ playerTeamID=1 → "loss" via direct comparison.
+	// matchResult is intentionally empty to prove GetResultForMatch is NOT called.
+	matches := &fakeMatchStore{playerTeamID: 1, matchResult: ""}
+
+	w := NewWorker(events, accounts, matches, &fakeDraftStore{}, &fakeCollectionStore{}, &fakeInventoryStore{}, &fakeQuestStore{}, &fakeDeckStore{}, gp)
+	w.WithGameRowWriter(grw)
+	w.WithCardPlayStore(cp)
+
+	w.RunOnce(context.Background())
+
+	if len(grw.upserts) != 1 {
+		t.Fatalf("expected 1 UpsertGameRow call, got %d", len(grw.upserts))
+	}
+	if grw.upserts[0].result != "loss" {
+		t.Errorf("UpsertGameRow result: want %q (non-zero winningTeamID path), got %q",
+			"loss", grw.upserts[0].result)
 	}
 }

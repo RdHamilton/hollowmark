@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { EventsOn } from '@/services/websocketClient';
 import { matches, system } from '@/services/api';
+import { useReadModelUpdates } from '@/hooks/useReadModelUpdates';
 import { models } from '@/types/models';
 import type { DaemonHealthState } from './DaemonHealthIndicator';
 import DownloadProgressBar from './DownloadProgressBar';
@@ -70,17 +70,12 @@ const StatusStrip = ({ daemonStatus }: StatusStripProps) => {
     void loadStats();
   }, [loadStats]);
 
-  useEffect(() => {
-    const unsubscribe = EventsOn('stats:updated', () => {
-      void loadStats();
-    });
-
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
-  }, [loadStats]);
+  // Rewired per ADR-084: readmodel.updated matches/decks domain replaces
+  // the dead stats:updated colon-vocabulary listener (no server emitter).
+  useReadModelUpdates({
+    onMatches: () => { void loadStats(); },
+    onDecks: () => { void loadStats(); },
+  });
 
   const isDaemonOffline = daemonStatus !== 'connected';
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -493,6 +494,87 @@ func TestCardsGetByArenaID_ImageURLsPropagate(t *testing.T) {
 	}
 	if card["ImageURLArt"] != "https://img.scryfall.com/a.jpg" {
 		t.Errorf("ImageURLArt: got %v", card["ImageURLArt"])
+	}
+}
+
+// ─── Basic land static fallback ──────────────────────────────────────────────
+
+// TestCardsGetByArenaID_BasicLandFallback verifies that GET /cards/{arenaId}
+// returns 200 with correct name, type, image URLs, and colors for each of the
+// five basic land arena IDs (81716–81720) even when set_cards has no row for
+// them (db returns nil). This exercises the static fallback added to fix
+// #1361 — basic lands showing "unknown" in the draft deck editor.
+func TestCardsGetByArenaID_BasicLandFallback(t *testing.T) {
+	cases := []struct {
+		arenaID   int
+		wantName  string
+		wantColor string
+	}{
+		{81716, "Plains", "W"},
+		{81717, "Island", "U"},
+		{81718, "Swamp", "B"},
+		{81719, "Mountain", "R"},
+		{81720, "Forest", "G"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.wantName, func(t *testing.T) {
+			// Stub returns nil — simulates missing set_cards row for this land.
+			h := handlers.NewCardsHandler(
+				&stubCardsReader{byArenaID: nil},
+				&cardsAccountLookup{accountID: 7, found: true},
+			)
+			arenaStr := fmt.Sprintf("%d", tc.arenaID)
+			req := authedCardsRequest(t, http.MethodGet, "/api/v1/cards/"+arenaStr, nil, 168)
+			req = chiCardsContext(req, "arenaId", arenaStr)
+			rr := httptest.NewRecorder()
+			h.GetByArenaID(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("[%s] want 200 got %d body=%s", tc.wantName, rr.Code, rr.Body.String())
+			}
+			var card map[string]any
+			decodeCardsEnvelope(t, rr.Body.Bytes(), &card)
+
+			if card["Name"] != tc.wantName {
+				t.Errorf("[%s] Name: got %v want %v", tc.wantName, card["Name"], tc.wantName)
+			}
+			// Types must contain "Basic" and "Land".
+			types, _ := card["Types"].([]any)
+			hasBasic, hasLand := false, false
+			for _, tp := range types {
+				s, _ := tp.(string)
+				if s == "Basic" {
+					hasBasic = true
+				}
+				if s == "Land" {
+					hasLand = true
+				}
+			}
+			if !hasBasic || !hasLand {
+				t.Errorf("[%s] Types: got %v want Basic+Land", tc.wantName, types)
+			}
+			// Colors must contain the expected color symbol.
+			colors, _ := card["Colors"].([]any)
+			found := false
+			for _, c := range colors {
+				if c == tc.wantColor {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("[%s] Colors: got %v want %v", tc.wantName, colors, tc.wantColor)
+			}
+			// ImageURL and ImageURLSmall must be non-empty Scryfall URLs.
+			imgURL, _ := card["ImageURL"].(string)
+			imgSmall, _ := card["ImageURLSmall"].(string)
+			if imgURL == "" {
+				t.Errorf("[%s] ImageURL: empty", tc.wantName)
+			}
+			if imgSmall == "" {
+				t.Errorf("[%s] ImageURLSmall: empty", tc.wantName)
+			}
+		})
 	}
 }
 

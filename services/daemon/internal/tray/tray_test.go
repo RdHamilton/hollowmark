@@ -311,3 +311,24 @@ func TestSetSyncDegraded_NoopOnNonIngestStatuses(t *testing.T) {
 		assert.Equal(t, s, a.status, "SetSyncDegraded(false) must not clobber %v", s)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Hollowmark rebrand — tray label defaults (canonical domain decision)
+// ---------------------------------------------------------------------------
+
+// TestNew_DefaultLabel_IsHollowmark verifies that tray.New uses "Hollowmark" as
+// the default app label so the tray title, tooltip, About item, "Open Hollowmark"
+// menu item, and "Quit" tooltip all show the rebranded name.
+func TestNew_DefaultLabel_IsHollowmark(t *testing.T) {
+	a := New("https://app.hollowmark.app", "v0.4.3", nil, nil)
+	assert.Equal(t, "Hollowmark", a.appLabel,
+		"tray.New default label must be Hollowmark (canonical domain decision)")
+}
+
+// TestNewWithLabel_ExplicitLabel verifies that NewWithLabel still accepts an
+// explicit label so the staging channel can pass "Hollowmark (Staging)".
+func TestNewWithLabel_ExplicitLabel(t *testing.T) {
+	a := NewWithLabel("https://app.hollowmark.app", "v0.4.3", nil, nil, "Hollowmark (Staging)")
+	assert.Equal(t, "Hollowmark (Staging)", a.appLabel,
+		"NewWithLabel must preserve the explicitly supplied label")
+}

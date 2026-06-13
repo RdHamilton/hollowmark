@@ -91,16 +91,20 @@ describe('KeyboardShortcutsHandler', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/settings');
   });
 
-  it('emits stats:updated on Ctrl+R', () => {
+  it('emits readmodel.updated for all domains on Ctrl+R (ADR-084)', () => {
     renderComponent();
     pressKey('r', { ctrlKey: true });
-    expect(mockEventsEmit).toHaveBeenCalledWith('stats:updated');
+    expect(mockEventsEmit).toHaveBeenCalledWith('readmodel.updated', {
+      domains: ['matches', 'drafts', 'quests', 'collection', 'decks', 'inventory', 'mastery'],
+    });
   });
 
-  it('emits stats:updated on Ctrl+Shift+R (uppercase R)', () => {
+  it('emits readmodel.updated for all domains on Ctrl+Shift+R (uppercase R) (ADR-084)', () => {
     renderComponent();
     pressKey('R', { ctrlKey: true });
-    expect(mockEventsEmit).toHaveBeenCalledWith('stats:updated');
+    expect(mockEventsEmit).toHaveBeenCalledWith('readmodel.updated', {
+      domains: ['matches', 'drafts', 'quests', 'collection', 'decks', 'inventory', 'mastery'],
+    });
   });
 
   it('does not navigate when modifier key is absent', () => {

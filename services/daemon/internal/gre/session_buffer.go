@@ -11,6 +11,9 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/recovery"
+	"github.com/getsentry/sentry-go"
 )
 
 // FlushFunc is called whenever a session buffer is flushed.  The caller is
@@ -154,6 +157,7 @@ func (m *Manager) FlushSession(ctx context.Context, sessionID, matchID string, p
 // RunSweep starts the background stale-buffer sweep goroutine.
 // It returns when ctx is cancelled.
 func (m *Manager) RunSweep(ctx context.Context) {
+	defer recovery.RecoverGoroutine("gre-sweep", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 	ticker := time.NewTicker(m.sweepInterval)
 	defer ticker.Stop()
 

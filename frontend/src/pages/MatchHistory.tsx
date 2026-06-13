@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { RectangleStackIcon ,
   MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
-import { EventsOn } from '@/services/websocketClient';
 import { matches as matchesApi } from '@/services/api';
 import { models } from '@/types/models';
 import { getDisplayFormat, getDisplayEventName } from '@/utils/formatNormalization';
@@ -153,108 +152,16 @@ const MatchHistory = () => {
     loadMatches();
   }, [dateRange, customStartDate, customEndDate, cardFormat, queueType, result]);
 
-  // Listen for real-time updates
-  useEffect(() => {
-    const loadMatches = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-
-        // Build filter
-        const filter = new models.StatsFilter();
-
-        // Date range
-        if (dateRange === 'custom') {
-          // Use custom date range if provided
-          if (customStartDate) {
-            const start = new Date(customStartDate + 'T00:00:00');
-            filter.StartDate = start;
-          }
-          if (customEndDate) {
-            // Add 1 day to end date to make it inclusive
-            // (e.g., end date "2024-11-14" becomes "2024-11-15T00:00:00")
-            const end = new Date(customEndDate + 'T00:00:00');
-            end.setDate(end.getDate() + 1);
-            filter.EndDate = end;
-          }
-        } else if (dateRange !== 'all') {
-          const now = new Date();
-          const start = new Date();
-
-          switch (dateRange) {
-            case '7days':
-              start.setDate(now.getDate() - 7);
-              break;
-            case '30days':
-              start.setDate(now.getDate() - 30);
-              break;
-            case '90days':
-              start.setDate(now.getDate() - 90);
-              break;
-          }
-
-          // Set start time to beginning of day
-          start.setHours(0, 0, 0, 0);
-          // Add 1 day to end date to make it inclusive (beginning of next day)
-          const end = new Date(now);
-          end.setDate(end.getDate() + 1);
-          end.setHours(0, 0, 0, 0);
-
-          filter.StartDate = start;
-          filter.EndDate = end;
-        }
-
-        // Card format filter (deck format)
-        if (cardFormat !== 'all') {
-          filter.DeckFormat = cardFormat;
-        }
-
-        // Queue type filter (ladder/play)
-        if (queueType !== 'all') {
-          filter.Format = queueType;
-        }
-
-        // Result filter
-        if (result !== 'all') {
-          filter.Result = result;
-        }
-
-        const matchData = await matchesApi.getMatches(matchesApi.statsFilterToRequest(filter));
-        const matches = matchData || [];
-        setMatchList(matches);
-        if (matches.length > 0 && !firstGamePlayedFiredRef.current) {
-          firstGamePlayedFiredRef.current = true;
-          const firstMatch = matches[0];
-          trackEvent({
-            name: 'funnel_first_game_played',
-            properties: {
-              format: firstMatch.Format ?? undefined,
-              source: 'match_history',
-            },
-          });
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load matches');
-        console.error('Error loading matches:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    const unsubscribe = EventsOn('stats:updated', () => {
-      console.log('Stats updated event received - reloading match history');
-      loadMatches();
-    });
-
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
-  }, [dateRange, customStartDate, customEndDate, cardFormat, queueType, result]);
+  // Real-time update listener removed per ADR-084 §G1 — the dead stats:updated
+  // colon-vocabulary had no server emitter. This page (MatchHistory.tsx) is a
+  // desktop-era component not routed in App.tsx; BffMatchHistory is the active
+  // replacement. The useEffect above already reloads on filter changes.
 
   const formatTimestamp = (timestamp: unknown) => {
-    return new Date(String(timestamp)).toLocaleString();
+    return new Date(String(timestamp)).toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
   };
 
   const formatScore = (wins: number, losses: number) => {

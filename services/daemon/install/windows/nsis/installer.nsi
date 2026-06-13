@@ -78,7 +78,14 @@
 !define CONFIG_DIR   "$APPDATA\vaultmtg${BIN_SUFFIX}"
 !define TASK_NAME    "VaultMTG${APP_SUFFIX}-Daemon"
 !define APP_NAME     "VaultMTG${APP_SUFFIX}"
-!define CRED_TARGET  "vaultmtg-daemon${BIN_SUFFIX}-api-key"
+; CRED_TARGET_NEW is the live Windows Credential Manager target used by go-keyring
+; (ADR-022 Phase 3 / common.ps1:79 CredTarget = "com.hollowmark.daemon${Suffix}:api-key").
+; CRED_TARGET_LEGACY is the pre-Phase-3 target retained for upgrade-path clearing.
+; Both are cleared on install/update (#1330 stale-auth-clear).
+!define CRED_TARGET_NEW    "com.hollowmark.daemon${BIN_SUFFIX}:api-key"
+!define CRED_TARGET_LEGACY "com.vaultmtg.daemon${BIN_SUFFIX}:api-key"
+; Legacy CRED_TARGET kept for the existing cross-env reinstall block; points at new name.
+!define CRED_TARGET  "${CRED_TARGET_NEW}"
 
 ;----------------------------------------------------------------------
 ; General attributes
@@ -222,6 +229,49 @@ Section "Install" SecInstall
     FileWrite $0 '{$\n  "cloud_api_url": "${CLOUD_API_URL}",$\n  "api_key": ""$\n}$\n'
     FileClose $0
   SkipWriteConfig:
+
+  ; --- Belt-and-suspenders stale auth clear (#1330 / 2026-06-12 incident) -----------
+  ; On EVERY install/update, unconditionally clear Windows Credential Manager entries
+  ; and zero auth fields in daemon.json so the daemon's startup ProbeTokenLiveness
+  ; probe (#3238 Fix A) runs against a clean slate on next launch.
+  ;
+  ; Two credential targets are cleared for full field coverage:
+  ;   CRED_TARGET_NEW    = com.hollowmark.daemon[:staging]:api-key  (live, ADR-022 Phase 3)
+  ;   CRED_TARGET_LEGACY = com.vaultmtg.daemon[:staging]:api-key   (pre-Phase-3 upgrade path)
+  ;
+  ; daemon.json auth fields zeroed: keychain, api_key, daemon_jwt.
+  ; Preserved: account_id, daemon_id, cloud_api_url, sync_enabled, and all other fields.
+  ;
+  ; cmdkey /delete exits non-zero when the entry is absent — /f flag suppresses
+  ; the error dialog; the PowerShell script wraps in try/catch for the JSON patch.
+  ; Non-fatal: errors here must never roll back the install.
+  ;
+  ; Implementation uses the .ps1 temp-file pattern (same as the health-check and
+  ; env-check blocks above) to avoid NSIS/PowerShell quote-nesting issues.
+  ; Only runs when daemon.json already exists (update/reinstall path); a fresh
+  ; install has no stale auth to clear.
+  IfFileExists "${CONFIG_DIR}\daemon.json" DoStaleAuthClear SkipStaleAuthClear
+  DoStaleAuthClear:
+    ; Clear both credential targets. cmdkey exits 1 when entry absent — ignore.
+    ExecWait 'cmdkey /delete:"${CRED_TARGET_NEW}"'
+    ExecWait 'cmdkey /delete:"${CRED_TARGET_LEGACY}"'
+    ; Zero auth fields in daemon.json via a temp PowerShell script.
+    FileOpen  $3 "$TEMP\vaultmtg-stale-auth-clear.ps1" w
+    FileWrite $3 '$$configFile = "${CONFIG_DIR}\daemon.json"$\n'
+    FileWrite $3 'try {$\n'
+    FileWrite $3 '    $$data = Get-Content $$configFile -Raw | ConvertFrom-Json$\n'
+    FileWrite $3 '    $$data.PSObject.Properties.Remove("keychain")$\n'
+    FileWrite $3 '    $$data.PSObject.Properties.Remove("api_key")$\n'
+    FileWrite $3 '    $$data.PSObject.Properties.Remove("daemon_jwt")$\n'
+    FileWrite $3 '    $$data | ConvertTo-Json -Depth 10 | Set-Content $$configFile -Encoding UTF8$\n'
+    FileWrite $3 '    Write-Host "[installer] stale auth cleared (keychain/api_key/daemon_jwt removed)"$\n'
+    FileWrite $3 '} catch {$\n'
+    FileWrite $3 '    Write-Host "[installer] WARNING: could not patch daemon.json for stale auth clear: $$_"$\n'
+    FileWrite $3 '}$\n'
+    FileClose $3
+    ExecWait 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$TEMP\vaultmtg-stale-auth-clear.ps1"'
+    Delete "$TEMP\vaultmtg-stale-auth-clear.ps1"
+  SkipStaleAuthClear:
 
   ; Write uninstaller.
   WriteUninstaller "$INSTDIR\Uninstall.exe"

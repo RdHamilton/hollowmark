@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/config"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/credstore"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/dispatch"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/keychain"
 	"github.com/stretchr/testify/assert"
@@ -432,7 +433,9 @@ func TestRunInProcessReauth_DeadlineExpiresBeforeBFF(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	err = runInProcessReauth(ctx, cfg, cfgPath, "com.vaultmtg.daemon")
+	// Provide a credstore backed by a temp file — content irrelevant for this test.
+	testCS := credstore.NewFileStore(filepath.Join(t.TempDir(), "credentials"))
+	err = runInProcessReauth(ctx, cfg, cfgPath, "com.vaultmtg.daemon", testCS)
 
 	// The function must return an error — either a context error (deadline) or
 	// a pkce.Run error caused by the fake endpoint. Either way it must NOT block.
@@ -445,7 +448,8 @@ func TestRunPKCEAuth_MissingClerkFrontendAPI(t *testing.T) {
 	t.Setenv("CLERK_FRONTEND_API", "")
 	t.Setenv("CLERK_OAUTH_CLIENT_ID", "some-client-id")
 
-	err := runPKCEAuth(nil, "", "com.vaultmtg.daemon")
+	testCS := credstore.NewFileStore(filepath.Join(t.TempDir(), "credentials"))
+	err := runPKCEAuth(nil, "", "com.vaultmtg.daemon", testCS)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "CLERK_FRONTEND_API")
 }
@@ -456,7 +460,8 @@ func TestRunPKCEAuth_MissingClientID(t *testing.T) {
 	t.Setenv("CLERK_FRONTEND_API", "https://accounts.example.clerk.dev")
 	t.Setenv("CLERK_OAUTH_CLIENT_ID", "")
 
-	err := runPKCEAuth(nil, "", "com.vaultmtg.daemon")
+	testCS := credstore.NewFileStore(filepath.Join(t.TempDir(), "credentials"))
+	err := runPKCEAuth(nil, "", "com.vaultmtg.daemon", testCS)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "CLERK_OAUTH_CLIENT_ID")
 }
@@ -467,7 +472,8 @@ func TestRunPKCEAuth_BothMissing(t *testing.T) {
 	t.Setenv("CLERK_FRONTEND_API", "")
 	t.Setenv("CLERK_OAUTH_CLIENT_ID", "")
 
-	err := runPKCEAuth(nil, "", "com.vaultmtg.daemon")
+	testCS := credstore.NewFileStore(filepath.Join(t.TempDir(), "credentials"))
+	err := runPKCEAuth(nil, "", "com.vaultmtg.daemon", testCS)
 	require.Error(t, err,
 		"both env vars missing must produce an error")
 }
@@ -1417,11 +1423,29 @@ func TestDefaultSPAURL_ProductionDefault(t *testing.T) {
 		"DefaultSPAURL must have a non-empty package-level default")
 }
 
+// TestDefaultSPAURL_SourceDefaultIsHollowmark verifies the source-code default
+// for DefaultSPAURL is the canonical hollowmark.app SPA domain (not the legacy
+// app.vaultmtg.app). The release workflow ldflags inject this same value for
+// stable tags; the source default applies to direct `go build` without ldflags.
+func TestDefaultSPAURL_SourceDefaultIsHollowmark(t *testing.T) {
+	assert.Equal(t, "https://app.hollowmark.app", DefaultSPAURL,
+		"DefaultSPAURL source default must be https://app.hollowmark.app (canonical domain decision)")
+}
+
 // TestDefaultSetupURL_ProductionDefault verifies that the package-level default
 // for DefaultSetupURL is non-empty.
 func TestDefaultSetupURL_ProductionDefault(t *testing.T) {
 	assert.NotEmpty(t, DefaultSetupURL,
 		"DefaultSetupURL must have a non-empty package-level default")
+}
+
+// TestDefaultSetupURL_SourceDefaultIsHollowmark verifies the source-code default
+// for DefaultSetupURL is the canonical hollowmark.app setup domain (not the legacy
+// vaultmtg.app/setup). The release workflow ldflags inject this same value for
+// stable tags.
+func TestDefaultSetupURL_SourceDefaultIsHollowmark(t *testing.T) {
+	assert.Equal(t, "https://hollowmark.app/setup", DefaultSetupURL,
+		"DefaultSetupURL source default must be https://hollowmark.app/setup (canonical domain decision)")
 }
 
 // ---------------------------------------------------------------------------
@@ -1566,8 +1590,10 @@ func TestDispatchKeychainMigrated_SkipsOnEmptyKey(t *testing.T) {
 		// APIKey intentionally empty — Keychain:true means we read from keyring.
 	}
 
-	dispatchKeychainMigrated(cfg, "0.4.3-test")
+	// Use an empty FileStore — Get() returns ErrNotFound, so no key is available.
+	testCS := credstore.NewFileStore(filepath.Join(t.TempDir(), "credentials"))
+	dispatchKeychainMigrated(cfg, "0.4.3-test", testCS)
 
 	assert.Equal(t, 0, ingestHits,
-		"dispatchKeychainMigrated must not issue a BFF request when keychain.GetForService returns empty")
+		"dispatchKeychainMigrated must not issue a BFF request when credential store returns ErrNotFound")
 }

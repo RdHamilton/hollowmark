@@ -1193,3 +1193,49 @@ func TestRouter_InternalHealth_NoSecret_Returns401(t *testing.T) {
 		t.Fatalf("GET /internal/v1/health empty secret: want 401, got %d", rr.Code)
 	}
 }
+
+// TestRouter_Ingest_NilMiddleware_RouteNotMounted verifies AC1+AC3 from
+// ticket #1332: when DaemonAPIKeyAuthMiddl is nil, the ingest route must NOT
+// be mounted at all — the server must refuse to expose an unauthenticated
+// POST /api/v1/ingest/events endpoint.
+//
+// Expected: 405 Method Not Allowed (chi returns 405 when a path is registered
+// but the method is not, or 404 when the path itself is unregistered — both
+// indicate no ingest handler is reachable without auth).
+//
+// Before the fix this test fails because the unguarded fallback mounts the
+// route and a no-auth POST returns a handler-determined status (not 405/404).
+func TestRouter_Ingest_NilMiddleware_RouteNotMounted(t *testing.T) {
+	deps := RouterDeps{
+		Broker:        sse.NewWithHeartbeat(0),
+		IngestHandler: handlers.NewIngestHandler(&noopBroadcaster{}),
+		// DaemonAPIKeyAuthMiddl intentionally nil — simulates misconfiguration.
+	}
+
+	r := BuildRouter(minimalConfig(), deps)
+
+	body := bytes.NewBufferString(`{"events":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/events", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	// The route must not be mounted: chi returns 405 when the path exists but
+	// not the method, or 404 when the path itself is absent.  Either signals
+	// the unguarded fallback is gone.  200 or any 2xx is a test failure.
+	if rr.Code == http.StatusOK {
+		t.Fatalf(
+			"POST /api/v1/ingest/events with nil DaemonAPIKeyAuthMiddl: "+
+				"want 404 or 405 (route not mounted), got %d — unguarded fallback is still active",
+			rr.Code,
+		)
+	}
+
+	if rr.Code != http.StatusMethodNotAllowed && rr.Code != http.StatusNotFound {
+		t.Fatalf(
+			"POST /api/v1/ingest/events with nil DaemonAPIKeyAuthMiddl: "+
+				"want 404 or 405, got %d",
+			rr.Code,
+		)
+	}
+}

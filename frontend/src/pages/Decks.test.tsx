@@ -353,6 +353,34 @@ describe('Decks', () => {
       });
     });
 
+    it('deck card Modified line includes time portion (#1360)', async () => {
+      // modifiedAt ISO string has a non-midnight time — the rendered label must
+      // include a time component (AM/PM or HH:MM) so same-day draft decks are
+      // distinguishable. Currently formatDate calls toLocaleDateString() which
+      // drops the time; this test pins the required behaviour.
+      mockDecks.getDecks.mockResolvedValue([
+        createMockDeckListItem({
+          id: 'deck-time',
+          name: 'Draft Deck',
+          source: 'draft',
+          modifiedAt: new Date('2024-01-15T14:30:00').toISOString(),
+        }),
+      ]);
+
+      renderWithRouter(<Decks />);
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      await waitFor(() => {
+        expect(screen.getByText('Draft Deck')).toBeInTheDocument();
+      });
+
+      // The Modified: span text must include a time indicator — either AM/PM or HH:MM
+      const modifiedEl = screen.getByText(/Modified:/);
+      const modifiedText = modifiedEl.textContent ?? '';
+      expect(modifiedText).toMatch(/\d{1,2}:\d{2}/);
+    });
+
     it('should show create button in header when decks exist', async () => {
       mockDecks.getDecks.mockResolvedValue(createMockDeckList());
 

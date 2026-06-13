@@ -1,7 +1,7 @@
 //go:build cgo
 
 // Package tray manages the system tray (menu bar) icon and menu for the
-// VaultMTG daemon. systray.Run must be called on the main OS thread; callers
+// Hollowmark daemon. systray.Run must be called on the main OS thread; callers
 // must invoke App.Run from main() and start the daemon event loop inside the
 // onReady callback.
 package tray
@@ -16,6 +16,8 @@ import (
 
 	"fyne.io/systray"
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/install"
+	"github.com/RdHamilton/hollowmark/services/daemon/internal/recovery"
+	"github.com/getsentry/sentry-go"
 )
 
 // NSApplicationActivationPolicy values, mirrored from AppKit so the
@@ -107,8 +109,8 @@ type App struct {
 	appURL  string
 	version string
 	// appLabel is the user-visible title shown next to the tray icon (macOS) and
-	// in the tooltip. "VaultMTG" for the stable channel; "VaultMTG (Staging)"
-	// for the staging channel. Set via NewWithLabel; defaults to "VaultMTG".
+	// in the tooltip. "Hollowmark" for the stable channel; "Hollowmark (Staging)"
+	// for the staging channel. Set via NewWithLabel; defaults to "Hollowmark".
 	appLabel string
 	openURL  func(string) error
 	onQuit   func()
@@ -161,7 +163,7 @@ type App struct {
 	// TryAgain is signalled when the user clicks "Try Again" (keychain retry).
 	TryAgain chan struct{}
 	// RetrySetup is signalled when the user clicks "Retry Setup…". The handler
-	// opens https://vaultmtg.app/setup in the browser and re-runs the PKCE flow.
+	// opens https://hollowmark.app/setup in the browser and re-runs the PKCE flow.
 	// Buffered cap=1 so a second click before the first is handled is dropped.
 	RetrySetup chan struct{}
 	// InstallUpdate is signalled when the user clicks "Update available: vX.Y.Z".
@@ -169,19 +171,19 @@ type App struct {
 	InstallUpdate chan struct{}
 }
 
-// New creates an App with the default "VaultMTG" label. appURL is opened when
-// "Open VaultMTG" is clicked. version is the daemon build version (injected via
+// New creates an App with the default "Hollowmark" label. appURL is opened when
+// "Open Hollowmark" is clicked. version is the daemon build version (injected via
 // -ldflags -X main.Version=<ver>; defaults to "dev" for local builds) and is
 // displayed in the "About" menu item. openURL is the platform open-browser
 // function. onQuit is called when the tray exits (Quit clicked or process
 // terminated). For channel-aware label use NewWithLabel.
 func New(appURL, version string, openURL func(string) error, onQuit func()) *App {
-	return NewWithLabel(appURL, version, openURL, onQuit, "VaultMTG")
+	return NewWithLabel(appURL, version, openURL, onQuit, "Hollowmark")
 }
 
 // NewWithLabel creates an App with an explicit tray label (ADR-049 Ticket 4).
 // Pass install.Identity(channel).TrayLabel as the label argument so the tray
-// title reflects the channel: "VaultMTG" (stable) or "VaultMTG (Staging)" (staging).
+// title reflects the channel: "Hollowmark" (stable) or "Hollowmark (Staging)" (staging).
 func NewWithLabel(appURL, version string, openURL func(string) error, onQuit func(), label string) *App {
 	return &App{
 		appURL:        appURL,
@@ -287,6 +289,47 @@ func (a *App) SetKeychainError(show bool) {
 		if a.miTryAgain != nil {
 			a.miTryAgain.Hide()
 		}
+	}
+}
+
+// SetRunError transitions the tray to StatusError and shows the "Try Again"
+// menu item. Called by runWithDegrade (ADR-083 SH-3) when svc.Run returns a
+// non-fatal error and a retry is available. The user can click "Try Again" to
+// trigger another svc.Run attempt without restarting the daemon.
+// Safe to call from any goroutine.
+func (a *App) SetRunError() {
+	a.SetStatus(StatusError)
+	if a.miTryAgain != nil {
+		a.miTryAgain.Show()
+	}
+}
+
+// SetRunStopped transitions the tray to StatusError with a "daemon stopped"
+// label and hides the "Try Again" item (all retries exhausted — AC3).
+// The process stays alive; the user must restart the daemon manually.
+// Safe to call from any goroutine.
+func (a *App) SetRunStopped() {
+	a.SetStatus(StatusError)
+	if a.miTryAgain != nil {
+		a.miTryAgain.Hide()
+	}
+}
+
+// TryAgainCh returns the TryAgain channel for use by runWithDegrade.
+// This exposes the existing channel via the runDegradeHooks interface
+// without adding a new field — the channel is already driven by the
+// tray loop's miTryAgain.ClickedCh handler.
+func (a *App) TryAgainCh() <-chan struct{} {
+	return a.TryAgain
+}
+
+// SetConnected restores the tray to StatusConnected after a successful
+// svc.Run recovery. Called by runWithDegrade on a clean svc.Run exit (AC6).
+// Safe to call from any goroutine.
+func (a *App) SetConnected() {
+	a.SetStatus(StatusConnected)
+	if a.miTryAgain != nil {
+		a.miTryAgain.Hide()
 	}
 }
 
@@ -419,7 +462,7 @@ func (a *App) setup() {
 	a.miAbout.Disable()
 
 	// Check for Updates — opens the GitHub Releases page for the daemon.
-	a.miCheckForUpdates = systray.AddMenuItem("Check for Updates", "Opens GitHub Releases page for the VaultMTG daemon")
+	a.miCheckForUpdates = systray.AddMenuItem("Check for Updates", "Opens GitHub Releases page for the Hollowmark daemon")
 
 	// Update available — hidden until the update-check loop finds a newer version.
 	a.miUpdateAvailable = systray.AddMenuItem("Update available", "A new daemon version is available")
@@ -455,7 +498,7 @@ func (a *App) setup() {
 
 	systray.AddSeparator()
 
-	a.miOpenApp = systray.AddMenuItem("Open "+a.appLabel, "Open the VaultMTG web app")
+	a.miOpenApp = systray.AddMenuItem("Open "+a.appLabel, "Open the Hollowmark web app")
 
 	systray.AddSeparator()
 
@@ -510,6 +553,7 @@ func (a *App) NotifySyncResult(err error) {
 }
 
 func (a *App) loop() {
+	defer recovery.RecoverGoroutine("tray-loop", recovery.CaptureFn(sentry.CurrentHub().CaptureException))
 	for {
 		select {
 		case <-a.miCheckForUpdates.ClickedCh:

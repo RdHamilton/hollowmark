@@ -333,6 +333,9 @@ func TestDaemonBinarySmoke(t *testing.T) {
 	assert.NotEmpty(t, draftPackEvent.Payload, "draft.pack payload must be non-empty")
 
 	// ── Clean shutdown via SIGTERM ─────────────────────────────────────────────
+	// SH-2 (ADR-083): SIGTERM must trigger a graceful drain (batchBuffer.Close +
+	// greManager.FlushAll) then exit cleanly. The daemon logs
+	// "[daemon] stopped reason=sigterm" before returning.
 
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
 
@@ -348,8 +351,14 @@ func TestDaemonBinarySmoke(t *testing.T) {
 			// Accept that; only fail if the process hangs.
 			t.Logf("daemon exited with: %v (expected after SIGTERM)", exitErr)
 		}
+		// Assert the structured shutdown reason log line (SH-5, ADR-083).
+		// The drain must have completed before exit; "stopped reason=sigterm"
+		// is emitted by logShutdown in handleSignalShutdown.
+		logs := daemonLogs.String()
+		assert.Contains(t, logs, "stopped reason=sigterm",
+			"daemon must log 'stopped reason=sigterm' on SIGTERM shutdown (SH-5 ADR-083)")
 	case <-time.After(10 * time.Second):
-		t.Fatal("daemon did not exit within 10s after SIGTERM")
+		t.Fatalf("daemon did not exit within 10s after SIGTERM\ndaemon output:\n%s", daemonLogs.String())
 	}
 }
 
@@ -557,7 +566,11 @@ func TestDaemonReinstallStaleAuthSmoke(t *testing.T) {
 		if exitErr != nil {
 			t.Logf("daemon exited with: %v (expected after SIGTERM)", exitErr)
 		}
+		// Assert the structured shutdown reason log line (SH-5, ADR-083).
+		logs := daemonLogs.String()
+		assert.Contains(t, logs, "stopped reason=sigterm",
+			"daemon must log 'stopped reason=sigterm' on SIGTERM shutdown (SH-5 ADR-083)")
 	case <-time.After(10 * time.Second):
-		t.Fatal("daemon did not exit within 10s after SIGTERM")
+		t.Fatalf("daemon did not exit within 10s after SIGTERM\ndaemon output:\n%s", daemonLogs.String())
 	}
 }

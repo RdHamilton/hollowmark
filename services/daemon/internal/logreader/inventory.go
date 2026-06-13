@@ -84,6 +84,62 @@ func ParseInventoryEntry(entry *LogEntry) (*contract.InventoryUpdatedPayload, er
 		}
 	}
 
+	// MasteryPass is a nested object inside InventoryInfo (#1338). It carries
+	// the player's mastery pass progression. Absent in older Arena versions —
+	// missing key is not an error; Mastery stays nil.
+	if mpRaw, ok := invMap["MasteryPass"].(map[string]interface{}); ok {
+		mi := &contract.MasteryInfo{}
+		if v, ok := mpRaw["CurrentLevel"].(float64); ok {
+			mi.Level = int(v)
+		}
+		if v, ok := mpRaw["PassType"].(string); ok {
+			mi.PassType = v
+		}
+		if v, ok := mpRaw["MaxLevel"].(float64); ok {
+			mi.Max = int(v)
+		}
+		p.Mastery = mi
+	}
+
+	// DeckSummaries is a TOP-LEVEL sibling of InventoryInfo in the Arena login
+	// blob (Arena 2026.60+). It carries the full deck library headers without
+	// card lists. Absent in older Arena versions — missing key is not an error.
+	if rawDecks, ok := entry.JSON["DeckSummaries"].([]interface{}); ok {
+		for _, rawDeck := range rawDecks {
+			dMap, ok := rawDeck.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			deckID, _ := dMap["DeckId"].(string)
+			if deckID == "" {
+				continue // skip entries with no identity
+			}
+			name, _ := dMap["Name"].(string)
+
+			// Format is stored as an Attribute with name=="Format", matching the
+			// same Attributes[name=="Format"].value pattern as ParseDeckEntry.
+			var format string
+			if attrs, ok := dMap["Attributes"].([]interface{}); ok {
+				for _, attr := range attrs {
+					attrMap, ok := attr.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					if attrMap["name"] == "Format" {
+						format, _ = attrMap["value"].(string)
+						break
+					}
+				}
+			}
+
+			p.Decks = append(p.Decks, contract.DeckSummary{
+				DeckID: deckID,
+				Name:   name,
+				Format: format,
+			})
+		}
+	}
+
 	return p, nil
 }
 

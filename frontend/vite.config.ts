@@ -121,6 +121,7 @@ export default defineConfig({
           include: [
             'src/**/*.integration.test.ts',
             'src/services/api/*.test.ts',
+            'src/test/icon-integrity.test.ts',
           ],
         },
       },

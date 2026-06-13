@@ -416,27 +416,28 @@ test.describe('Compendium Phase-1 — Hollowmark logo + wordmark in nav @smoke',
     await mockHomeEndpoints(page);
   });
 
-  test('@smoke Hollowmark orb mark renders in nav at ≥32px', async ({ page }) => {
+  test('@smoke Hollowmark wordmark lockup renders in nav at ≥32px height', async ({ page }) => {
     await page.goto('/home');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
 
-    const mark = page.locator('[data-testid="nav-brand"] img.nav-brand-mark');
-    await expect(mark).toBeVisible();
+    // d4a7881d: nav brand is now a single wordmark-lockup img (mark + logotype combined)
+    const wordmark = page.locator('[data-testid="nav-brand"] img.nav-brand-wordmark');
+    await expect(wordmark).toBeVisible();
 
-    // Design spec: mark must be rendered at ≥32px width (#1020 commit message)
-    const box = await mark.boundingBox();
+    // Design spec: wordmark lockup must render at ≥32px height
+    const box = await wordmark.boundingBox();
     expect(box).not.toBeNull();
-    expect(box!.width).toBeGreaterThanOrEqual(32);
     expect(box!.height).toBeGreaterThanOrEqual(32);
   });
 
-  test('@smoke Hollowmark wordmark reads "Hollowmark" in nav', async ({ page }) => {
+  test('@smoke Hollowmark wordmark alt reads "Hollowmark" in nav', async ({ page }) => {
     await page.goto('/home');
     await expect(page.locator('[data-testid="app-container"]')).toBeVisible();
 
-    const wordmark = page.locator('[data-testid="nav-brand"] .nav-brand-wordmark');
+    // d4a7881d: .nav-brand-wordmark is now an img element; identity verified via alt attribute
+    const wordmark = page.locator('[data-testid="nav-brand"] img.nav-brand-wordmark');
     await expect(wordmark).toBeVisible();
-    await expect(wordmark).toHaveText('Hollowmark');
+    await expect(wordmark).toHaveAttribute('alt', 'Hollowmark');
   });
 
   test('@smoke nav-brand aria-label is "Hollowmark home"', async ({ page }) => {
@@ -577,26 +578,27 @@ test.describe('Compendium Phase-1 — Gilt on Quests surfaces', () => {
 // ===========================================================================
 // Suite 5: Favicon identity assertion (AC4)
 //
-// Asserts the app serves the Hollowmark SVG favicon (logo-vaultmtg-app-icon.svg)
+// Asserts the app serves the Hollowmark SVG favicon (logo-hollowmark-app-icon.svg)
 // and that the HTML <head> references it. Does NOT byte-hash the .ico fallback
 // since .ico generation is a separate build step — the canonical assertion is
 // that the SVG favicon URL is linked and responds with SVG content type.
 // ===========================================================================
 
 test.describe('Compendium Phase-1 — Favicon identity @smoke', () => {
-  test('@smoke HTML references /logo-vaultmtg-app-icon.svg as the primary favicon', async ({ page }) => {
+  test('@smoke HTML references /logo-hollowmark-app-icon.svg as the primary favicon', async ({ page }) => {
     await page.goto('/');
     // The <link rel="icon" type="image/svg+xml"> must reference the Hollowmark SVG
+    // d4a7881d: favicon updated from /logo-vaultmtg-app-icon.svg to /logo-hollowmark-app-icon.svg
     const svgFaviconHref = await page.evaluate(() => {
       const link = document.querySelector<HTMLLinkElement>('link[rel="icon"][type="image/svg+xml"]');
       return link?.getAttribute('href') ?? null;
     });
-    expect(svgFaviconHref).toBe('/logo-vaultmtg-app-icon.svg');
+    expect(svgFaviconHref).toBe('/logo-hollowmark-app-icon.svg');
   });
 
-  test('@smoke /logo-vaultmtg-app-icon.svg is reachable and is SVG content', async ({ page }) => {
+  test('@smoke /logo-hollowmark-app-icon.svg is reachable and is SVG content', async ({ page }) => {
     await page.goto('/');
-    const response = await page.request.get('/logo-vaultmtg-app-icon.svg');
+    const response = await page.request.get('/logo-hollowmark-app-icon.svg');
     expect(response.status()).toBe(200);
 
     const contentType = response.headers()['content-type'] ?? '';
@@ -611,7 +613,7 @@ test.describe('Compendium Phase-1 — Favicon identity @smoke', () => {
     // Asserts the public asset on-disk is the Hollowmark one, not the old WUBRG favicon.
     const assetPath = path.resolve(
       __dirname,
-      '../../public/logo-vaultmtg-app-icon.svg'
+      '../../public/logo-hollowmark-app-icon.svg'
     );
     expect(fs.existsSync(assetPath)).toBe(true);
 

@@ -107,6 +107,15 @@ type IdentitySet struct {
 	// Windows: %APPDATA%\vaultmtg (stable) or %APPDATA%\vaultmtg-staging (staging).
 	ConfigDir string
 
+	// CredentialFile is the path of the 0600 credential file used on darwin
+	// (ADR-081 §Decision 1, #1345). Derived as filepath.Join(ConfigDir, "credentials").
+	// This is the authoritative per-channel path for the file-store backend;
+	// callers must use this field rather than re-deriving to ensure staging and
+	// prod never collide and uninstall scripts know exactly what to clean up.
+	// Populated on all platforms (tooling / uninstall use), though only darwin
+	// actively writes to it at runtime.
+	CredentialFile string
+
 	// LogPath is the daemon log file path (macOS).
 	// ~/Library/Logs/vaultmtg-daemon.log (stable)
 	// ~/Library/Logs/vaultmtg-daemon-staging.log (staging).
@@ -119,7 +128,7 @@ type IdentitySet struct {
 	AppBundlePath string
 
 	// TrayLabel is the user-visible tray icon title / tooltip.
-	// "VaultMTG" (stable) or "VaultMTG (Staging)" (staging).
+	// "Hollowmark" (stable) or "Hollowmark (Staging)" (staging).
 	TrayLabel string
 
 	// LocalAPIPort is the loopback TCP port the daemon's local HTTP API listens on.
@@ -198,9 +207,10 @@ func Identity(channel string) IdentitySet {
 		PlistLabel:           "com.vaultmtg.daemon" + s.Label,   // unchanged in v0.3.9 per PRD AC15
 		KeychainService:      "com.hollowmark.daemon" + s.Label, // ADR-022 Phase 3 credential shim
 		ConfigDir:            configDir,
+		CredentialFile:       filepath.Join(configDir, "credentials"), // ADR-081 §Decision 1
 		LogPath:              logPath,
 		AppBundlePath:        "/Applications/VaultMTG" + s.App + ".app",
-		TrayLabel:            "VaultMTG" + s.Display,
+		TrayLabel:            "Hollowmark" + s.Display,
 		LocalAPIPort:         port,
 		PlistLabelHollowmark: plistLabelHollowmark,
 		PlistPathHollowmark:  plistPathHollowmark,

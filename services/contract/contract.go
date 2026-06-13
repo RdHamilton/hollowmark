@@ -53,8 +53,43 @@ type InventoryBooster struct {
 	Count       int    `json:"count"`
 }
 
+// DeckSummary carries the identity and format of a single deck as reported by
+// the DeckSummaries array in the Arena login blob (top-level sibling of
+// InventoryInfo). It intentionally carries no card list — that comes from the
+// separate DeckUpsertDeckV2 event which the daemon parses via ParseDeckEntry.
+// Used by InventoryUpdatedPayload.Decks (additive field, #1337).
+type DeckSummary struct {
+	DeckID string `json:"deck_id"`
+	Name   string `json:"name"`
+	// Format is the value of the Attribute with name=="Format" in the summary's
+	// Attributes array, e.g. "Standard", "Alchemy", "Historic". Empty when the
+	// Attribute is absent.
+	Format string `json:"format"`
+}
+
+// MasteryInfo carries the player's mastery pass state as read from the
+// MasteryPass object inside InventoryInfo in the Arena login blob.
+// Used by InventoryUpdatedPayload.Mastery (additive field, #1338).
+type MasteryInfo struct {
+	// Level is the player's current mastery level (maps to InventoryInfo.MasteryPass.CurrentLevel).
+	Level int `json:"level"`
+	// PassType is the pass tier string (e.g. "Basic", "Standard", "Premium").
+	// Maps to InventoryInfo.MasteryPass.PassType.
+	PassType string `json:"pass_type"`
+	// Max is the maximum level available in the current season
+	// (maps to InventoryInfo.MasteryPass.MaxLevel).
+	Max int `json:"max"`
+}
+
 // InventoryUpdatedPayload is embedded in a DaemonEvent with Type "inventory.updated".
-// It carries the player's current gem/gold/wildcard counts and booster holdings.
+// It carries the player's current gem/gold/wildcard counts, booster holdings,
+// and — when parsed from a login blob — the full deck header library (Decks)
+// and mastery pass state (Mastery).
+//
+// Decks and Mastery are additive: older daemon versions that do not populate
+// them will produce nil/empty values; the BFF projection worker skips fan-outs
+// when these fields are nil/empty. No contract version bump required for Decks
+// (JSON omitempty on the wire). Mastery requires v0.1.8 (#1338).
 type InventoryUpdatedPayload struct {
 	Gems               int                `json:"gems"`
 	Gold               int                `json:"gold"`
@@ -64,6 +99,15 @@ type InventoryUpdatedPayload struct {
 	WildCardRares      int                `json:"wild_card_rares"`
 	WildCardMythics    int                `json:"wild_card_mythics"`
 	Boosters           []InventoryBooster `json:"boosters"`
+	// Decks carries the player's full deck library headers from the Arena login
+	// blob DeckSummaries array. Populated by the daemon's ParseInventoryEntry
+	// when DeckSummaries is present (Arena 2026.60+). Omitted from the wire
+	// payload when empty so older BFF versions ignore it gracefully.
+	Decks []DeckSummary `json:"decks,omitempty"`
+	// Mastery carries the player's mastery pass state from the MasteryPass object
+	// inside InventoryInfo. Populated by the daemon's ParseInventoryEntry when
+	// MasteryPass is present. Nil when absent so older BFF versions ignore it.
+	Mastery *MasteryInfo `json:"mastery,omitempty"`
 }
 
 // QuestProgressPayload is embedded in a DaemonEvent with Type "quest.progress".

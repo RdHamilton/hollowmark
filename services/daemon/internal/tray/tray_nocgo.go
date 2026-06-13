@@ -48,8 +48,8 @@ type App struct {
 	appURL  string
 	version string
 	// appLabel is the user-visible title shown next to the tray icon and in
-	// the tooltip. "VaultMTG" for the stable channel; "VaultMTG (Staging)"
-	// for the staging channel. Set via NewWithLabel; defaults to "VaultMTG".
+	// the tooltip. "Hollowmark" for the stable channel; "Hollowmark (Staging)"
+	// for the staging channel. Set via NewWithLabel; defaults to "Hollowmark".
 	appLabel string
 	onQuit   func()
 	status   Status
@@ -68,15 +68,15 @@ type App struct {
 	InstallUpdate chan struct{}
 }
 
-// New creates a no-op App with the default "VaultMTG" label. version is stored
+// New creates a no-op App with the default "Hollowmark" label. version is stored
 // but not rendered (headless stub). For channel-aware label use NewWithLabel.
 func New(appURL, version string, openURL func(string) error, onQuit func()) *App {
-	return NewWithLabel(appURL, version, openURL, onQuit, "VaultMTG")
+	return NewWithLabel(appURL, version, openURL, onQuit, "Hollowmark")
 }
 
 // NewWithLabel creates a no-op App with an explicit tray label (ADR-049 Ticket 4).
 // Pass install.Identity(channel).TrayLabel as the label argument so the tray
-// title reflects the channel ("VaultMTG" vs "VaultMTG (Staging)").
+// title reflects the channel ("Hollowmark" vs "Hollowmark (Staging)").
 func NewWithLabel(appURL, version string, openURL func(string) error, onQuit func(), label string) *App {
 	return &App{
 		appURL:        appURL,
@@ -132,3 +132,17 @@ func (a *App) SetWaitingForArena(_ bool)         {}
 func (a *App) SetSyncDegraded(_ bool)            {} // headless stub — no tray to update (#1234)
 func (a *App) NotifySyncResult(_ error)          {} // headless stub — no tray label to update
 func (a *App) NotifyUpdateAvailable(_, _ string) {} // headless stub — no tray item to show
+
+// SetRunError sets the status to StatusError (headless stub — no visible icon).
+func (a *App) SetRunError() { a.status = StatusError }
+
+// SetRunStopped sets the status to StatusError with retries exhausted
+// (headless stub — process stays alive per ADR-083 SH-3).
+func (a *App) SetRunStopped() { a.status = StatusError }
+
+// SetConnected restores the status to StatusConnected (headless stub).
+func (a *App) SetConnected() { a.status = StatusConnected }
+
+// TryAgainCh returns the TryAgain channel (headless stub — always open,
+// never signalled in headless mode; the degrade loop handles ctx cancel).
+func (a *App) TryAgainCh() <-chan struct{} { return a.TryAgain }

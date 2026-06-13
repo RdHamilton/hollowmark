@@ -135,3 +135,84 @@ func TestParseBotDraftPick_RejectsMissingPickInfo(t *testing.T) {
 	_, err := ParseBotDraftPick(entry)
 	require.Error(t, err)
 }
+
+// ---------------------------------------------------------------------------
+// New MTGA wire format (#1344, Defect 1) — Payload / request as native objects
+// ---------------------------------------------------------------------------
+//
+// Around MTGA 2026.60 the BotDraftDraftStatus API-response stopped wrapping its
+// payload in a JSON string. Instead of:
+//
+//	{"CurrentModule":"BotDraft","Payload":"{\"EventName\":\"...\", ...}"}
+//
+// the log now emits:
+//
+//	{"CurrentModule":"BotDraft","Payload":{"EventName":"...", ...}}
+//
+// Likewise BotDraftDraftPick request changed from a stringified object to a
+// native object. The parsers must handle both shapes so that old-format
+// (pre-2026.60) and new-format (2026.60+) daemons both work.
+
+// TestParseBotDraftStatusPack_NewFormat_ObjectPayload parses the new-format
+// BotDraft pack line where Payload is a native JSON object (not a string).
+// Corpus fixture source: catalog/samples/api-response__BotDraftDraftStatus.json.
+func TestParseBotDraftStatusPack_NewFormat_ObjectPayload(t *testing.T) {
+	// New-format: Payload is a JSON object, not a stringified inner envelope.
+	// DraftPack grpIds are still strings (["102644", "102523", ...]).
+	raw := `{"CurrentModule":"BotDraft","Payload":{"Result":"Success","EventName":"QuickDraft_SOS_20260526","DraftStatus":"PickNext","PackNumber":0,"PickNumber":0,"NumCardsToPick":1,"DraftPack":["102644","102523","102702"],"PackStyles":[],"PickedCards":[],"PickedStyles":[]}}`
+	entry := botDraftPackEntry(t, raw)
+
+	p, err := ParseBotDraftStatusPack(entry)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+
+	assert.Equal(t, "QuickDraft_SOS_20260526", p.CourseName)
+	assert.Equal(t, "", p.DraftID)
+	// pack 0 / pick 0 → cumulative 1-based = 1.
+	assert.Equal(t, 1, p.DraftPack.SelfPick)
+	assert.Equal(t, []int{102644, 102523, 102702}, p.DraftPack.PackCards)
+}
+
+// TestParseBotDraftStatusPack_NewFormat_LaterPack verifies the cumulative
+// SelfPick formula for the new format on pack 1 / pick 0.
+func TestParseBotDraftStatusPack_NewFormat_LaterPack(t *testing.T) {
+	raw := `{"CurrentModule":"BotDraft","Payload":{"EventName":"QuickDraft_SOS_20260526","PackNumber":1,"PickNumber":0,"DraftPack":["102668","102548"],"PickedCards":["102473"]}}`
+	entry := botDraftPackEntry(t, raw)
+
+	p, err := ParseBotDraftStatusPack(entry)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+
+	// pack 1 / pick 0 → 1*15 + 0 + 1 = 16.
+	assert.Equal(t, 16, p.DraftPack.SelfPick)
+	assert.Equal(t, []int{102668, 102548}, p.DraftPack.PackCards)
+}
+
+// TestParseBotDraftPick_NewFormat_ObjectRequest parses the new-format
+// BotDraftDraftPick line where request is a native JSON object (not a string).
+// Corpus fixture source: catalog/samples/api-request__BotDraftDraftPick.json.
+func TestParseBotDraftPick_NewFormat_ObjectRequest(t *testing.T) {
+	// New-format: request is a JSON object. CardIds are still strings.
+	raw := `{"id":"11111111-0000-4000-8000-000000004762","request":{"EventName":"QuickDraft_SOS_20260526","PickInfo":{"EventName":"QuickDraft_SOS_20260526","CardIds":["102473"],"PackNumber":0,"PickNumber":0}}}`
+	entry := botDraftPackEntry(t, raw)
+
+	p, err := ParseBotDraftPick(entry)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+
+	assert.Equal(t, "QuickDraft_SOS_20260526", p.CourseName)
+	assert.Equal(t, "", p.DraftID)
+	assert.Equal(t, 0, p.PackNumber)
+	assert.Equal(t, 0, p.PickNumber)
+	assert.Equal(t, []int{102473}, p.PickedCards)
+}
+
+// TestParseBotDraftPick_NewFormat_RejectsObjectRequestWithoutPickInfo ensures
+// that a new-format request object without PickInfo is rejected.
+func TestParseBotDraftPick_NewFormat_RejectsObjectRequestWithoutPickInfo(t *testing.T) {
+	raw := `{"id":"abc","request":{"EventName":"QuickDraft_SOS_20260526"}}`
+	entry := botDraftPackEntry(t, raw)
+
+	_, err := ParseBotDraftPick(entry)
+	require.Error(t, err)
+}

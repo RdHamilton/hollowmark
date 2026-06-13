@@ -79,10 +79,25 @@ export async function getMatch(matchId: string): Promise<Match> {
 }
 
 /**
+ * BFF envelope for GET /matches/:id/games.
+ *
+ * `capturedResults` is true when a match_game_results row exists for the
+ * match — meaning the daemon captured result data — even if the `games`
+ * projection rows are absent (e.g. due to the projection-FK bug in #1340).
+ * The frontend uses this flag to distinguish "processing delay / projection
+ * incomplete" (capturedResults=true, games=[]) from "data was never captured"
+ * (capturedResults=false, games=[]).
+ */
+export interface MatchGamesResponse {
+  games: models.Game[];
+  capturedResults: boolean;
+}
+
+/**
  * Get games for a specific match.
  */
-export async function getMatchGames(matchId: string): Promise<models.Game[]> {
-  return bffGet<models.Game[]>(`/matches/${matchId}/games`);
+export async function getMatchGames(matchId: string): Promise<MatchGamesResponse> {
+  return bffGet<MatchGamesResponse>(`/matches/${matchId}/games`);
 }
 
 /**
