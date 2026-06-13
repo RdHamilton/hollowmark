@@ -33,10 +33,6 @@ type stubQuestsReader struct {
 	history    []repository.QuestRow
 	historyErr error
 
-	winsCount int
-	winsSince time.Time
-	winsErr   error
-
 	stats    repository.QuestStatsAggregate
 	statsErr error
 
@@ -53,17 +49,23 @@ func (s *stubQuestsReader) ListHistoryByAccountID(_ context.Context, _ int64, _,
 	return s.history, s.historyErr
 }
 
-func (s *stubQuestsReader) CountWinsSince(_ context.Context, _ int64, since time.Time) (int, error) {
-	s.winsSince = since
-	return s.winsCount, s.winsErr
-}
-
 func (s *stubQuestsReader) QuestStats(_ context.Context, _ int64, _, _ time.Time) (repository.QuestStatsAggregate, error) {
 	return s.stats, s.statsErr
 }
 
 func (s *stubQuestsReader) LastQuestSeenAt(_ context.Context, _ int64) (time.Time, bool, error) {
 	return s.lastSeen, s.lastSeenOK, s.lastSeenErr
+}
+
+// stubWinsReader implements winsReader for handler tests (#1344).
+type stubWinsReader struct {
+	daily   int
+	weekly  int
+	winsErr error
+}
+
+func (s *stubWinsReader) GetPeriodicWins(_ context.Context, _ int64) (int, int, error) {
+	return s.daily, s.weekly, s.winsErr
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -168,9 +170,12 @@ func TestQuestsHistory_HappyPath(t *testing.T) {
 
 // ─── Wins ───────────────────────────────────────────────────────────────────
 
+// TestQuestsDailyWins_HappyPath verifies that DailyWins returns the value from
+// accounts.daily_wins via the winsReader (#1344 — authoritative MTGA source).
 func TestQuestsDailyWins_HappyPath(t *testing.T) {
-	reader := &stubQuestsReader{winsCount: 3}
-	h := handlers.NewQuestsHandler(reader, &questsAccountLookup{accountID: 7, found: true})
+	wins := &stubWinsReader{daily: 4, weekly: 7}
+	h := handlers.NewQuestsHandler(&stubQuestsReader{}, &questsAccountLookup{accountID: 7, found: true}).
+		WithWinsReader(wins)
 	req := authedQuestsRequest(t, http.MethodGet, "/api/v1/quests/wins/daily", 168)
 	rr := httptest.NewRecorder()
 	h.DailyWins(rr, req)
@@ -179,17 +184,17 @@ func TestQuestsDailyWins_HappyPath(t *testing.T) {
 	}
 	var resp map[string]any
 	decodeQuestsEnvelope(t, rr.Body.Bytes(), &resp)
-	if resp["dailyWins"].(float64) != 3 || resp["goal"].(float64) != 15 {
+	if resp["dailyWins"].(float64) != 4 || resp["goal"].(float64) != 15 {
 		t.Errorf("daily wins: %v", resp)
-	}
-	if reader.winsSince.IsZero() {
-		t.Errorf("expected since timestamp to be passed to repo")
 	}
 }
 
+// TestQuestsWeeklyWins_HappyPath verifies that WeeklyWins returns the value
+// from accounts.weekly_wins via the winsReader (#1344).
 func TestQuestsWeeklyWins_HappyPath(t *testing.T) {
-	reader := &stubQuestsReader{winsCount: 12}
-	h := handlers.NewQuestsHandler(reader, &questsAccountLookup{accountID: 7, found: true})
+	wins := &stubWinsReader{daily: 4, weekly: 7}
+	h := handlers.NewQuestsHandler(&stubQuestsReader{}, &questsAccountLookup{accountID: 7, found: true}).
+		WithWinsReader(wins)
 	req := authedQuestsRequest(t, http.MethodGet, "/api/v1/quests/wins/weekly", 168)
 	rr := httptest.NewRecorder()
 	h.WeeklyWins(rr, req)
@@ -198,7 +203,7 @@ func TestQuestsWeeklyWins_HappyPath(t *testing.T) {
 	}
 	var resp map[string]any
 	decodeQuestsEnvelope(t, rr.Body.Bytes(), &resp)
-	if resp["weeklyWins"].(float64) != 12 || resp["goal"].(float64) != 15 {
+	if resp["weeklyWins"].(float64) != 7 || resp["goal"].(float64) != 15 {
 		t.Errorf("weekly wins: %v", resp)
 	}
 }

@@ -12,6 +12,14 @@ import (
 	"github.com/RdHamilton/hollowmark/services/daemon/internal/logreader"
 )
 
+// IsMasteryEntry reports whether the log entry is an InventoryInfo entry that
+// carries a MasteryPass nested object. Delegates to logreader.IsMasteryEntry.
+// Exported from the classify package so handleEntry can call it without
+// importing logreader directly where it already imports classify.
+func IsMasteryEntry(entry *logreader.LogEntry) bool {
+	return logreader.IsMasteryEntry(entry)
+}
+
 // ClassifyEntry maps a log entry to a semantic event type string.
 // Returns "" if the entry is not a tracked event type.
 //
@@ -22,7 +30,7 @@ import (
 //  3. Match events — matchGameRoomStateChangedEvent path preferred over the
 //     legacy CurrentEventState path.
 //  4. Player authentication / rank.
-//  5. Inventory, quests, collection, deck.
+//  5. Inventory, quests, collection, deck, periodic rewards.
 //  6. GRE game-state messages.
 func ClassifyEntry(entry *logreader.LogEntry) string {
 	// Premier pack: Draft.Notify line carries draftId + PackCards (comma string).
@@ -131,6 +139,13 @@ func ClassifyEntry(entry *logreader.LogEntry) string {
 	// so deck linkage is available when match.completed fires.
 	if logreader.IsCourseDeckEntry(entry) {
 		return "course.deck_submitted"
+	}
+
+	// Periodic rewards snapshot (PeriodicRewardsGetStatus response).
+	// The sequence ID keys appear directly at the top level of the entry, not
+	// nested under ClientPeriodicRewards.
+	if logreader.IsPeriodicEntry(entry) {
+		return "periodic.updated"
 	}
 
 	// GRE game-state messages — buffered into the GRE session manager for batch
