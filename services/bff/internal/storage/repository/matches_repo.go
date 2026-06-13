@@ -843,7 +843,7 @@ func (r *MatchesRepository) RankTimelineForFormat(ctx context.Context, accountID
 	const q = `SELECT id, timestamp, rank_before, rank_after, result
 	           FROM matches
 	           WHERE account_id = $1 AND lower(format) = lower($2)
-	             AND timestamp >= $3 AND timestamp <= $4
+	             AND timestamp >= $3 AND timestamp < $4
 	             AND (rank_before IS NOT NULL OR rank_after IS NOT NULL)
 	           ORDER BY timestamp`
 	rows, err := r.db.QueryContext(ctx, q, accountID, format, startDate, endDate)

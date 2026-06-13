@@ -182,7 +182,8 @@ func (r *QuestRepository) ListHistoryByAccountID(ctx context.Context, accountID 
 		next++
 	}
 	if end != nil {
-		clauses = append(clauses, "completed_at <= $"+itoa(next))
+		// end is the exclusive upper bound (callers advance bare dates by +1 day).
+		clauses = append(clauses, "completed_at < $"+itoa(next))
 		args = append(args, *end)
 		next++
 	}
@@ -234,7 +235,7 @@ func (r *QuestRepository) QuestStats(ctx context.Context, accountID int64, start
 	             COALESCE(AVG(EXTRACT(EPOCH FROM (completed_at - first_seen_at)) * 1000)
 	                FILTER (WHERE completed_at IS NOT NULL), 0)::BIGINT                       AS avg_completion_ms
 	           FROM quests
-	           WHERE account_id = $1 AND first_seen_at >= $2 AND first_seen_at <= $3`
+	           WHERE account_id = $1 AND first_seen_at >= $2 AND first_seen_at < $3`
 	var s QuestStatsAggregate
 	if err := r.db.QueryRowContext(ctx, q, accountID, start, end).Scan(
 		&s.TotalQuests, &s.CompletedQuests, &s.ActiveQuests,
