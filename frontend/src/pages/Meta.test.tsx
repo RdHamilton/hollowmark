@@ -998,6 +998,123 @@ describe('Meta', () => {
     });
   });
 
+  describe('tier badge positioning — no viewport-fixed orphan (#stray-badge)', () => {
+    // Regression tests for the stray "Tier 1" pill floating at the viewport
+    // bottom-right corner when an archetype detail modal is open.
+    //
+    // Root cause: CurrentPackPicker.css defined .tier-badge with
+    // `position: absolute; bottom: 28px; right: 4px` in global CSS scope.
+    // Vite bundles all CSS globally, so that rule bled onto every .tier-badge
+    // element in the app, including Meta.tsx's tier list headers and modal
+    // detail-badges, where there was no positioned ancestor to contain the
+    // badge. The fix scopes that rule under .card-image-container so it only
+    // applies to the pack-grid card image overlay where it belongs.
+
+    it('tier badge in modal detail-badges is a descendant of archetype-detail-panel', async () => {
+      mockGetMetaArchetypes.mockResolvedValue(createMockArchetypes());
+
+      renderMeta();
+
+      await waitFor(() => {
+        expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
+      });
+
+      // Open the detail panel
+      const archetypeCard = screen.getByText('Mono Red Aggro').closest('.archetype-card');
+      fireEvent.click(archetypeCard!);
+
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { level: 2, name: 'Mono Red Aggro' })).toBeInTheDocument();
+      });
+
+      // The modal panel must exist
+      const panel = document.querySelector('.archetype-detail-panel');
+      expect(panel).toBeInTheDocument();
+
+      // Every .tier-badge inside detail-badges must be a descendant of the panel,
+      // not a sibling of the overlay or a child of the document body.
+      const detailBadges = panel!.querySelectorAll('.detail-badges .tier-badge');
+      expect(detailBadges.length).toBeGreaterThan(0);
+
+      detailBadges.forEach((badge) => {
+        expect(panel!.contains(badge)).toBe(true);
+      });
+    });
+
+    it('CurrentPackPicker.css scopes .tier-badge position:absolute under .card-image-container', () => {
+      // CSS contract test: the absolute-positioned tier badge rule in CurrentPackPicker.css
+      // must be scoped under .card-image-container so it cannot bleed globally.
+      //
+      // jsdom does not evaluate external CSS files so getComputedStyle cannot catch this
+      // regression. Instead we read the CSS source directly and assert the selector form.
+      //
+      // The bad form (global bleed):
+      //   .tier-badge { position: absolute; ... }
+      //
+      // The required form (scoped):
+      //   .card-image-container .tier-badge { position: absolute; ... }
+      //
+      // This test fails when the raw CSS contains an unscoped top-level .tier-badge block
+      // that sets position:absolute, which is exactly the stray-badge root cause.
+      const fs = require('fs');
+      const path = require('path');
+
+      const cssPath = path.resolve(
+        __dirname,
+        '../components/CurrentPackPicker.css'
+      );
+      const css = fs.readFileSync(cssPath, 'utf-8');
+
+      // Extract all .tier-badge rule blocks (not .tier-badge--* modifiers).
+      // A bare `.tier-badge {` without a parent selector is the global-bleed pattern.
+      // After the fix only `.card-image-container .tier-badge {` should have position:absolute.
+
+      // Find all positions of the bare `.tier-badge {` rule (no preceding parent selector on the same line).
+      const bareBadgeRuleRegex = /(?:^|\})\s*\.tier-badge\s*\{([^}]*)\}/gms;
+      const matches = [...css.matchAll(bareBadgeRuleRegex)];
+
+      for (const match of matches) {
+        const ruleBody = match[1];
+        // A bare .tier-badge rule must NOT declare position:absolute.
+        if (/position\s*:\s*absolute/.test(ruleBody)) {
+          throw new Error(
+            'CurrentPackPicker.css has an unscoped `.tier-badge { position: absolute }` rule ' +
+            'that bleeds globally. Scope it under `.card-image-container .tier-badge` instead.'
+          );
+        }
+      }
+    });
+
+    it('no .tier-badge element exists outside .meta-page when modal is open', async () => {
+      // Belt-and-suspenders: asserts no stray badge has escaped the page root.
+      mockGetMetaArchetypes.mockResolvedValue(createMockArchetypes());
+
+      renderMeta();
+
+      await waitFor(() => {
+        expect(screen.getByText('Mono Red Aggro')).toBeInTheDocument();
+      });
+
+      const archetypeCard = screen.getByText('Mono Red Aggro').closest('.archetype-card');
+      fireEvent.click(archetypeCard!);
+
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { level: 2, name: 'Mono Red Aggro' })).toBeInTheDocument();
+      });
+
+      // All .tier-badge elements must be inside .meta-page
+      const metaPage = document.querySelector('.meta-page');
+      expect(metaPage).toBeInTheDocument();
+
+      const allBadges = document.querySelectorAll('.tier-badge');
+      expect(allBadges.length).toBeGreaterThan(0);
+
+      allBadges.forEach((badge) => {
+        expect(metaPage!.contains(badge)).toBe(true);
+      });
+    });
+  });
+
   describe('Format Select Dropdown Positioning (#2016)', () => {
     it('AC2: Meta format select renders and updates selection correctly', async () => {
       mockGetMetaArchetypes.mockResolvedValue(createMockArchetypes());

@@ -133,8 +133,11 @@
 }
 
 /* Tier badge — design-system §7.3: 28×22px, bottom-right corner of card image.
-   Sits above the "Best Pick" bar (which is ~20px tall at the absolute bottom). */
-.tier-badge {
+   Sits above the "Best Pick" bar (which is ~20px tall at the absolute bottom).
+   Scoped under .card-image-container (position:relative) so the absolute
+   positioning is contained to the card image and cannot bleed globally to other
+   components (e.g. Meta.tsx's .tier-badge pills) that share the class name. */
+.card-image-container .tier-badge {
     position: absolute;
     bottom: 28px;
     right: 4px;
