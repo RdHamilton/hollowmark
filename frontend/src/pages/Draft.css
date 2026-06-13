@@ -270,6 +270,20 @@
     justify-content: center;
 }
 
+/* Unknown card placeholder — renders when set_cards metadata is missing (ADR-085 defect 4) */
+.card-name-small.card-unknown {
+    flex-direction: column;
+    gap: 2px;
+    opacity: 0.6;
+    font-style: italic;
+}
+
+.card-unknown-id {
+    font-size: 9px;
+    color: var(--fg-muted, var(--fg-secondary));
+    word-break: break-all;
+}
+
 /* Card Details - Popup Overlay */
 .card-details-overlay {
     position: fixed;

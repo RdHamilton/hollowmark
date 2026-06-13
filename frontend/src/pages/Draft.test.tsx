@@ -999,4 +999,163 @@ describe('Draft Component', () => {
       expect(screen.queryByTestId('draft-awaiting-data')).not.toBeInTheDocument();
     });
   });
+
+  // --------------------------------------------------------------------------
+  // #1396 — Pick History renders "Unknown Card" placeholder when set_cards
+  // metadata is missing (ADR-085 defect 4 — empty set_cards table)
+  // --------------------------------------------------------------------------
+
+  describe('Pick History — missing set_cards metadata (#1396)', () => {
+    // Test 1 — AC1+AC2+AC3 (active-draft path): one pick with no matching card in
+    // setCards renders pick-unknown-card placeholder, not a blank container.
+    it('active-draft path: renders pick-unknown-card placeholder when setCards is empty', async () => {
+      const session = createMockDraftSession();
+      const pick = createMockDraftPick({ CardID: '99999', PackNumber: 0, PickNumber: 1 });
+
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
+      mockDrafts.getDraftPicks.mockResolvedValue([pick]);
+      mockDrafts.getDraftPool.mockResolvedValue([]);
+      // Empty setCards — every pick.CardID lookup returns undefined
+      mockCards.getSetCards.mockResolvedValue([]);
+      mockCards.getCardRatings.mockResolvedValue([]);
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
+      });
+
+      // AC1: placeholder renders — never a blank container
+      const unknownCards = screen.getAllByTestId('pick-unknown-card');
+      expect(unknownCards).toHaveLength(1);
+
+      // AC1: raw CardID is shown as the fallback label
+      expect(unknownCards[0]).toHaveTextContent('99999');
+
+      // AC1: no img element inside the pick-history-item for this card
+      const pickItems = document.querySelectorAll('.pick-history-item');
+      expect(pickItems).toHaveLength(1);
+      expect(pickItems[0].querySelector('img')).toBeNull();
+    });
+
+    // Test 2 — partial resolution: one pick resolves, one does not. Assert both
+    // branches render (one img + one unknown placeholder).
+    it('active-draft path: partial setCards — resolved pick shows img, unresolved shows placeholder', async () => {
+      const session = createMockDraftSession();
+      const resolvedCard = createMockSetCard({ ArenaID: '11111', Name: 'Known Card' });
+      const picks = [
+        createMockDraftPick({ ID: 1, CardID: '11111', PackNumber: 0, PickNumber: 1 }),
+        createMockDraftPick({ ID: 2, CardID: '99999', PackNumber: 0, PickNumber: 2 }),
+      ];
+
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
+      mockDrafts.getDraftPicks.mockResolvedValue(picks);
+      mockDrafts.getDraftPool.mockResolvedValue([]);
+      // Only card 11111 is in setCards — 99999 is missing
+      mockCards.getSetCards.mockResolvedValue([resolvedCard]);
+      mockCards.getCardRatings.mockResolvedValue([]);
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
+      });
+
+      // One img for the resolved card
+      const imgs = document.querySelectorAll('.pick-history-item img');
+      expect(imgs).toHaveLength(1);
+
+      // One unknown placeholder for the unresolved card
+      const unknownCards = screen.getAllByTestId('pick-unknown-card');
+      expect(unknownCards).toHaveLength(1);
+      expect(unknownCards[0]).toHaveTextContent('99999');
+    });
+
+    // Test 3 — AC3 (historical-draft path): getCardByArenaId rejects for a CardID
+    // → pick-unknown-card placeholder renders with that CardID as fallback label.
+    it('historical-draft path: renders pick-unknown-card placeholder when card fetch fails', async () => {
+      const completedSession = createMockDraftSession({
+        ID: 'completed-session',
+        Status: 'completed',
+      });
+      const pick = createMockDraftPick({
+        SessionID: 'completed-session',
+        CardID: '88888',
+        PackNumber: 0,
+        PickNumber: 1,
+      });
+
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([]);
+      mockDrafts.getCompletedDraftSessions.mockResolvedValue([completedSession]);
+      mockDrafts.getDraftPicks.mockResolvedValue([pick]);
+      mockDrafts.getDraftPool.mockResolvedValue([]);
+      // Card fetch fails for 88888 (empty set_cards on live RDS)
+      mockCards.getCardByArenaId.mockRejectedValue(new Error('card not found'));
+      mockDrafts.getDraftGrade.mockRejectedValue(new Error('No grade'));
+      mockDrafts.getDraftDeckMetrics.mockResolvedValue(createMockDeckMetrics());
+
+      render(<Draft />);
+
+      // Open the historical draft replay
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /View Replay/i })).toBeInTheDocument();
+      });
+
+      const replayButton = screen.getByRole('button', { name: /View Replay/i });
+      await userEvent.click(replayButton);
+
+      await waitFor(() => {
+        expect(screen.getByText('Draft Replay')).toBeInTheDocument();
+      }, { timeout: 5000 });
+
+      // AC3 + AC1: placeholder renders with the raw CardID
+      await waitFor(() => {
+        const unknownCards = screen.getAllByTestId('pick-unknown-card');
+        expect(unknownCards).toHaveLength(1);
+        expect(unknownCards[0]).toHaveTextContent('88888');
+      }, { timeout: 3000 });
+    });
+
+    // Test 4 — AC3 regression guard: when getCardByArenaId resolves successfully,
+    // no placeholder is shown and the card renders normally.
+    it('historical-draft path: no placeholder when card resolves successfully', async () => {
+      const completedSession = createMockDraftSession({
+        ID: 'completed-session',
+        Status: 'completed',
+      });
+      const card = createMockSetCard({ ArenaID: '12345', Name: 'Known Historical Card' });
+      const pick = createMockDraftPick({
+        SessionID: 'completed-session',
+        CardID: '12345',
+        PackNumber: 0,
+        PickNumber: 1,
+      });
+
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([]);
+      mockDrafts.getCompletedDraftSessions.mockResolvedValue([completedSession]);
+      mockDrafts.getDraftPicks.mockResolvedValue([pick]);
+      mockDrafts.getDraftPool.mockResolvedValue([]);
+      mockCards.getCardByArenaId.mockResolvedValue(card);
+      mockDrafts.getDraftGrade.mockRejectedValue(new Error('No grade'));
+      mockDrafts.getDraftDeckMetrics.mockResolvedValue(createMockDeckMetrics());
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /View Replay/i })).toBeInTheDocument();
+      });
+
+      const replayButton = screen.getByRole('button', { name: /View Replay/i });
+      await userEvent.click(replayButton);
+
+      await waitFor(() => {
+        expect(screen.getByText('Draft Replay')).toBeInTheDocument();
+      }, { timeout: 5000 });
+
+      // No unknown placeholder — card resolved
+      await waitFor(() => {
+        expect(screen.queryByTestId('pick-unknown-card')).not.toBeInTheDocument();
+      }, { timeout: 3000 });
+    });
+  });
 });
