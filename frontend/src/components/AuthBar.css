@@ -49,3 +49,9 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* #348: signup button bg = var(--accent); accent-on-accent outline = 1:1 (invisible).
+   Override with --fg-inverse (#0D1117) → 5.66:1 on --vault-sapphire (#4A90D9) ✓ */
+.auth-btn-signup:focus-visible {
+  outline-color: var(--fg-inverse);
+}
