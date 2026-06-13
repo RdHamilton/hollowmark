@@ -114,7 +114,9 @@ func (r *DraftsRepository) ListSessions(ctx context.Context, accountID int64, f 
 		next++
 	}
 	if f.EndDate != nil {
-		clauses = append(clauses, "ds.start_time <= $"+strconv.Itoa(next))
+		// EndDate is the exclusive upper bound; handlers advance bare YYYY-MM-DD
+		// by +1 day so start_time < end covers the full requested calendar day.
+		clauses = append(clauses, "ds.start_time < $"+strconv.Itoa(next))
 		args = append(args, *f.EndDate)
 		next++
 	}
@@ -285,7 +287,9 @@ func (r *DraftsRepository) AggregateStats(ctx context.Context, accountID int64, 
 		next++
 	}
 	if f.EndDate != nil {
-		clauses = append(clauses, "start_time <= $"+strconv.Itoa(next))
+		// EndDate is the exclusive upper bound; handlers advance bare YYYY-MM-DD
+		// by +1 day so start_time < end covers the full requested calendar day.
+		clauses = append(clauses, "start_time < $"+strconv.Itoa(next))
 		args = append(args, *f.EndDate)
 	}
 	q := `SELECT

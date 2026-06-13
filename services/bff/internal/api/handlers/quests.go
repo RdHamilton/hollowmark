@@ -287,21 +287,28 @@ func questsToResponse(rows []repository.QuestRow) []questResponse {
 // parseQuestWindow reads optional ?startDate / ?endDate query params for
 // /quests/history. Returns nil pointers when the corresponding param is
 // missing — a nil bound means "unbounded on that side".
+// Bare YYYY-MM-DD end dates are advanced by one day for an exclusive upper
+// bound consistent with buildMatchWhere's "timestamp < end" comparison.
 func parseQuestWindow(r *http.Request) (*time.Time, *time.Time, error) {
 	var start, end *time.Time
 	if s := r.URL.Query().Get("startDate"); s != "" {
-		t, err := parseFilterDate(s)
+		t, _, err := parseFilterDate(s)
 		if err != nil {
 			return nil, nil, err
 		}
 		start = &t
 	}
 	if s := r.URL.Query().Get("endDate"); s != "" {
-		t, err := parseFilterDate(s)
+		t, isDayOnly, err := parseFilterDate(s)
 		if err != nil {
 			return nil, nil, err
 		}
-		end = &t
+		if isDayOnly {
+			advanced := t.AddDate(0, 0, 1)
+			end = &advanced
+		} else {
+			end = &t
+		}
 	}
 	return start, end, nil
 }
@@ -309,20 +316,26 @@ func parseQuestWindow(r *http.Request) (*time.Time, *time.Time, error) {
 // parseQuestStatsWindow reads required ?startDate / ?endDate params for the
 // stats endpoint. Defaults to a 30-day rolling window if unset (the SPA
 // always sends both today, but defending the endpoint costs nothing).
+// Bare YYYY-MM-DD end dates are advanced by one day for an exclusive upper
+// bound consistent with buildMatchWhere's "timestamp < end" comparison.
 func parseQuestStatsWindow(r *http.Request) (time.Time, time.Time, error) {
 	now := time.Now().UTC()
 	var start, end time.Time
 	if s := r.URL.Query().Get("endDate"); s != "" {
-		t, err := parseFilterDate(s)
+		t, isDayOnly, err := parseFilterDate(s)
 		if err != nil {
 			return time.Time{}, time.Time{}, err
 		}
-		end = t
+		if isDayOnly {
+			end = t.AddDate(0, 0, 1)
+		} else {
+			end = t
+		}
 	} else {
 		end = now
 	}
 	if s := r.URL.Query().Get("startDate"); s != "" {
-		t, err := parseFilterDate(s)
+		t, _, err := parseFilterDate(s)
 		if err != nil {
 			return time.Time{}, time.Time{}, err
 		}

@@ -197,7 +197,7 @@ func (h *DraftsHandler) List(w http.ResponseWriter, r *http.Request) {
 		Format: body.Format, SetCode: body.SetCode, Status: body.Status,
 	}
 	if body.StartDate != "" {
-		t, err := parseFilterDate(body.StartDate)
+		t, _, err := parseFilterDate(body.StartDate)
 		if err != nil {
 			writeJSONError(w, "start_date: "+err.Error(), http.StatusBadRequest)
 			return
@@ -205,12 +205,17 @@ func (h *DraftsHandler) List(w http.ResponseWriter, r *http.Request) {
 		filter.StartDate = &t
 	}
 	if body.EndDate != "" {
-		t, err := parseFilterDate(body.EndDate)
+		t, isDayOnly, err := parseFilterDate(body.EndDate)
 		if err != nil {
 			writeJSONError(w, "end_date: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		filter.EndDate = &t
+		if isDayOnly {
+			advanced := t.AddDate(0, 0, 1)
+			filter.EndDate = &advanced
+		} else {
+			filter.EndDate = &t
+		}
 	}
 	rows, err := h.drafts.ListSessions(r.Context(), accountID, filter)
 	if err != nil {
@@ -329,7 +334,7 @@ func (h *DraftsHandler) Stats(w http.ResponseWriter, r *http.Request) {
 		Format: body.Format, SetCode: body.SetCode, Status: body.Status,
 	}
 	if body.StartDate != "" {
-		t, err := parseFilterDate(body.StartDate)
+		t, _, err := parseFilterDate(body.StartDate)
 		if err != nil {
 			writeJSONError(w, "start_date: "+err.Error(), http.StatusBadRequest)
 			return
@@ -337,12 +342,17 @@ func (h *DraftsHandler) Stats(w http.ResponseWriter, r *http.Request) {
 		filter.StartDate = &t
 	}
 	if body.EndDate != "" {
-		t, err := parseFilterDate(body.EndDate)
+		t, isDayOnly, err := parseFilterDate(body.EndDate)
 		if err != nil {
 			writeJSONError(w, "end_date: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		filter.EndDate = &t
+		if isDayOnly {
+			advanced := t.AddDate(0, 0, 1)
+			filter.EndDate = &advanced
+		} else {
+			filter.EndDate = &t
+		}
 	}
 	agg, err := h.drafts.AggregateStats(r.Context(), accountID, filter)
 	if err != nil {

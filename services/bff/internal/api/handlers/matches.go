@@ -323,18 +323,29 @@ func buildMatchFilter(req matchesListFilterRequest, page, limit int) (repository
 		Result:  strings.TrimSpace(req.Result),
 	}
 	if req.StartDate != "" {
-		t, err := parseFilterDate(req.StartDate)
+		t, _, err := parseFilterDate(req.StartDate)
 		if err != nil {
 			return f, err
 		}
 		f.StartDate = &t
 	}
 	if req.EndDate != "" {
-		t, err := parseFilterDate(req.EndDate)
+		t, isDayOnly, err := parseFilterDate(req.EndDate)
 		if err != nil {
 			return f, err
 		}
-		f.EndDate = &t
+		if isDayOnly {
+			// Advance bare YYYY-MM-DD by one day so buildMatchWhere can use
+			// timestamp < endDate and include all times through 23:59:59 on
+			// the requested calendar day.
+			// TODO(#1393): date bounds are UTC-day not client-local-day;
+			// over-includes ahead-of-UTC users at trailing edge — interim
+			// until client-tz plumbing (#1393).
+			advanced := t.AddDate(0, 0, 1)
+			f.EndDate = &advanced
+		} else {
+			f.EndDate = &t
+		}
 	}
 	if f.Result != "" {
 		switch strings.ToLower(f.Result) {
@@ -349,14 +360,19 @@ func buildMatchFilter(req matchesListFilterRequest, page, limit int) (repository
 // parseFilterDate accepts either an RFC3339 timestamp or a YYYY-MM-DD date.
 // The SPA's matches.ts formatDateParam helper emits YYYY-MM-DD; older callers
 // may send full ISO strings.
-func parseFilterDate(s string) (time.Time, error) {
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t, nil
+//
+// isDayOnly is true when the input is a bare YYYY-MM-DD string. Callers using
+// the result as an end-date bound must advance it by one day and use a strict-
+// less-than comparison (timestamp < end) so that all times within the
+// requested calendar day are included. RFC3339 callers must NOT advance.
+func parseFilterDate(s string) (t time.Time, isDayOnly bool, err error) {
+	if t, err = time.Parse(time.RFC3339, s); err == nil {
+		return t, false, nil
 	}
-	if t, err := time.Parse("2006-01-02", s); err == nil {
-		return t, nil
+	if t, err = time.Parse("2006-01-02", s); err == nil {
+		return t, true, nil
 	}
-	return time.Time{}, &fieldError{"invalid date format (want RFC3339 or YYYY-MM-DD): " + s}
+	return time.Time{}, false, &fieldError{"invalid date format (want RFC3339 or YYYY-MM-DD): " + s}
 }
 
 // dedupeNonEmpty returns a copy of in with empty strings dropped and
@@ -1341,6 +1357,10 @@ func decodeJSONBody(r *http.Request, v any) error {
 // parseTrendWindow validates the start/end dates passed via query string or
 // JSON body. Defaults to a 30-day rolling window when both are empty so the
 // SPA can call /matches/trends without picking dates upfront.
+//
+// Bare YYYY-MM-DD end dates are advanced by one day so that the resulting
+// MatchFilter.EndDate is an exclusive upper bound consistent with
+// buildMatchWhere's "timestamp < end" comparison.
 func parseTrendWindow(startStr, endStr string) (time.Time, time.Time, error) {
 	now := time.Now().UTC()
 	startStr = strings.TrimSpace(startStr)
@@ -1350,15 +1370,22 @@ func parseTrendWindow(startStr, endStr string) (time.Time, time.Time, error) {
 	if endStr == "" {
 		end = now
 	} else {
-		end, err = parseFilterDate(endStr)
+		var endDayOnly bool
+		end, endDayOnly, err = parseFilterDate(endStr)
 		if err != nil {
 			return time.Time{}, time.Time{}, err
+		}
+		if endDayOnly {
+			// TODO(#1393): date bounds are UTC-day not client-local-day;
+			// over-includes ahead-of-UTC users at trailing edge — interim
+			// until client-tz plumbing (#1393).
+			end = end.AddDate(0, 0, 1)
 		}
 	}
 	if startStr == "" {
 		start = end.AddDate(0, 0, -30)
 	} else {
-		start, err = parseFilterDate(startStr)
+		start, _, err = parseFilterDate(startStr)
 		if err != nil {
 			return time.Time{}, time.Time{}, err
 		}
