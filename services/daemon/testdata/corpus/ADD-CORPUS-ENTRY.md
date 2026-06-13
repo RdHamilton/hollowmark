@@ -204,3 +204,46 @@ manifest `assertions` block before commit.
 - Manifests: `services/daemon/testdata/corpus/layer5-expected/`
 - Regeneration tool: `tools/layer5-manifest-gen/regenerate.sh`
 - Mode B spec: `frontend/tests/e2e/layer5-render-reconcile.spec.ts`
+
+---
+
+## Generating daemon-emit fixtures with a build-tagged recorder
+
+For events that require running the real production code path to derive fixture
+values (e.g. `draft.completed` where `session_id` = the CourseId GUID from
+`buildCoursesCompletedPayload`), use a committed `//go:build record` recorder
+rather than hand-authoring the JSON.
+
+**Pattern (from #1427 Ray plan-approval ruling):**
+
+1. Create a `services/daemon/cmd/gen-<fixture>/<fixture>.go` file tagged with
+   `//go:build record`.
+2. The recorder reads the committed `player-log/*.log` fixture, runs the real
+   classify + enrich logic, marshals the result as a `contract.DaemonEvent`
+   envelope, and prints it to stdout.
+3. Run once (from repo root) to regenerate:
+
+```bash
+GOPRIVATE=github.com/RdHamilton/hollowmark \
+  go run -tags record ./services/daemon/cmd/gen-<fixture>/ \
+  > services/daemon/testdata/corpus/daemon-emit/<fixture>.json
+```
+
+4. Commit both the recorder AND the generated file. Document the regenerate
+   command in MANIFEST's provenance cell.
+
+**Example — draft-completed.json (ticket #1427):**
+
+```bash
+GOPRIVATE=github.com/RdHamilton/hollowmark \
+  go run -tags record ./services/daemon/cmd/gen-corpus-draft/ \
+  > services/daemon/testdata/corpus/daemon-emit/draft-completed.json
+```
+
+Recorder source: `services/daemon/cmd/gen-corpus-draft/main.go`
+
+**Why committed?** The recorder is reproducible and discoverable. Future authors
+can re-run it after any production code change to verify the fixture stays
+current. An ad-hoc `go run` script with provenance documented only in MANIFEST
+prose is invisible to future engineers; a committed recorder with a documented
+command is not.
