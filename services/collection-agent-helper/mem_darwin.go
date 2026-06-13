@@ -39,7 +39,11 @@ func openTask(pid int) (C.mach_port_t, error) {
 	self := C.selfTask()
 	var task C.mach_port_t
 	if kr := C.task_for_pid(self, C.int(pid), &task); kr != C.KERN_SUCCESS {
-		return 0, fmt.Errorf("task_for_pid failed: kern_return_t=%d (must run as root)", kr)
+		// task_for_pid requires (a) the binary is signed with com.apple.security.cs.debugger
+		// entitlement and (b) the user has granted com.apple.TaskForPid-allow via
+		// RequestOneTimeAuthorization (ADR-059). kern_return_t=5 (KERN_FAILURE) usually
+		// means the entitlement is missing or the authorization right was not obtained.
+		return 0, fmt.Errorf("task_for_pid failed: kern_return_t=%d (check debugger entitlement + one-time authorization)", kr)
 	}
 	return task, nil
 }

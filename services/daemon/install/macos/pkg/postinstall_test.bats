@@ -799,40 +799,49 @@ print('PASS: auth fields cleared; non-auth fields preserved')
 }
 
 # ---------------------------------------------------------------------------
-# collection-agent-helper install in postinstall (R4 — hollowmark-tickets#1286)
+# collection-agent-helper in postinstall (ADR-059 / hollowmark-tickets#892)
 #
-# postinstall now calls install-helper.sh (sourced from SHARE_DIR) after
-# bootstrapping the daemon LaunchAgent.  Key constraints:
+# Under ADR-059, the helper is no longer a LaunchDaemon.  Postinstall §8
+# ONLY logs the helper version (R6) — it does NOT call install-helper.sh
+# (which is removed from the package payload).  The helper runs as the
+# logged-in user when the daemon requests a scan.
 #
-#   R4: The install-helper.sh call is NON-FATAL.  An error from install-helper.sh
-#       must NOT roll back the entire .pkg install (the #334/Code=112 failure
-#       class).  postinstall must log a WARNING and continue.
-#
-#   R6: postinstall logs the installed helper version after a successful install.
-#       The version is embedded as HelperVersion in the binary at build time.
+# Key constraints:
+#   R6: postinstall logs helper_version= from the binary's --version flag.
+#   Non-fatal: if the helper binary is absent, postinstall skips the log
+#              and exits 0.
+#   No install-helper.sh: postinstall must NOT call install-helper.sh.
+#              Its presence would mean the old LaunchDaemon model is still
+#              being used (ADR-059 fitness function).
 #
 # Tests use SHARE_DIR override so they can write under BATS_TEST_TMPDIR.
 # ---------------------------------------------------------------------------
 
-# 18. Helper install is non-fatal: postinstall exits 0 even when install-helper.sh fails
-@test "helper install: postinstall exits 0 even when install-helper.sh returns non-zero (R4)" {
-  # Produce a test postinstall and add a SHARE_DIR with a failing install-helper.sh.
-  local test_dir="${BATS_TEST_TMPDIR}/r4-nonfatal-$$"
+# 18. ADR-059: postinstall does NOT call install-helper.sh (LaunchDaemon model removed)
+@test "helper (ADR-059): postinstall does NOT invoke install-helper.sh on install" {
+  local test_dir="${BATS_TEST_TMPDIR}/r4-nodaemon-$$"
   mkdir -p "${test_dir}"
   local tmp_script="${BATS_TEST_TMPDIR}/postinstall-r4-$$"
   _make_test_script "${tmp_script}" "${test_dir}"
 
-  # Create a SHARE_DIR with an install-helper.sh that always fails.
+  # Create a SHARE_DIR with an install-helper.sh sentinel that fails loudly if called.
   local fake_share="${BATS_TEST_TMPDIR}/share-r4-$$"
   mkdir -p "${fake_share}/install"
-  cat > "${fake_share}/install/install-helper.sh" <<'EOF'
+  local install_called="${BATS_TEST_TMPDIR}/install_helper_was_called_$$"
+  cat > "${fake_share}/install/install-helper.sh" <<EOF
 #!/usr/bin/env bash
-echo "stub install-helper: simulating failure" >&2
+touch "${install_called}"
+echo "ERROR: install-helper.sh was called — ADR-059 requires it to NOT be called from postinstall" >&2
 exit 1
 EOF
   chmod +x "${fake_share}/install/install-helper.sh"
-  # Place a fake helper binary so the install attempt finds one to pass.
-  echo "fake helper" > "${fake_share}/collection-helper"
+  # Provide a fake helper binary with a --version that exits 0.
+  cat > "${fake_share}/collection-helper" <<'HELPEREOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then echo "dev"; fi
+exit 0
+HELPEREOF
+  chmod +x "${fake_share}/collection-helper"
 
   run env \
     PATH="${STUB_DIR}:${PATH}" \
@@ -843,29 +852,28 @@ EOF
 
   echo "status: ${status}"
   echo "output: ${output}"
-  # postinstall must exit 0 — helper failure is non-fatal.
+  # Must exit 0.
   [ "${status}" -eq 0 ]
-  [[ "${output}" == *"WARNING"* ]] || [[ "${output}" == *"warning"* ]]
+  # install-helper.sh sentinel must NOT have been touched.
+  [ ! -f "${install_called}" ]
 }
 
-# 19. Helper install is attempted when SHARE_DIR/collection-helper exists
-@test "helper install: install-helper.sh is called when helper binary is present in SHARE_DIR" {
-  local test_dir="${BATS_TEST_TMPDIR}/r4-called-$$"
+# 19. ADR-059: postinstall logs helper_version when helper binary is present (R6)
+@test "helper (ADR-059): postinstall logs helper_version when binary is present in SHARE_DIR" {
+  local test_dir="${BATS_TEST_TMPDIR}/r6-version-$$"
   mkdir -p "${test_dir}"
-  local tmp_script="${BATS_TEST_TMPDIR}/postinstall-r4called-$$"
+  local tmp_script="${BATS_TEST_TMPDIR}/postinstall-r6-$$"
   _make_test_script "${tmp_script}" "${test_dir}"
 
-  local fake_share="${BATS_TEST_TMPDIR}/share-r4called-$$"
-  mkdir -p "${fake_share}/install"
-  local install_called="${BATS_TEST_TMPDIR}/install_helper_called"
-  cat > "${fake_share}/install/install-helper.sh" <<EOF
+  local fake_share="${BATS_TEST_TMPDIR}/share-r6-$$"
+  mkdir -p "${fake_share}"
+  # Provide a fake helper binary that prints its version on --version.
+  cat > "${fake_share}/collection-helper" <<'HELPEREOF'
 #!/usr/bin/env bash
-echo "stub install-helper: called with args: \$*" >&2
-touch "${install_called}"
+if [[ "${1:-}" == "--version" ]]; then echo "v0.4.5-test"; fi
 exit 0
-EOF
-  chmod +x "${fake_share}/install/install-helper.sh"
-  echo "fake helper" > "${fake_share}/collection-helper"
+HELPEREOF
+  chmod +x "${fake_share}/collection-helper"
 
   run env \
     PATH="${STUB_DIR}:${PATH}" \
@@ -877,11 +885,14 @@ EOF
   echo "status: ${status}"
   echo "output: ${output}"
   [ "${status}" -eq 0 ]
-  [ -f "${install_called}" ]
+  # Output must contain the version log line (R6).
+  [[ "${output}" == *"helper_version=v0.4.5-test"* ]]
+  # Output must reference ADR-059 user-space model (no LaunchDaemon).
+  [[ "${output}" == *"no LaunchDaemon"* ]]
 }
 
-# 20. Helper install is skipped (non-fatal) when SHARE_DIR/collection-helper is absent
-@test "helper install: skipped gracefully when SHARE_DIR/collection-helper is absent" {
+# 20. ADR-059: helper absent — postinstall skips version log and exits 0 (non-fatal)
+@test "helper (ADR-059): skipped gracefully when SHARE_DIR/collection-helper is absent" {
   local test_dir="${BATS_TEST_TMPDIR}/r4-absent-$$"
   mkdir -p "${test_dir}"
   local tmp_script="${BATS_TEST_TMPDIR}/postinstall-r4absent-$$"
@@ -902,6 +913,7 @@ EOF
   echo "output: ${output}"
   # Must not fail — helper absent is not an error.
   [ "${status}" -eq 0 ]
+  [[ "${output}" == *"skipping version log"* ]]
 }
 
 # ---------------------------------------------------------------------------
