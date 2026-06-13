@@ -1714,6 +1714,74 @@ type draftScenePayload struct {
 	DraftType string `json:"draft_type"` // e.g. "QuickDraft"
 }
 
+// buildCoursesCompletedPayload scans a Courses[] array from an
+// EventGetCoursesV2 response and returns a *draftScenePayload for the first
+// draft course whose CurrentModule is "Complete".  It also registers every
+// draft course's CourseId with the draftstate store (when non-nil) so
+// subsequent HandlePack / HandlePick calls key on the stable GUID (#1422).
+//
+// Returns nil when no completing draft course is found.
+func buildCoursesCompletedPayload(courses []interface{}, store *draftstate.Store) *draftScenePayload {
+	for _, item := range courses {
+		c, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := c["InternalEventName"].(string)
+		courseID, _ := c["CourseId"].(string)
+		mod, _ := c["CurrentModule"].(string)
+
+		if !strings.Contains(name, "Draft") {
+			continue
+		}
+
+		// Always register the stable CourseId so draftState can use it as
+		// the session key for any subsequent pack/pick events (#1422).
+		if store != nil && courseID != "" {
+			store.HandleCourseId(courseID, name)
+		}
+
+		if mod == "Complete" {
+			format, setCode := deriveDraftFormatAndSet(name)
+			id := courseID
+			if id == "" {
+				// Fallback when CourseId is absent: use the CourseName so at
+				// least the event type is correct; BFF upsert is idempotent.
+				id = name
+			}
+			return &draftScenePayload{
+				SessionID: id,
+				EventName: name,
+				SetCode:   setCode,
+				DraftType: format,
+			}
+		}
+	}
+	return nil
+}
+
+// deriveDraftFormatAndSet extracts the draft-type prefix and set-code suffix
+// from a CourseName like "QuickDraftEmblem_SOS_20260611".
+// Returns ("QuickDraftEmblem", "SOS") for that example.
+func deriveDraftFormatAndSet(courseName string) (string, string) {
+	// Format is everything up to the first underscore that precedes a 3-4
+	// character set code; set code is the segment after it.
+	// We reuse splitCourse from draftstate for consistency.
+	parts := strings.Split(courseName, "_")
+	if len(parts) < 3 {
+		// Two-segment name like "PremierDraft_BLB" — no date suffix.
+		if len(parts) == 2 {
+			return parts[0], parts[1]
+		}
+		return courseName, ""
+	}
+	// Three-or-more segments: last segment is the date, second-to-last is
+	// the set code, everything before is the format.
+	setCode := parts[len(parts)-2]
+	format := strings.Join(parts[:len(parts)-2], "_")
+	return format, setCode
+}
+
 // handleEntry classifies a log entry and dispatches it to the BFF.
 //
 // Concurrency: handleEntry is called from two goroutines:
@@ -1949,20 +2017,30 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 			payload = p
 		}
 	case "draft.started", "draft.completed":
-		// Enrich scene-change events with the active draftstate session so the
+		// EventGetCoursesV2 path (#1422): a Courses[] array carries the stable
+		// CourseId GUID for every active event.  We use this in two ways:
+		//   1. Register each CourseId with draftState so subsequent HandlePack /
+		//      HandlePick calls key on the GUID instead of a timestamp.
+		//   2. When a draft.completed originates from a Courses[] entry
+		//      (CurrentModule=Complete), build the draftScenePayload directly
+		//      from the Courses data — no draftState.Get needed, so this path
+		//      works even after a daemon restart.
+		if eventType == "draft.completed" {
+			if courses, ok := entry.JSON["Courses"].([]interface{}); ok {
+				if p := buildCoursesCompletedPayload(courses, s.draftState); p != nil {
+					payload = p
+				}
+			}
+		}
+
+		// Scene-change path: enrich with the active draftstate session so the
 		// BFF's projectDraftSession can identify the session (#1344 PR-B).
-		//
-		// Without enrichment both events fall through to entry.JSON
-		// ({fromSceneName, toSceneName, context} — no session_id) and
-		// projectDraftSession permanently rejects them. The practical result:
-		//   • draft.started  — session never opened via this event path.
-		//   • draft.completed — NO draft session ever transitions to
-		//     status=completed; all users see a perpetual ACTIVE DRAFT card.
+		// Skipped when the Courses[] path already built a payload above.
 		//
 		// When no session is active (daemon restarted before any pack event),
 		// fall back to entry.JSON. The BFF will permanent-reject the entry
 		// (existing guard), which is correct — there is nothing to close.
-		if s.draftState != nil {
+		if payload == nil && s.draftState != nil {
 			if sess, ok := s.draftState.Get("current"); ok {
 				payload = draftScenePayload{
 					SessionID: sess.ID,

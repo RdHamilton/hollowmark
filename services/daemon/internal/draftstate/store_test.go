@@ -267,3 +267,162 @@ func TestConcurrentReadsAndWritesAreSafe(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// ---------------------------------------------------------------------------
+// HandleCourseId — stable session identity (#1422)
+// ---------------------------------------------------------------------------
+
+// TestHandleCourseId_UsedBySubsequentHandlePack verifies that when
+// HandleCourseId is called before the first draft.pack, the new session's ID
+// is the stable CourseId GUID rather than a regenerating timestamp.
+//
+// Pre-fix behaviour: ID = "QuickDraftEmblem_SOS_20260611:<timestamp>"
+// Post-fix behaviour: ID = "56c6eed8-bec8-4f4c-a8b5-b8beeb94ea1e"
+func TestHandleCourseId_UsedBySubsequentHandlePack(t *testing.T) {
+	const courseID = "56c6eed8-bec8-4f4c-a8b5-b8beeb94ea1e"
+	const courseName = "QuickDraftEmblem_SOS_20260611"
+
+	s := draftstate.New()
+	s.SetClock(fixedClock(time.Date(2026, 6, 11, 1, 9, 50, 0, time.UTC)))
+
+	// Register the stable GUID before any pack event (simulates EventGetCoursesV2
+	// firing before the player sees their first pack).
+	s.HandleCourseId(courseID, courseName)
+
+	// First pack event.
+	s.HandlePack(&logreader.DraftPackPayload{
+		CourseName: courseName,
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{1001, 1002}, SelfPick: 1},
+	})
+
+	sess, ok := s.Get("current")
+	if !ok {
+		t.Fatal("expected a current session")
+	}
+	if sess.ID != courseID {
+		t.Errorf("session ID = %q, want stable GUID %q", sess.ID, courseID)
+	}
+}
+
+// TestHandleCourseId_RekeyExistingSession verifies that when HandleCourseId
+// is called AFTER a HandlePack (i.e. the pack arrived before the Courses
+// response), the existing session is rekeyed to the stable GUID.
+func TestHandleCourseId_RekeyExistingSession(t *testing.T) {
+	const courseID = "56c6eed8-bec8-4f4c-a8b5-b8beeb94ea1e"
+	const courseName = "QuickDraftEmblem_SOS_20260611"
+
+	s := draftstate.New()
+	s.SetClock(fixedClock(time.Date(2026, 6, 11, 1, 9, 50, 0, time.UTC)))
+
+	// Pack arrives first — session is minted with a timestamp ID.
+	s.HandlePack(&logreader.DraftPackPayload{
+		CourseName: courseName,
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{1001, 1002}, SelfPick: 1},
+	})
+	before, _ := s.Get("current")
+	if before.ID == courseID {
+		t.Skip("ID was already the GUID before rekeying — precondition not met")
+	}
+
+	// Courses response arrives — rekeying should happen.
+	s.HandleCourseId(courseID, courseName)
+
+	after, ok := s.Get("current")
+	if !ok {
+		t.Fatal("expected a current session after rekeying")
+	}
+	if after.ID != courseID {
+		t.Errorf("session ID after rekey = %q, want stable GUID %q", after.ID, courseID)
+	}
+}
+
+// TestHandleCourseId_TwiceDraftStartedExactlyOneSession is the #1423 cut-criteria
+// test: a draft.started event re-emitted after daemon restart (simulated by
+// calling HandleCourseId + HandlePack twice) must result in exactly ONE
+// session in the store, not two duplicate rows.
+//
+// This is the exact scenario that caused three `draft_sessions` rows in prod
+// for one real SOS draft (account_id=7, ids differing only by timestamp).
+func TestHandleCourseId_TwiceDraftStartedExactlyOneSession(t *testing.T) {
+	const courseID = "56c6eed8-bec8-4f4c-a8b5-b8beeb94ea1e"
+	const courseName = "QuickDraftEmblem_SOS_20260611"
+
+	s := draftstate.New()
+	tick := time.Date(2026, 6, 11, 1, 9, 50, 0, time.UTC)
+	s.SetClock(func() time.Time {
+		tick = tick.Add(time.Minute) // advance time so naive timestamps differ
+		return tick
+	})
+
+	// First daemon session: Courses response registers the GUID, then pack 1.
+	s.HandleCourseId(courseID, courseName)
+	s.HandlePack(&logreader.DraftPackPayload{
+		CourseName: courseName,
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{1}, SelfPick: 1},
+	})
+
+	// Daemon restart: Courses response fires again, then same pack 1 replayed.
+	s.HandleCourseId(courseID, courseName)
+	s.HandlePack(&logreader.DraftPackPayload{
+		CourseName: courseName,
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{1}, SelfPick: 1},
+	})
+
+	sessions := s.Sessions()
+	if len(sessions) != 1 {
+		t.Errorf("#1423 restart-dedup: want exactly 1 session, got %d (phantom duplicate)", len(sessions))
+	}
+	if len(sessions) >= 1 && sessions[0].ID != courseID {
+		t.Errorf("surviving session ID = %q, want GUID %q", sessions[0].ID, courseID)
+	}
+}
+
+// TestHandleCourseId_RestartDedup verifies the restart-duplicate scenario:
+// two back-to-back HandlePack calls with the same CourseName (simulating a
+// daemon restart) map to the SAME session when HandleCourseId has been called
+// with a stable GUID.  Before the fix, each call produced a distinct
+// timestamp-based ID.
+func TestHandleCourseId_RestartDedup(t *testing.T) {
+	const courseID = "56c6eed8-bec8-4f4c-a8b5-b8beeb94ea1e"
+	const courseName = "QuickDraftEmblem_SOS_20260611"
+
+	s := draftstate.New()
+	t0 := time.Date(2026, 6, 11, 1, 9, 50, 0, time.UTC)
+	tick := t0
+	s.SetClock(func() time.Time {
+		tick = tick.Add(time.Second)
+		return tick
+	})
+
+	// Register stable GUID.
+	s.HandleCourseId(courseID, courseName)
+
+	// First "session open" (e.g. log replay from before restart).
+	s.HandlePack(&logreader.DraftPackPayload{
+		CourseName: courseName,
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{1}, SelfPick: 1},
+	})
+	first, _ := s.Get("current")
+	if first.ID != courseID {
+		t.Fatalf("first session ID = %q, want %q", first.ID, courseID)
+	}
+
+	// Simulate daemon restart: HandleCourseId fires again for the same course.
+	s.HandleCourseId(courseID, courseName)
+
+	// Another pack event — must return the SAME session, not a duplicate.
+	s.HandlePack(&logreader.DraftPackPayload{
+		CourseName: courseName,
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{2}, SelfPick: 2},
+	})
+	second, _ := s.Get("current")
+	if second.ID != courseID {
+		t.Fatalf("second session ID = %q, want %q", second.ID, courseID)
+	}
+
+	// Only ONE session should exist in the store.
+	sessions := s.Sessions()
+	if len(sessions) != 1 {
+		t.Errorf("want 1 session after restart-dedup, got %d", len(sessions))
+	}
+}
