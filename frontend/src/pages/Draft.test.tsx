@@ -114,6 +114,18 @@ function createMockCardRating(overrides: Partial<gui.CardRatingWithTier> = {}): 
   });
 }
 
+function createMockDraftPack(overrides: Partial<models.DraftPackSession> = {}): models.DraftPackSession {
+  return new models.DraftPackSession({
+    ID: 1,
+    SessionID: 'test-session-1',
+    PackNumber: 0,
+    PickNumber: 0,
+    CardIDs: ['12345', '22222', '33333'],
+    Timestamp: new Date(),
+    ...overrides,
+  });
+}
+
 function createMockDeckMetrics(overrides: Partial<models.DeckMetrics> = {}): models.DeckMetrics {
   return new models.DeckMetrics({
     total_cards: 15,
@@ -984,7 +996,58 @@ describe('Draft Component', () => {
       }, { timeout: 3000 });
     });
 
-    // Test 3 — Case A regression guard: no active session → shows Draft History, not Case B awaiting banner
+    // Test 3 — Case C (#1402): packs > 0, picks == 0 (partial-transition reorder state).
+    // Shows a "Pack received" banner instead of a silent blank container.
+    it('Case C (#1402): shows pack-received banner when packs > 0 and picks == 0', async () => {
+      const session = createMockDraftSession({
+        EventName: 'Quick Draft',
+        SetCode: 'BLB',
+      });
+      const pack = createMockDraftPack();
+
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
+      mockDrafts.getDraftPicks.mockResolvedValue([]);
+      mockDrafts.getDraftPool.mockResolvedValue([pack]);
+      mockCards.getSetCards.mockResolvedValue([]);
+      mockCards.getCardRatings.mockResolvedValue([]);
+
+      render(<Draft />);
+
+      // Active-draft view must render
+      await waitFor(() => {
+        expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
+      });
+
+      // Case C banner must be present
+      expect(screen.getByTestId('draft-pack-received')).toBeInTheDocument();
+      expect(screen.getByText(/Pack received — waiting for pick data/i)).toBeInTheDocument();
+
+      // Case B banner must NOT be shown (picks==0 && packs==0 is a different state)
+      expect(screen.queryByTestId('draft-awaiting-data')).not.toBeInTheDocument();
+    });
+
+    // Test 4 — Case C regression guard: Case B banner must not render when packs are present.
+    it('Case C regression: Case B awaiting-data banner is hidden when packs > 0', async () => {
+      const session = createMockDraftSession();
+      const pack = createMockDraftPack();
+
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
+      mockDrafts.getDraftPicks.mockResolvedValue([]);
+      mockDrafts.getDraftPool.mockResolvedValue([pack]);
+      mockCards.getSetCards.mockResolvedValue([]);
+      mockCards.getCardRatings.mockResolvedValue([]);
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Draft Assistant')).toBeInTheDocument();
+      });
+
+      // Case B banner must be suppressed — packs > 0 so we are in Case C
+      expect(screen.queryByTestId('draft-awaiting-data')).not.toBeInTheDocument();
+    });
+
+    // Test 5 — Case A regression guard: no active session → shows Draft History (not awaiting banner)
     it('Case A regression: shows Draft History (not awaiting-data banner) when no active session exists', async () => {
       mockDrafts.getActiveDraftSessions.mockResolvedValue([]);
       mockDrafts.getCompletedDraftSessions.mockResolvedValue([]);

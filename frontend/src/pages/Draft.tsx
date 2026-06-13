@@ -952,6 +952,20 @@ const Draft: React.FC = () => {
                         </div>
                     )}
 
+                    {/* Case C (#1402) — partial-transition: pack events arrived before pick events.
+                        Daemon or network reorder means packs > 0 but picks == 0.
+                        Show an explanatory banner so the player sees a meaningful state
+                        instead of a silent blank pack container. */}
+                    {state.session && state.packs.length > 0 && state.picks.length === 0 && (
+                        <div className="draft-awaiting-data" data-testid="draft-pack-received">
+                            <div className="loading-spinner"></div>
+                            <p>Pack received — waiting for pick data.</p>
+                            <p className="draft-awaiting-hint">
+                                Pick data is on its way. If this persists, switch to another Arena screen and back.
+                            </p>
+                        </div>
+                    )}
+
                     {/* Current Pack Picker View — gated by live_draft_advisor_enabled */}
                     {showCurrentPack && state.session && showAdvisor && (
                         <CurrentPackPicker
