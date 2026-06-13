@@ -76,6 +76,23 @@ describe("formatLabels", () => {
       expect(humanizeFormatSlug("Historic")).toBe("Historic");
     });
 
+    // ── Emblem draft types (#1418 Defect A) ─────────────────────────────────
+    it("maps QuickDraftEmblem_STX_20260601 to Quick Draft (Cascade Emblem) with set name", () => {
+      const result = humanizeFormatSlug("QuickDraftEmblem_STX_20260601");
+      expect(result).toContain("Quick Draft (Cascade Emblem)");
+      expect(result).toContain("Strixhaven");
+    });
+
+    it("maps PremierDraftEmblem_STX_20260601 to Premier Draft (Cascade Emblem) with set name", () => {
+      const result = humanizeFormatSlug("PremierDraftEmblem_STX_20260601");
+      expect(result).toContain("Premier Draft (Cascade Emblem)");
+      expect(result).toContain("Strixhaven");
+    });
+
+    it("falls back to label-only when set code is unknown for QuickDraftEmblem", () => {
+      expect(humanizeFormatSlug("QuickDraftEmblem_XYZ_20260101")).toBe("Quick Draft (Cascade Emblem)");
+    });
+
     it("never returns a raw slug with an 8-digit date", () => {
       const inputs = [
         "QuickDraft_SOS_20260526",
@@ -83,6 +100,8 @@ describe("formatLabels", () => {
         "TradDraft_DSK_20240924",
         "HISTORICBRAWLWITHALLOWLIST_20260126",
         "SealedDeck_OTJ_20240416",
+        "QuickDraftEmblem_STX_20260601",
+        "PremierDraftEmblem_STX_20260601",
       ];
       for (const input of inputs) {
         const result = humanizeFormatSlug(input);
