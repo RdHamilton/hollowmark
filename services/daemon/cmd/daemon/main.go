@@ -32,6 +32,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -1206,7 +1208,9 @@ func runInProcessReauth(ctx context.Context, cfg *config.Config, cfgPath string,
 	}
 
 	sentryhook.SetUser(accountID)
-	log.Printf("[mtga-daemon] in-process reauth: complete — new device_id=%s", serverDeviceID)
+	// NB-5: log a truncated SHA-256 hash rather than the raw device_id to avoid
+	// emitting a stable correlating identifier in cleartext at INFO level.
+	log.Printf("[mtga-daemon] in-process reauth: complete — new device_id hash=%s", deviceIDLogToken(serverDeviceID))
 	return nil
 }
 
@@ -1214,6 +1218,15 @@ func runInProcessReauth(ctx context.Context, cfg *config.Config, cfgPath string,
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// deviceIDLogToken returns a short log-safe token for a device_id: the first 8
+// hex characters (4 bytes) of its SHA-256 hash. This satisfies NB-5 / S-07
+// log-hygiene: the raw identifier is never emitted at INFO level while a stable
+// short token still lets an operator confirm rotation in log output.
+func deviceIDLogToken(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:4])
 }
 
 // defaultConfigPath returns the channel-appropriate default config path derived
