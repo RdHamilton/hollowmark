@@ -92,8 +92,19 @@ describe('cards API', () => {
 
       const result = await cards.getCardRatings('MKM', 'PremierDraft');
 
-      expect(get).toHaveBeenCalledWith('/cards/ratings/MKM/PremierDraft');
+      // options arg is undefined when not supplied — pass-through to get()
+      expect(get).toHaveBeenCalledWith('/cards/ratings/MKM/PremierDraft', undefined);
       expect(result).toEqual(mockRatings);
+    });
+
+    it('should forward options (including signal) to get', async () => {
+      const mockRatings = [{ name: 'Card 1', ever_drawn_win_rate: 0.55 }];
+      vi.mocked(get).mockResolvedValue(mockRatings);
+      const signal = new AbortController().signal;
+
+      await cards.getCardRatings('MKM', 'PremierDraft', { signal });
+
+      expect(get).toHaveBeenCalledWith('/cards/ratings/MKM/PremierDraft', { signal });
     });
   });
 

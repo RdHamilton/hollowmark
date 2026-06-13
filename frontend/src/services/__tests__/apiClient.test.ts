@@ -450,6 +450,92 @@ describe('apiClient', () => {
   });
 });
 
+// ── AbortSignal.any composition — timeout preserved with caller signal ─────────
+//
+// Regression guard for the apiClient signal-composition fix (#1403).
+// Before the fix, the fetch() call in request() spread `...fetchOptions` AFTER
+// `signal: controller.signal`, which caused a caller-supplied `{ signal }` to
+// REPLACE the internal timeout controller's signal. The setTimeout would still
+// fire, but it would abort a controller whose signal was no longer attached to
+// fetch — leaving the request hanging with no timeout protection.
+//
+// After the fix, AbortSignal.any([timeoutSignal, callerSignal]) is composed once
+// and set explicitly, so BOTH signals remain active on the same fetch call.
+//
+// Strategy: configure a very short timeout (10ms) so the real setTimeout fires
+// quickly, and mock fetch to listen to the signal + reject with AbortError when
+// it fires (mirroring how the real Fetch API behaves).
+
+describe('signal composition — timeout preserved when caller signal supplied (#1403)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Very short timeout so the test doesn't have to wait 30s
+    configureApi({ baseUrl: 'http://localhost:8080/api/v1', timeout: 10 });
+    localStorage.clear();
+    resetErrorThrottle();
+  });
+
+  afterEach(() => {
+    // Restore default so other suites are not affected
+    configureApi({ baseUrl: 'http://localhost:8080/api/v1', timeout: 30000 });
+    vi.clearAllMocks();
+    localStorage.clear();
+    setClerkTokenProvider(null);
+    resetErrorThrottle();
+  });
+
+  /** Helper: mock fetch to reject with an AbortError when the given signal fires. */
+  function mockSignalAwareFetch() {
+    mockFetch.mockImplementation((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        const signal = init.signal as AbortSignal | undefined;
+        if (!signal) return; // never resolves if no signal — tests always pass signal
+        if (signal.aborted) {
+          reject(Object.assign(new Error('AbortError'), { name: 'AbortError' }));
+          return;
+        }
+        signal.addEventListener('abort', () => {
+          reject(Object.assign(new Error('AbortError'), { name: 'AbortError' }));
+        });
+        // Otherwise never resolves, simulating a hung BFF request
+      });
+    });
+  }
+
+  it('internal 10ms timeout still fires when a non-aborted caller signal is supplied', async () => {
+    // Pre-fix behaviour: caller signal REPLACED the timeout signal → fetch hangs
+    //   indefinitely because only the caller signal is attached, and it never fires.
+    // Post-fix behaviour: AbortSignal.any([timeoutSignal, callerSignal]) — the
+    //   10ms setTimeout aborts the composed signal → fetch rejects with AbortError
+    //   → apiClient maps that to ApiRequestError(408).
+    mockSignalAwareFetch();
+
+    const callerController = new AbortController(); // NOT aborted
+    const requestPromise = get('/ratings/slow', { signal: callerController.signal } as RequestInit);
+
+    await expect(requestPromise).rejects.toMatchObject({
+      name: 'ApiRequestError',
+      status: 408,
+    });
+  }, 500);
+
+  it('caller signal abort terminates the request independently of the internal timeout', async () => {
+    // Use a long internal timeout so only the caller's abort fires during the test.
+    configureApi({ baseUrl: 'http://localhost:8080/api/v1', timeout: 60_000 });
+    mockSignalAwareFetch();
+
+    const callerController = new AbortController();
+    const requestPromise = get('/ratings/abort', { signal: callerController.signal } as RequestInit);
+
+    // Abort from the caller side — must reject without waiting for the internal timeout
+    callerController.abort();
+
+    await expect(requestPromise).rejects.toMatchObject({
+      name: 'ApiRequestError',
+    });
+  }, 500);
+});
+
 describe('ApiRequestError', () => {
   it('should create error with all properties', () => {
     const error = new ApiRequestError('Not found', 404, 'NOT_FOUND', 'Resource does not exist');

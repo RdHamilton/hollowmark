@@ -223,11 +223,20 @@ async function request<T>(
   body?: unknown,
   options: ApiRequestOptions = {}
 ): Promise<T> {
-  const { skipErrorAnalytics, ...fetchOptions } = options;
+  const { skipErrorAnalytics, signal: callerSignal, ...fetchOptions } = options;
   const url = `${config.baseUrl}${path}`;
 
   const controller = new globalThis.AbortController();
   const timeoutId = setTimeout(() => controller.abort(), config.timeout);
+
+  // Compose the internal timeout signal with any caller-supplied signal so BOTH
+  // remain active. Without composition, spreading fetchOptions (which may contain
+  // a caller `signal`) after `signal: controller.signal` would silently replace
+  // the timeout signal, disabling the 30s guard on the exact calls this hardening
+  // is meant to protect (#1403).
+  const composedSignal = callerSignal
+    ? AbortSignal.any([controller.signal, callerSignal])
+    : controller.signal;
 
   try {
     const headers = await authHeaders();
@@ -239,8 +248,9 @@ async function request<T>(
         ...fetchOptions.headers,
       },
       body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
       ...fetchOptions,
+      // Set signal AFTER the spread so fetchOptions can never override it.
+      signal: composedSignal,
     });
 
     clearTimeout(timeoutId);
@@ -368,11 +378,15 @@ export function post<T>(path: string, body?: unknown, options?: ApiRequestOption
  * The Authorization header is added by authHeaders() as usual.
  */
 export async function postFormData<T>(path: string, formData: FormData, options: ApiRequestOptions = {}): Promise<T> {
-  const { skipErrorAnalytics, ...fetchOptions } = options;
+  const { skipErrorAnalytics, signal: callerSignal, ...fetchOptions } = options;
   const url = `${config.baseUrl}${path}`;
 
   const controller = new globalThis.AbortController();
   const timeoutId = setTimeout(() => controller.abort(), config.timeout);
+
+  const composedSignal = callerSignal
+    ? AbortSignal.any([controller.signal, callerSignal])
+    : controller.signal;
 
   try {
     const auth = await authHeaders();
@@ -384,8 +398,8 @@ export async function postFormData<T>(path: string, formData: FormData, options:
         ...fetchOptions.headers,
       },
       body: formData,
-      signal: controller.signal,
       ...fetchOptions,
+      signal: composedSignal,
     });
 
     clearTimeout(timeoutId);
@@ -471,10 +485,15 @@ export interface RawGetResult<T> {
  * Use this when you need to inspect response headers (e.g. X-Cache-Degraded).
  */
 export async function getRaw<T>(path: string, options: RequestInit = {}): Promise<RawGetResult<T>> {
+  const { signal: callerSignal, ...restOptions } = options;
   const url = `${config.baseUrl}${path}`;
 
   const controller = new globalThis.AbortController();
   const timeoutId = setTimeout(() => controller.abort(), config.timeout);
+
+  const composedSignal = callerSignal
+    ? AbortSignal.any([controller.signal, callerSignal])
+    : controller.signal;
 
   try {
     const headers = await authHeaders();
@@ -483,10 +502,10 @@ export async function getRaw<T>(path: string, options: RequestInit = {}): Promis
       headers: {
         'Content-Type': 'application/json',
         ...headers,
-        ...options.headers,
+        ...restOptions.headers,
       },
-      signal: controller.signal,
-      ...options,
+      ...restOptions,
+      signal: composedSignal,
     });
 
     clearTimeout(timeoutId);

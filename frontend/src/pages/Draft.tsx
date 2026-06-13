@@ -114,6 +114,10 @@ const Draft: React.FC = () => {
     // Stable ref to debouncedLoadActiveDraft so useReadModelUpdates can call it
     // before the function is declared in the component body.
     const debouncedLoadActiveDraftRef = useRef<() => void>(() => { /* populated below */ });
+    // AbortController for the auto-refresh staleness-check cycle (#1403).
+    // Holds the controller for the current in-flight refresh so we can abort it
+    // on effect re-entry (new session) and on unmount.
+    const refreshAbortRef = useRef<AbortController | null>(null);
 
     useEffect(() => {
         // Load active draft immediately
@@ -157,6 +161,10 @@ const Draft: React.FC = () => {
     const checkedSessionsRef = useRef<Set<string>>(new Set());
 
     // Auto-refresh stale ratings data (#732)
+    // Abort guard added in #1403: each invocation creates a fresh AbortController
+    // stored in refreshAbortRef. The cleanup return aborts on unmount (Race B) and
+    // the abort-before-create pattern at the top of the async body aborts any
+    // in-flight cycle before starting a new one (Race A).
     useEffect(() => {
         // Only check after initial load completes and we have a session with ratings
         if (state.loading || !state.session || state.ratings.length === 0) return;
@@ -171,10 +179,18 @@ const Draft: React.FC = () => {
         // Mark this session as checked immediately to prevent re-runs
         checkedSessionsRef.current.add(sessionId);
 
+        // Abort any in-flight refresh from a prior effect invocation, then acquire
+        // a new controller for this cycle.
+        refreshAbortRef.current?.abort();
+        const abortController = new AbortController();
+        refreshAbortRef.current = abortController;
+        const signal = abortController.signal;
+
         const checkAndRefreshStaleData = async () => {
             try {
                 // Check if ratings are stale
-                const staleness = await cards.getRatingsStaleness(setCode, draftType);
+                const staleness = await cards.getRatingsStaleness(setCode, draftType, { signal });
+                if (signal.aborted) return;
 
                 if (!staleness.isStale) {
                     console.log(`[Draft] Ratings for ${setCode} are fresh (${staleness.cardCount} cards)`);
@@ -189,11 +205,13 @@ const Draft: React.FC = () => {
 
                 try {
                     updateProgress(downloadId, 20);
-                    await cards.refreshSetRatings(setCode, draftType);
+                    await cards.refreshSetRatings(setCode, draftType, { signal });
+                    if (signal.aborted) return;
                     updateProgress(downloadId, 60);
 
                     // Reload ratings after refresh
-                    const newRatings = await cards.getCardRatings(setCode, draftType);
+                    const newRatings = await cards.getCardRatings(setCode, draftType, { signal });
+                    if (signal.aborted) return;
                     updateProgress(downloadId, 90);
 
                     setState(prev => ({
@@ -213,6 +231,10 @@ const Draft: React.FC = () => {
         };
 
         checkAndRefreshStaleData();
+
+        return () => {
+            abortController.abort();
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps -- Only run when session changes, not when ratings are updated
     }, [state.loading, state.session?.ID]);
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -733,7 +733,9 @@ describe('Draft Component', () => {
       render(<Draft />);
 
       await waitFor(() => {
-        expect(mockCards.getRatingsStaleness).toHaveBeenCalledWith('BLB', 'PremierDraft');
+        expect(mockCards.getRatingsStaleness).toHaveBeenCalledWith(
+          'BLB', 'PremierDraft', expect.objectContaining({ signal: expect.any(AbortSignal) })
+        );
       });
 
       // Should not have called refresh since ratings are fresh
@@ -759,7 +761,9 @@ describe('Draft Component', () => {
       render(<Draft />);
 
       await waitFor(() => {
-        expect(mockCards.refreshSetRatings).toHaveBeenCalledWith('BLB', 'PremierDraft');
+        expect(mockCards.refreshSetRatings).toHaveBeenCalledWith(
+          'BLB', 'PremierDraft', expect.objectContaining({ signal: expect.any(AbortSignal) })
+        );
       });
     });
 
@@ -1219,6 +1223,170 @@ describe('Draft Component', () => {
       await waitFor(() => {
         expect(screen.queryByTestId('pick-unknown-card')).not.toBeInTheDocument();
       }, { timeout: 3000 });
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // #1403 — auto-refresh AbortController guard
+  // --------------------------------------------------------------------------
+
+  describe('#1403 auto-refresh AbortController guard', () => {
+    let abortSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      abortSpy = vi.spyOn(AbortController.prototype, 'abort');
+    });
+
+    afterEach(() => {
+      abortSpy.mockRestore();
+    });
+
+    // Helper: set up a fully-loaded active-draft state so the auto-refresh effect
+    // can run. Ratings must be non-empty for the effect to proceed past its guard.
+    function setupLoadedDraft() {
+      const session = createMockDraftSession({
+        ID: 'abort-test-session',
+        SetCode: 'BLB',
+        DraftType: 'PremierDraft',
+      });
+      const ratings = [createMockCardRating()];
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
+      mockDrafts.getDraftPicks.mockResolvedValue([createMockDraftPick()]);
+      mockDrafts.getDraftPool.mockResolvedValue([]);
+      mockCards.getSetCards.mockResolvedValue([createMockSetCard()]);
+      mockCards.getCardRatings.mockResolvedValue(ratings);
+      mockDrafts.getDraftDeckMetrics.mockResolvedValue(createMockDeckMetrics());
+      return session;
+    }
+
+    it('abort fires on unmount while refresh is in-flight (Race B / AC3)', async () => {
+      // Use a never-resolving promise to simulate a slow refreshSetRatings call.
+      // The ref holds the controller; unmount should trigger .abort() on it.
+      let resolveRefresh!: () => void;
+      const hangingRefresh = new Promise<void>((res) => { resolveRefresh = res; });
+
+      setupLoadedDraft();
+      mockCards.getRatingsStaleness.mockResolvedValue({
+        cachedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
+        isStale: true,
+        cardCount: 100,
+      });
+      mockCards.refreshSetRatings.mockReturnValue(hangingRefresh);
+
+      const { unmount } = render(<Draft />);
+
+      // Wait for getRatingsStaleness to be called — confirms the effect entered the async path
+      await waitFor(() => {
+        expect(mockCards.getRatingsStaleness).toHaveBeenCalled();
+      });
+
+      // At this point refreshSetRatings is hanging; unmount to trigger cleanup
+      unmount();
+
+      expect(abortSpy).toHaveBeenCalled();
+
+      // Resolve the hanging promise after the test to prevent unhandled rejection
+      resolveRefresh();
+    });
+
+    it('cleanup fires abort when effect dependency changes (AC2 / Race A guard)', async () => {
+      // The abort-on-re-entry guard: when the effect's cleanup runs (because its
+      // dependency state.session?.ID changes), the `return () => { abortController.abort() }`
+      // cleanup fires abort on the in-flight controller.
+      //
+      // We verify this by:
+      // 1. Rendering with session1 — auto-refresh starts and hangs on refreshSetRatings
+      // 2. Triggering a readmodel update that causes loadActiveDraft to run with session2
+      //    (which updates state.session?.ID, causing the effect to re-run with new deps)
+      // 3. The prior effect's cleanup fires .abort() on the session1 controller
+      let resolveFirst!: () => void;
+      const firstHang = new Promise<void>((res) => { resolveFirst = res; });
+
+      const session1 = createMockDraftSession({
+        ID: 'abort-dep-session-1',
+        SetCode: 'BLB',
+        DraftType: 'PremierDraft',
+      });
+      const session2 = createMockDraftSession({
+        ID: 'abort-dep-session-2',
+        SetCode: 'BLB',
+        DraftType: 'PremierDraft',
+      });
+      const ratings = [createMockCardRating()];
+
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session1]);
+      mockDrafts.getDraftPicks.mockResolvedValue([createMockDraftPick()]);
+      mockDrafts.getDraftPool.mockResolvedValue([]);
+      mockCards.getSetCards.mockResolvedValue([createMockSetCard()]);
+      mockCards.getCardRatings.mockResolvedValue(ratings);
+      mockDrafts.getDraftDeckMetrics.mockResolvedValue(createMockDeckMetrics());
+      mockCards.getRatingsStaleness.mockResolvedValue({
+        cachedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
+        isStale: true,
+        cardCount: 100,
+      });
+      // First cycle hangs — simulates slow 17Lands refresh
+      mockCards.refreshSetRatings.mockReturnValueOnce(firstHang);
+
+      render(<Draft />);
+
+      // Wait until first refresh cycle is in-flight (getRatingsStaleness resolved)
+      await waitFor(() => {
+        expect(mockCards.getRatingsStaleness).toHaveBeenCalledTimes(1);
+      });
+
+      // Now switch to session2 via a readmodel event — this triggers loadActiveDraft
+      // which updates state.session?.ID, causing the effect to re-run.
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session2]);
+      mockCards.refreshSetRatings.mockResolvedValue(undefined);
+      mockCards.getCardRatings.mockResolvedValue(ratings);
+      mockEventEmitter.emit('readmodel.updated', { domains: ['drafts'] });
+
+      await waitFor(() => {
+        // The cleanup of the first effect invocation must have aborted its controller
+        expect(abortSpy).toHaveBeenCalled();
+      }, { timeout: 3000 });
+
+      // Release the first hanging promise after the test
+      resolveFirst();
+    });
+
+    it('happy path: refresh completes — ratings state updated, no abort triggered', async () => {
+      const newRatings = [createMockCardRating({ name: 'Updated Card' })];
+      setupLoadedDraft();
+      mockCards.getRatingsStaleness.mockResolvedValue({
+        cachedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
+        isStale: true,
+        cardCount: 100,
+      });
+      mockCards.refreshSetRatings.mockResolvedValue(undefined);
+      mockCards.getCardRatings.mockResolvedValue(newRatings);
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        expect(mockCards.refreshSetRatings).toHaveBeenCalledWith('BLB', 'PremierDraft', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      });
+
+      // abort() must NOT have been called in the happy path
+      expect(abortSpy).not.toHaveBeenCalled();
+    });
+
+    it('fresh-skip: getRatingsStaleness returns isStale=false — refreshSetRatings never called', async () => {
+      setupLoadedDraft();
+      mockCards.getRatingsStaleness.mockResolvedValue({
+        cachedAt: new Date().toISOString(),
+        isStale: false,
+        cardCount: 100,
+      });
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        expect(mockCards.getRatingsStaleness).toHaveBeenCalledWith('BLB', 'PremierDraft', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      });
+
+      expect(mockCards.refreshSetRatings).not.toHaveBeenCalled();
     });
   });
 });
