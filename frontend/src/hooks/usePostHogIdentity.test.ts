@@ -620,6 +620,35 @@ describe('usePostHogIdentity', () => {
     expect(identifiedCalls[0][0].properties.user_id).toBe('cafe0000cafe0000');
   });
 
+  // T7 (Ray-mandated): unregisterSuperProperty('device_id') fires BEFORE resetIdentity on sign-out
+  it('T7: unregisterSuperProperty(device_id) is called BEFORE resetIdentity on sign-out', async () => {
+    mockUseUser.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      user: { id: 'user_abc' },
+    });
+    const { usePostHogIdentity } = await import('./usePostHogIdentity');
+    const { rerender } = renderHook(() => usePostHogIdentity());
+
+    // Wire callLog AFTER the initial sign-in render so that sign-in-phase
+    // device_id registration calls do not pollute the ordering log.
+    const callLog: string[] = [];
+    mockUnregisterSuperProperty.mockImplementation((name: string) => {
+      callLog.push(`unregisterSuperProperty:${name}`);
+    });
+    mockResetIdentity.mockImplementation(() => {
+      callLog.push('resetIdentity');
+    });
+
+    mockUseUser.mockReturnValue({ isLoaded: true, isSignedIn: false, user: null });
+    rerender();
+
+    const unregisterDeviceIdIdx = callLog.indexOf('unregisterSuperProperty:device_id');
+    const resetIdx = callLog.indexOf('resetIdentity');
+    expect(unregisterDeviceIdIdx).toBeGreaterThanOrEqual(0);
+    expect(resetIdx).toBeGreaterThan(unregisterDeviceIdIdx);
+  });
+
   // T6 (Ray-mandated): single-device → multi-device transition also triggers unregister
   it('T6: single-to-multi-device transition triggers unregisterSuperProperty(device_id)', async () => {
     // First render: 1 device → register device_id
