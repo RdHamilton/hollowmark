@@ -43,15 +43,28 @@ const lowConfidenceGIHFloor = 500
 // colorCommitmentThreshold is the number of cards of a single color
 // needed for a pool to be considered "committed" to that color. Two
 // colors both meeting this threshold = two-color commitment, triggering
-// pool-aware (archetype + color-fit) mode. Chosen at 3 to match
-// typical early-draft color-signal strength.
-const colorCommitmentThreshold = 3
+// pool-aware (archetype + color-fit) mode.
+//
+// Raised from 3 → 5 per Prof verdict (#1400): at 3 cards the player is
+// barely committed; the advisor was killing correct splice picks and bomb
+// recommendations. A player needs ~5 on-color cards before two-color
+// commitment is meaningful enough to suppress off-color cards.
+const colorCommitmentThreshold = 5
 
 // splashHighGIHWRFloor is the GIHWR above which an off-color card
 // qualifies for the splash-consideration reason path instead of an
 // off-color penalty. ADR-047 §5 (Prof constraint): "high-GIHWR card
 // one step off-color MUST have a dedicated splash consideration reason."
 const splashHighGIHWRFloor = 66.0
+
+// topQualityGIHWRFloor is the GIHWR at or above which an off-color card
+// is considered top-10% quality for its set. Cards at or above this
+// threshold bypass full commitment suppression even when the pool is
+// color-committed — they still surface in the recommendation list.
+// Calibrated to approximately the top 10% of 17Lands GIHWR distributions
+// for PremierDraft formats (typically 63–65%). Named constant per
+// ADR-047 fitness function (never inline). (#1400)
+const topQualityGIHWRFloor = 63.0
 
 // highALSAFloor is the ALSA above which a card qualifies for the
 // "frequently available late" scarcity signal. 7.0 is a round number
@@ -526,7 +539,16 @@ func colorFitReason(r rank.Card, cm draftalgo.CardMeta, poolColors []string) str
 		return "Off-color but a strong splash consideration"
 	}
 
-	// Off-color, not splash-worthy.
+	// Quality modifier (#1400): top-10% GIHWR cards bypass full suppression even
+	// when the pool is committed. They still surface in the recommendation list
+	// with standalone-power framing rather than the off-color penalty.
+	// topQualityGIHWRFloor < splashHighGIHWRFloor so this fires only for the
+	// "strong but not bomb-level" off-color cards that the old code silently killed.
+	if r.HasGIHWR && r.GIHWR >= topQualityGIHWRFloor {
+		return standalonePowerReason(r)
+	}
+
+	// Off-color, not splash-worthy, not top-quality.
 	return "Not your colors"
 }
 
