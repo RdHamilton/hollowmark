@@ -94,6 +94,28 @@
     font-style: italic;
 }
 
+/* ADR-047 §2 disclosure spans — inline-visible, NOT tooltip-only (Prof gate) */
+.rec-low-confidence {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--warning);
+    background: var(--bg-overlay);
+    border: 1px solid var(--warning);
+    border-radius: var(--radius-sm);
+    padding: 2px var(--space-1);
+}
+
+.rec-no-arena-data {
+    font-size: var(--text-xs);
+    font-weight: 500;
+    color: var(--fg-muted);
+    background: var(--bg-overlay);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 2px var(--space-1);
+    font-style: italic;
+}
+
 /* Pack Cards Grid */
 .pack-cards-grid {
     display: grid;
