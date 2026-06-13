@@ -624,6 +624,128 @@ func TestPhaseB_NoRawPercentInAnyReason(t *testing.T) {
 	}
 }
 
+// ─── nondeterminism / sort stability (#1397) ─────────────────────────────
+
+// TestPoolColors_Deterministic100Calls — AC1: calling Recommend 100 times with
+// identical inputs must always produce the same PoolColors[0] and Archetype.
+// This directly exercises the map-iteration nondeterminism class: without the
+// 3-key sort fix, a tied-frequency pool (3R, 3G) will flip randomly.
+func TestPoolColors_Deterministic100Calls(t *testing.T) {
+	// 3R + 3G: tied frequency. R cards carry higher GIHWR so quality-sum
+	// breaks the tie in R's favor. The test asserts stability, not which
+	// color wins (that is AC2's job).
+	pool := poolWithColors(t, 3, "R", 3, "G", 0, "")
+	poolIDs := poolKeys(pool)
+	pack := []string{"packcard"}
+	count := 1000
+	ratingsMap := stubRatings{"packcard": 60.0}
+	for id := range pool {
+		if id[0] == 'R' {
+			ratingsMap[id] = 68.0
+		} else {
+			ratingsMap[id] = 50.0
+		}
+	}
+	names := stubCards{"packcard": "Pack Card"}
+	meta := stubCardMeta{"packcard": {Colors: []string{"R"}, ALSA: 3.0, GIHCount: &count}}
+	for id, m := range pool {
+		meta[id] = m
+	}
+
+	first := recommend.Recommend("PremierDraft", poolIDs, pack, ratingsMap, names, meta)
+	if len(first.PoolColors) == 0 {
+		t.Fatal("expected PoolColors to be non-empty")
+	}
+	firstColor := first.PoolColors[0]
+	firstArchetype := ""
+	if len(first.TopPicks) > 0 {
+		firstArchetype = first.TopPicks[0].Archetype
+	}
+
+	for i := 1; i < 100; i++ {
+		got := recommend.Recommend("PremierDraft", poolIDs, pack, ratingsMap, names, meta)
+		if len(got.PoolColors) == 0 {
+			t.Fatalf("call %d: PoolColors unexpectedly empty", i)
+		}
+		if got.PoolColors[0] != firstColor {
+			t.Errorf("call %d: PoolColors[0] = %q, want %q (nondeterminism)", i, got.PoolColors[0], firstColor)
+		}
+		archetype := ""
+		if len(got.TopPicks) > 0 {
+			archetype = got.TopPicks[0].Archetype
+		}
+		if archetype != firstArchetype {
+			t.Errorf("call %d: Archetype = %q, want %q (nondeterminism)", i, archetype, firstArchetype)
+		}
+	}
+}
+
+// TestPoolColors_QualitySumTieBreak — AC2: when two colors have the same
+// frequency, the one with the higher GIHWR quality sum must win PoolColors[0].
+// Pool: 3R (GIHWR 70/68/65) vs 3G (GIHWR 55/50/48); R quality_sum > G quality_sum
+// despite equal card count → PoolColors[0] must be "R".
+func TestPoolColors_QualitySumTieBreak(t *testing.T) {
+	rRatings := []float64{70.0, 68.0, 65.0}
+	gRatings := []float64{55.0, 50.0, 48.0}
+
+	pool := make(map[string]draftalgo.CardMeta)
+	ratingsMap := stubRatings{"packcard": 60.0}
+	rIDs := []string{"Ra", "Rb", "Rc"}
+	gIDs := []string{"Ga", "Gb", "Gc"}
+	for i, id := range rIDs {
+		pool[id] = draftalgo.CardMeta{Colors: []string{"R"}}
+		ratingsMap[id] = rRatings[i]
+	}
+	for i, id := range gIDs {
+		pool[id] = draftalgo.CardMeta{Colors: []string{"G"}}
+		ratingsMap[id] = gRatings[i]
+	}
+	poolIDs := append(rIDs, gIDs...)
+
+	count := 1000
+	meta := stubCardMeta{"packcard": {Colors: []string{"R"}, ALSA: 3.0, GIHCount: &count}}
+	for id, m := range pool {
+		meta[id] = m
+	}
+	names := stubCards{"packcard": "Pack Card"}
+
+	recs := recommend.Recommend("PremierDraft", poolIDs, []string{"packcard"}, ratingsMap, names, meta)
+
+	if len(recs.PoolColors) == 0 {
+		t.Fatal("expected PoolColors to be non-empty")
+	}
+	if recs.PoolColors[0] != "R" {
+		t.Errorf("quality-sum tie-break: PoolColors[0] = %q, want %q (R has higher quality sum)", recs.PoolColors[0], "R")
+	}
+}
+
+// TestPoolColors_WUBRGFallbackNoRatings — AC3: when frequencies are tied and
+// there is no ratings data, WUBRG position must be the deterministic fallback.
+// Pool: 3B + 3G (both count=3, no ratings). B is position 2, G is position 4
+// in WUBRG → B must appear first in PoolColors.
+func TestPoolColors_WUBRGFallbackNoRatings(t *testing.T) {
+	pool := poolWithColors(t, 3, "B", 3, "G", 0, "")
+	poolIDs := poolKeys(pool)
+
+	count := 1000
+	meta := stubCardMeta{"packcard": {Colors: []string{"B"}, ALSA: 3.0, GIHCount: &count}}
+	for id, m := range pool {
+		meta[id] = m
+	}
+	names := stubCards{"packcard": "Pack Card"}
+	// Nil ratings — no quality data for pool cards.
+	var nilRatings draftalgo.RatingsLookup
+
+	recs := recommend.Recommend("PremierDraft", poolIDs, []string{"packcard"}, nilRatings, names, meta)
+
+	if len(recs.PoolColors) == 0 {
+		t.Fatal("expected PoolColors to be non-empty")
+	}
+	if recs.PoolColors[0] != "B" {
+		t.Errorf("WUBRG fallback: PoolColors[0] = %q, want %q (B < G in WUBRG order)", recs.PoolColors[0], "B")
+	}
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────
 
 // poolWithColors builds a pool map from n1 cards of color1, n2 of color2,
