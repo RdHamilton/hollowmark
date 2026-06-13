@@ -71,7 +71,7 @@ function createMockDraftPick(overrides: Partial<models.DraftPickSession> = {}): 
     ID: 1,
     SessionID: 'test-session-1',
     PackNumber: 0,
-    PickNumber: 1,
+    PickNumber: 0,
     CardID: '12345',
     Timestamp: new Date('2025-11-20T10:05:00Z'),
     PickQualityGrade: null,
@@ -229,7 +229,7 @@ describe('Draft Component', () => {
     it('should update when draft:updated event is fired', async () => {
       const session = createMockDraftSession();
       // Start in Case C (one pick) so the active-draft view is rendered immediately
-      const initialPick = createMockDraftPick({ PackNumber: 0, PickNumber: 1 });
+      const initialPick = createMockDraftPick({ PackNumber: 0, PickNumber: 0 });
       const packs: models.DraftPackSession[] = [];
       const setCards = [createMockSetCard()];
       const ratings = [createMockCardRating()];
@@ -249,7 +249,7 @@ describe('Draft Component', () => {
       });
 
       // Update picks — now two picks
-      const secondPick = createMockDraftPick({ ID: 2, PackNumber: 0, PickNumber: 2 });
+      const secondPick = createMockDraftPick({ ID: 2, PackNumber: 0, PickNumber: 1 });
       mockDrafts.getDraftPicks.mockResolvedValue([initialPick, secondPick]);
       mockDrafts.getDraftDeckMetrics.mockResolvedValue(mockMetrics);
 
@@ -263,13 +263,49 @@ describe('Draft Component', () => {
   });
 
   describe('Draft Picks Display', () => {
+    // ── pick-number display regression (#1398) ─────────────────────────────
+    // The BFF stores PickNumber as 0-based (first pick of a pack = 0).
+    // Both pick-history render sites must add +1 so the UI shows P1P1, not P1P0.
+    // This test uses the real 0-based wire values to catch a regression at source.
+    it('renders pick number labels with +1 offset for 0-based BFF PickNumber (#1398)', async () => {
+      const session = createMockDraftSession();
+      const card1 = createMockSetCard({ ArenaID: '11111', Name: 'Card One' });
+      const card2 = createMockSetCard({ ArenaID: '22222', Name: 'Card Two' });
+      // PackNumber and PickNumber are both 0-based from the BFF
+      const picks = [
+        createMockDraftPick({ CardID: '11111', PackNumber: 0, PickNumber: 0 }),
+        createMockDraftPick({ ID: 2, CardID: '22222', PackNumber: 0, PickNumber: 1 }),
+      ];
+
+      mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
+      mockDrafts.getDraftPicks.mockResolvedValue(picks);
+      mockDrafts.getDraftPool.mockResolvedValue([]);
+      mockCards.getSetCards.mockResolvedValue([card1, card2]);
+      mockCards.getCardRatings.mockResolvedValue([]);
+
+      render(<Draft />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Picks: 2\/45/i)).toBeInTheDocument();
+      });
+
+      // PickNumber 0 → displays P1P1 (NOT the buggy P1P0)
+      // PickNumber 1 → displays P1P2
+      expect(screen.getByText('Pick History')).toBeInTheDocument();
+      expect(screen.getByText('P1P1')).toBeInTheDocument();
+      expect(screen.getByText('P1P2')).toBeInTheDocument();
+      // Regression guard: the raw 0-based label must never appear
+      expect(screen.queryByText('P1P0')).not.toBeInTheDocument();
+    });
+
     it('should render picked cards correctly', async () => {
       const session = createMockDraftSession();
       const card1 = createMockSetCard({ ArenaID: '11111', Name: 'Card One' });
       const card2 = createMockSetCard({ ArenaID: '22222', Name: 'Card Two' });
+      // Using 0-based PickNumber values as the BFF sends them
       const picks = [
-        createMockDraftPick({ CardID: '11111', PackNumber: 0, PickNumber: 1 }),
-        createMockDraftPick({ CardID: '22222', PackNumber: 0, PickNumber: 2 }),
+        createMockDraftPick({ CardID: '11111', PackNumber: 0, PickNumber: 0 }),
+        createMockDraftPick({ ID: 2, CardID: '22222', PackNumber: 0, PickNumber: 1 }),
       ];
 
       mockDrafts.getActiveDraftSessions.mockResolvedValue([session]);
