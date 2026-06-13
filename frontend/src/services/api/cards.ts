@@ -11,6 +11,7 @@
  */
 
 import { get, post, del, getRaw } from '../apiClient';
+import type { ApiRequestOptions } from '../apiClient';
 import { models, gui, seventeenlands } from '@/types/models';
 
 // Re-export types for convenience
@@ -72,9 +73,10 @@ export async function getSetCards(setCode: string): Promise<SetCard[]> {
  */
 export async function getCardRatings(
   setCode: string,
-  format: string
+  format: string,
+  options?: ApiRequestOptions
 ): Promise<CardRatingWithTier[]> {
-  return get<CardRatingWithTier[]>(`/cards/ratings/${setCode}/${format}`);
+  return get<CardRatingWithTier[]>(`/cards/ratings/${setCode}/${format}`, options);
 }
 
 /**
@@ -166,9 +168,10 @@ export interface RatingsStaleness {
  */
 export async function getRatingsStaleness(
   setCode: string,
-  format: string
+  format: string,
+  options?: ApiRequestOptions
 ): Promise<RatingsStaleness> {
-  return get<RatingsStaleness>(`/cards/ratings/${setCode}/${format}/staleness`);
+  return get<RatingsStaleness>(`/cards/ratings/${setCode}/${format}/staleness`, options);
 }
 
 /**
@@ -176,9 +179,10 @@ export async function getRatingsStaleness(
  */
 export async function refreshSetRatings(
   setCode: string,
-  format: string = 'PremierDraft'
+  format: string = 'PremierDraft',
+  options?: ApiRequestOptions
 ): Promise<void> {
-  await post(`/cards/ratings/${setCode}/refresh`, { format });
+  await post(`/cards/ratings/${setCode}/refresh`, { format }, options);
 }
 
 // ============================================================================
