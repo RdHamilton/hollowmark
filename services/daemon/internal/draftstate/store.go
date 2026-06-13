@@ -255,15 +255,50 @@ func sessionKey(courseName, draftID string) string {
 	return draftID
 }
 
-// splitCourse pulls the format prefix and set suffix out of an MTGA
-// CourseName like "PremierDraft_BLB" → ("PremierDraft", "BLB"). Falls
-// back gracefully when the format doesn't match.
+// splitCourse pulls the format prefix and set code out of an MTGA CourseName.
+//
+// MTGA CourseNames come in two shapes:
+//
+//   - Two-segment:   "PremierDraft_BLB"                → ("PremierDraft",     "BLB")
+//   - Three-segment: "QuickDraft_SOS_20260526"          → ("QuickDraft",       "SOS")
+//   - Three-segment: "QuickDraftEmblem_SOS_20260611"    → ("QuickDraftEmblem", "SOS")
+//   - Three-segment: "PremierDraftEmblem_SOS_20260611"  → ("PremierDraftEmblem", "SOS")
+//
+// The old strings.LastIndex approach broke on three-segment names by treating
+// the trailing date segment (e.g. "20260611") as the set code. The fix scans
+// segments right-to-left and picks the first segment that is entirely
+// alphabetic (A–Z / a–z) as the set code; everything to its left is the
+// format prefix. Purely numeric segments (dates, sequence IDs) are skipped.
+// Falls back to (course, "") when no alpha segment is found after position 0.
 func splitCourse(course string) (string, string) {
-	idx := strings.LastIndex(course, "_")
-	if idx <= 0 || idx == len(course)-1 {
+	segments := strings.Split(course, "_")
+	if len(segments) < 2 {
 		return course, ""
 	}
-	return course[:idx], course[idx+1:]
+	for i := len(segments) - 1; i >= 1; i-- {
+		if isAlpha(segments[i]) {
+			prefix := strings.Join(segments[:i], "_")
+			return prefix, segments[i]
+		}
+	}
+	// No all-alpha segment found after position 0 — fall back to the last
+	// segment (preserves old behaviour for unknown future formats).
+	return strings.Join(segments[:len(segments)-1], "_"), segments[len(segments)-1]
+}
+
+// isAlpha reports whether s consists entirely of ASCII letters (A–Z / a–z).
+// Set codes like "BLB", "SOS", "FDN" are all-alpha; date stamps like
+// "20260611" and numeric IDs are not.
+func isAlpha(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+			return false
+		}
+	}
+	return true
 }
 
 // cloneSession returns a deep copy safe for handlers to read without
