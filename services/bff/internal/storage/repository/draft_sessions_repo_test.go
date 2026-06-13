@@ -10,9 +10,17 @@ import (
 	"github.com/RdHamilton/hollowmark/services/bff/internal/storage/repository"
 )
 
-// insertTestDraftSession inserts a minimal draft_sessions row for the given account.
-// The row (and any associated draft_match_results) is removed via t.Cleanup.
+// insertTestDraftSession inserts a minimal draft_sessions row for the given account
+// with status="completed".  The row (and any associated draft_match_results) is
+// removed via t.Cleanup.
 func insertTestDraftSession(t *testing.T, db *sql.DB, sessionID string, accountID int64, setCode string, startTime time.Time) {
+	t.Helper()
+	insertTestDraftSessionWithStatus(t, db, sessionID, accountID, setCode, startTime, "completed")
+}
+
+// insertTestDraftSessionWithStatus is the underlying helper that accepts an explicit
+// status value.  Use insertTestDraftSession for completed rows (the common case).
+func insertTestDraftSessionWithStatus(t *testing.T, db *sql.DB, sessionID string, accountID int64, setCode string, startTime time.Time, status string) {
 	t.Helper()
 
 	_, err := db.ExecContext(
@@ -20,10 +28,10 @@ func insertTestDraftSession(t *testing.T, db *sql.DB, sessionID string, accountI
 		`INSERT INTO draft_sessions
 			(id, account_id, event_name, set_code, draft_type, start_time, status)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		sessionID, accountID, "event-"+sessionID, setCode, "PremierDraft", startTime, "completed",
+		sessionID, accountID, "event-"+sessionID, setCode, "PremierDraft", startTime, status,
 	)
 	if err != nil {
-		t.Fatalf("insertTestDraftSession %q: %v", sessionID, err)
+		t.Fatalf("insertTestDraftSessionWithStatus %q status=%q: %v", sessionID, status, err)
 	}
 
 	t.Cleanup(func() {
@@ -739,5 +747,71 @@ func TestInsertDraftPick_Idempotent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected 1 pick row after idempotent insert, got %d", count)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Draft History view filter: completed-only (#1419 Defect E follow-on)
+// ---------------------------------------------------------------------------
+
+// TestDraftSessionsRepository_ListByAccountID_ExcludesInProgressSessions verifies
+// that the Draft History endpoint (backed by ListByAccountID) does NOT surface
+// in_progress drafts.  Before the #1419 fix, sessions created by draft.pack /
+// draft.pick events (status="in_progress") appeared in the Draft History table
+// while the player was still in-game, causing premature entries.
+//
+// The test inserts one completed and one in_progress session for the same account,
+// then asserts that ListByAccountID returns exactly the completed row, and that the
+// pagination total also reflects only the completed count.
+func TestDraftSessionsRepository_ListByAccountID_ExcludesInProgressSessions(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "draft-history-filter-test")
+	now := time.Now().UTC()
+
+	// Completed session — must appear in Draft History.
+	insertTestDraftSessionWithStatus(t, db, "ds-hist-done-"+fmt.Sprintf("%d", accountID), accountID, "SOS", now, "completed")
+	// In-progress session — must NOT appear in Draft History.
+	insertTestDraftSessionWithStatus(t, db, "ds-hist-wip-"+fmt.Sprintf("%d", accountID), accountID, "SOS", now.Add(-time.Minute), "in_progress")
+
+	rows, total, err := repo.ListByAccountID(context.Background(), accountID, "", 1, 100)
+	if err != nil {
+		t.Fatalf("ListByAccountID: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("total: want 1 (completed only), got %d", total)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows: want 1, got %d", len(rows))
+	}
+	// The returned row must be the completed one.
+	wantID := "ds-hist-done-" + fmt.Sprintf("%d", accountID)
+	if rows[0].ID != wantID {
+		t.Errorf("row ID: want %q, got %q", wantID, rows[0].ID)
+	}
+}
+
+// TestDraftSessionsRepository_ListByAccountID_SetCode_ExcludesInProgress verifies
+// the set-code-filtered path also excludes in_progress sessions.
+func TestDraftSessionsRepository_ListByAccountID_SetCode_ExcludesInProgress(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "draft-history-setfilter-test")
+	now := time.Now().UTC()
+
+	insertTestDraftSessionWithStatus(t, db, "ds-sf-done-"+fmt.Sprintf("%d", accountID), accountID, "SOS", now, "completed")
+	insertTestDraftSessionWithStatus(t, db, "ds-sf-wip-"+fmt.Sprintf("%d", accountID), accountID, "SOS", now.Add(-time.Minute), "in_progress")
+
+	rows, total, err := repo.ListByAccountID(context.Background(), accountID, "SOS", 1, 100)
+	if err != nil {
+		t.Fatalf("ListByAccountID SOS: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("total: want 1, got %d", total)
+	}
+	if len(rows) != 1 {
+		t.Errorf("rows: want 1, got %d", len(rows))
 	}
 }

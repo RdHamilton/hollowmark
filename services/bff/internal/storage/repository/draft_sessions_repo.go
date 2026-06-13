@@ -52,9 +52,12 @@ func NewDraftSessionsRepository(db DB) *DraftSessionsRepository {
 	return &DraftSessionsRepository{db: db}
 }
 
-// ListByAccountID returns a page of draft sessions for the given account,
-// ordered by start_time DESC.  setCode may be empty to return all sets.
-// wins/losses are computed via JOIN against draft_match_results in a single query.
+// ListByAccountID returns a page of completed draft sessions for the given
+// account, ordered by start_time DESC.  Only sessions with status='completed'
+// are returned — in-progress sessions are excluded so the Draft History view
+// never surfaces a draft that is still underway (#1419).  setCode may be
+// empty to return all sets.  wins/losses are computed via JOIN against
+// draft_match_results in a single query.
 func (r *DraftSessionsRepository) ListByAccountID(
 	ctx context.Context,
 	accountID int64,
@@ -77,7 +80,7 @@ func (r *DraftSessionsRepository) ListByAccountID(
 			       ds.format_type, ds.is_trophy
 			FROM draft_sessions ds
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
-			WHERE ds.account_id = $1 AND ds.set_code = $2
+			WHERE ds.account_id = $1 AND ds.set_code = $2 AND ds.status = 'completed'
 			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC
 			LIMIT $3 OFFSET $4`
@@ -91,7 +94,7 @@ func (r *DraftSessionsRepository) ListByAccountID(
 			       ds.format_type, ds.is_trophy
 			FROM draft_sessions ds
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
-			WHERE ds.account_id = $1
+			WHERE ds.account_id = $1 AND ds.status = 'completed'
 			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC
 			LIMIT $2 OFFSET $3`
@@ -134,14 +137,14 @@ func (r *DraftSessionsRepository) countByAccountID(ctx context.Context, accountI
 	var total int
 
 	if setCode != "" {
-		const q = `SELECT COUNT(*) FROM draft_sessions WHERE account_id = $1 AND set_code = $2`
+		const q = `SELECT COUNT(*) FROM draft_sessions WHERE account_id = $1 AND set_code = $2 AND status = 'completed'`
 		row := r.db.QueryRowContext(ctx, q, accountID, setCode)
 
 		if err := row.Scan(&total); err != nil {
 			return 0, err
 		}
 	} else {
-		const q = `SELECT COUNT(*) FROM draft_sessions WHERE account_id = $1`
+		const q = `SELECT COUNT(*) FROM draft_sessions WHERE account_id = $1 AND status = 'completed'`
 		row := r.db.QueryRowContext(ctx, q, accountID)
 
 		if err := row.Scan(&total); err != nil {
@@ -184,6 +187,7 @@ func (r *DraftSessionsRepository) ListByAccountIDCursorP(
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
 			WHERE ds.account_id = $1
 			  AND ds.set_code = $2
+			  AND ds.status = 'completed'
 			  AND (ds.start_time < $3 OR (ds.start_time = $3 AND ds.id < $4))
 			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC, ds.id DESC
@@ -199,7 +203,7 @@ func (r *DraftSessionsRepository) ListByAccountIDCursorP(
 			       ds.format_type, ds.is_trophy
 			FROM draft_sessions ds
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
-			WHERE ds.account_id = $1 AND ds.set_code = $2
+			WHERE ds.account_id = $1 AND ds.set_code = $2 AND ds.status = 'completed'
 			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC, ds.id DESC
 			LIMIT $3`
@@ -215,6 +219,7 @@ func (r *DraftSessionsRepository) ListByAccountIDCursorP(
 			FROM draft_sessions ds
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
 			WHERE ds.account_id = $1
+			  AND ds.status = 'completed'
 			  AND (ds.start_time < $2 OR (ds.start_time = $2 AND ds.id < $3))
 			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC, ds.id DESC
@@ -230,7 +235,7 @@ func (r *DraftSessionsRepository) ListByAccountIDCursorP(
 			       ds.format_type, ds.is_trophy
 			FROM draft_sessions ds
 			LEFT JOIN draft_match_results dmr ON dmr.session_id = ds.id
-			WHERE ds.account_id = $1
+			WHERE ds.account_id = $1 AND ds.status = 'completed'
 			GROUP BY ds.id, ds.set_code, ds.draft_type, ds.start_time, ds.end_time, ds.format_type, ds.is_trophy
 			ORDER BY ds.start_time DESC, ds.id DESC
 			LIMIT $2`
