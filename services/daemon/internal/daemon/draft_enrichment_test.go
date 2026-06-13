@@ -79,9 +79,9 @@ func seedDraftstate(t *testing.T, courseName string, fixedNow time.Time) (*draft
 // session_id. The captured payload will have SessionID == "".
 func TestDraftStarted_Enriched_EmitsSessionID(t *testing.T) {
 	fixedNow := time.Now().UTC().Add(-5 * time.Minute)
-	// Use a two-segment CourseName so splitCourse yields Format="QuickDraft", SetCode="EOE".
-	// Three-segment names (e.g. "QuickDraft_EOE_20260612") split on the last "_" giving
-	// Format="QuickDraft_EOE", SetCode="20260612" — not the shape we want here.
+	// Two-segment CourseName: splitCourse("QuickDraft_EOE") → Format="QuickDraft", SetCode="EOE".
+	// Three-segment names (e.g. "QuickDraft_EOE_20260612") also work correctly after
+	// the #1418 fix — both yield Format="QuickDraft", SetCode="EOE".
 	store, wantSessionID := seedDraftstate(t, "QuickDraft_EOE", fixedNow)
 
 	var cap eventCapture

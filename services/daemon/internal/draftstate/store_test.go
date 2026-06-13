@@ -237,6 +237,129 @@ func TestSetCodeFallback_CourseWithoutUnderscore(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Emblem draft-type family — splitCourse robustness (#1418 Defect A)
+// ---------------------------------------------------------------------------
+//
+// MTGA 2026.61+ introduced Emblem-variant drafts. The CourseName has THREE
+// underscore-separated segments: <FormatPrefix>_<SetCode>_<YYYYMMDD>.
+//
+//   Example: "QuickDraftEmblem_SOS_20260611"
+//
+// The existing splitCourse implementation does strings.LastIndex(course,"_")
+// which extracts the DATE segment ("20260611") as SetCode instead of the
+// actual 2–4 letter set code ("SOS"). This causes every Emblem draft session
+// to carry a garbage SetCode and an incorrect Format, breaking the draft
+// advisor, set-code-scoped ratings lookup, and SPA display.
+//
+// The fix: scan segments right-to-left; the first ALL-ALPHA segment is the
+// set code; everything to its left is the format prefix.
+
+// TestSplitCourse_QuickDraftEmblem_ThreeSegment is the headline regression
+// test from the incident. A QuickDraftEmblem CourseName with the shape
+// <Format>_<SetCode>_<YYYYMMDD> must parse to Format="QuickDraftEmblem" and
+// SetCode="SOS" (not "20260611").
+func TestSplitCourse_QuickDraftEmblem_ThreeSegment(t *testing.T) {
+	s := draftstate.New()
+	s.HandlePack(&logreader.DraftPackPayload{
+		CourseName: "QuickDraftEmblem_SOS_20260611",
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{102470}, SelfPick: 1},
+	})
+	sess, ok := s.Get("current")
+	if !ok {
+		t.Fatal("expected a current session after HandlePack")
+	}
+	if sess.Format != "QuickDraftEmblem" {
+		t.Errorf("Format = %q, want QuickDraftEmblem", sess.Format)
+	}
+	if sess.SetCode != "SOS" {
+		t.Errorf("SetCode = %q, want SOS (not the date segment)", sess.SetCode)
+	}
+}
+
+// TestSplitCourse_PremierDraftEmblem_ThreeSegment verifies the broader Emblem
+// family: PremierDraftEmblem also has the three-segment shape.
+func TestSplitCourse_PremierDraftEmblem_ThreeSegment(t *testing.T) {
+	s := draftstate.New()
+	s.HandlePack(&logreader.DraftPackPayload{
+		CourseName: "PremierDraftEmblem_SOS_20260611",
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{100}, SelfPick: 1},
+	})
+	sess, ok := s.Get("current")
+	if !ok {
+		t.Fatal("expected a current session after HandlePack")
+	}
+	if sess.Format != "PremierDraftEmblem" {
+		t.Errorf("Format = %q, want PremierDraftEmblem", sess.Format)
+	}
+	if sess.SetCode != "SOS" {
+		t.Errorf("SetCode = %q, want SOS", sess.SetCode)
+	}
+}
+
+// TestSplitCourse_QuickDraft_TwoSegment_NotRegressed verifies the standard
+// two-segment QuickDraft form still parses correctly after the Emblem fix.
+// "QuickDraft_SOS_20260526" is also three-segment — it must yield Format="QuickDraft"
+// and SetCode="SOS".
+func TestSplitCourse_QuickDraft_TwoSegment_NotRegressed(t *testing.T) {
+	s := draftstate.New()
+	s.HandlePack(&logreader.DraftPackPayload{
+		CourseName: "QuickDraft_SOS_20260526",
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{100}, SelfPick: 1},
+	})
+	sess, ok := s.Get("current")
+	if !ok {
+		t.Fatal("expected a current session after HandlePack")
+	}
+	if sess.Format != "QuickDraft" {
+		t.Errorf("Format = %q, want QuickDraft", sess.Format)
+	}
+	if sess.SetCode != "SOS" {
+		t.Errorf("SetCode = %q, want SOS", sess.SetCode)
+	}
+}
+
+// TestSplitCourse_PremierDraft_TwoSegment_NotRegressed verifies the canonical
+// two-segment PremierDraft form is unaffected.
+func TestSplitCourse_PremierDraft_TwoSegment_NotRegressed(t *testing.T) {
+	s := draftstate.New()
+	s.HandlePack(&logreader.DraftPackPayload{
+		CourseName: "PremierDraft_BLB",
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{100}, SelfPick: 1},
+	})
+	sess, ok := s.Get("current")
+	if !ok {
+		t.Fatal("expected a current session after HandlePack")
+	}
+	if sess.Format != "PremierDraft" {
+		t.Errorf("Format = %q, want PremierDraft", sess.Format)
+	}
+	if sess.SetCode != "BLB" {
+		t.Errorf("SetCode = %q, want BLB", sess.SetCode)
+	}
+}
+
+// TestSplitCourse_FutureEmblemVariant_ArbitrarySetCode verifies that the
+// fix is not SOS-specific; any all-alpha set code in position N-2 is
+// recognised correctly.
+func TestSplitCourse_FutureEmblemVariant_ArbitrarySetCode(t *testing.T) {
+	s := draftstate.New()
+	s.HandlePack(&logreader.DraftPackPayload{
+		CourseName: "QuickDraftEmblem_FDN_20261201",
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{100}, SelfPick: 1},
+	})
+	sess, ok := s.Get("current")
+	if !ok {
+		t.Fatal("expected a current session after HandlePack")
+	}
+	if sess.Format != "QuickDraftEmblem" {
+		t.Errorf("Format = %q, want QuickDraftEmblem", sess.Format)
+	}
+	if sess.SetCode != "FDN" {
+		t.Errorf("SetCode = %q, want FDN", sess.SetCode)
+	}
+}
+
 func TestConcurrentReadsAndWritesAreSafe(t *testing.T) {
 	s := draftstate.New()
 	var wg sync.WaitGroup
