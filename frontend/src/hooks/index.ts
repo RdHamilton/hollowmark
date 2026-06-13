@@ -51,5 +51,6 @@ export type {
   DraftPickPayload,
   SessionStatus,
   DraftSessionState,
+  DraftSessionSnapshot,
   UseDraftSessionReturn,
 } from './useDraftSession';

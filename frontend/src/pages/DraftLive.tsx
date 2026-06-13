@@ -6,6 +6,14 @@
  * and fetches card ratings from the BFF for top-pick highlighting.
  *
  * Ticket: #1390
+ *
+ * #1421 — Mount-fetch cold-start hydration:
+ * On mount (once Clerk is loaded), fetch the active draft session from the
+ * BFF and hydrate useDraftSession so the page shows the active state
+ * immediately without waiting for an SSE event replay that will never come.
+ * ADR-084 = ingest-time broadcast only; the BFF SSE broker does NOT replay
+ * missed events.  SSE remains the live-update path once the session is
+ * hydrated.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -17,6 +25,7 @@ import type { DraftPackPayload } from '@/hooks';
 import { getDraftRatings } from '@/services/api/bffDraftRatings';
 import type { BffCardRating } from '@/services/api/bffDraftRatings';
 import { getSetCards } from '@/services/api/cards';
+import { getActiveDraftSessions, getDraftPicks } from '@/services/api/drafts';
 import { trackEvent } from '@/services/analytics';
 import { useFeatureFlag } from '@/hooks/useFeatureFlag';
 import { gradeFromGihwr } from './draftGrade';
@@ -103,7 +112,7 @@ interface RatingsState {
 // ---------------------------------------------------------------------------
 
 const DraftLive: React.FC = () => {
-  const { getToken } = useAuth();
+  const { getToken, isLoaded, isSignedIn } = useAuth();
   const getTokenRef = useRef(getToken);
   useEffect(() => { getTokenRef.current = getToken; });
 
@@ -118,11 +127,63 @@ const DraftLive: React.FC = () => {
   const { latestEvent, status: streamStatus } = useDraftEventStream();
 
   // ── Session state machine ─────────────────────────────────────────────────
-  const { state: session, dispatch } = useDraftSession();
+  const { state: session, dispatch, hydrate } = useDraftSession();
 
-  // ── Draft metadata derived from events ───────────────────────────────────
+  // ── Draft metadata derived from events or mount-fetch ────────────────────
   const [setCode, setSetCode] = useState<string | null>(null);
   const [draftFormat, setDraftFormat] = useState<string | null>(null);
+
+  // ── Mount-fetch cold-start hydration (#1421) ──────────────────────────────
+  // On mount, once Clerk is loaded and the user is signed in, fetch the active
+  // draft session from the BFF and hydrate the state machine.  This prevents
+  // "No active draft" showing mid-draft when the user opens the page between
+  // SSE pack events — the BFF SSE broker does NOT replay (ADR-084).
+  //
+  // Race handling: hydrate() is a no-op when sessionStatus is already 'active',
+  // so if an SSE draft.pack arrives before this fetch resolves the live SSE
+  // state is preserved.
+  const mountFetchedRef = useRef(false);
+
+  useEffect(() => {
+    // Wait for Clerk to finish hydrating before touching the BFF — same guard
+    // as useDraftEventStream uses before opening the EventSource.
+    if (!isLoaded || !isSignedIn) return;
+    // Only run once per mount.
+    if (mountFetchedRef.current) return;
+    mountFetchedRef.current = true;
+
+    const fetchActiveSession = async () => {
+      try {
+        const sessions = await getActiveDraftSessions();
+        if (!sessions || sessions.length === 0) return;
+
+        const session = sessions[0];
+
+        // Derive metadata from the session row.
+        if (session.SetCode) setSetCode(session.SetCode.toUpperCase());
+        if (session.DraftType) setDraftFormat(formatLabel(session.DraftType));
+
+        // Fetch picks to reconstruct pickedCardIds and latest pack/pick position.
+        const picks = await getDraftPicks(session.ID);
+        const pickedCardIds = (picks ?? []).map((p) => Number(p.CardID)).filter(Number.isFinite);
+
+        // Derive pack/pick from the most-recent pick row (picks are returned
+        // newest-last by the BFF — take the last element).
+        const lastPick = picks && picks.length > 0 ? picks[picks.length - 1] : null;
+        // BFF PackNumber is 0-based; normalise to 1-based for the state machine.
+        const packNumber = lastPick ? lastPick.PackNumber + 1 : 0;
+        const pickNumber = lastPick ? lastPick.PickNumber + 1 : 0;
+
+        hydrate({ pickedCardIds, packNumber, pickNumber });
+      } catch {
+        // Mount-fetch is best-effort: a network error here is non-fatal.
+        // The SSE stream will activate the session on the next pack event.
+      }
+    };
+
+    void fetchActiveSession();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate is stable; setSetCode/setDraftFormat are stable setState dispatchers
+  }, [isLoaded, isSignedIn]);
 
   // Feed latest SSE event into state machine + derive metadata.
   useEffect(() => {

@@ -52,6 +52,30 @@ export interface DraftPickPayload {
 }
 
 // ---------------------------------------------------------------------------
+// Hydration snapshot — produced by the mount-fetch cold-start path (#1421).
+//
+// The BFF does NOT replicate live pack cards (ADR-084 = ingest-time broadcast
+// only), so currentPackCards is always empty on hydration; SSE fills it in on
+// the next pack event. The snapshot carries picks from the BFF so the pick
+// history is immediately visible without waiting for an SSE replay.
+// ---------------------------------------------------------------------------
+
+export interface DraftSessionSnapshot {
+  /** Arena grpIds the player has already picked, derived from BFF pick rows. */
+  pickedCardIds: number[];
+  /**
+   * 1-based pack number from the most-recent BFF pick row.
+   * 0 when no picks have been recorded yet.
+   */
+  packNumber: number;
+  /**
+   * 1-based pick number from the most-recent BFF pick row.
+   * 0 when no picks have been recorded yet.
+   */
+  pickNumber: number;
+}
+
+// ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
@@ -79,92 +103,114 @@ const INITIAL_STATE: DraftSessionState = {
 // Reducer
 // ---------------------------------------------------------------------------
 
-type Action = { type: 'DISPATCH_EVENT'; event: DraftEvent };
+type Action =
+  | { type: 'DISPATCH_EVENT'; event: DraftEvent }
+  | { type: 'HYDRATE'; snapshot: DraftSessionSnapshot };
 
 function reducer(state: DraftSessionState, action: Action): DraftSessionState {
-  if (action.type !== 'DISPATCH_EVENT') {
-    return state;
-  }
-
-  const { event } = action;
-
-  switch (event.type) {
-    case 'draft.started':
-      // Reset cleanly: new draft session begins.
+  switch (action.type) {
+    case 'HYDRATE': {
+      // Only hydrate from idle — if SSE already activated the session (race
+      // where a pack arrives before the mount-fetch resolves), preserve the
+      // live SSE state rather than overwriting it with the snapshot.
+      if (state.sessionStatus !== 'idle') return state;
+      const { snapshot } = action;
       return {
         ...INITIAL_STATE,
         sessionStatus: 'active',
-      };
-
-    case 'draft.ended':
-      return {
-        ...state,
-        sessionStatus: 'complete',
+        packNumber: snapshot.packNumber,
+        pickNumber: snapshot.pickNumber,
+        pickedCards: snapshot.pickedCardIds,
+        // currentPackCards intentionally left empty — SSE fills it in.
         currentPackCards: [],
-      };
-
-    case 'draft.pack': {
-      const p = event.payload as DraftPackPayload | undefined;
-      if (!p) return state;
-
-      // Support both nested daemon shape and flat shape.
-      const cards: number[] =
-        p.draftPack?.PackCards ??
-        p.card_ids ??
-        [];
-
-      // SelfPick is 1-based; PickNumber in flat shape is 0-based.
-      // Normalise both to 1-based for consumer convenience.
-      const rawSelfPick = p.draftPack?.SelfPick;
-      const rawFlatPick = p.pick_number;
-      const pickNumber =
-        rawSelfPick !== undefined
-          ? rawSelfPick
-          : rawFlatPick !== undefined
-          ? rawFlatPick + 1
-          : state.pickNumber;
-
-      // PackNumber in flat shape is 0-based; normalise to 1-based.
-      const rawFlatPack = p.pack_number;
-      const packNumber =
-        rawFlatPack !== undefined ? rawFlatPack + 1 : state.packNumber;
-
-      return {
-        ...state,
-        sessionStatus: 'active',
-        packNumber,
-        pickNumber,
-        currentPackCards: cards,
       };
     }
 
-    case 'draft.pick': {
-      const p = event.payload as DraftPickPayload | undefined;
-      if (!p) return state;
+    case 'DISPATCH_EVENT': {
+      const { event } = action;
 
-      const picked: number[] =
-        p.pickedCards ??
-        (p.card_id !== undefined ? [p.card_id] : []);
+      switch (event.type) {
+        case 'draft.started':
+          // Reset cleanly: new draft session begins.
+          return {
+            ...INITIAL_STATE,
+            sessionStatus: 'active',
+          };
 
-      // PackNumber and PickNumber from the daemon are 0-based.
-      const packNumber =
-        p.PackNumber !== undefined ? p.PackNumber + 1 : state.packNumber;
-      const pickNumber =
-        p.PickNumber !== undefined ? p.PickNumber + 1 : state.pickNumber;
+        case 'draft.ended':
+          return {
+            ...state,
+            sessionStatus: 'complete',
+            currentPackCards: [],
+          };
 
-      // Remove picked cards from currentPackCards.
-      const remaining = state.currentPackCards.filter(
-        (id) => !picked.includes(id)
-      );
+        case 'draft.pack': {
+          const p = event.payload as DraftPackPayload | undefined;
+          if (!p) return state;
 
-      return {
-        ...state,
-        sessionStatus: 'active',
-        packNumber,
-        pickNumber,
-        currentPackCards: remaining,
-        pickedCards: [...state.pickedCards, ...picked],
-      };
+          // Support both nested daemon shape and flat shape.
+          const cards: number[] =
+            p.draftPack?.PackCards ??
+            p.card_ids ??
+            [];
+
+          // SelfPick is 1-based; PickNumber in flat shape is 0-based.
+          // Normalise both to 1-based for consumer convenience.
+          const rawSelfPick = p.draftPack?.SelfPick;
+          const rawFlatPick = p.pick_number;
+          const pickNumber =
+            rawSelfPick !== undefined
+              ? rawSelfPick
+              : rawFlatPick !== undefined
+              ? rawFlatPick + 1
+              : state.pickNumber;
+
+          // PackNumber in flat shape is 0-based; normalise to 1-based.
+          const rawFlatPack = p.pack_number;
+          const packNumber =
+            rawFlatPack !== undefined ? rawFlatPack + 1 : state.packNumber;
+
+          return {
+            ...state,
+            sessionStatus: 'active',
+            packNumber,
+            pickNumber,
+            currentPackCards: cards,
+          };
+        }
+
+        case 'draft.pick': {
+          const p = event.payload as DraftPickPayload | undefined;
+          if (!p) return state;
+
+          const picked: number[] =
+            p.pickedCards ??
+            (p.card_id !== undefined ? [p.card_id] : []);
+
+          // PackNumber and PickNumber from the daemon are 0-based.
+          const packNumber =
+            p.PackNumber !== undefined ? p.PackNumber + 1 : state.packNumber;
+          const pickNumber =
+            p.PickNumber !== undefined ? p.PickNumber + 1 : state.pickNumber;
+
+          // Remove picked cards from currentPackCards.
+          const remaining = state.currentPackCards.filter(
+            (id) => !picked.includes(id)
+          );
+
+          return {
+            ...state,
+            sessionStatus: 'active',
+            packNumber,
+            pickNumber,
+            currentPackCards: remaining,
+            pickedCards: [...state.pickedCards, ...picked],
+          };
+        }
+
+        default:
+          return state;
+      }
     }
 
     default:
@@ -180,14 +226,23 @@ export interface UseDraftSessionReturn {
   state: DraftSessionState;
   /** Feed a parsed SSE event into the state machine. */
   dispatch: (event: DraftEvent) => void;
+  /**
+   * Hydrate the state machine from a BFF session snapshot (#1421 cold-start
+   * path). Call this on mount when an active session exists in the DB so the
+   * page does not show "No active draft" while waiting for the next SSE event.
+   *
+   * No-op if the session is already active (SSE beat the fetch to the punch).
+   */
+  hydrate: (snapshot: DraftSessionSnapshot) => void;
 }
 
 /**
  * useDraftSession manages the in-memory state machine for a live draft session.
  *
  * It is designed to consume events produced by the useDraftEventStream hook.
- * For mid-session resume, replay the buffered stream events through dispatch()
- * in order; the latest draft.pack event will reconstruct currentPackCards.
+ * For mid-session resume, call hydrate() with the BFF session snapshot on
+ * mount (#1421); the state machine activates immediately without requiring an
+ * SSE event replay that will never come (ADR-084 = ingest-time broadcast only).
  */
 export function useDraftSession(): UseDraftSessionReturn {
   const [state, dispatchAction] = useReducer(reducer, INITIAL_STATE);
@@ -196,5 +251,9 @@ export function useDraftSession(): UseDraftSessionReturn {
     dispatchAction({ type: 'DISPATCH_EVENT', event });
   }, []);
 
-  return { state, dispatch };
+  const hydrate = useCallback((snapshot: DraftSessionSnapshot) => {
+    dispatchAction({ type: 'HYDRATE', snapshot });
+  }, []);
+
+  return { state, dispatch, hydrate };
 }

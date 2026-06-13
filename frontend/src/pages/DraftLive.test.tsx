@@ -2,9 +2,11 @@
  * DraftLive component tests — ticket #1390
  *
  * Mocks:
- *   - useDraftEventStream  → controlled via mockStream
- *   - useDraftSession      → controlled via mockSession
- *   - getDraftRatings      → controlled via mockGetDraftRatings
+ *   - useDraftEventStream        → controlled via mockStream
+ *   - useDraftSession            → controlled via mockSession
+ *   - getDraftRatings            → controlled via mockGetDraftRatings
+ *   - getActiveDraftSessions     → controlled via mockGetActiveDraftSessions (#1421)
+ *   - getDraftPicks              → controlled via mockGetDraftPicks (#1421)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -33,6 +35,7 @@ const mockSessionReturn: UseDraftSessionReturn = {
     pickedCards: [],
   },
   dispatch: vi.fn(),
+  hydrate: vi.fn(),
 };
 
 vi.mock('@/hooks', () => ({
@@ -49,9 +52,19 @@ vi.mock('@/services/api/cards', () => ({
   getSetCards: vi.fn(),
 }));
 
-// Clerk useAuth mock
+// BFF drafts adapter — used for mount-fetch cold-start hydration (#1421).
+vi.mock('@/services/api/drafts', () => ({
+  getActiveDraftSessions: vi.fn(),
+  getDraftPicks: vi.fn(),
+}));
+
+// Clerk useAuth mock — isLoaded + isSignedIn required for mount-fetch gate.
 vi.mock('@clerk/react', () => ({
-  useAuth: vi.fn(() => ({ getToken: vi.fn().mockResolvedValue('test-token') })),
+  useAuth: vi.fn(() => ({
+    getToken: vi.fn().mockResolvedValue('test-token'),
+    isLoaded: true,
+    isSignedIn: true,
+  })),
 }));
 
 // Feature flag mock — default ON (preserves existing test behaviour)
@@ -71,11 +84,14 @@ vi.mock('@/services/analytics', () => ({
 import { useDraftEventStream, useDraftSession } from '@/hooks';
 import { getDraftRatings } from '@/services/api/bffDraftRatings';
 import { getSetCards } from '@/services/api/cards';
+import { getActiveDraftSessions, getDraftPicks } from '@/services/api/drafts';
 
 const mockUseDraftEventStream = vi.mocked(useDraftEventStream);
 const mockUseDraftSession = vi.mocked(useDraftSession);
 const mockGetDraftRatings = vi.mocked(getDraftRatings);
 const mockGetSetCards = vi.mocked(getSetCards);
+const mockGetActiveDraftSessions = vi.mocked(getActiveDraftSessions);
+const mockGetDraftPicks = vi.mocked(getDraftPicks);
 const mockUseFeatureFlag = vi.mocked(useFeatureFlagModule.useFeatureFlag);
 const mockTrackEvent = vi.mocked(analyticsModule.trackEvent);
 
@@ -133,6 +149,68 @@ function buildRatingsResult(cards: { arena_id: number; name: string; gihwr?: num
   };
 }
 
+/** Build a minimal DraftSession row shape (matches models.DraftSession). */
+function buildDraftSession(overrides: Partial<{
+  ID: string;
+  SetCode: string;
+  DraftType: string;
+  EventName: string;
+  Status: string;
+}> = {}) {
+  return {
+    ID: overrides.ID ?? 'session-abc',
+    SetCode: overrides.SetCode ?? 'ONE',
+    DraftType: overrides.DraftType ?? 'PremierDraft',
+    EventName: overrides.EventName ?? 'Premier Draft',
+    Status: overrides.Status ?? 'active',
+    StartTime: '2026-06-12T10:00:00Z',
+    EndTime: null,
+    TotalPicks: 0,
+    OverallGrade: null,
+    OverallScore: null,
+    PickQualityScore: null,
+    ColorDisciplineScore: null,
+    DeckCompositionScore: null,
+    StrategicScore: null,
+    PredictedWinRate: null,
+    PredictedWinRateMin: null,
+    PredictedWinRateMax: null,
+    PredictionFactors: null,
+    PredictedAt: null,
+    CreatedAt: '2026-06-12T10:00:00Z',
+    UpdatedAt: '2026-06-12T10:00:00Z',
+    Wins: 0,
+    Losses: 0,
+    IsTrophy: false,
+    FormatType: 'PremierDraft',
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
+/** Build a minimal DraftPickSession row shape. */
+function buildPickRow(overrides: Partial<{
+  ID: string;
+  SessionID: string;
+  PackNumber: number;
+  PickNumber: number;
+  CardID: string;
+}> = {}) {
+  return {
+    ID: overrides.ID ?? 'pick-1',
+    SessionID: overrides.SessionID ?? 'session-abc',
+    PackNumber: overrides.PackNumber ?? 0,
+    PickNumber: overrides.PickNumber ?? 0,
+    CardID: overrides.CardID ?? '101',
+    Timestamp: '2026-06-12T10:01:00Z',
+    PickQualityGrade: null,
+    PickQualityRank: null,
+    PackBestGIHWR: null,
+    PickedCardGIHWR: null,
+    AlternativesJSON: null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -143,6 +221,9 @@ describe('DraftLive', () => {
     mockGetDraftRatings.mockResolvedValue(buildRatingsResult([]));
     // Default: empty catalog — individual tests override as needed.
     mockGetSetCards.mockResolvedValue(buildCatalog([]));
+    // Default: no active session — mount-fetch returns empty (#1421 cold-start).
+    mockGetActiveDraftSessions.mockResolvedValue([]);
+    mockGetDraftPicks.mockResolvedValue([]);
     // Default: flag ON — preserves existing test behaviour
     mockUseFeatureFlag.mockReturnValue({ enabled: true });
   });
@@ -155,6 +236,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'idle' }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -171,6 +253,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'idle' }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -188,6 +271,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'idle' }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -205,6 +289,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'complete' }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -234,6 +319,7 @@ describe('DraftLive', () => {
           currentPackCards: [101, 102],
         }),
         dispatch: dispatchFn,
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -272,6 +358,7 @@ describe('DraftLive', () => {
           currentPackCards: [201, 202],
         }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -299,6 +386,7 @@ describe('DraftLive', () => {
           currentPackCards: [],
         }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -328,6 +416,7 @@ describe('DraftLive', () => {
           pickedCards: [301, 302],
         }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -347,6 +436,7 @@ describe('DraftLive', () => {
           pickedCards: [],
         }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -374,6 +464,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'active', currentPackCards: [101, 102] }),
         dispatch: dispatchFn,
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -404,6 +495,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'active' }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -431,6 +523,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'active' }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -455,6 +548,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'active' }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -492,6 +586,7 @@ describe('DraftLive', () => {
           currentPackCards: [401],
         }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -511,6 +606,7 @@ describe('DraftLive', () => {
           currentPackCards: [999],
         }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -534,6 +630,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'active', currentPackCards: [] }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -572,6 +669,7 @@ describe('DraftLive', () => {
           currentPackCards: [501, 502],
         }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
     }
 
@@ -664,6 +762,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'active' }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
       render(<DraftLive />);
     }
@@ -866,6 +965,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'active', currentPackCards: [102520] }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -893,6 +993,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'active', currentPackCards: [555] }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -911,6 +1012,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'active', currentPackCards: [777] }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -1014,6 +1116,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'active', currentPackCards: [901] }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -1042,6 +1145,7 @@ describe('DraftLive', () => {
       mockUseDraftSession.mockReturnValue({
         state: buildSession({ sessionStatus: 'active', currentPackCards: [902] }),
         dispatch: vi.fn(),
+        hydrate: vi.fn(),
       });
 
       render(<DraftLive />);
@@ -1053,6 +1157,153 @@ describe('DraftLive', () => {
       expect(screen.getByTestId('card-grade-902')).toHaveTextContent('—');
       // gihwr === 0 → the win-rate line is suppressed entirely.
       expect(screen.queryByTestId('card-gihwr-902')).not.toBeInTheDocument();
+    });
+  });
+
+  // ── #1421 — Mount-fetch cold-start hydration ──────────────────────────────
+  // The BFF SSE broker does NOT replay past events (ADR-084 = ingest-time
+  // broadcast only). Opening the Draft Live page mid-draft must NOT show
+  // "No active draft" — the page must hydrate from the BFF active-session
+  // read on mount so the active state is immediately reflected without
+  // waiting for the next SSE pack event to arrive.
+  describe('mount-fetch cold-start hydration (#1421)', () => {
+    it('calls hydrate() when BFF returns an active session, without any SSE event', async () => {
+      // BFF returns an active session with 3 picks.
+      mockGetActiveDraftSessions.mockResolvedValue([
+        buildDraftSession({ ID: 'sess-mid', SetCode: 'BLB', DraftType: 'PremierDraft' }),
+      ]);
+      mockGetDraftPicks.mockResolvedValue([
+        buildPickRow({ ID: 'pk-1', SessionID: 'sess-mid', PackNumber: 0, PickNumber: 0, CardID: '201' }),
+        buildPickRow({ ID: 'pk-2', SessionID: 'sess-mid', PackNumber: 0, PickNumber: 1, CardID: '202' }),
+        buildPickRow({ ID: 'pk-3', SessionID: 'sess-mid', PackNumber: 0, PickNumber: 2, CardID: '203' }),
+      ]);
+
+      const hydrateFn = vi.fn();
+      // Session starts idle — hydrate() is what activates it.
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: null, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'idle' }),
+        dispatch: vi.fn(),
+        hydrate: hydrateFn,
+      });
+
+      render(<DraftLive />);
+
+      // hydrate() must be called with the correct snapshot derived from the BFF data.
+      await waitFor(() => {
+        expect(hydrateFn).toHaveBeenCalledWith({
+          pickedCardIds: [201, 202, 203],
+          // PackNumber=0 (0-based) → 1 (1-based); last pick is pk-3 at PackNumber=0
+          packNumber: 1,
+          // PickNumber=2 (0-based) → 3 (1-based); last pick is pk-3 at PickNumber=2
+          pickNumber: 3,
+        });
+      });
+    });
+
+    it('does NOT call hydrate() when BFF returns no active sessions', async () => {
+      mockGetActiveDraftSessions.mockResolvedValue([]);
+
+      const hydrateFn = vi.fn();
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: null, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'idle' }),
+        dispatch: vi.fn(),
+        hydrate: hydrateFn,
+      });
+
+      render(<DraftLive />);
+
+      // Give the async fetch time to settle.
+      await act(async () => {});
+
+      expect(hydrateFn).not.toHaveBeenCalled();
+    });
+
+    it('derives set code and format from the BFF session row on mount-fetch', async () => {
+      mockGetActiveDraftSessions.mockResolvedValue([
+        buildDraftSession({ SetCode: 'MKM', DraftType: 'BotDraft' }),
+      ]);
+      mockGetDraftPicks.mockResolvedValue([]);
+
+      const hydrateFn = vi.fn();
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: null, status: 'open' });
+      // Simulate: hydrate() activates the session so the active view renders.
+      mockUseDraftSession.mockImplementation(() => {
+        const state = buildSession({ sessionStatus: 'active' });
+        return { state, dispatch: vi.fn(), hydrate: hydrateFn };
+      });
+
+      render(<DraftLive />);
+
+      // Ratings fetch must use the set code and format from the BFF row.
+      // BotDraft → QuickDraft via formatLabel().
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('MKM', 'QuickDraft', 'test-token');
+      });
+    });
+
+    it('hydrates with empty pickedCardIds and zero positions when session has no picks', async () => {
+      mockGetActiveDraftSessions.mockResolvedValue([
+        buildDraftSession({ ID: 'sess-fresh', SetCode: 'ONE', DraftType: 'PremierDraft' }),
+      ]);
+      mockGetDraftPicks.mockResolvedValue([]);
+
+      const hydrateFn = vi.fn();
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: null, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'idle' }),
+        dispatch: vi.fn(),
+        hydrate: hydrateFn,
+      });
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(hydrateFn).toHaveBeenCalledWith({
+          pickedCardIds: [],
+          packNumber: 0,
+          pickNumber: 0,
+        });
+      });
+    });
+
+    it('does not overwrite an already-active session (SSE beat the mount-fetch)', async () => {
+      // SSE already activated the session (draft.pack arrived before the fetch).
+      // hydrate() is a no-op when the session is already active, so even if the
+      // BFF returns a session row, the live SSE state is preserved.
+      mockGetActiveDraftSessions.mockResolvedValue([
+        buildDraftSession({ ID: 'sess-live', SetCode: 'BLB' }),
+      ]);
+      mockGetDraftPicks.mockResolvedValue([
+        buildPickRow({ CardID: '50' }),
+      ]);
+
+      const hydrateFn = vi.fn();
+      // Session is ALREADY active (SSE fired first).
+      mockUseDraftEventStream.mockReturnValue({ latestEvent: null, status: 'open' });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({
+          sessionStatus: 'active',
+          packNumber: 1,
+          pickNumber: 2,
+          currentPackCards: [400, 401, 402],
+        }),
+        dispatch: vi.fn(),
+        hydrate: hydrateFn,
+      });
+
+      render(<DraftLive />);
+
+      // hydrate() IS called — but the reducer ignores it when sessionStatus !== 'idle'.
+      // The component's job is to call hydrate(); the reducer guards against overwrite.
+      // This test verifies the component calls hydrate() regardless — the no-op guard
+      // lives in the reducer (covered by useDraftSession.test.ts).
+      await waitFor(() => {
+        expect(hydrateFn).toHaveBeenCalled();
+      });
+      // The active state (pack cards etc.) must still be visible.
+      expect(screen.getByTestId('draft-live-pack')).toBeInTheDocument();
     });
   });
 });
