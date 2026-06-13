@@ -244,6 +244,129 @@ func TestPostgresStore_UpsertRatings_ZeroFetchedAt_Integration(t *testing.T) {
 	_, _ = pool.Exec(ctx, "DELETE FROM draft_card_ratings WHERE set_code = 'ZFT'")
 }
 
+// TestPostgresStore_UpsertColorRatings_Integration verifies that UpsertColorRatings
+// writes rows into draft_color_ratings, replaces them on a second call (DELETE+INSERT
+// semantics), and skips entries with an empty short_name.
+//
+// Root-cause context: migration 000057 granted only SELECT, INSERT, UPDATE on
+// draft_color_ratings to mtga_sync — missing DELETE. UpsertColorRatings wraps a
+// DELETE + batch INSERT in a single transaction, so every invocation failed with an
+// insufficient_privilege error and the table was permanently empty. Migration 000125
+// adds the missing GRANT DELETE ON draft_color_ratings TO mtga_sync.
+func TestPostgresStore_UpsertColorRatings_Integration(t *testing.T) {
+	dbURL := os.Getenv("TEST_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("TEST_DATABASE_URL not set; skipping integration test")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dbURL)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	const setCode = "CRI"
+	const format = "PremierDraft"
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM draft_color_ratings WHERE set_code = $1", setCode)
+	})
+
+	store := datasets.NewPostgresStore(pool)
+
+	// --- First upsert: two valid rows + one empty-short_name row (must be skipped). ---
+	first := []seventeenlands.ColorRating{
+		{ShortName: "WU", ColorName: "Azorius", Wins: 2900, Games: 5000, IsSummary: false},
+		{ShortName: "BG", ColorName: "Golgari", Wins: 1600, Games: 3200, IsSummary: false},
+		{ShortName: "", ColorName: "Ignored", Wins: 100, Games: 200, IsSummary: false}, // must be skipped
+	}
+	require.NoError(t, store.UpsertColorRatings(ctx, setCode, format, first),
+		"UpsertColorRatings must succeed on first call")
+
+	var countAfterFirst int
+	err = pool.QueryRow(
+		ctx,
+		`SELECT COUNT(*) FROM draft_color_ratings WHERE set_code = $1 AND draft_format = $2`,
+		setCode, format,
+	).Scan(&countAfterFirst)
+	require.NoError(t, err)
+	assert.Equal(t, 2, countAfterFirst,
+		"two non-empty-short_name rows must be written; empty short_name row must be skipped")
+
+	// Verify win_rate is stored as the computed ratio, not raw wins.
+	var winRate float64
+	err = pool.QueryRow(
+		ctx,
+		`SELECT win_rate FROM draft_color_ratings WHERE set_code = $1 AND draft_format = $2 AND color_combination = 'WU'`,
+		setCode, format,
+	).Scan(&winRate)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.58, winRate, 0.001,
+		"win_rate must be stored as Wins/Games (2900/5000 = 0.58)")
+
+	// --- Second upsert: DELETE+INSERT semantics — only the new row should remain. ---
+	second := []seventeenlands.ColorRating{
+		{ShortName: "RG", ColorName: "Gruul", Wins: 3000, Games: 5000, IsSummary: false},
+	}
+	require.NoError(t, store.UpsertColorRatings(ctx, setCode, format, second),
+		"UpsertColorRatings must succeed on second call (requires DELETE privilege on draft_color_ratings)")
+
+	var countAfterSecond int
+	err = pool.QueryRow(
+		ctx,
+		`SELECT COUNT(*) FROM draft_color_ratings WHERE set_code = $1 AND draft_format = $2`,
+		setCode, format,
+	).Scan(&countAfterSecond)
+	require.NoError(t, err)
+	assert.Equal(t, 1, countAfterSecond,
+		"second UpsertColorRatings must replace all rows from first call (DELETE+INSERT semantics)")
+
+	var exists bool
+	err = pool.QueryRow(
+		ctx,
+		`SELECT EXISTS(SELECT 1 FROM draft_color_ratings WHERE set_code = $1 AND draft_format = $2 AND color_combination = 'RG')`,
+		setCode, format,
+	).Scan(&exists)
+	require.NoError(t, err)
+	assert.True(t, exists, "only the row from the second call (RG) must remain")
+}
+
+// TestPostgresStore_UpsertColorRatings_GamesPlayed_Integration verifies that the
+// games_played column is persisted alongside win_rate.
+func TestPostgresStore_UpsertColorRatings_GamesPlayed_Integration(t *testing.T) {
+	dbURL := os.Getenv("TEST_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("TEST_DATABASE_URL not set; skipping integration test")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dbURL)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	const setCode = "GPI"
+	const format = "QuickDraft"
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM draft_color_ratings WHERE set_code = $1", setCode)
+	})
+
+	store := datasets.NewPostgresStore(pool)
+
+	ratings := []seventeenlands.ColorRating{
+		{ShortName: "WB", ColorName: "Orzhov", Wins: 480, Games: 800, IsSummary: false},
+	}
+	require.NoError(t, store.UpsertColorRatings(ctx, setCode, format, ratings))
+
+	var gamesPlayed int
+	err = pool.QueryRow(
+		ctx,
+		`SELECT games_played FROM draft_color_ratings WHERE set_code = $1 AND draft_format = $2 AND color_combination = 'WB'`,
+		setCode, format,
+	).Scan(&gamesPlayed)
+	require.NoError(t, err)
+	assert.Equal(t, 800, gamesPlayed, "games_played must be persisted from ColorRating.Games")
+}
+
 func intPtrTest(v int) *int { return &v }
 
 // TestPostgresStore_UpsertSetCards_Integration verifies that UpsertSetCards writes
