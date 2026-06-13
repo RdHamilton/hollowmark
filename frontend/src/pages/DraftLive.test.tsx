@@ -719,6 +719,127 @@ describe('DraftLive', () => {
     });
   });
 
+  // ── Defect A (#1418): Emblem draft type recognition ───────────────────────
+  // QuickDraftEmblem is the Arena identifier for "Quick Draft with Cascade
+  // Emblem" events.  It must map to the canonical "QuickDraft" BFF key (same
+  // ratings data) and the advisor must engage — not silently no-op.
+  describe('Emblem draft type recognition (#1418 Defect A)', () => {
+    function startedEvent(setCode: string, draftType: string): import('@/hooks/useDraftEventStream').DaemonEvent {
+      return {
+        type: 'draft.started',
+        account_id: 'acc1',
+        event_id: 'e0',
+        session_id: 's1',
+        sequence: 0,
+        occurred_at: '2026-06-12T00:00:00Z',
+        payload: { set_code: setCode, draft_type: draftType },
+      };
+    }
+
+    function renderWithEmblemDraftType(setCode: string, draftType: string) {
+      mockUseDraftEventStream.mockReturnValue({
+        latestEvent: startedEvent(setCode, draftType),
+        status: 'open',
+      });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({ sessionStatus: 'active' }),
+        dispatch: vi.fn(),
+      });
+      render(<DraftLive />);
+    }
+
+    it('maps QuickDraftEmblem → "QuickDraft" in the ratings fetch', async () => {
+      renderWithEmblemDraftType('STX', 'QuickDraftEmblem');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('STX', 'QuickDraft', 'test-token');
+      });
+    });
+
+    it('advisor engages (getDraftRatings called) for QuickDraftEmblem — not a silent no-op', async () => {
+      mockGetDraftRatings.mockResolvedValue(
+        buildRatingsResult([
+          { arena_id: 601, name: 'Clever Lumimancer', gihwr: 0.62 },
+          { arena_id: 602, name: 'Sedgemoor Witch', gihwr: 0.58 },
+        ])
+      );
+
+      mockUseDraftEventStream.mockReturnValue({
+        latestEvent: startedEvent('STX', 'QuickDraftEmblem'),
+        status: 'open',
+      });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({
+          sessionStatus: 'active',
+          packNumber: 1,
+          pickNumber: 1,
+          currentPackCards: [601, 602],
+        }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      // getDraftRatings must have been called — advisor engaged.
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('STX', 'QuickDraft', 'test-token');
+      });
+
+      // Pack cards render with grades (not blank/unknown state).
+      await waitFor(() => {
+        expect(screen.getByTestId('pack-card-601')).toBeInTheDocument();
+        expect(screen.getByTestId('pack-card-602')).toBeInTheDocument();
+      });
+
+      // Top-pick badge shows because advisor is active.
+      await waitFor(() => {
+        expect(screen.getByTestId('top-pick-badge')).toBeInTheDocument();
+      });
+    });
+
+    it('top-pick card is highlighted for QuickDraftEmblem session', async () => {
+      mockGetDraftRatings.mockResolvedValue(
+        buildRatingsResult([
+          { arena_id: 601, name: 'Clever Lumimancer', gihwr: 0.62 },
+          { arena_id: 602, name: 'Sedgemoor Witch', gihwr: 0.58 },
+        ])
+      );
+
+      mockUseDraftEventStream.mockReturnValue({
+        latestEvent: startedEvent('STX', 'QuickDraftEmblem'),
+        status: 'open',
+      });
+      mockUseDraftSession.mockReturnValue({
+        state: buildSession({
+          sessionStatus: 'active',
+          packNumber: 1,
+          pickNumber: 1,
+          currentPackCards: [601, 602],
+        }),
+        dispatch: vi.fn(),
+      });
+
+      render(<DraftLive />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('top-pick-badge')).toBeInTheDocument();
+      });
+
+      // Higher-GIHWR card (601) is the top pick.
+      expect(screen.getByTestId('pack-card-601')).toHaveAttribute('data-top-pick', 'true');
+      // Lower-GIHWR card (602) is NOT marked top pick.
+      expect(screen.getByTestId('pack-card-602')).not.toHaveAttribute('data-top-pick');
+    });
+
+    it('PremierDraftEmblem maps to "PremierDraft" in the ratings fetch', async () => {
+      renderWithEmblemDraftType('STX', 'PremierDraftEmblem');
+
+      await waitFor(() => {
+        expect(mockGetDraftRatings).toHaveBeenCalledWith('STX', 'PremierDraft', 'test-token');
+      });
+    });
+  });
+
   // ── Defect 3: base-catalog name fallback ──────────────────────────────────
   // A player must NEVER see a raw "#<arenaId>". When ratings are unavailable for
   // ANY reason, names resolve from the base catalog (/api/v1/cards) and the grade

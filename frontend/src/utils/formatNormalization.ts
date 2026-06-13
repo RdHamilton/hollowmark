@@ -12,8 +12,19 @@ const QUEUE_TYPE_MAP: Record<string, string> = {
 
 /**
  * Known draft format prefixes that should be normalized.
+ * Emblem variants (e.g. QuickDraftEmblem_STX_20260601) share the same
+ * pick-from-packs structure as their base counterparts and are recognized
+ * here so normalizeQueueType returns the prefix rather than the raw slug
+ * (#1418 Defect A).
  */
-const DRAFT_PREFIXES = ['QuickDraft', 'PremierDraft', 'TradDraft', 'SealedDeck'];
+const DRAFT_PREFIXES = [
+  'QuickDraft',
+  'PremierDraft',
+  'TradDraft',
+  'SealedDeck',
+  'QuickDraftEmblem',
+  'PremierDraftEmblem',
+];
 
 /**
  * Format-specific event IDs that contain the format name.
@@ -105,7 +116,9 @@ export function normalizeQueueType(queueType: string): string {
     if (DRAFT_PREFIXES.includes(prefix)) {
       return prefix
         .replace('TradDraft', 'Traditional Draft')
-        .replace('SealedDeck', 'Sealed');
+        .replace('SealedDeck', 'Sealed')
+        .replace('QuickDraftEmblem', 'Quick Draft (Cascade Emblem)')
+        .replace('PremierDraftEmblem', 'Premier Draft (Cascade Emblem)');
     }
     // Check if it's a mapped queue type with underscore
     if (QUEUE_TYPE_MAP[queueType]) {

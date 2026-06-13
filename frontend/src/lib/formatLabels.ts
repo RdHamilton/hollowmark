@@ -53,6 +53,12 @@ const DRAFT_TYPE_LABELS: Record<string, string> = {
   PremierDraft: "Premier Draft",
   TradDraft: "Traditional Draft",
   SealedDeck: "Sealed",
+  // Emblem variants: Arena applies a Cascade Emblem game effect to the draft
+  // while keeping the same pick-from-packs structure.  Label them distinctly
+  // so players recognise the event, but the advisor logic treats them identically
+  // to the base format (#1418 Defect A).
+  QuickDraftEmblem: "Quick Draft (Cascade Emblem)",
+  PremierDraftEmblem: "Premier Draft (Cascade Emblem)",
 };
 
 const FORMAT_KEYWORD_LABELS: Record<string, string> = {

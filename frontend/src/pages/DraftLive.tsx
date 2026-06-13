@@ -40,17 +40,27 @@ import './DraftLive.css';
  * classify.go) and `draft.started` carries `draft_type: "BotDraft"`, so BotDraft
  * must map to the canonical `"QuickDraft"` key — not passed through unchanged.
  *
+ * Emblem draft types (e.g. `"QuickDraftEmblem"`, `"PremierDraftEmblem"`) are
+ * Arena variants that apply a Cascade Emblem game effect while keeping the same
+ * pick-from-packs draft structure.  The 17Lands ratings data is identical to
+ * the base format, so Emblem types resolve to the same canonical BFF key as
+ * their non-Emblem counterparts (#1418 Defect A).
+ *
  * Handles both the flat `draft_type` field and the nested `CourseName` field
  * from the daemon pack payload.
  */
 function formatLabel(raw: string | undefined): string {
   if (!raw) return 'Draft';
   const upper = raw.toUpperCase();
+  // PremierDraftEmblem must be tested before the EMBLEM catch-all below so it
+  // resolves to "PremierDraft" rather than "QuickDraft".
   if (upper.includes('PREMIER') || upper.includes('TRADITIONAL') || upper.includes('TRAD')) {
     return 'PremierDraft';
   }
   // "BOTDRAFT" is MTGA's internal CurrentModule name for QuickDraft (classify.go).
-  if (upper.includes('QUICK') || upper.includes('BOTDRAFT') || upper.includes('BOT')) {
+  // "EMBLEM" matches QuickDraftEmblem (Cascade Emblem quick drafts) — same
+  // ratings data and draft mechanics as QuickDraft (#1418 Defect A).
+  if (upper.includes('QUICK') || upper.includes('BOTDRAFT') || upper.includes('BOT') || upper.includes('EMBLEM')) {
     return 'QuickDraft';
   }
   if (upper.includes('SEALED')) return 'Sealed';

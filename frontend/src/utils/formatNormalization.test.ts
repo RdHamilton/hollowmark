@@ -107,6 +107,22 @@ describe('formatNormalization', () => {
       });
     });
 
+    // ── Emblem draft types (#1418 Defect A) ────────────────────────────────
+    describe('Emblem draft formats', () => {
+      it('normalizes QuickDraftEmblem with set code and date to "Quick Draft (Cascade Emblem)"', () => {
+        expect(normalizeQueueType('QuickDraftEmblem_STX_20260601')).toBe('Quick Draft (Cascade Emblem)');
+      });
+
+      it('normalizes PremierDraftEmblem with set code to "Premier Draft (Cascade Emblem)"', () => {
+        expect(normalizeQueueType('PremierDraftEmblem_STX_20260601')).toBe('Premier Draft (Cascade Emblem)');
+      });
+
+      it('does not return the raw "QuickDraftEmblem" prefix unchanged', () => {
+        const result = normalizeQueueType('QuickDraftEmblem_STX_20260601');
+        expect(result).not.toBe('QuickDraftEmblem');
+      });
+    });
+
     describe('MTGA internal format slugs with date suffix (DEFECT — raw format slug)', () => {
       it('normalizes HISTORICBRAWLWITHALLOWLIST_20260126 to Historic Brawl', () => {
         expect(normalizeQueueType('HISTORICBRAWLWITHALLOWLIST_20260126')).toBe('Historic Brawl');
