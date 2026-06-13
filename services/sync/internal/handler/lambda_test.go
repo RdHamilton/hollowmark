@@ -1,11 +1,14 @@
 package handler_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"sort"
 	"testing"
 	"time"
@@ -1315,4 +1318,79 @@ func TestHandle_BackfillSetCardStubs_EmptyRatings(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, store.upsertedStubs, "no stubs must be emitted for sets with 0 ratings")
+}
+
+// --- skip-guard WARNING log format tests (#1420) ---
+//
+// These tests lock the exact text of the WARNING log line emitted by updateSkipGuard
+// when a set trips the threshold. The CloudWatch Logs metric filter in sync-lambda.yml
+// keys on the literal substring "[sync] skip guard WARNING:" to publish a custom metric.
+// If the log format changes, the metric filter silently stops matching, making the alarm
+// dead. These tests catch that breakage at CI time.
+
+// TestHandle_SkipGuardWarning_LogLineContainsRequiredSubstring verifies that when a
+// set returns 0 cards for ≥ maxConsecutiveSkips invocations, the WARNING log line
+// contains the metric-filter anchor substring "[sync] skip guard WARNING:".
+func TestHandle_SkipGuardWarning_LogLineContainsRequiredSubstring(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	f := &stubFetcher{cards: []seventeenlands.CardRating{}}
+	store := newPersistentHashStore()
+
+	// threshold=1 — trips immediately on the first invocation.
+	h := handler.NewWithOptions(f, nil, store, []string{"TESTSET"}, []string{"PremierDraft"}, 0, 1, 0, noBackoff)
+	err := h.Handle(context.Background(), nil)
+
+	require.NoError(t, err)
+
+	logOutput := buf.String()
+	// This substring is the CloudWatch Logs metric filter pattern. If it
+	// changes, the CW alarm silently stops firing. Lock it here.
+	assert.Contains(t, logOutput, "[sync] skip guard WARNING:",
+		"WARNING log line must contain the metric-filter anchor substring")
+}
+
+// TestHandle_SkipGuardWarning_LogLineContainsSetCode verifies that the WARNING log
+// line includes the set code so operators can identify which set is affected.
+func TestHandle_SkipGuardWarning_LogLineContainsSetCode(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	f := &stubFetcher{cards: []seventeenlands.CardRating{}}
+	store := newPersistentHashStore()
+
+	h := handler.NewWithOptions(f, nil, store, []string{"sos"}, []string{"PremierDraft"}, 0, 1, 0, noBackoff)
+	err := h.Handle(context.Background(), nil)
+
+	require.NoError(t, err)
+
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, "sos",
+		"WARNING log line must include the set code so operators can identify the set")
+	assert.Contains(t, logOutput, "[sync] skip guard WARNING:",
+		"WARNING log line must contain the metric-filter anchor substring")
+}
+
+// TestHandle_SkipGuardWarning_NotEmittedBelowThreshold verifies that the WARNING
+// line is NOT logged when the skip count is below the threshold. Prevents false alarms.
+func TestHandle_SkipGuardWarning_NotEmittedBelowThreshold(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	f := &stubFetcher{cards: []seventeenlands.CardRating{}}
+	store := newPersistentHashStore()
+
+	// threshold=3 — only 2 misses, so WARNING must NOT appear.
+	h := handler.NewWithOptions(f, nil, store, []string{"FDN"}, []string{"PremierDraft"}, 0, 3, 0, noBackoff)
+	require.NoError(t, h.Handle(context.Background(), nil))
+	require.NoError(t, h.Handle(context.Background(), nil))
+
+	logOutput := buf.String()
+	assert.NotContains(t, logOutput, "[sync] skip guard WARNING:",
+		"WARNING log must NOT appear when skip count is below threshold")
+}
 }
