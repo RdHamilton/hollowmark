@@ -1031,19 +1031,24 @@ jobs:
             bin/${{ env.BINARY }}
           codesign --verify --verbose bin/${{ env.BINARY }}
 
-      - name: Sign collection-agent-helper binary (R1 — hollowmark-tickets#1286)
-        # The helper must be signed with Developer ID Application + hardened runtime
-        # BEFORE pkgbuild embeds it in the .pkg payload.  Gatekeeper requires the
-        # hardened runtime flag on binaries executed as root by launchd.
+      - name: Sign collection-agent-helper binary (ADR-059 / hollowmark-tickets#892)
+        # Sign with Developer ID Application + hardened runtime + the debugger
+        # entitlement declared in collection-agent-helper.entitlements.
         #
-        # Same flags as the daemon (--force --options runtime --timestamp).
+        # Under ADR-059 the helper is no longer a root LaunchDaemon.  It runs
+        # as the logged-in user; task_for_pid succeeds because:
+        #   (a) the binary carries com.apple.security.cs.debugger entitlement, and
+        #   (b) the user has granted com.apple.TaskForPid-allow via
+        #       RequestOneTimeAuthorization on first enable.
+        #
+        # The --entitlements flag embeds the plist so the notarization submission
+        # sees the declared entitlement.  The fitness function in ADR-059 requires:
+        #   codesign -d --entitlements - bin/collection-helper
+        # to emit com.apple.security.cs.debugger = true.  Verified in the assertion
+        # step below.
+        #
         # The existing .pkg notarytool submission covers all payload binaries —
         # no separate notarization call is needed for the helper.
-        #
-        # R1 manual gate (cannot be verified statically): after install on a test
-        # machine, confirm the hardened-runtime-signed helper completes a real
-        # task_for_pid scan via launchd.  Document this in the PR as a manual
-        # reviewer/Ramone verification step.
         env:
           SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
@@ -1051,11 +1056,30 @@ jobs:
           codesign \
             --force \
             --options runtime \
+            --entitlements services/collection-agent-helper/collection-agent-helper.entitlements \
             --sign "$SIGNING_IDENTITY" \
             --timestamp \
             bin/collection-helper
           codesign --verify --verbose bin/collection-helper
-          echo "PASS: collection-helper signed with hardened runtime."
+          echo "PASS: collection-helper signed with hardened runtime + debugger entitlement."
+
+      - name: Assert debugger entitlement present on signed helper (ADR-059 fitness)
+        # ADR-059 §Fitness Functions: codesign -d --entitlements - must emit
+        # com.apple.security.cs.debugger = true.  A missing or false value means
+        # the entitlements file was not passed or was rejected by the signing tool.
+        # Hard-fail here rather than shipping a binary that will silently fail
+        # task_for_pid at runtime.
+        run: |
+          ENTITLEMENTS=$(codesign -d --entitlements - bin/collection-helper 2>&1)
+          echo "=== helper entitlements ==="
+          echo "${ENTITLEMENTS}"
+          echo "==========================="
+          if ! echo "${ENTITLEMENTS}" | grep -q "com.apple.security.cs.debugger"; then
+            echo "ERROR: com.apple.security.cs.debugger not found in helper entitlements." >&2
+            echo "Check --entitlements path and collection-agent-helper.entitlements content." >&2
+            exit 1
+          fi
+          echo "PASS: com.apple.security.cs.debugger entitlement confirmed on signed helper."
 
       - name: Resolve cloud API URL for this build
         id: cloud_url
@@ -1135,18 +1159,16 @@ jobs:
           # binary does not overwrite the prod binary at /usr/local/bin.
           cp bin/${{ env.BINARY }} "pkg-root/usr/local/bin/${DAEMON_BINARY_NAME}"
 
-          # Install collection-agent-helper to SHARE_DIR (hollowmark-tickets#1286, R2).
-          # The helper is channel-agnostic (R5) — same binary for stable + staging.
+          # Install collection-agent-helper to SHARE_DIR (hollowmark-tickets#1286 R2,
+          # ADR-059 privilege-model migration).  Under ADR-059 the helper is no longer
+          # a LaunchDaemon — only the binary is staged; install/ subdir is removed.
           # SHARE_DIR must match helperShareDir constant in collection.go and
           # SHARE_DIR in build-pkg.sh.
           SHARE_DIR_ROOT="pkg-root/usr/local/share/vaultmtg"
-          mkdir -p "${SHARE_DIR_ROOT}/install"
+          mkdir -p "${SHARE_DIR_ROOT}"
           cp bin/collection-helper "${SHARE_DIR_ROOT}/collection-helper"
           chmod 755 "${SHARE_DIR_ROOT}/collection-helper"
-          cp services/collection-agent-helper/install/install-helper.sh "${SHARE_DIR_ROOT}/install/install-helper.sh"
-          cp services/collection-agent-helper/install/com.vaultmtg.collection-helper.plist "${SHARE_DIR_ROOT}/install/com.vaultmtg.collection-helper.plist"
-          chmod 755 "${SHARE_DIR_ROOT}/install/install-helper.sh"
-          echo "[sign-macos] helper staged at ${SHARE_DIR_ROOT}/ and ${SHARE_DIR_ROOT}/install/"
+          echo "[sign-macos] helper staged at ${SHARE_DIR_ROOT}/collection-helper (ADR-059 user-space model — no install/ subdir)"
 
           # pkgbuild does not propagate env vars to the installed postinstall.
           # Substitute placeholders in a copy of the script BEFORE bundling.

@@ -538,36 +538,24 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Install the collection-agent-helper (hollowmark-tickets#1286, R4).
+# 8. Log collection-agent-helper version (ADR-059 / hollowmark-tickets#892).
 #
-# The helper binary and its install/ directory are staged at SHARE_DIR by the
-# .pkg payload so locateHelperFiles() can find them.  This call is unconditional
-# on every .pkg install/upgrade — install-helper.sh handles bootout + bootstrap
-# itself, making this idempotent.
+# The helper binary is staged at SHARE_DIR by the .pkg payload.  Under ADR-059
+# the helper is NO LONGER a LaunchDaemon — it runs as the logged-in user when
+# the daemon requests a collection scan, authorized once via
+# com.apple.TaskForPid-allow.  No install-helper.sh call is made here; there
+# is nothing to register with launchd.
 #
-# R4 constraint: this call MUST be non-fatal.  A failure here (e.g. TCC denial
-# or launchd not available) must not roll back the entire .pkg (the #334 /
-# PackageKit Code=112 class).  The tray "Grant Access" is the user repair path.
-#
-# R6: log the helper version (HelperVersion ldflag embedded at build time) so
-# operators can correlate helper versions from logs without a socket query.
+# Log the helper version so operators can correlate it with scan telemetry
+# (ADR-041 / hollowmark-tickets#1286 R6).
 # ---------------------------------------------------------------------------
 HELPER_BINARY_PATH="${SHARE_DIR}/collection-helper"
-HELPER_INSTALL_SH="${SHARE_DIR}/install/install-helper.sh"
 
-if [[ -f "${HELPER_BINARY_PATH}" && -f "${HELPER_INSTALL_SH}" ]]; then
-  echo "[postinstall] installing collection-agent-helper via ${HELPER_INSTALL_SH}"
-  if bash "${HELPER_INSTALL_SH}" "${HELPER_BINARY_PATH}" 2>&1; then
-    echo "[postinstall] collection-agent-helper installed"
-    # Log helper version for traceability (R6).
-    HELPER_VERSION=$("${HELPER_BINARY_PATH}" --version 2>/dev/null || echo "unknown")
-    echo "[postinstall] helper_version=${HELPER_VERSION}"
-  else
-    echo "[postinstall] WARNING: collection-agent-helper install returned non-zero." >&2
-    echo "[postinstall] WARNING: Daemon installed successfully. Use 'Grant Access' in the tray to install the helper." >&2
-  fi
+if [[ -f "${HELPER_BINARY_PATH}" ]]; then
+  HELPER_VERSION=$("${HELPER_BINARY_PATH}" --version 2>/dev/null || echo "unknown")
+  echo "[postinstall] helper_version=${HELPER_VERSION} (no LaunchDaemon — user-space ADR-059 model)"
 else
-  echo "[postinstall] collection-agent-helper not staged at ${HELPER_BINARY_PATH} — skipping."
+  echo "[postinstall] collection-agent-helper not staged at ${HELPER_BINARY_PATH} — skipping version log."
 fi
 
 echo "[postinstall] done"

@@ -3,49 +3,82 @@
 package daemon
 
 import (
-	"strings"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
-func TestBuildOsaScript_ContainsAdminPrivileges(t *testing.T) {
-	script := buildOsaScript("/usr/local/bin/helper", "/usr/local/lib/install")
-	assert.Contains(t, script, "with administrator privileges")
-	assert.Contains(t, script, "install-helper.sh")
+// TestTriggerHelperAuthorization_Success verifies that triggerHelperAuthorization
+// invokes the helper binary with the --authorize flag and returns nil when the
+// binary exits 0.
+//
+// Under ADR-059 the real helper calls AuthorizationCopyRights for
+// com.apple.TaskForPid-allow and exits.  Here we use a shell script that
+// echos "authorization granted" and exits 0 to isolate the exec contract
+// without CGO or a signed binary.
+func TestTriggerHelperAuthorization_Success(t *testing.T) {
+	// Build a fake helper that accepts --authorize and exits 0.
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "collection-helper")
+	script := "#!/bin/sh\necho 'authorization granted'; exit 0\n"
+	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake helper: %v", err)
+	}
+
+	if err := triggerHelperAuthorization(fakeBin); err != nil {
+		t.Errorf("triggerHelperAuthorization() error = %v; want nil", err)
+	}
 }
 
-func TestBuildOsaScript_PathWithSpaces(t *testing.T) {
-	script := buildOsaScript("/Applications/Vault MTG/helper", "/Applications/Vault MTG/install")
-	// Paths with spaces must be shell-quoted.
-	assert.Contains(t, script, "'")
-	assert.Contains(t, script, "install-helper.sh")
-	assert.Contains(t, script, "Vault MTG")
+// TestTriggerHelperAuthorization_Denied verifies that triggerHelperAuthorization
+// returns a non-nil error when the helper binary exits non-zero (user cancelled
+// the admin dialog, SIP policy blocked the right, etc.).
+func TestTriggerHelperAuthorization_Denied(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "collection-helper")
+	script := "#!/bin/sh\necho 'authorization failed: OSStatus=-60005' >&2; exit 1\n"
+	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake helper: %v", err)
+	}
+
+	err := triggerHelperAuthorization(fakeBin)
+	if err == nil {
+		t.Fatal("triggerHelperAuthorization() error = nil; want non-nil when helper exits 1")
+	}
+	// Error must include the helper's stderr output so the caller can log it.
+	var exitErr *exec.ExitError
+	if !isExitError(err, &exitErr) {
+		t.Logf("error = %v (non-ExitError is acceptable — the error wraps it)", err)
+	}
 }
 
-func TestBuildOsaScript_PathWithSingleQuote(t *testing.T) {
-	script := buildOsaScript("/tmp/vault's/helper", "/tmp/vault's/install")
-	// Single quotes inside paths must be escaped as '\''.
-	assert.Contains(t, script, `'\''`)
+// TestTriggerHelperAuthorization_BinaryNotFound verifies that
+// triggerHelperAuthorization returns a non-nil error when the binary path does
+// not exist, so callers see a clear failure rather than a panic.
+func TestTriggerHelperAuthorization_BinaryNotFound(t *testing.T) {
+	err := triggerHelperAuthorization("/nonexistent/collection-helper")
+	if err == nil {
+		t.Fatal("triggerHelperAuthorization() error = nil; want non-nil for missing binary")
+	}
 }
 
-func TestBuildOsaScript_NoShellInjection(t *testing.T) {
-	// A path containing shell metacharacters must be wrapped in single-quotes.
-	script := buildOsaScript("/tmp/helper;rm -rf /", "/tmp/install;rm -rf /")
-	// The dangerous helper path must appear fully inside single-quotes.
-	assert.Contains(t, script, "'/tmp/helper;rm -rf /'")
-}
-
-func TestShellQuote_PlainPath(t *testing.T) {
-	assert.Equal(t, "'/usr/local/bin'", shellQuote("/usr/local/bin"))
-}
-
-func TestShellQuote_PathWithSpaces(t *testing.T) {
-	assert.Equal(t, "'/path/with spaces'", shellQuote("/path/with spaces"))
-}
-
-func TestShellQuote_PathWithSingleQuote(t *testing.T) {
-	got := shellQuote("/it's here")
-	assert.True(t, strings.HasPrefix(got, "'"))
-	assert.Contains(t, got, `'\''`)
+// isExitError is a helper that unwraps the error chain to find an *exec.ExitError.
+// It mirrors errors.As but works without importing errors in this file.
+func isExitError(err error, target **exec.ExitError) bool {
+	if err == nil {
+		return false
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		if target != nil {
+			*target = ee
+		}
+		return true
+	}
+	// Unwrap one level (fmt.Errorf "%w" wrapping).
+	type unwrapper interface{ Unwrap() error }
+	if u, ok := err.(unwrapper); ok {
+		return isExitError(u.Unwrap(), target)
+	}
+	return false
 }

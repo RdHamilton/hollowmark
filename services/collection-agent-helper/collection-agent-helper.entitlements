@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        com.apple.security.cs.debugger authorizes cross-process memory reads
+        via task_for_pid on macOS when the helper binary is signed with a
+        Developer ID Application certificate (hardened runtime enabled).
+
+        This replaces the root LaunchDaemon privilege model (ADR-059):
+        the helper no longer runs as root; instead it carries this entitlement
+        and the user performs a one-time admin authorization via
+        AuthorizationCopyRights (com.apple.TaskForPid-allow) on first enable.
+
+        Reference: ADR-059 §Implementation, §Fitness Functions.
+        Precedent:  Untapped.gg macOS Companion (verified codesign -d --entitlements -).
+    -->
+    <key>com.apple.security.cs.debugger</key>
+    <true/>
+
+    <!--
+        com.apple.security.cs.allow-unsigned-executable-memory is intentionally
+        NOT included — the helper performs no JIT compilation or self-modifying code.
+        Minimum entitlement set (principle of least privilege).
+    -->
+</dict>
+</plist>

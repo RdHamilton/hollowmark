@@ -93,22 +93,19 @@ mkdir -p "${PKG_ROOT}${SHARE_DIR}"
 cp "${SCRIPT_DIR}/../uninstall.sh" "${PKG_ROOT}${SHARE_DIR}/uninstall.sh"
 chmod 755 "${PKG_ROOT}${SHARE_DIR}/uninstall.sh"
 
-# Install the collection-agent-helper binary and its install/ directory
-# (hollowmark-tickets#1286, R2).  postinstall calls install-helper.sh from
-# SHARE_DIR/install/ so the helper is bootstrapped on every .pkg install.
-# The helper binary must be codesigned before reaching this script (R1).
+# Install the collection-agent-helper binary (hollowmark-tickets#1286 R2,
+# ADR-059 privilege-model migration).
+#
+# Under ADR-059 the helper is no longer a LaunchDaemon.  Only the helper
+# binary itself is staged at SHARE_DIR — the install/ subdirectory (plist +
+# install-helper.sh) is removed from the package payload.  postinstall logs
+# the helper version (R6) but does not call install-helper.sh.
+#
+# The helper binary must be codesigned with com.apple.security.cs.debugger
+# entitlement before reaching this script (R1 / sign-macos job).
 cp "${HELPER_BINARY_PATH}" "${PKG_ROOT}${SHARE_DIR}/collection-helper"
 chmod 755 "${PKG_ROOT}${SHARE_DIR}/collection-helper"
-mkdir -p "${PKG_ROOT}${SHARE_DIR}/install"
-HELPER_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../../collection-agent-helper/install"
-if [[ ! -d "${HELPER_SRC_DIR}" ]]; then
-  echo "[build-pkg] ERROR: collection-agent-helper install/ directory not found at ${HELPER_SRC_DIR}" >&2
-  exit 1
-fi
-cp "${HELPER_SRC_DIR}/install-helper.sh" "${PKG_ROOT}${SHARE_DIR}/install/install-helper.sh"
-cp "${HELPER_SRC_DIR}/com.vaultmtg.collection-helper.plist" "${PKG_ROOT}${SHARE_DIR}/install/com.vaultmtg.collection-helper.plist"
-chmod 755 "${PKG_ROOT}${SHARE_DIR}/install/install-helper.sh"
-echo "[build-pkg] helper staged at ${SHARE_DIR}/collection-helper (and install/ subdirectory)"
+echo "[build-pkg] helper staged at ${SHARE_DIR}/collection-helper (ADR-059 user-space model — no install/ subdir)"
 
 # ---------------------------------------------------------------------------
 # Build the VaultMTG.app launcher bundle (ADR-036 I-8, ticket #278).

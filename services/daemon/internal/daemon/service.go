@@ -1287,11 +1287,11 @@ func (s *Service) Run(ctx context.Context) error {
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
-						log.Printf("[daemon] panic in installCollectionHelper: %v", r)
+						log.Printf("[daemon] panic in authorizeCollectionHelper: %v", r)
 						sentry.CurrentHub().Recover(r)
 					}
 				}()
-				s.installCollectionHelper()
+				s.authorizeCollectionHelper()
 			}()
 
 		case <-s.trayHooks.InstallUpdate:

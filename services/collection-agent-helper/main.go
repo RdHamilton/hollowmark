@@ -1,20 +1,20 @@
 //go:build darwin
 
-// Command collection-helper runs as a root launchd daemon and exposes a Unix
-// socket at /tmp/com.vaultmtg.collection-helper.sock. The VaultMTG daemon
-// connects to this socket to request a collection scan. The helper calls
-// task_for_pid against the running MTGA process and returns the card inventory
-// as JSON.
+// Command collection-helper exposes a Unix socket at
+// /tmp/com.vaultmtg.collection-helper.sock. The VaultMTG daemon connects to
+// this socket to request a collection scan. The helper calls task_for_pid
+// against the running MTGA process (authorized via com.apple.TaskForPid-allow
+// and the com.apple.security.cs.debugger entitlement — ADR-059) and returns
+// the card inventory as JSON.
 //
-// Installation (performed by the tray "Grant Access" flow):
-//
-//	sudo cp collection-helper /Library/Application\ Support/VaultMTG/
-//	sudo cp com.vaultmtg.collection-helper.plist /Library/LaunchDaemons/
-//	sudo launchctl load /Library/LaunchDaemons/com.vaultmtg.collection-helper.plist
+// The helper runs as the logged-in user (not root). task_for_pid succeeds
+// because the signed+notarized binary carries the com.apple.security.cs.debugger
+// entitlement and the user has completed the one-time admin authorization dialog
+// (RequestOneTimeAuthorization) on first enhanced-mode enable.
 //
 // Derivation / diagnostic mode:
 //
-//	sudo ./collection-helper --dump-regions <PID> <outdir>
+//	./collection-helper --dump-regions <PID> <outdir>
 //
 // Dumps all readable VM regions from <PID> to <outdir>/region_NNNN_0x<addr>.bin
 // and writes <outdir>/manifest.json. Uses the same non-intrusive mach_vm_read
@@ -43,9 +43,18 @@ func main() {
 		return
 	}
 
-	if os.Getuid() != 0 {
-		fmt.Fprintln(os.Stderr, "collection-helper must run as root")
-		os.Exit(1)
+	// --authorize: perform the one-time admin authorization dialog for
+	// com.apple.TaskForPid-allow (ADR-059) and exit.  The daemon's tray
+	// "Grant Access" flow invokes this flag via triggerHelperAuthorization().
+	// AuthorizationCopyRights surfaces the system admin-password dialog; the
+	// grant is cached so subsequent --authorize calls are no-ops.
+	if len(os.Args) == 2 && os.Args[1] == "--authorize" {
+		if err := RequestOneTimeAuthorization(); err != nil {
+			fmt.Fprintf(os.Stderr, "authorization failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("authorization granted")
+		return
 	}
 
 	log.SetPrefix("[collection-helper] ")

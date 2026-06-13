@@ -178,80 +178,80 @@ func (s *Service) performCollectionSync(ctx context.Context) {
 	}
 }
 
-// installCollectionHelper runs the privileged helper installer. On macOS this
-// uses osascript to prompt for an admin password then run the install script.
-// After install it re-probes the socket and updates the tray.
-func (s *Service) installCollectionHelper() {
+// authorizeCollectionHelper obtains the one-time com.apple.TaskForPid-allow
+// authorization right (ADR-059) by invoking the helper binary with --authorize.
+// This replaces the old osascript-driven root install flow (runHelperInstaller).
+// On macOS the helper binary is already signed with com.apple.security.cs.debugger;
+// the only privileged action remaining is surfacing the admin-password dialog once.
+//
+// After the authorization dialog succeeds, this polls the helper socket until it
+// is accepting connections (the helper starts on-demand when the daemon requests
+// a scan) and updates the tray state.
+func (s *Service) authorizeCollectionHelper() {
 	if runtime.GOOS != "darwin" {
-		log.Printf("[daemon] collection helper install not supported on %s", runtime.GOOS)
+		log.Printf("[daemon] collection helper authorization not supported on %s", runtime.GOOS)
 		return
 	}
 
-	helperBinary, scriptDir, err := locateHelperFiles()
+	helperBinary, err := locateHelperBinary()
 	if err != nil {
-		log.Printf("[daemon] cannot locate helper files: %v", err)
+		log.Printf("[daemon] cannot locate collection-helper: %v", err)
 		return
 	}
 
-	log.Printf("[daemon] installing collection helper from %s", helperBinary)
-	if err := runHelperInstaller(helperBinary, scriptDir); err != nil {
-		log.Printf("[daemon] helper install failed: %v", err)
+	log.Printf("[daemon] requesting com.apple.TaskForPid-allow authorization via %s --authorize", helperBinary)
+	if err := triggerHelperAuthorization(helperBinary); err != nil {
+		log.Printf("[daemon] helper authorization failed: %v", err)
 		return
 	}
 
-	// Poll until the helper socket is accepting connections (launchd startup
-	// can take several seconds). Give up after 15s and let the next periodic
-	// check update the tray when the socket eventually comes up.
+	// Poll until the helper socket is accepting connections.  The helper starts
+	// on-demand when the daemon connects for a scan, so availability may lag
+	// briefly.  Give up after 15s and let the next periodic check update the tray.
 	c := collectionclient.New()
-	installed := false
+	authorized := false
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if c.IsHelperRunning() {
-			installed = true
+			authorized = true
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	if s.trayHooks.SetHelperInstalled != nil {
-		s.trayHooks.SetHelperInstalled(installed)
+		s.trayHooks.SetHelperInstalled(authorized)
 	}
-	if installed {
-		log.Printf("[daemon] collection helper installed and running")
+	if authorized {
+		log.Printf("[daemon] collection helper authorized and socket ready")
 	} else {
-		log.Printf("[daemon] collection helper installed but socket not yet up — will retry")
+		log.Printf("[daemon] collection helper authorized but socket not yet up — will retry")
 	}
 }
 
 // helperShareDir is the production install location for the collection-helper
-// binary and its install/ directory.  This must match SHARE_DIR in
+// binary.  This must match SHARE_DIR in
 // services/daemon/install/macos/pkg/build-pkg.sh and postinstall.
 // (hollowmark-tickets#1286, R7)
 const helperShareDir = "/usr/local/share/vaultmtg"
 
-// locateHelperFiles returns the path to the collection-helper binary and the
-// directory containing the install script.
+// locateHelperBinary returns the path to the collection-helper binary.
 //
 // Resolution order (hollowmark-tickets#1286, R7):
 //  1. MTGA_COLLECTION_HELPER_DIR env var — used in development and tests.
 //  2. helperShareDir (/usr/local/share/vaultmtg) — the production install
-//     path where the .pkg places the helper binary and install/ directory.
+//     path where the .pkg places the helper binary.
 //
-// The pre-#1286 fallback (dirname of the running daemon executable) is
-// removed: production deployments now always ship the helper under SHARE_DIR,
-// and relying on the executable directory was the proximate cause of users
-// running a stale binary that was never refreshed on update.
-func locateHelperFiles() (helperBinary, scriptDir string, err error) {
+// Under ADR-059 there is no longer a companion install/ directory alongside
+// the binary; the helper runs as the logged-in user and requires only the
+// one-time com.apple.TaskForPid-allow authorization (no root install script).
+func locateHelperBinary() (string, error) {
 	dir := os.Getenv("MTGA_COLLECTION_HELPER_DIR")
 	if dir == "" {
 		dir = helperShareDir
 	}
-	helperBinary = filepath.Join(dir, "collection-helper")
-	scriptDir = filepath.Join(dir, "install")
+	helperBinary := filepath.Join(dir, "collection-helper")
 	if _, statErr := os.Stat(helperBinary); statErr != nil {
-		return "", "", fmt.Errorf("collection-helper binary not found in %s (set MTGA_COLLECTION_HELPER_DIR to override): %w", dir, statErr)
+		return "", fmt.Errorf("collection-helper binary not found in %s (set MTGA_COLLECTION_HELPER_DIR to override): %w", dir, statErr)
 	}
-	if _, statErr := os.Stat(scriptDir); statErr != nil {
-		return "", "", fmt.Errorf("install directory not found in %s: %w", dir, statErr)
-	}
-	return helperBinary, scriptDir, nil
+	return helperBinary, nil
 }
