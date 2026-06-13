@@ -199,6 +199,38 @@ describe('#320 WCAG AA — focus-visible rings (AC2)', () => {
     expect(css).toMatch(/\.auth-btn:focus-visible/);
   });
 
+  it('AuthBar.css: .auth-btn-signup has a :focus-visible override rule (AC1 — #348)', () => {
+    // The generic .auth-btn:focus-visible uses var(--accent) which is accent-on-accent
+    // (1:1 contrast) on the signup button. A dedicated .auth-btn-signup:focus-visible
+    // rule must exist to override it with a contrasting colour.
+    const css = readFileSync(join(SRC_DIR, 'components/AuthBar.css'), 'utf8');
+    expect(css).toMatch(/\.auth-btn-signup:focus-visible/);
+  });
+
+  it('AuthBar.css: .auth-btn-signup:focus-visible outline colour meets WCAG AA 3:1 on --vault-sapphire (AC1 — #348)', () => {
+    // The signup button background is var(--accent) = --vault-sapphire (#4A90D9).
+    // The override outline must provide ≥3:1 contrast against that background.
+    // Recommended: var(--fg-inverse) = --vault-fg-inverse (#0D1117) → 5.66:1.
+    const css = readFileSync(join(SRC_DIR, 'components/AuthBar.css'), 'utf8');
+    // Extract the .auth-btn-signup:focus-visible block
+    const startIdx = css.indexOf('.auth-btn-signup:focus-visible');
+    expect(startIdx, '.auth-btn-signup:focus-visible rule not found in AuthBar.css').toBeGreaterThan(-1);
+    const block = css.slice(startIdx, css.indexOf('}', startIdx) + 1);
+    // The outline-color property must reference a CSS variable (not raw hex)
+    expect(block, 'outline-color property missing from .auth-btn-signup:focus-visible block').toMatch(/outline[^:]*:/);
+    // The block must NOT use var(--accent) as the outline colour (accent-on-accent = invisible)
+    expect(block, '.auth-btn-signup:focus-visible must NOT use var(--accent) as outline colour — accent-on-accent is invisible').not.toMatch(/outline\s*:.*var\(--accent\)/);
+    // The recommended override is var(--fg-inverse) = #0D1117 → 5.66:1 on #4A90D9
+    // Verify the resolved hex meets the WCAG AA UI-element threshold (≥3:1)
+    const sapphire = tok('--vault-sapphire');       // button background: #4A90D9
+    const fgInverse = tok('--vault-fg-inverse');    // recommended outline: #0D1117
+    const ratio = contrastRatio(fgInverse, sapphire);
+    expect(
+      ratio,
+      `--vault-fg-inverse (${fgInverse}) on --vault-sapphire (${sapphire}): ${ratio.toFixed(2)}:1 — must be ≥3:1 (WCAG AA non-text contrast)`,
+    ).toBeGreaterThanOrEqual(3.0);
+  });
+
   it('App.css: global button has :focus-visible rule', () => {
     const css = readFileSync(join(SRC_DIR, 'App.css'), 'utf8');
     expect(css).toMatch(/button:focus-visible/);
