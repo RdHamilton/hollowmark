@@ -32,6 +32,7 @@ var expectedPlayerLog = []string{
 	"player-log/deck-updated.log",
 	"player-log/inventory-updated.log",
 	"player-log/player-authenticated.log",
+	"player-log/periodic-updated.log",
 }
 
 // expectedDaemonEmit lists all daemon-emit fixture files that must exist,
@@ -48,6 +49,7 @@ var expectedDaemonEmit = []string{
 	"daemon-emit/collection-updated.json",
 	"daemon-emit/deck-updated.json",
 	"daemon-emit/inventory-updated.json",
+	"daemon-emit/periodic-updated.json",
 }
 
 // expectedDBExpected lists all db-expected fixture files that must exist and
@@ -59,6 +61,7 @@ var expectedDBExpected = []string{
 	"db-expected/quest-progress.json",
 	"db-expected/quest-upsert-result.json",
 	"db-expected/deck-updated.json",
+	"db-expected/periodic-updated.json",
 }
 
 // expectedAPIExpected lists all api-expected fixture files that must exist

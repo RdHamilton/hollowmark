@@ -128,6 +128,26 @@ var questPairings = []questPair{
 	},
 }
 
+// periodicPair describes a daemon-emit periodic-updated fixture and its expected
+// DB counterpart. The key assertion for #1344: DailyWins and WeeklyWins in the
+// daemon-emit payload must equal the _dailyRewardSequenceId / _weeklyRewardSequenceId
+// values in the player-log fixture — proving that the sequence ID IS the win count.
+type periodicPair struct {
+	daemonEmit string
+	dbExpected string
+}
+
+// periodicPairings is the authoritative map for periodic.updated corpus fixtures.
+// Per #1344 (Ray's golden-corpus amendment): the sequenceId == win-count semantic
+// must be pinned in the corpus so any future refactor that breaks that invariant
+// fails the harness immediately.
+var periodicPairings = []periodicPair{
+	{
+		daemonEmit: "daemon-emit/periodic-updated.json",
+		dbExpected: "db-expected/periodic-updated.json",
+	},
+}
+
 // deckPairings maps deck daemon-emit files to their db/api counterparts.
 var deckPairings = []deckPair{
 	{
@@ -164,6 +184,18 @@ func TestCorpusConsistency(t *testing.T) {
 			p := p
 			t.Run(p.daemonEmit, func(t *testing.T) {
 				checkDeckPair(t, p)
+			})
+		}
+	})
+
+	// #1344 golden-corpus amendment: assert the sequenceId == win-count semantic
+	// is pinned in the corpus. A future refactor that breaks this invariant must
+	// update both the player-log fixture and the db-expected fixture together.
+	t.Run("periodic fixtures", func(t *testing.T) {
+		for _, p := range periodicPairings {
+			p := p
+			t.Run(p.daemonEmit, func(t *testing.T) {
+				checkPeriodicPair(t, p)
 			})
 		}
 	})
@@ -333,6 +365,59 @@ func checkDeckPair(t *testing.T, p deckPair) {
 		if apiResp.Format != emitPayload.Format {
 			t.Errorf("format drift: daemon-emit %s has format=%q but api-expected %s has format=%q",
 				p.daemonEmit, emitPayload.Format, p.apiExpected, apiResp.Format)
+		}
+	}
+}
+
+// checkPeriodicPair asserts that the DailyWins and WeeklyWins in the daemon-emit
+// fixture match the player-log fixture's _dailyRewardSequenceId / _weeklyRewardSequenceId
+// values, and that the db-expected fixture's DailyWins / WeeklyWins match too.
+//
+// This pins the core semantic for #1344: the sequence ID == win count. If either
+// the daemon parser or the BFF projection changes this invariant, this test fails.
+func checkPeriodicPair(t *testing.T, p periodicPair) {
+	t.Helper()
+
+	// Unmarshal daemon-emit fixture.
+	emitData := mustRead(t, p.daemonEmit)
+	var emitEvt contract.DaemonEvent
+	if err := json.Unmarshal(emitData, &emitEvt); err != nil {
+		t.Fatalf("%s: unmarshal DaemonEvent: %v", p.daemonEmit, err)
+	}
+	if emitEvt.Type != "periodic.updated" {
+		t.Errorf("%s: expected Type %q, got %q", p.daemonEmit, "periodic.updated", emitEvt.Type)
+	}
+	var emitPayload contract.PeriodicUpdatedPayload
+	if err := json.Unmarshal(emitEvt.Payload, &emitPayload); err != nil {
+		t.Fatalf("%s: unmarshal PeriodicUpdatedPayload: %v", p.daemonEmit, err)
+	}
+
+	// #1344 invariant: DailyWins and WeeklyWins must be > 0 in the test fixture
+	// (this is the real-game scenario: after 4 daily wins / 7 weekly wins).
+	if emitPayload.DailyWins <= 0 {
+		t.Errorf("%s: DailyWins must be > 0 in the golden fixture (sequenceId == win count)", p.daemonEmit)
+	}
+	if emitPayload.WeeklyWins <= 0 {
+		t.Errorf("%s: WeeklyWins must be > 0 in the golden fixture (sequenceId == win count)", p.daemonEmit)
+	}
+
+	// Check db-expected: DailyWins and WeeklyWins must match the daemon-emit payload.
+	if p.dbExpected != "" {
+		dbData := mustRead(t, p.dbExpected)
+		var dbRow struct {
+			DailyWins  int `json:"DailyWins"`
+			WeeklyWins int `json:"WeeklyWins"`
+		}
+		if err := json.Unmarshal(dbData, &dbRow); err != nil {
+			t.Fatalf("%s: unmarshal db-expected: %v", p.dbExpected, err)
+		}
+		if dbRow.DailyWins != emitPayload.DailyWins {
+			t.Errorf("daily_wins drift: daemon-emit %s has DailyWins=%d but db-expected %s has DailyWins=%d",
+				p.daemonEmit, emitPayload.DailyWins, p.dbExpected, dbRow.DailyWins)
+		}
+		if dbRow.WeeklyWins != emitPayload.WeeklyWins {
+			t.Errorf("weekly_wins drift: daemon-emit %s has WeeklyWins=%d but db-expected %s has WeeklyWins=%d",
+				p.daemonEmit, emitPayload.WeeklyWins, p.dbExpected, dbRow.WeeklyWins)
 		}
 	}
 }

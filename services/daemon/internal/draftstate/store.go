@@ -16,11 +16,14 @@
 // the player is staring at right now. That's what the user wants the
 // "draft live" panel to show.
 //
-// Session identity: MTGA's logs don't carry a stable per-draft session
-// ID at the start of a draft — we synthesize one from CourseName plus
-// the first-pack timestamp. The localapi accepts the literal string
-// "current" for callers who just want "whatever draft is happening
-// right now."
+// Session identity: the stable per-draft ID is the MTGA CourseId GUID
+// extracted from EventGetCoursesV2 responses (#1422).  When that GUID is
+// available (via HandleCourseId), the daemon uses it as the session key so
+// that a re-emitted draft.started after a daemon restart maps to the same
+// draft_sessions row rather than creating a duplicate.  When the GUID has
+// not been seen yet, the daemon falls back to "<CourseName>:<timestamp>".
+// The localapi accepts the literal string "current" for callers who just
+// want "whatever draft is happening right now."
 package draftstate
 
 import (
@@ -42,9 +45,14 @@ type Pick struct {
 }
 
 // Session is the daemon's view of one in-progress (or recently finished)
-// draft. Two timestamps disambiguate sessions sharing a CourseName.
+// draft.
 type Session struct {
-	ID         string // synthetic: "<CourseName>:<RFC3339 timestamp>"
+	// ID is the session identifier.  When the stable MTGA CourseId GUID has
+	// been observed (via HandleCourseId / EventGetCoursesV2), ID is that GUID.
+	// Otherwise it falls back to "<CourseName>:<RFC3339 timestamp>" so existing
+	// sessions are not broken on daemons that have not yet seen the Courses
+	// response (#1422).
+	ID         string
 	CourseName string // raw from MTGA, e.g. "PremierDraft_BLB"
 	SetCode    string // derived suffix, e.g. "BLB"
 	Format     string // derived prefix, e.g. "PremierDraft"
@@ -69,6 +77,11 @@ type Store struct {
 	// currentID tracks the session most recently touched by a draft
 	// event. The localapi's "current" lookup returns this one.
 	currentID string
+	// courseIDs maps CourseName → stable MTGA CourseId GUID so that
+	// subsequent create() calls use the GUID as the session ID rather
+	// than a regenerating timestamp.  Populated by HandleCourseId when
+	// the daemon observes an EventGetCoursesV2 entry (#1422).
+	courseIDs map[string]string
 	// now lets tests override time.Now() for deterministic IDs.
 	now func() time.Time
 }
@@ -76,8 +89,9 @@ type Store struct {
 // New returns an empty Store.
 func New() *Store {
 	return &Store{
-		sessions: map[string]*Session{},
-		now:      time.Now,
+		sessions:  map[string]*Session{},
+		courseIDs: map[string]string{},
+		now:       time.Now,
 	}
 }
 
@@ -86,6 +100,39 @@ func (s *Store) SetClock(now func() time.Time) {
 	s.mu.Lock()
 	s.now = now
 	s.mu.Unlock()
+}
+
+// HandleCourseId registers the stable MTGA CourseId GUID for a CourseName.
+// The daemon calls this when it processes an EventGetCoursesV2 response that
+// carries a CourseId for an in-progress draft course.  Subsequent HandlePack /
+// HandlePick calls for the same CourseName will use the stable GUID as the
+// session ID instead of a regenerating timestamp, preventing duplicate
+// draft_sessions rows on daemon restart (#1422).
+//
+// If the CourseName already has a matching live session (e.g. the daemon saw
+// a pack before the Courses response), we rekey that session to the stable
+// GUID so subsequent lookups are consistent.
+func (s *Store) HandleCourseId(courseId, courseName string) {
+	if courseId == "" || courseName == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Register the stable ID for future create() calls.
+	s.courseIDs[courseName] = courseId
+
+	// If a session already exists for this CourseName but with a timestamp
+	// ID, rekey it so that the next draftState.Get("current") returns the
+	// correct stable ID to service.go.
+	if existing, ok := s.findByCourseLocked(courseName); ok && existing.ID != courseId {
+		delete(s.sessions, existing.ID)
+		existing.ID = courseId
+		s.sessions[courseId] = existing
+		if s.currentID == "" || s.currentID != courseId {
+			s.currentID = courseId
+		}
+	}
 }
 
 // HandlePack records a fresh pack the player is looking at. If this is
@@ -207,6 +254,11 @@ func (s *Store) findOrCreate(course string, pickIdx int) *Session {
 }
 
 func (s *Store) findByCourse(course string) (*Session, bool) {
+	return s.findByCourseLocked(course)
+}
+
+// findByCourseLocked is the lock-free inner body; callers must hold s.mu.
+func (s *Store) findByCourseLocked(course string) (*Session, bool) {
 	// Most recently updated session matching course. Reverse iteration
 	// over the map is fine — we expect ≤1 active session per course at
 	// any time.
@@ -227,7 +279,13 @@ func (s *Store) findByCourse(course string) (*Session, bool) {
 
 func (s *Store) create(course string, _ int) *Session {
 	now := s.now()
-	id := course + ":" + now.UTC().Format(time.RFC3339Nano)
+	// Prefer the stable CourseId GUID registered by HandleCourseId over the
+	// regenerating timestamp.  If no GUID has been seen for this course yet,
+	// fall back to the legacy "<CourseName>:<timestamp>" form.
+	id, hasCourseID := s.courseIDs[course]
+	if !hasCourseID || id == "" {
+		id = course + ":" + now.UTC().Format(time.RFC3339Nano)
+	}
 	format, setCode := splitCourse(course)
 	sess := &Session{
 		ID:         id,
@@ -255,15 +313,50 @@ func sessionKey(courseName, draftID string) string {
 	return draftID
 }
 
-// splitCourse pulls the format prefix and set suffix out of an MTGA
-// CourseName like "PremierDraft_BLB" → ("PremierDraft", "BLB"). Falls
-// back gracefully when the format doesn't match.
+// splitCourse pulls the format prefix and set code out of an MTGA CourseName.
+//
+// MTGA CourseNames come in two shapes:
+//
+//   - Two-segment:   "PremierDraft_BLB"                → ("PremierDraft",     "BLB")
+//   - Three-segment: "QuickDraft_SOS_20260526"          → ("QuickDraft",       "SOS")
+//   - Three-segment: "QuickDraftEmblem_SOS_20260611"    → ("QuickDraftEmblem", "SOS")
+//   - Three-segment: "PremierDraftEmblem_SOS_20260611"  → ("PremierDraftEmblem", "SOS")
+//
+// The old strings.LastIndex approach broke on three-segment names by treating
+// the trailing date segment (e.g. "20260611") as the set code. The fix scans
+// segments right-to-left and picks the first segment that is entirely
+// alphabetic (A–Z / a–z) as the set code; everything to its left is the
+// format prefix. Purely numeric segments (dates, sequence IDs) are skipped.
+// Falls back to (course, "") when no alpha segment is found after position 0.
 func splitCourse(course string) (string, string) {
-	idx := strings.LastIndex(course, "_")
-	if idx <= 0 || idx == len(course)-1 {
+	segments := strings.Split(course, "_")
+	if len(segments) < 2 {
 		return course, ""
 	}
-	return course[:idx], course[idx+1:]
+	for i := len(segments) - 1; i >= 1; i-- {
+		if isAlpha(segments[i]) {
+			prefix := strings.Join(segments[:i], "_")
+			return prefix, segments[i]
+		}
+	}
+	// No all-alpha segment found after position 0 — fall back to the last
+	// segment (preserves old behaviour for unknown future formats).
+	return strings.Join(segments[:len(segments)-1], "_"), segments[len(segments)-1]
+}
+
+// isAlpha reports whether s consists entirely of ASCII letters (A–Z / a–z).
+// Set codes like "BLB", "SOS", "FDN" are all-alpha; date stamps like
+// "20260611" and numeric IDs are not.
+func isAlpha(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+			return false
+		}
+	}
+	return true
 }
 
 // cloneSession returns a deep copy safe for handlers to read without

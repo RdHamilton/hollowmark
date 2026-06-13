@@ -79,9 +79,9 @@ func seedDraftstate(t *testing.T, courseName string, fixedNow time.Time) (*draft
 // session_id. The captured payload will have SessionID == "".
 func TestDraftStarted_Enriched_EmitsSessionID(t *testing.T) {
 	fixedNow := time.Now().UTC().Add(-5 * time.Minute)
-	// Use a two-segment CourseName so splitCourse yields Format="QuickDraft", SetCode="EOE".
-	// Three-segment names (e.g. "QuickDraft_EOE_20260612") split on the last "_" giving
-	// Format="QuickDraft_EOE", SetCode="20260612" — not the shape we want here.
+	// Two-segment CourseName: splitCourse("QuickDraft_EOE") → Format="QuickDraft", SetCode="EOE".
+	// Three-segment names (e.g. "QuickDraft_EOE_20260612") also work correctly after
+	// the #1418 fix — both yield Format="QuickDraft", SetCode="EOE".
 	store, wantSessionID := seedDraftstate(t, "QuickDraft_EOE", fixedNow)
 
 	var cap eventCapture
@@ -236,5 +236,124 @@ func TestDraftStarted_FlushNow_FiresImmediately(t *testing.T) {
 		// Good.
 	case <-time.After(300 * time.Millisecond):
 		t.Fatal("draft.started did not flush promptly — FlushNow must be called for this event type")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildCoursesCompletedPayload — CourseId stable session identity (#1422)
+// ---------------------------------------------------------------------------
+
+// TestBuildCoursesCompletedPayload_UsesStableCourseId verifies that a
+// Courses[] array with a Complete draft course produces a payload whose
+// SessionID is the CourseId GUID, not the CourseName.
+func TestBuildCoursesCompletedPayload_UsesStableCourseId(t *testing.T) {
+	const courseID = "56c6eed8-bec8-4f4c-a8b5-b8beeb94ea1e"
+	courses := []interface{}{
+		map[string]interface{}{
+			"InternalEventName": "QuickDraftEmblem_SOS_20260611",
+			"CourseId":          courseID,
+			"CurrentModule":     "Complete",
+		},
+	}
+	p := buildCoursesCompletedPayload(courses, nil)
+	if p == nil {
+		t.Fatal("expected non-nil payload for Complete draft course")
+	}
+	if p.SessionID != courseID {
+		t.Errorf("SessionID = %q, want GUID %q", p.SessionID, courseID)
+	}
+	if p.EventName != "QuickDraftEmblem_SOS_20260611" {
+		t.Errorf("EventName = %q", p.EventName)
+	}
+	if p.SetCode != "SOS" {
+		t.Errorf("SetCode = %q, want SOS", p.SetCode)
+	}
+	if p.DraftType != "QuickDraftEmblem" {
+		t.Errorf("DraftType = %q, want QuickDraftEmblem", p.DraftType)
+	}
+}
+
+// TestBuildCoursesCompletedPayload_NilWhenNoDraftComplete verifies that
+// non-draft courses and non-Complete draft courses return nil.
+func TestBuildCoursesCompletedPayload_NilWhenNoDraftComplete(t *testing.T) {
+	courses := []interface{}{
+		map[string]interface{}{
+			"InternalEventName": "Explorer_Ladder",
+			"CourseId":          "aa-bb-cc",
+			"CurrentModule":     "Complete",
+		},
+		map[string]interface{}{
+			"InternalEventName": "QuickDraftEmblem_SOS_20260611",
+			"CourseId":          "56c6eed8-bec8-4f4c-a8b5-b8beeb94ea1e",
+			"CurrentModule":     "CreateMatch", // in progress
+		},
+	}
+	p := buildCoursesCompletedPayload(courses, nil)
+	if p != nil {
+		t.Errorf("expected nil payload, got %+v", p)
+	}
+}
+
+// TestBuildCoursesCompletedPayload_RegistersCourseIdInStore verifies that
+// non-Complete draft courses have their CourseId registered with the draftstate
+// store so future HandlePack calls use the stable GUID.
+func TestBuildCoursesCompletedPayload_RegistersCourseIdInStore(t *testing.T) {
+	const courseID = "56c6eed8-bec8-4f4c-a8b5-b8beeb94ea1e"
+	const courseName = "QuickDraftEmblem_SOS_20260611"
+
+	store := draftstate.New()
+
+	courses := []interface{}{
+		map[string]interface{}{
+			"InternalEventName": courseName,
+			"CourseId":          courseID,
+			"CurrentModule":     "CreateMatch", // in progress — not Complete
+		},
+	}
+	// No completing course — payload must be nil.
+	p := buildCoursesCompletedPayload(courses, store)
+	if p != nil {
+		t.Errorf("expected nil for in-progress course, got %+v", p)
+	}
+
+	// But the store must now know the CourseId.  Verify via HandlePack.
+	store.HandlePack(&logreader.DraftPackPayload{
+		CourseName: courseName,
+		DraftPack:  logreader.DraftPackDetail{PackCards: []int{1}, SelfPick: 1},
+	})
+	sess, ok := store.Get("current")
+	if !ok {
+		t.Fatal("expected session after HandlePack")
+	}
+	if sess.ID != courseID {
+		t.Errorf("session ID = %q, want GUID %q (CourseId registration failed)", sess.ID, courseID)
+	}
+}
+
+// TestDeriveDraftFormatAndSet verifies the format/setcode extraction for
+// three-segment (QuickDraftEmblem_SOS_20260611), two-segment (PremierDraft_BLB),
+// and one-segment edge cases.
+func TestDeriveDraftFormatAndSet(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantFormat string
+		wantSet    string
+	}{
+		{"three-segment QuickDraftEmblem", "QuickDraftEmblem_SOS_20260611", "QuickDraftEmblem", "SOS"},
+		{"three-segment PremierDraft", "PremierDraft_SOS_20260526", "PremierDraft", "SOS"},
+		{"two-segment PremierDraft_BLB", "PremierDraft_BLB", "PremierDraft", "BLB"},
+		{"no underscore", "QuickDraft", "QuickDraft", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotFormat, gotSet := deriveDraftFormatAndSet(tc.input)
+			if gotFormat != tc.wantFormat {
+				t.Errorf("format: got %q, want %q", gotFormat, tc.wantFormat)
+			}
+			if gotSet != tc.wantSet {
+				t.Errorf("setCode: got %q, want %q", gotSet, tc.wantSet)
+			}
+		})
 	}
 }

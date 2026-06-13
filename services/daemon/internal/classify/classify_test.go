@@ -159,3 +159,98 @@ func TestClassifyEntry_BotDraftPick_NewFormat_ObjectRequest(t *testing.T) {
 	}
 	assert.Equal(t, "draft.pick", ClassifyEntry(entry))
 }
+
+// ---------------------------------------------------------------------------
+// periodic.updated classifier (#1344 quest/mastery fix)
+// ---------------------------------------------------------------------------
+
+// TestClassifyEntry_PeriodicUpdated verifies that a PeriodicRewardsGetStatus
+// response carrying the top-level "_dailyRewardSequenceId" key is classified
+// as "periodic.updated".
+func TestClassifyEntry_PeriodicUpdated(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"_dailyRewardSequenceId":         float64(4),
+			"_weeklyRewardSequenceId":        float64(7),
+			"_dailyRewardResetTimestamp":     "2026-06-12T09:00:00Z",
+			"_weeklyRewardResetTimestamp":    "2026-06-09T09:00:00Z",
+			"_dailyRewardChestDescriptions":  map[string]interface{}{},
+			"_weeklyRewardChestDescriptions": map[string]interface{}{},
+		},
+	}
+	assert.Equal(t, "periodic.updated", ClassifyEntry(entry))
+}
+
+// TestClassifyEntry_PeriodicUpdated_WeeklyOnly verifies that
+// _weeklyRewardSequenceId alone is sufficient to classify the event.
+func TestClassifyEntry_PeriodicUpdated_WeeklyOnly(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"_weeklyRewardSequenceId":        float64(3),
+			"_weeklyRewardChestDescriptions": map[string]interface{}{},
+		},
+	}
+	assert.Equal(t, "periodic.updated", ClassifyEntry(entry))
+}
+
+// TestClassifyEntry_PeriodicUpdated_ChestDescriptionsAloneNotMatched verifies
+// that a PeriodicRewards entry with only chest descriptions (no sequence IDs)
+// is NOT classified as periodic.updated.
+func TestClassifyEntry_PeriodicUpdated_ChestDescriptionsAloneNotMatched(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON:   map[string]interface{}{"_dailyRewardChestDescriptions": map[string]interface{}{}},
+	}
+	assert.NotEqual(t, "periodic.updated", ClassifyEntry(entry))
+}
+
+// ---------------------------------------------------------------------------
+// mastery.updated classifier (#1344 quest/mastery fix)
+// ---------------------------------------------------------------------------
+
+// TestIsMasteryEntry_WithMasteryPass verifies that an InventoryInfo entry
+// containing a MasteryPass nested object is reported as a mastery entry.
+func TestIsMasteryEntry_WithMasteryPass(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"InventoryInfo": map[string]interface{}{
+				"Gems": float64(1200),
+				"Gold": float64(5000),
+				"MasteryPass": map[string]interface{}{
+					"CurrentLevel": float64(18),
+					"PassType":     "Standard",
+					"MaxLevel":     float64(80),
+				},
+			},
+		},
+	}
+	assert.True(t, IsMasteryEntry(entry))
+}
+
+// TestIsMasteryEntry_WithoutMasteryPass verifies that an InventoryInfo entry
+// lacking a MasteryPass key is NOT a mastery entry.
+func TestIsMasteryEntry_WithoutMasteryPass(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON: map[string]interface{}{
+			"InventoryInfo": map[string]interface{}{
+				"Gems": float64(1200),
+				"Gold": float64(5000),
+			},
+		},
+	}
+	assert.False(t, IsMasteryEntry(entry))
+}
+
+// TestIsMasteryEntry_NonInventoryEntry verifies that a non-inventory entry
+// (no InventoryInfo key) is not a mastery entry.
+func TestIsMasteryEntry_NonInventoryEntry(t *testing.T) {
+	entry := &logreader.LogEntry{
+		IsJSON: true,
+		JSON:   map[string]interface{}{"quests": []interface{}{}},
+	}
+	assert.False(t, IsMasteryEntry(entry))
+}

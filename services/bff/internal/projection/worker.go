@@ -129,6 +129,12 @@ type masteryStore interface {
 	UpsertMastery(ctx context.Context, u repository.MasteryUpsert) error
 }
 
+// periodicStore writes periodic win counts to the accounts table (#1344).
+// It targets the daily_wins and weekly_wins columns from migration 000012.
+type periodicStore interface {
+	UpsertPeriodicWins(ctx context.Context, u repository.PeriodicWinsUpsert) error
+}
+
 // draftDeckCreator creates a deck row from a completed draft session's picks.
 // It is implemented by *repository.DecksRepository.
 type draftDeckCreator interface {
@@ -262,6 +268,7 @@ type Worker struct {
 	decks         deckStore
 	deckSummaries deckSummaryStore
 	mastery       masteryStore
+	periodic      periodicStore
 	gamePlays     gamePlayStore
 	cardPlays     cardPlayStore
 	gameRows      gameRowWriter
@@ -352,9 +359,18 @@ func (w *Worker) WithDeckSummaryStore(store deckSummaryStore) *Worker {
 
 // WithMasteryStore wires the mastery pass store into w and returns w.
 // When wired, projectInventoryUpdated calls UpsertMastery when the payload
-// carries a non-nil Mastery field (#1338).
+// carries a non-nil Mastery field (#1338). Also used by projectMasteryUpdated
+// to handle standalone mastery.updated events (#1344).
 func (w *Worker) WithMasteryStore(store masteryStore) *Worker {
 	w.mastery = store
+	return w
+}
+
+// WithPeriodicStore wires the periodic wins store into w and returns w.
+// When wired, projectPeriodicUpdated writes daily_wins / weekly_wins to the
+// accounts table from periodic.updated daemon events (#1344).
+func (w *Worker) WithPeriodicStore(store periodicStore) *Worker {
+	w.periodic = store
 	return w
 }
 
@@ -469,6 +485,13 @@ func domainsForEventType(eventType string) []string {
 		// inventory.updated dirtying inventory + decks (deck summaries fan-out,
 		// worker.go ~1145-1161) + mastery (mastery fan-out, worker.go ~1163-1177).
 		return []string{"inventory", "decks", "mastery"}
+	case "periodic.updated":
+		// periodic.updated writes daily_wins / weekly_wins on the accounts table.
+		// Quests page reads those columns — mark "quests" dirty so SSE pushes a refresh.
+		return []string{"quests"}
+	case "mastery.updated":
+		// standalone mastery.updated writes mastery_level / mastery_pass / mastery_max.
+		return []string{"mastery"}
 	default:
 		return nil
 	}
@@ -704,6 +727,20 @@ func (w *Worker) projectRow(ctx context.Context, row *repository.DaemonEventRow)
 		writeErr = w.projectDeckUpdated(ctx, row)
 		if writeErr != nil {
 			log.Printf("[projection] projectDeckUpdated id=%d: %v", row.ID, writeErr)
+			outcome = outcomeSkippedMalformed
+		}
+
+	case "periodic.updated":
+		writeErr = w.projectPeriodicUpdated(ctx, row)
+		if writeErr != nil {
+			log.Printf("[projection] projectPeriodicUpdated id=%d: %v", row.ID, writeErr)
+			outcome = outcomeSkippedMalformed
+		}
+
+	case "mastery.updated":
+		writeErr = w.projectMasteryUpdated(ctx, row)
+		if writeErr != nil {
+			log.Printf("[projection] projectMasteryUpdated id=%d: %v", row.ID, writeErr)
 			outcome = outcomeSkippedMalformed
 		}
 
@@ -1337,6 +1374,84 @@ func (w *Worker) projectInventoryUpdated(ctx context.Context, row *repository.Da
 		}); masteryErr != nil {
 			log.Printf("[projection] projectInventoryUpdated id=%d: UpsertMastery: %v", row.ID, masteryErr)
 		}
+	}
+
+	return nil
+}
+
+// --- periodic.updated projector ---
+
+// projectPeriodicUpdated writes daily_wins and weekly_wins from a
+// periodic.updated daemon event to the accounts table (#1344). These are the
+// authoritative MTGA win counts from PeriodicRewardsGetStatus — the Quests page
+// reads them directly instead of the match-derived CountWinsSince path.
+func (w *Worker) projectPeriodicUpdated(ctx context.Context, row *repository.DaemonEventRow) error {
+	var p contract.PeriodicUpdatedPayload
+	if err := json.Unmarshal(row.Payload, &p); err != nil {
+		return fmt.Errorf("unmarshal periodic.updated payload: %w", err)
+	}
+
+	if row.AccountID == "" {
+		return permanent(fmt.Errorf("periodic.updated payload missing account_id"))
+	}
+
+	accountID, err := w.accounts.GetOrCreateByClientID(ctx, row.AccountID, row.UserID)
+	if err != nil {
+		return fmt.Errorf("resolve account: %w", err)
+	}
+
+	if w.periodic == nil {
+		// Store not wired — accept the event and mark projected. Logging omitted
+		// to avoid spam on servers that haven't wired the store yet.
+		return nil
+	}
+
+	if err := w.periodic.UpsertPeriodicWins(ctx, repository.PeriodicWinsUpsert{
+		AccountID:  accountID,
+		DailyWins:  p.DailyWins,
+		WeeklyWins: p.WeeklyWins,
+		UpdatedAt:  row.OccurredAt,
+	}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// --- mastery.updated projector ---
+
+// projectMasteryUpdated handles standalone mastery.updated events emitted by the
+// daemon alongside inventory.updated when InventoryInfo carries a MasteryPass
+// object (#1344). Delegates to UpsertMastery, the same path used by the
+// inventory.updated mastery fan-out — mastery is now independently replayable.
+func (w *Worker) projectMasteryUpdated(ctx context.Context, row *repository.DaemonEventRow) error {
+	var p contract.MasteryUpdatedPayload
+	if err := json.Unmarshal(row.Payload, &p); err != nil {
+		return fmt.Errorf("unmarshal mastery.updated payload: %w", err)
+	}
+
+	if row.AccountID == "" {
+		return permanent(fmt.Errorf("mastery.updated payload missing account_id"))
+	}
+
+	accountID, err := w.accounts.GetOrCreateByClientID(ctx, row.AccountID, row.UserID)
+	if err != nil {
+		return fmt.Errorf("resolve account: %w", err)
+	}
+
+	if w.mastery == nil {
+		// Store not wired — accept the event and mark projected.
+		return nil
+	}
+
+	if err := w.mastery.UpsertMastery(ctx, repository.MasteryUpsert{
+		AccountID:    accountID,
+		MasteryLevel: p.Level,
+		MasteryPass:  p.PassType,
+		MasteryMax:   p.Max,
+		UpdatedAt:    row.OccurredAt,
+	}); err != nil {
+		return err
 	}
 
 	return nil
