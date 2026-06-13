@@ -49,9 +49,15 @@ Promoted to REAL / REAL-DERIVED from the 2026-05-31 Premier-draft session captur
 Still FORMAT-CONFIRMED (could NOT be promoted from this capture):
 
 - `player-log/collection-updated.log` + `daemon-emit/collection-updated.json` — the capture contains **no** `PlayerInventoryGetPlayerCardsV3` collection snapshot (player did not open the collection screen). Awaits a capture exercising the collection surface.
-- `player-log/draft-pack.log` + `player-log/draft-pick.log` + `daemon-emit/draft-pack.json` + `daemon-emit/draft-pick.json` — **GATED on the Premier draft classifier/parser fix.** The Layer-2 contract gate parses the player-log draft fixtures through `ParseDraftPack`/`ParseDraftPick`, which require the top-level `draftPack`/`pickedCards` keys; the daemon classifier gates on those same keys. In the Premier capture those keys appear 0 times — the real Premier pack is `Draft.Notify {draftId,SelfPick,SelfPack,PackCards}` and the real pick is the `EventPlayerDraftMakePick` request — so neither the player-log nor the daemon-emit draft fixtures can be promoted without diverging from (or breaking) the current parser. They are intentionally left until the draft-parser fix (sibling of #336) lands. The real Premier draft shapes are captured under `catalog/samples/` and documented in the taxonomy report.
 
-Note: BotDraft (QuickDraft) draft support is a separate daemon gap tracked by #337 — its raw shapes are catalogued in `tools/fixture-extractor` catalog output (axes `api-request/api-response BotDraftDraftPick`, `json-key DraftPack`), not promoted here.
+### Promotion status (#1405 draft corpus refresh, 2026-06-12 SOS QuickDraftEmblem session)
+
+Draft fixtures were previously gated on the BotDraft parser fix (#1344). That fix merged; all four draft fixtures are now promoted.
+
+- `player-log/draft-pack.log` → REAL — BotDraft `CurrentModule=BotDraft` + stringified `Payload` wire format; `QuickDraftEmblem_SOS_20260611`; PackNumber=0, PickNumber=0, 14 cards. UUID sanitized per ADR-041.
+- `player-log/draft-pick.log` → REAL — `BotDraftDraftPick` request wire format; first pick (PackNumber=0, PickNumber=0, CardIds=[102556]). UUID sanitized.
+- `daemon-emit/draft-pack.json` → REAL-DERIVED — produced by running `logreader.ParseBotDraftStatusPack` on the REAL player-log fixture. Payload shape: `{CourseName, draftPack{PackCards, SelfPick}}`. The FORMAT-CONFIRMED placeholder had the wrong shape (`{draft_id, set_code, pack_number, pick_number}` — a stale `contract.DraftEventPayload` shape the daemon never emits for draft.pack).
+- `daemon-emit/draft-pick.json` → REAL-DERIVED — produced by running `logreader.ParseBotDraftPick` on the REAL player-log fixture. Payload shape: `{CourseName, pickedCards, PackNumber, PickNumber}`. `PickNumber=0` (0-based); the old FORMAT-CONFIRMED fixture had `pick_number=1` which was wrong (D-4 bug #1399 — first pick of a draft is index 0).
 
 ## PII Sanitisation
 
@@ -116,6 +122,7 @@ The test is fast enough to not materially impact CI wall-clock time (~1ms pure J
 |---|---|---|---|
 | 2026-06-02 | `feat/696-697-layer5-corpus-promotion` | 36 files, 12 matches, 0 game_plays | Initial corpus; GRE replay not yet supported. |
 | 2026-06-04 | `feat/808-golden-corpus-rebuild` | 36 files, 7 matches, 1128 game_plays | GRE session manager wired into replay package (#808). match-detail-timeline.json flipped to `expected_empty=false`. Draft data DLQ pending #772. |
+| 2026-06-12 | `fix/1405-draft-corpus-refresh` | N/A — fixture-only refresh (no injector run) | Draft fixtures promoted to REAL/REAL-DERIVED from Ramone's SOS QuickDraftEmblem_SOS_20260611 session capture (#1405). Closes D-4 (#1399). |
 
 ## Layer Consumption
 
