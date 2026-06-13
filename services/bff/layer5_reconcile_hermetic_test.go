@@ -1568,3 +1568,133 @@ func toIntSlice(v any) []int {
 	}
 	return out
 }
+
+// ─── Surface 6b — Draft completion golden fixture ────────────────────────────
+
+// TestLayer5Hermetic_DraftCompleted asserts that the daemon-emit
+// draft-completed.json fixture, when replayed through the BFF projection,
+// transitions a draft session to status='completed' and the History surface
+// returns it.
+//
+// Guards #3285 (EventGetCoursesV2 CurrentModule=Complete → draft.completed
+// emit) end-to-end at layer-5 via the golden corpus. Pairs with #1399 / #1405
+// / #3288 (pack/pick REAL-DERIVED corpus refresh) and #1427 (this ticket).
+//
+// Path A (EventGetCoursesV2) is the authoritative completion signal per
+// classify.go:88-100. This fixture exercises that path — not scene-change.
+func TestLayer5Hermetic_DraftCompleted(t *testing.T) {
+	db := l5OpenDB(t)
+	manifestDir := l5HermeticManifestDir(t)
+	corpusDir := l5HermeticCorpusDir(t)
+	manifest := l5LoadManifest(t, manifestDir, "draft-surface.json")
+
+	// Locate the completion-projection assertion entry in the manifest.
+	assertions := manifest["assertions"].([]any)
+	var completionAssert map[string]any
+	for _, a := range assertions {
+		entry, ok := a.(map[string]any)
+		if !ok {
+			continue
+		}
+		if sub, _ := entry["subcase"].(string); sub == "completion-projection" {
+			completionAssert = entry
+			break
+		}
+	}
+	if completionAssert == nil {
+		t.Fatalf("[layer5-hermetic] draft-surface.json has no assertions[].subcase=completion-projection — add the completion-projection entry per #1427")
+	}
+
+	completionFields := completionAssert["fields"].(map[string]any)
+	wantSessionStatus := completionFields["session_status"].(string)
+	wantSetCode := completionFields["set_code"].(string)
+	wantEventName := completionFields["event_name"].(string)
+	wantHistoryRowCountMin := int(completionFields["history_row_count_min"].(float64))
+
+	clientID := "l5h-draft-completed"
+	userID := l5SeedUser(t, db, clientID)
+	accountID := l5ResolveAccountID(t, db, clientID, userID)
+	_ = accountID
+
+	// Seed only draft-completed.json — standalone CoursesV2-completion session.
+	// Pack/pick are NOT seeded: Option A (Ray binding §2) — the completion event
+	// creates its own draft_sessions row keyed on the CourseId GUID.
+	l5HermeticSeedFromCorpus(t, db, userID, clientID, corpusDir, []string{
+		"draft-completed.json",
+	})
+
+	// Query draft_sessions directly to assert status='completed'.
+	var sessionCount int
+	var sessionStatus string
+	err := db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*), COALESCE(MAX(status), '')
+		   FROM draft_sessions
+		  WHERE account_id = (SELECT id FROM accounts WHERE client_id = $1)
+		    AND status = 'completed'`,
+		clientID,
+	).Scan(&sessionCount, &sessionStatus)
+	if err != nil {
+		t.Fatalf("[layer5-hermetic] draft-completed: query draft_sessions: %v", err)
+	}
+	if sessionCount < 1 {
+		t.Errorf("[layer5-hermetic] draft-completed: want draft_sessions.status=%q row count >= 1, got %d (projection may not have run or session_id mismatch)",
+			wantSessionStatus, sessionCount)
+	} else if sessionStatus != wantSessionStatus {
+		l5HermeticSurfaceErrorf(t, "draft-completed", "session_status", "draft-surface.json",
+			wantSessionStatus, sessionStatus)
+	}
+
+	// AC2: GET /api/v1/history/drafts returns >= 1 row with the completed session.
+	draftSessionsRepo := repository.NewDraftSessionsRepository(db)
+	accountRepo := repository.NewAccountRepository(db)
+	matchesRepo := repository.NewMatchesRepository(db)
+
+	historyHandler := handlers.NewHistoryHandler(accountRepo, matchesRepo, draftSessionsRepo)
+	historyRouter := l5HermeticBuildRouter("/api/v1/history/drafts", http.MethodGet, userID, historyHandler.GetDrafts)
+	historyTS := httptest.NewServer(historyRouter)
+	t.Cleanup(historyTS.Close)
+
+	historyResp := l5HermeticDo(t, historyTS, http.MethodGet, "/api/v1/history/drafts", nil)
+
+	dataRaw, hasDat := historyResp["data"]
+	if !hasDat {
+		t.Fatalf("[layer5-hermetic] draft-completed: response missing 'data' key")
+	}
+	draftsData, _ := dataRaw.([]any)
+	if len(draftsData) < wantHistoryRowCountMin {
+		l5HermeticSurfaceErrorf(t, "draft-completed", "history_row_count", "draft-surface.json",
+			fmt.Sprintf(">= %d", wantHistoryRowCountMin), len(draftsData))
+		return
+	}
+
+	// AC2: the first row must carry the expected set_code.
+	// The history endpoint returns rows ordered by start_time DESC — the seeded
+	// completion session is the only row for this scoped clientID.
+	firstRow, ok := draftsData[0].(map[string]any)
+	if !ok {
+		t.Fatalf("[layer5-hermetic] draft-completed: history data[0] is not an object")
+	}
+	if gotSetCode, _ := firstRow["set_code"].(string); gotSetCode != wantSetCode {
+		l5HermeticSurfaceErrorf(t, "draft-completed", "set_code", "draft-surface.json",
+			wantSetCode, gotSetCode)
+	}
+	// event_name is stored in draft_sessions but not surfaced by the draftResponse
+	// API shape (which exposes set_code + format). Assert via the DB row.
+	var gotEventName string
+	if dbErr := db.QueryRowContext(
+		context.Background(),
+		`SELECT COALESCE(event_name, '')
+		   FROM draft_sessions
+		  WHERE account_id = (SELECT id FROM accounts WHERE client_id = $1)
+		    AND status = 'completed'
+		  LIMIT 1`,
+		clientID,
+	).Scan(&gotEventName); dbErr != nil {
+		t.Fatalf("[layer5-hermetic] draft-completed: query event_name: %v", dbErr)
+	}
+	if gotEventName != wantEventName {
+		l5HermeticSurfaceErrorf(t, "draft-completed", "event_name", "draft-surface.json",
+			wantEventName, gotEventName)
+	}
+}

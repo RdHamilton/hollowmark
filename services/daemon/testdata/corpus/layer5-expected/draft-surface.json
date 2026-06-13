@@ -30,6 +30,20 @@
         "table_must_not_render": true,
         "table_testid": "draft-history-table"
       }
+    },
+    {
+      "surface": "draft-surface",
+      "mode": "B",
+      "subcase": "completion-projection",
+      "bff_endpoint": "/api/v1/history/drafts",
+      "notes": "Guards #3285 (EventGetCoursesV2 CurrentModule=Complete -> draft.completed emit) + #1427 (CurrentModule:Complete golden fixture) end-to-end at layer-5. Replay of draft-completed.json must yield draft_sessions.status='completed' and a history row. session_id is the CourseId GUID (Path A, classify.go:88-100 authoritative path). REAL-DERIVED: session_id=11111111-0000-4000-8000-000000000824 verified by running gen-corpus-draft recorder on player-log/draft-complete.log.",
+      "fields": {
+        "session_status": "completed",
+        "set_code": "SOS",
+        "draft_type": "QuickDraftEmblem",
+        "event_name": "QuickDraftEmblem_SOS_20260611",
+        "history_row_count_min": 1
+      }
     }
   ],
   "corpus_promotion": {
@@ -42,6 +56,6 @@
       "draft_sessions_projected": 0,
       "projection_errors": 0
     },
-    "note": "1142 packs + 1136 picks parse but 0 project. Historical logs predate session_id. Needs new daemon-captured drafts. Grade assertion uses seeded fixture (bridge pattern — same as deck-builder-resolution.json) per Ray's Layer 5 ruling (#829 PLAN_VERDICT)."
+    "note": "1142 packs + 1136 picks parse but 0 project. Historical logs predate session_id. Needs new daemon-captured drafts. Grade assertion uses seeded fixture (bridge pattern \u2014 same as deck-builder-resolution.json) per Ray's Layer 5 ruling (#829 PLAN_VERDICT)."
   }
 }

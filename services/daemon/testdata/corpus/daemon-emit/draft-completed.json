@@ -1,0 +1,14 @@
+{
+  "type": "draft.completed",
+  "account_id": "test-account-001",
+  "event_id": "11111111-0000-0000-0000-000000000008",
+  "session_id": "22222222-0000-0000-0000-000000000001",
+  "sequence": 8,
+  "occurred_at": "2026-06-12T00:05:00Z",
+  "payload": {
+    "session_id": "11111111-0000-4000-8000-000000000824",
+    "event_name": "QuickDraftEmblem_SOS_20260611",
+    "set_code": "SOS",
+    "draft_type": "QuickDraftEmblem"
+  }
+}
