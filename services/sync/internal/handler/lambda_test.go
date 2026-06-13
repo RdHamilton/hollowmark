@@ -54,6 +54,10 @@ type stubStore struct {
 	getHashErr   error
 	setHashErr   error
 	setHashCalls []stubSetHashCall
+
+	// SetCardStub control fields.
+	upsertedStubs  []datasets.SetCardStub
+	upsertStubsErr error
 }
 
 type stubColorUpsert struct {
@@ -109,6 +113,11 @@ func (s *stubStore) SetHash(_ context.Context, key, hash string) error {
 
 func (s *stubStore) UpsertSetCards(_ context.Context, _ []scryfall.ScryfallCard) error {
 	return nil
+}
+
+func (s *stubStore) UpsertSetCardStubs(_ context.Context, stubs []datasets.SetCardStub) error {
+	s.upsertedStubs = append(s.upsertedStubs, stubs...)
+	return s.upsertStubsErr
 }
 
 // Compile-time check that stubStore satisfies datasets.Store.
@@ -1170,4 +1179,140 @@ func TestHandle_SyncCards_UpsertSetCardsError_NonFatal(t *testing.T) {
 	require.Len(t, store.upsertSetCardsCalls, 1)
 	// The 17Lands ratings sync must still have proceeded.
 	assert.Equal(t, 1, fetcher.called, "ratings sync must still run despite UpsertSetCards error")
+}
+
+// --- backfillSetCardStubs tests (#1394) ---
+
+// TestHandle_BackfillSetCardStubs_WritesStubsFromRatings verifies that after the
+// ratings sync, Handle calls UpsertSetCardStubs with one SetCardStub per unique
+// (set_code, arena_id) pair from the fetched ratings. The stub carries the
+// arena_id_source "17lands" so it is distinguishable from Scryfall-sourced rows.
+func TestHandle_BackfillSetCardStubs_WritesStubsFromRatings(t *testing.T) {
+	cards := []seventeenlands.CardRating{
+		{MtgaID: 91537, Name: "Banishing Light"},
+		{MtgaID: 91760, Name: "Shores of Gold"},
+	}
+	fetcher := &stubFetcher{cards: cards}
+	store := &stubStore{}
+
+	h := handler.NewWithFormats(fetcher, store, []string{"BLB"}, []string{"PremierDraft"})
+	err := h.Handle(context.Background(), nil)
+
+	require.NoError(t, err)
+	// Both arena_ids must appear as stubs.
+	require.Len(t, store.upsertedStubs, 2, "one stub per unique arena_id from ratings")
+	stubsByID := make(map[int]datasets.SetCardStub)
+	for _, s := range store.upsertedStubs {
+		stubsByID[s.ArenaID] = s
+	}
+	assert.Equal(t, "Banishing Light", stubsByID[91537].Name)
+	assert.Equal(t, "BLB", stubsByID[91537].SetCode)
+	assert.Equal(t, "17lands", stubsByID[91537].Source)
+	assert.Equal(t, "Shores of Gold", stubsByID[91760].Name)
+	assert.Equal(t, "BLB", stubsByID[91760].SetCode)
+	assert.Equal(t, "17lands", stubsByID[91760].Source)
+}
+
+// TestHandle_BackfillSetCardStubs_DeduplicatesAcrossFormats verifies that when the
+// same arena_id appears in both PremierDraft and QuickDraft responses (the normal
+// case), the stub is only emitted once — not once per format — because writing the
+// same (set_code, arena_id) twice is harmless (DO NOTHING) but wastes a DB round-trip.
+func TestHandle_BackfillSetCardStubs_DeduplicatesAcrossFormats(t *testing.T) {
+	// Same card appears in both formats.
+	sharedCard := seventeenlands.CardRating{MtgaID: 92200, Name: "Valgavoth, Terror Eater"}
+	fetcher := &stubFetcher{cards: []seventeenlands.CardRating{sharedCard}}
+	store := &stubStore{}
+
+	h := handler.NewWithFormats(fetcher, store, []string{"DSK"}, []string{"PremierDraft", "QuickDraft"})
+	err := h.Handle(context.Background(), nil)
+
+	require.NoError(t, err)
+	// 2 formats were fetched.
+	assert.Equal(t, 2, fetcher.called)
+	// But only ONE stub per unique (set_code, arena_id) — deduped.
+	require.Len(t, store.upsertedStubs, 1, "duplicate arena_id across formats must be emitted once")
+	assert.Equal(t, 92200, store.upsertedStubs[0].ArenaID)
+}
+
+// TestHandle_BackfillSetCardStubs_MultiSet verifies that stubs from multiple sets
+// are all written in a single UpsertSetCardStubs call (or accumulated correctly),
+// each stub carrying the correct set_code for its originating set.
+func TestHandle_BackfillSetCardStubs_MultiSet(t *testing.T) {
+	fetcher := &countingFetcher{
+		results: map[string]fetchResult{
+			"BLB": {cards: []seventeenlands.CardRating{
+				{MtgaID: 91001, Name: "Card BLB 1"},
+			}},
+			"DSK": {cards: []seventeenlands.CardRating{
+				{MtgaID: 92001, Name: "Card DSK 1"},
+				{MtgaID: 92002, Name: "Card DSK 2"},
+			}},
+		},
+	}
+	store := &stubStore{}
+
+	h := handler.NewWithFormats(fetcher, store, []string{"BLB", "DSK"}, []string{"PremierDraft"})
+	err := h.Handle(context.Background(), nil)
+
+	require.NoError(t, err)
+	// 1 BLB card + 2 DSK cards = 3 distinct stubs.
+	require.Len(t, store.upsertedStubs, 3, "stubs must be collected from all active sets")
+	setCodes := make(map[string]int)
+	for _, s := range store.upsertedStubs {
+		setCodes[s.SetCode]++
+	}
+	assert.Equal(t, 1, setCodes["BLB"])
+	assert.Equal(t, 2, setCodes["DSK"])
+}
+
+// TestHandle_BackfillSetCardStubs_SkippedWhenZeroMtgaID verifies that rating rows
+// with MtgaID == 0 (paper-only cards with no Arena printing) are not emitted as stubs.
+func TestHandle_BackfillSetCardStubs_SkippedWhenZeroMtgaID(t *testing.T) {
+	cards := []seventeenlands.CardRating{
+		{MtgaID: 0, Name: "Paper Only Card"},
+		{MtgaID: 91537, Name: "Banishing Light"},
+	}
+	fetcher := &stubFetcher{cards: cards}
+	store := &stubStore{}
+
+	h := handler.NewWithFormats(fetcher, store, []string{"BLB"}, []string{"PremierDraft"})
+	err := h.Handle(context.Background(), nil)
+
+	require.NoError(t, err)
+	require.Len(t, store.upsertedStubs, 1, "paper-only card (MtgaID==0) must not produce a stub")
+	assert.Equal(t, 91537, store.upsertedStubs[0].ArenaID)
+}
+
+// TestHandle_BackfillSetCardStubs_NonFatal verifies that a UpsertSetCardStubs
+// failure does not abort Handle — the ratings already persisted and the next
+// Lambda invocation will retry the backfill.
+func TestHandle_BackfillSetCardStubs_NonFatal(t *testing.T) {
+	cards := []seventeenlands.CardRating{
+		{MtgaID: 91537, Name: "Banishing Light"},
+	}
+	fetcher := &stubFetcher{cards: cards}
+	store := &stubStore{
+		upsertStubsErr: errors.New("db write failed"),
+	}
+
+	h := handler.NewWithFormats(fetcher, store, []string{"BLB"}, []string{"PremierDraft"})
+	err := h.Handle(context.Background(), nil)
+
+	require.NoError(t, err, "UpsertSetCardStubs error must be non-fatal")
+	// UpsertRatings must still have been called — stub failure must not roll back ratings.
+	require.Len(t, store.upserted, 1, "ratings must be stored even when stub backfill fails")
+}
+
+// TestHandle_BackfillSetCardStubs_EmptyRatings verifies that when a set returns
+// no cards (e.g. set not yet live on 17Lands), no stubs are emitted and
+// UpsertSetCardStubs is not called with empty input.
+func TestHandle_BackfillSetCardStubs_EmptyRatings(t *testing.T) {
+	fetcher := &stubFetcher{cards: []seventeenlands.CardRating{}} // 0 cards
+	store := &stubStore{}
+
+	h := handler.NewWithFormats(fetcher, store, []string{"SOS"}, []string{"PremierDraft"})
+	err := h.Handle(context.Background(), nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, store.upsertedStubs, "no stubs must be emitted for sets with 0 ratings")
 }

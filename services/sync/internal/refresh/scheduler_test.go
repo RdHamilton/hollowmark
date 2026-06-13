@@ -93,6 +93,10 @@ func (s *stubStore) UpsertSetCards(_ context.Context, _ []scryfall.ScryfallCard)
 	return nil
 }
 
+func (s *stubStore) UpsertSetCardStubs(_ context.Context, _ []datasets.SetCardStub) error {
+	return nil
+}
+
 // Ensure stubStore satisfies the Store interface.
 var _ datasets.Store = (*stubStore)(nil)
 

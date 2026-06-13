@@ -20,6 +20,18 @@ type SyncSet struct {
 	ExpansionCode string // 17Lands expansion code — used in API requests
 }
 
+// SetCardStub is a minimal set_cards row seeded from 17lands card ratings data.
+// It carries only the fields available from the 17lands card_ratings endpoint:
+// the Arena grpId (arena_id), the card name, the set code, and the data source.
+// Stub rows are inserted with ON CONFLICT (set_code, arena_id) DO NOTHING so they
+// never overwrite Scryfall-sourced rows that carry full card metadata.
+type SetCardStub struct {
+	ArenaID int
+	Name    string
+	SetCode string
+	Source  string // always "17lands" for stubs produced by backfillSetCardStubs
+}
+
 // Store persists and retrieves draft card ratings.
 type Store interface {
 	// GetActiveSets returns sets where is_draft_active = TRUE.
@@ -44,4 +56,11 @@ type Store interface {
 	// This is the sole Scryfall card write path — the retired cards table
 	// (dropped in migration 000025) is not written.
 	UpsertSetCards(ctx context.Context, cards []scryfall.ScryfallCard) error
+	// UpsertSetCardStubs inserts minimal set_cards rows sourced from 17lands
+	// card ratings data. Each stub carries only arena_id, name, set_code, and
+	// arena_id_source. Uses ON CONFLICT (set_code, arena_id) DO NOTHING so
+	// existing Scryfall-sourced rows with full metadata are never overwritten.
+	// This backfills arena_id resolution for cards Scryfall bulk-data lacks
+	// arena_id for (Alchemy sets, and recent sets before Scryfall backfills them).
+	UpsertSetCardStubs(ctx context.Context, stubs []SetCardStub) error
 }
