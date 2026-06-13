@@ -114,8 +114,8 @@ func TestLowConfidence_FramingNotWeakness(t *testing.T) {
 // TestColorFit_OnColorReason — a card whose colors are a subset of the
 // pool's committed colors must receive an on-color reason.
 func TestColorFit_OnColorReason(t *testing.T) {
-	// Pool is B/G committed (3 B, 3 G cards in pool → two colors committed).
-	pool := poolWithColors(t, 3, "B", 3, "G", 0, "")
+	// Pool is B/G committed (5 B, 5 G cards in pool → two colors committed at threshold=5).
+	pool := poolWithColors(t, 5, "B", 5, "G", 0, "")
 	pack := []string{"bomb"}
 	ratings := stubRatings{"bomb": 68.0}
 	names := stubCards{"bomb": "Golgari Bomb"}
@@ -176,10 +176,11 @@ func TestColorFit_LandsExcludedFromPenalty(t *testing.T) {
 
 // TestColorFit_OffColorPenaltyString — an off-color, non-splash card must
 // receive the reason string "Not your colors" (Prof copy nit — vmt-t#648).
-// ADR-047 §5.
+// ADR-047 §5. GIHWR=58.0 is below topQualityGIHWRFloor so the quality
+// modifier does not apply — full suppression is expected.
 func TestColorFit_OffColorPenaltyString(t *testing.T) {
-	// G/B committed pool, off-color R card with modest GIHWR (no splash path).
-	pool := poolWithColors(t, 4, "G", 3, "B", 0, "")
+	// G/B committed pool at threshold=5 (5G+5B), off-color R card with modest GIHWR.
+	pool := poolWithColors(t, 5, "G", 5, "B", 0, "")
 	pack := []string{"red-card"}
 	count := 1000
 	ratings := stubRatings{"red-card": 58.0} // below splashHighGIHWRFloor (≥72)
@@ -215,8 +216,8 @@ func TestColorFit_OffColorPenaltyString(t *testing.T) {
 // the committed two-color pool must receive a splash-consideration reason,
 // not an off-color penalty. ADR-047 §5: "splash-consideration reason path."
 func TestColorFit_SplashConsiderationPath(t *testing.T) {
-	// Pool is G/B committed.
-	pool := poolWithColors(t, 4, "G", 3, "B", 0, "")
+	// Pool is G/B committed at threshold=5 (5G+5B).
+	pool := poolWithColors(t, 5, "G", 5, "B", 0, "")
 	pack := []string{"red-bomb"}
 	countLow := 1200
 	ratings := stubRatings{"red-bomb": 74.0} // high GIHWR
@@ -278,10 +279,10 @@ func TestArchetype_SuppressedPreCommitment(t *testing.T) {
 }
 
 // TestArchetype_PopulatedPostCommitment — archetype tags must be populated
-// when pool has clearly committed to two colors (≥3 cards each).
+// when pool has clearly committed to two colors (≥5 cards each, threshold=5).
 func TestArchetype_PopulatedPostCommitment(t *testing.T) {
-	// Pool committed G/B: 4G + 3B cards = Golgari commitment.
-	pool := poolWithColors(t, 4, "G", 3, "B", 0, "")
+	// Pool committed G/B: 5G + 5B cards = Golgari commitment at threshold=5.
+	pool := poolWithColors(t, 5, "G", 5, "B", 0, "")
 	pack := []string{"a"}
 	count := 1000
 	ratings := stubRatings{"a": 65.0}
@@ -351,16 +352,16 @@ func TestArchetype_PoolColorsReDerivedEachPick(t *testing.T) {
 	meta["p2"] = draftalgo.CardMeta{Colors: []string{"B"}}
 	recs1 := recommend.Recommend("PremierDraft", smallPool, []string{"a"}, ratings, names, meta)
 
-	// Second call: committed pool (4G, 3B) → archetype populated
-	bigPool := make([]string, 7)
-	for i := 0; i < 4; i++ {
+	// Second call: committed pool (5G + 5B) → archetype populated at threshold=5.
+	bigPool := make([]string, 10)
+	for i := 0; i < 5; i++ {
 		id := "pg" + string(rune('0'+i))
 		bigPool[i] = id
 		meta[id] = draftalgo.CardMeta{Colors: []string{"G"}}
 	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 5; i++ {
 		id := "pb" + string(rune('0'+i))
-		bigPool[4+i] = id
+		bigPool[5+i] = id
 		meta[id] = draftalgo.CardMeta{Colors: []string{"B"}}
 	}
 	recs2 := recommend.Recommend("PremierDraft", bigPool, []string{"a"}, ratings, names, meta)
