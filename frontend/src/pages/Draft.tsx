@@ -671,6 +671,12 @@ const Draft: React.FC = () => {
                                                 {card && !card.ImageURLSmall && (
                                                     <div className="card-name-small">{card.Name}</div>
                                                 )}
+                                                {!card && (
+                                                    <div className="card-name-small card-unknown" data-testid="pick-unknown-card">
+                                                        Unknown Card
+                                                        <span className="card-unknown-id">{pick.CardID}</span>
+                                                    </div>
+                                                )}
                                                 {hasQuality && (
                                                     <div className={`pick-quality-badge ${getPickQualityClass(pick.PickQualityGrade)}`}>
                                                         {pick.PickQualityGrade}
@@ -1049,6 +1055,12 @@ const Draft: React.FC = () => {
                                             )}
                                             {card && !card.ImageURLSmall && (
                                                 <div className="card-name-small">{card.Name}</div>
+                                            )}
+                                            {!card && (
+                                                <div className="card-name-small card-unknown" data-testid="pick-unknown-card">
+                                                    Unknown Card
+                                                    <span className="card-unknown-id">{pick.CardID}</span>
+                                                </div>
                                             )}
                                             {hasQuality && (
                                                 <div className={`pick-quality-badge ${getPickQualityClass(pick.PickQualityGrade)}`}>
