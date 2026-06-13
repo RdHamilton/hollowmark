@@ -853,6 +853,72 @@ func TestMatchesRepository_GetResultForMatch_NotFound(t *testing.T) {
 	}
 }
 
+// ── Date-boundary tests ───────────────────────────────────────────────────────
+
+// TestMatchesRepository_AggregateStats_EndDate_ExclusiveBoundary verifies that
+// buildMatchWhere uses a strict-less-than bound for EndDate (timestamp < end),
+// NOT less-than-or-equal. A match whose timestamp equals the exact boundary
+// value must be EXCLUDED.
+//
+// RED: current code uses "timestamp <= $N" so TotalMatches=1; after fix it
+// must use "timestamp < $N" so TotalMatches=0.
+func TestMatchesRepository_AggregateStats_EndDate_ExclusiveBoundary(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "aggstats-exclusive-boundary")
+
+	// Match timestamp = exactly midnight 2026-06-13 00:00:00 UTC.
+	// The handler will advance bare "2026-06-12" to this exclusive bound.
+	// A match at exactly this instant belongs to 2026-06-13, not 2026-06-12,
+	// so it must be excluded.
+	matchTS := time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC)
+	matchID := fmt.Sprintf("aggstats-excl-bound-%d", accountID)
+	insertTestMatch(t, db, matchID, accountID, "Standard", matchTS)
+
+	endBound := time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC)
+	f := repository.MatchFilter{EndDate: &endBound}
+
+	agg, err := repo.AggregateStats(ctx, accountID, f)
+	if err != nil {
+		t.Fatalf("AggregateStats: %v", err)
+	}
+	// Must be 0: timestamp == exclusive bound is excluded by <, not <=.
+	if agg.TotalMatches != 0 {
+		t.Errorf("TotalMatches: want 0 (exclusive boundary excludes midnight match), got %d", agg.TotalMatches)
+	}
+}
+
+// TestMatchesRepository_AggregateStats_EndDate_BareDateIncludesLateMatch
+// verifies that a match at 23:50 UTC on date D is included when the caller
+// passes the already-advanced exclusive bound (midnight of D+1). This matches
+// what buildMatchFilter produces after the fix for bare "YYYY-MM-DD" EndDates.
+func TestMatchesRepository_AggregateStats_EndDate_BareDateIncludesLateMatch(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewMatchesRepository(db)
+	ctx := context.Background()
+
+	accountID := insertTestAccount(t, db, "aggstats-late-match")
+
+	// Match at 23:50 on 2026-06-12 — same calendar day as the SPA's endDate.
+	matchTS := time.Date(2026, 6, 12, 23, 50, 0, 0, time.UTC)
+	matchID := fmt.Sprintf("aggstats-late-match-%d", accountID)
+	insertTestMatch(t, db, matchID, accountID, "Standard", matchTS)
+
+	// The handler advances bare "2026-06-12" to this exclusive bound.
+	endBound := time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC)
+	f := repository.MatchFilter{EndDate: &endBound}
+
+	agg, err := repo.AggregateStats(ctx, accountID, f)
+	if err != nil {
+		t.Fatalf("AggregateStats: %v", err)
+	}
+	if agg.TotalMatches != 1 {
+		t.Errorf("TotalMatches: want 1 (23:50 match included when end is midnight D+1), got %d", agg.TotalMatches)
+	}
+}
+
 // TestMatchesRepository_GetResultForMatch_CrossTenantIsolation verifies that
 // GetResultForMatch scopes to accountID: account A presenting account B's
 // match_id must receive ("", nil), not B's result.

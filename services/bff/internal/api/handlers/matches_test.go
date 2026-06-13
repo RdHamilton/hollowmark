@@ -853,3 +853,94 @@ func TestMatchesCompareTimePeriods_HappyPath(t *testing.T) {
 		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+// ── Date-boundary handler tests ───────────────────────────────────────────────
+
+// TestMatchesStats_BareDateEndDate_AdvancedToExclusiveBound verifies that a
+// bare YYYY-MM-DD endDate is advanced by one day before being stored in
+// MatchFilter.EndDate, so that buildMatchWhere can use timestamp < endDate
+// and include matches up through 23:59:59 on the requested calendar day.
+//
+// RED: current buildMatchFilter stores the raw midnight value so
+// reader.statsCap.EndDate == "2026-06-12T00:00:00Z"; after fix it must be
+// "2026-06-13T00:00:00Z".
+func TestMatchesStats_BareDateEndDate_AdvancedToExclusiveBound(t *testing.T) {
+	reader := &stubMatchesReader{statsAgg: repository.StatsAggregate{TotalMatches: 1}}
+	h := handlers.NewMatchesHandler(reader, &matchesAccountLookup{accountID: 7, found: true})
+
+	body, _ := json.Marshal(map[string]any{"endDate": "2026-06-12"})
+	req := requestWithUserID(t, http.MethodPost, "/api/v1/matches/stats", body, 168)
+	rr := httptest.NewRecorder()
+	h.Stats(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	want := time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC)
+	if reader.statsCap.EndDate == nil {
+		t.Fatal("EndDate was nil — expected non-nil after parsing bare date")
+	}
+	if !reader.statsCap.EndDate.Equal(want) {
+		t.Errorf("EndDate: want %v (exclusive midnight D+1), got %v", want, *reader.statsCap.EndDate)
+	}
+}
+
+// TestMatchesStats_RFC3339EndDate_NotAdvanced verifies Amendment 1: when the
+// caller sends a full RFC3339 timestamp as endDate, it is stored as-is — the
+// +1-day advance must NOT be applied to RFC3339 instants.
+func TestMatchesStats_RFC3339EndDate_NotAdvanced(t *testing.T) {
+	reader := &stubMatchesReader{statsAgg: repository.StatsAggregate{TotalMatches: 1}}
+	h := handlers.NewMatchesHandler(reader, &matchesAccountLookup{accountID: 7, found: true})
+
+	// RFC3339 instant — must be stored exactly as sent.
+	body, _ := json.Marshal(map[string]any{"endDate": "2026-06-12T12:00:00Z"})
+	req := requestWithUserID(t, http.MethodPost, "/api/v1/matches/stats", body, 168)
+	rr := httptest.NewRecorder()
+	h.Stats(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	want := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	if reader.statsCap.EndDate == nil {
+		t.Fatal("EndDate was nil — expected non-nil after parsing RFC3339 date")
+	}
+	if !reader.statsCap.EndDate.Equal(want) {
+		t.Errorf("EndDate RFC3339: want %v (not advanced), got %v", want, *reader.statsCap.EndDate)
+	}
+}
+
+// TestMatchesStats_RamoneRegression documents the named regression: a match
+// played at 8:13 PM Eastern (UTC-4) is stored as 2026-06-13T00:13:00Z. The
+// SPA sends endDate="2026-06-12" (local date). After the fix the filter must
+// advance to "2026-06-13T00:00:00Z" — the exclusive UTC-day bound for
+// 2026-06-12. Note: this advance brings the bound to 00:00Z, which is still
+// before 00:13Z, so a 00:13Z match is NOT covered by the +1-day UTC advance
+// alone. Coverage requires the SPA to send the UTC date of the match
+// (2026-06-13) or client-tz plumbing (#1393). This test verifies the filter
+// value produced, not end-to-end inclusion of the 00:13Z match.
+func TestMatchesStats_RamoneRegression_FilterEndDateAdvanced(t *testing.T) {
+	reader := &stubMatchesReader{statsAgg: repository.StatsAggregate{TotalMatches: 0}}
+	h := handlers.NewMatchesHandler(reader, &matchesAccountLookup{accountID: 7, found: true})
+
+	// SPA sends the user's local date. After fix, this bare date is advanced.
+	body, _ := json.Marshal(map[string]any{"endDate": "2026-06-12"})
+	req := requestWithUserID(t, http.MethodPost, "/api/v1/matches/stats", body, 168)
+	rr := httptest.NewRecorder()
+	h.Stats(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	// The filter must carry the exclusive UTC-day bound, not raw midnight.
+	want := time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC)
+	if reader.statsCap.EndDate == nil {
+		t.Fatal("EndDate was nil")
+	}
+	if !reader.statsCap.EndDate.Equal(want) {
+		t.Errorf("Ramone regression: EndDate want %v (midnight D+1), got %v", want, *reader.statsCap.EndDate)
+	}
+}

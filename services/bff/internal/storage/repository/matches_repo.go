@@ -445,7 +445,11 @@ func buildMatchWhere(accountID int64, f MatchFilter, alias string) (string, []an
 		next++
 	}
 	if f.EndDate != nil {
-		clauses = append(clauses, col("timestamp")+" <= $"+itoa(next))
+		// EndDate is the exclusive upper bound (callers advance bare dates by
+		// +1 day via parseFilterDate's isDayOnly signal; RFC3339 callers
+		// pass the instant as-is). Use strict-less-than so that a match
+		// whose timestamp equals the boundary value is excluded.
+		clauses = append(clauses, col("timestamp")+" < $"+itoa(next))
 		args = append(args, *f.EndDate)
 		next++
 	}
@@ -839,7 +843,7 @@ func (r *MatchesRepository) RankTimelineForFormat(ctx context.Context, accountID
 	const q = `SELECT id, timestamp, rank_before, rank_after, result
 	           FROM matches
 	           WHERE account_id = $1 AND lower(format) = lower($2)
-	             AND timestamp >= $3 AND timestamp <= $4
+	             AND timestamp >= $3 AND timestamp < $4
 	             AND (rank_before IS NOT NULL OR rank_after IS NOT NULL)
 	           ORDER BY timestamp`
 	rows, err := r.db.QueryContext(ctx, q, accountID, format, startDate, endDate)
