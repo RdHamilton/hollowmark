@@ -28,12 +28,20 @@ type ColorRating struct {
 
 // DraftRatingsResult holds all ratings for a set/format pair, plus the freshness
 // timestamp from MAX(cached_at) across the card ratings rows.
+//
+// SetCardsEmpty and UnresolvedCardCount carry the data-quality signal for the
+// draft-ratings endpoint.  SetCardsEmpty=true means set_cards has zero rows for
+// this set_code (ADR-085 defect-4 post-wipe condition).  UnresolvedCardCount is
+// the number of card ratings rows whose arena_id had no matching set_cards row
+// (color/rarity NULL from the LEFT JOIN).  Both zero means fully healthy.
 type DraftRatingsResult struct {
-	SetCode      string
-	DraftFormat  string
-	CachedAt     time.Time
-	CardRatings  []CardRating
-	ColorRatings []ColorRating
+	SetCode             string
+	DraftFormat         string
+	CachedAt            time.Time
+	CardRatings         []CardRating
+	ColorRatings        []ColorRating
+	SetCardsEmpty       bool
+	UnresolvedCardCount int
 }
 
 // DraftRatingsRepository reads draft ratings from the database.
@@ -59,13 +67,35 @@ func NewDraftRatingsRepository(db DB) *DraftRatingsRepository {
 //
 // Returns (nil, nil) when no rows exist for the requested set/format so that the
 // caller can distinguish a missing result from a database error.
+//
+// Data-quality signals: SetCardsEmpty is set via a pre-flight COUNT query so that
+// an entirely missing set_cards table (ADR-085 defect-4 post-wipe) is unambiguous.
+// UnresolvedCardCount is populated per-row via sql.NullString scanning — NULL
+// color/rarity from the LEFT JOIN increments the counter (partial-sync case).
+// Both signals are independent: SetCardsEmpty=false, UnresolvedCardCount>0 means
+// set_cards is populated but some arena_ids have drifted.
 func (r *DraftRatingsRepository) GetRatings(ctx context.Context, setCode, draftFormat string) (*DraftRatingsResult, error) {
+	// Pre-flight COUNT: determine whether set_cards has ANY rows for this set_code.
+	// This is a cheap indexed query (set_code column) that disambiguates the
+	// ADR-085 defect-4 condition (empty table) from arena_id drift (partial mismatch).
+	const countQuery = `SELECT COUNT(*) FROM set_cards WHERE lower(set_code) = lower($1)`
+
+	var setCardsCount int64
+
+	if err := r.db.QueryRowContext(ctx, countQuery, setCode).Scan(&setCardsCount); err != nil {
+		return nil, err
+	}
+
+	setCardsEmpty := setCardsCount == 0
+
+	// Main card query: color/rarity selected as nullable columns (no COALESCE in
+	// SQL) so the scan loop can detect NULL and increment UnresolvedCardCount.
 	const cardQuery = `
 		SELECT
 			dcr.arena_id,
 			dcr.name,
-			COALESCE(c.colors, ''),
-			COALESCE(c.rarity, ''),
+			c.colors,
+			c.rarity,
 			dcr.gihwr,
 			dcr.ohwr,
 			dcr.alsa,
@@ -87,22 +117,36 @@ func (r *DraftRatingsRepository) GetRatings(ctx context.Context, setCode, draftF
 	defer func() { _ = rows.Close() }()
 
 	var (
-		cards    []CardRating
-		cachedAt time.Time
+		cards           []CardRating
+		cachedAt        time.Time
+		unresolvedCount int
 	)
 
 	for rows.Next() {
 		var (
 			c         CardRating
+			colors    sql.NullString
+			rarity    sql.NullString
 			maxCached time.Time
 		)
 
 		if err := rows.Scan(
-			&c.ArenaID, &c.Name, &c.Color, &c.Rarity,
+			&c.ArenaID, &c.Name, &colors, &rarity,
 			&c.GIHWR, &c.OHWR, &c.ALSA, &c.ATA, &c.GIHCount,
 			&maxCached,
 		); err != nil {
 			return nil, err
+		}
+
+		// COALESCE moved to application layer: NULL means no matching set_cards row.
+		if colors.Valid {
+			c.Color = colors.String
+		} else {
+			unresolvedCount++
+		}
+
+		if rarity.Valid {
+			c.Rarity = rarity.String
 		}
 
 		cachedAt = maxCached
@@ -149,11 +193,13 @@ func (r *DraftRatingsRepository) GetRatings(ctx context.Context, setCode, draftF
 	}
 
 	return &DraftRatingsResult{
-		SetCode:      setCode,
-		DraftFormat:  draftFormat,
-		CachedAt:     cachedAt,
-		CardRatings:  cards,
-		ColorRatings: colors,
+		SetCode:             setCode,
+		DraftFormat:         draftFormat,
+		CachedAt:            cachedAt,
+		CardRatings:         cards,
+		ColorRatings:        colors,
+		SetCardsEmpty:       setCardsEmpty,
+		UnresolvedCardCount: unresolvedCount,
 	}, nil
 }
 
