@@ -244,6 +244,97 @@ describe('useDraftSession', () => {
     });
   });
 
+  // ── hydrate() — mount-fetch cold-start path (#1421) ──────────────────────
+  // hydrate() is called by DraftLive on mount when the BFF returns an active
+  // session. It activates the state machine from idle WITHOUT requiring an SSE
+  // event replay that will never come (ADR-084 = ingest-time broadcast only).
+  describe('hydrate() — cold-start from BFF snapshot (#1421)', () => {
+    it('sets sessionStatus to active from idle', () => {
+      const { result } = renderHook(() => useDraftSession());
+      act(() => result.current.hydrate({ pickedCardIds: [], packNumber: 0, pickNumber: 0 }));
+      expect(result.current.state.sessionStatus).toBe('active');
+    });
+
+    it('populates pickedCards from the snapshot', () => {
+      const { result } = renderHook(() => useDraftSession());
+      act(() =>
+        result.current.hydrate({ pickedCardIds: [101, 202, 303], packNumber: 1, pickNumber: 3 })
+      );
+      expect(result.current.state.pickedCards).toEqual([101, 202, 303]);
+    });
+
+    it('sets packNumber from the snapshot', () => {
+      const { result } = renderHook(() => useDraftSession());
+      act(() =>
+        result.current.hydrate({ pickedCardIds: [], packNumber: 2, pickNumber: 5 })
+      );
+      expect(result.current.state.packNumber).toBe(2);
+    });
+
+    it('sets pickNumber from the snapshot', () => {
+      const { result } = renderHook(() => useDraftSession());
+      act(() =>
+        result.current.hydrate({ pickedCardIds: [], packNumber: 1, pickNumber: 7 })
+      );
+      expect(result.current.state.pickNumber).toBe(7);
+    });
+
+    it('leaves currentPackCards empty after hydration (pack data comes from SSE)', () => {
+      const { result } = renderHook(() => useDraftSession());
+      act(() =>
+        result.current.hydrate({ pickedCardIds: [10, 20], packNumber: 1, pickNumber: 2 })
+      );
+      expect(result.current.state.currentPackCards).toEqual([]);
+    });
+
+    it('is a no-op when the session is already active (SSE beat the mount-fetch)', () => {
+      const { result } = renderHook(() => useDraftSession());
+      // Activate via SSE event first.
+      act(() => result.current.dispatch(packEvent(1, 3, [400, 401, 402])));
+      expect(result.current.state.sessionStatus).toBe('active');
+
+      const before = result.current.state;
+
+      // hydrate() must not overwrite the live SSE state.
+      act(() =>
+        result.current.hydrate({ pickedCardIds: [999], packNumber: 5, pickNumber: 9 })
+      );
+
+      expect(result.current.state).toEqual(before);
+    });
+
+    it('is a no-op when the session is complete (draft ended)', () => {
+      const { result } = renderHook(() => useDraftSession());
+      act(() => result.current.dispatch({ type: 'draft.started' }));
+      act(() => result.current.dispatch({ type: 'draft.ended' }));
+      expect(result.current.state.sessionStatus).toBe('complete');
+
+      const before = result.current.state;
+
+      act(() =>
+        result.current.hydrate({ pickedCardIds: [1], packNumber: 1, pickNumber: 1 })
+      );
+
+      expect(result.current.state).toEqual(before);
+    });
+
+    it('subsequent SSE events build on the hydrated state', () => {
+      const { result } = renderHook(() => useDraftSession());
+      act(() =>
+        result.current.hydrate({ pickedCardIds: [101, 202], packNumber: 1, pickNumber: 2 })
+      );
+
+      // A new SSE pack event arrives — state machine must accept it normally.
+      act(() => result.current.dispatch(packEvent(1, 3, [300, 301, 302])));
+
+      const s = result.current.state;
+      expect(s.sessionStatus).toBe('active');
+      expect(s.currentPackCards).toEqual([300, 301, 302]);
+      // pickedCards accumulate from the hydrated baseline — SSE doesn't reset them.
+      expect(s.pickedCards).toEqual([101, 202]);
+    });
+  });
+
   describe('mid-session resume', () => {
     it('reconstructs state from replayed draft.pack events', () => {
       const { result } = renderHook(() => useDraftSession());
