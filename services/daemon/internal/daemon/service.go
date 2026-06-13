@@ -1802,6 +1802,23 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 			payload = entry.JSON
 		} else {
 			payload = p
+			// Emit a standalone mastery.updated event for the same log line
+			// whenever InventoryInfo carries a MasteryPass object. This makes
+			// mastery independently replayable without re-projecting the full
+			// inventory (#1344).
+			if classify.IsMasteryEntry(entry) {
+				mp, merr := logreader.ParseMasteryUpdatedEntry(entry)
+				if merr != nil {
+					log.Printf("[daemon] warn: parse mastery: %v", merr)
+				} else {
+					mEvt, merr := dispatch.BuildEvent("mastery.updated", s.cfg.AccountID, s.sessionID, mp)
+					if merr != nil {
+						log.Printf("[daemon] warn: build mastery event: %v", merr)
+					} else {
+						s.batchBuffer.Add(mEvt)
+					}
+				}
+			}
 		}
 	case "quest.progress":
 		p, err := logreader.ParseQuestProgressEntry(entry)
@@ -1867,6 +1884,19 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 		p, err := logreader.ParseDeckEntry(entry)
 		if err != nil {
 			log.Printf("[daemon] warn: parse deck: %v", err)
+			s.recordParseFailure(eventType, entry.Raw)
+			payload = entry.JSON
+		} else {
+			payload = p
+		}
+	case "periodic.updated":
+		// PeriodicRewardsGetStatus response: top-level _dailyRewardSequenceId /
+		// _weeklyRewardSequenceId map to the win count for the current reward
+		// period (#1344). These are the authoritative win counts from MTGA —
+		// the BFF writes them to accounts.daily_wins / weekly_wins.
+		p, err := logreader.ParsePeriodicEntry(entry)
+		if err != nil {
+			log.Printf("[daemon] warn: parse periodic: %v", err)
 			s.recordParseFailure(eventType, entry.Raw)
 			payload = entry.JSON
 		} else {

@@ -113,6 +113,22 @@ func (r *AccountRepository) GetAccountIDByUserID(ctx context.Context, userID int
 	return accountID, true, nil
 }
 
+// GetPeriodicWins reads the authoritative daily and weekly win counts from the
+// accounts table for a given account_id (#1344). The values are written by the
+// periodic.updated projection path (UpsertPeriodicWins) and sourced from
+// MTGA's PeriodicRewardsGetStatus response. Returns (0, 0, nil) when the
+// account row exists but no periodic.updated event has been projected yet.
+func (r *AccountRepository) GetPeriodicWins(ctx context.Context, accountID int64) (dailyWins, weeklyWins int, err error) {
+	const q = `SELECT daily_wins, weekly_wins FROM accounts WHERE id = $1 LIMIT 1`
+	if scanErr := r.db.QueryRowContext(ctx, q, accountID).Scan(&dailyWins, &weeklyWins); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return 0, 0, nil
+		}
+		return 0, 0, scanErr
+	}
+	return dailyWins, weeklyWins, nil
+}
+
 // GetOrCreateByClientID returns the accounts.id for the given MTGA client_id
 // (the raw Arena account string), verifying that the resolved account belongs
 // to userID.  If the client_id is registered under a different user_id,

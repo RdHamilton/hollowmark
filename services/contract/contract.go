@@ -110,6 +110,42 @@ type InventoryUpdatedPayload struct {
 	Mastery *MasteryInfo `json:"mastery,omitempty"`
 }
 
+// PeriodicUpdatedPayload is embedded in a DaemonEvent with Type "periodic.updated".
+// It carries the player's authoritative daily and weekly win counts as reported
+// by MTGA's PeriodicRewardsGetStatus response. The sequence IDs are 0-based
+// reward-track positions that equal the number of qualifying match wins the
+// player has accumulated in the current daily or weekly window.
+//
+// Sourced from the top-level "_dailyRewardSequenceId" and
+// "_weeklyRewardSequenceId" keys in the parsed log entry. These keys appear
+// directly at the top level of the entry — NOT nested under a ClientPeriodicRewards
+// wrapper.
+type PeriodicUpdatedPayload struct {
+	// DailyWins is the player's current daily win count (0–15).
+	// Maps to the top-level "_dailyRewardSequenceId" in the log entry.
+	DailyWins int `json:"daily_wins"`
+	// WeeklyWins is the player's current weekly win count (0–15).
+	// Maps to the top-level "_weeklyRewardSequenceId" in the log entry.
+	WeeklyWins int `json:"weekly_wins"`
+}
+
+// MasteryUpdatedPayload is embedded in a DaemonEvent with Type "mastery.updated".
+// It carries the player's mastery pass state sourced from InventoryInfo.MasteryPass
+// in the Arena login blob. Emitted as a standalone event alongside "inventory.updated"
+// whenever MasteryPass is present in the InventoryInfo, so mastery progression is
+// independently replayable and not coupled to the inventory projection path.
+type MasteryUpdatedPayload struct {
+	// Level is the player's current mastery level
+	// (maps to InventoryInfo.MasteryPass.CurrentLevel).
+	Level int `json:"level"`
+	// PassType is the pass tier string (e.g. "Basic", "Standard", "Premium").
+	// Maps to InventoryInfo.MasteryPass.PassType.
+	PassType string `json:"pass_type"`
+	// Max is the maximum level available in the current season
+	// (maps to InventoryInfo.MasteryPass.MaxLevel).
+	Max int `json:"max"`
+}
+
 // QuestProgressPayload is embedded in a DaemonEvent with Type "quest.progress".
 // It carries the state of all active quests from a QuestGetQuests response.
 type QuestProgressPayload struct {

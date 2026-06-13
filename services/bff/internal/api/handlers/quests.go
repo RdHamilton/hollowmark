@@ -32,20 +32,35 @@ const (
 type questsReader interface {
 	ListActiveByAccountID(ctx context.Context, accountID int64) ([]repository.QuestRow, error)
 	ListHistoryByAccountID(ctx context.Context, accountID int64, start, end *time.Time, limit int) ([]repository.QuestRow, error)
-	CountWinsSince(ctx context.Context, accountID int64, since time.Time) (int, error)
 	QuestStats(ctx context.Context, accountID int64, start, end time.Time) (repository.QuestStatsAggregate, error)
 	LastQuestSeenAt(ctx context.Context, accountID int64) (time.Time, bool, error)
+}
+
+// winsReader reads authoritative daily/weekly win counts from the accounts table.
+// Implemented by AccountRepository, which reads daily_wins / weekly_wins written
+// by the periodic.updated projection path (#1344).
+type winsReader interface {
+	GetPeriodicWins(ctx context.Context, accountID int64) (dailyWins, weeklyWins int, err error)
 }
 
 // QuestsHandler serves the cloud-data Phase 2 quests API.
 type QuestsHandler struct {
 	quests   questsReader
 	accounts AccountLookup
+	wins     winsReader
 }
 
 // NewQuestsHandler returns a QuestsHandler wired with the given repo + lookup.
 func NewQuestsHandler(q questsReader, accounts AccountLookup) *QuestsHandler {
 	return &QuestsHandler{quests: q, accounts: accounts}
+}
+
+// WithWinsReader wires the periodic wins reader into the handler (#1344).
+// When set, DailyWins and WeeklyWins read directly from accounts.daily_wins /
+// accounts.weekly_wins instead of the match-derived CountWinsSince path.
+func (h *QuestsHandler) WithWinsReader(w winsReader) *QuestsHandler {
+	h.wins = w
+	return h
 }
 
 // ─── wire shapes ────────────────────────────────────────────────────────────
@@ -164,7 +179,10 @@ func (h *QuestsHandler) History(w http.ResponseWriter, r *http.Request) {
 	writeMatchesJSON(w, questsToResponse(rows))
 }
 
-// DailyWins handles GET /api/v1/quests/wins/daily — wins in the last 24h.
+// DailyWins handles GET /api/v1/quests/wins/daily.
+// Reads the authoritative daily win count from accounts.daily_wins, which the
+// projection worker writes from MTGA's PeriodicRewardsGetStatus response
+// (#1344). No fallback to the match-derived CountWinsSince path.
 func (h *QuestsHandler) DailyWins(w http.ResponseWriter, r *http.Request) {
 	accountID, found, ok := h.resolveAccount(w, r, "DailyWins")
 	if !ok {
@@ -174,17 +192,24 @@ func (h *QuestsHandler) DailyWins(w http.ResponseWriter, r *http.Request) {
 		writeMatchesJSON(w, dailyWinsResponse{Goal: dailyWinsGoal})
 		return
 	}
-	since := time.Now().UTC().Add(-24 * time.Hour)
-	wins, err := h.quests.CountWinsSince(r.Context(), accountID, since)
+	if h.wins == nil {
+		// winsReader not wired — return zero pending re-deploy.
+		writeMatchesJSON(w, dailyWinsResponse{Goal: dailyWinsGoal})
+		return
+	}
+	daily, _, err := h.wins.GetPeriodicWins(r.Context(), accountID)
 	if err != nil {
-		log.Printf("[QuestsHandler.DailyWins] CountWinsSince accountID=%d: %v", accountID, err)
+		log.Printf("[QuestsHandler.DailyWins] GetPeriodicWins accountID=%d: %v", accountID, err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	writeMatchesJSON(w, dailyWinsResponse{DailyWins: wins, Goal: dailyWinsGoal})
+	writeMatchesJSON(w, dailyWinsResponse{DailyWins: daily, Goal: dailyWinsGoal})
 }
 
-// WeeklyWins handles GET /api/v1/quests/wins/weekly — wins in the last 7 days.
+// WeeklyWins handles GET /api/v1/quests/wins/weekly.
+// Reads the authoritative weekly win count from accounts.weekly_wins, which the
+// projection worker writes from MTGA's PeriodicRewardsGetStatus response
+// (#1344). No fallback to the match-derived CountWinsSince path.
 func (h *QuestsHandler) WeeklyWins(w http.ResponseWriter, r *http.Request) {
 	accountID, found, ok := h.resolveAccount(w, r, "WeeklyWins")
 	if !ok {
@@ -194,14 +219,18 @@ func (h *QuestsHandler) WeeklyWins(w http.ResponseWriter, r *http.Request) {
 		writeMatchesJSON(w, weeklyWinsResponse{Goal: weeklyWinsGoal})
 		return
 	}
-	since := time.Now().UTC().AddDate(0, 0, -7)
-	wins, err := h.quests.CountWinsSince(r.Context(), accountID, since)
+	if h.wins == nil {
+		// winsReader not wired — return zero pending re-deploy.
+		writeMatchesJSON(w, weeklyWinsResponse{Goal: weeklyWinsGoal})
+		return
+	}
+	_, weekly, err := h.wins.GetPeriodicWins(r.Context(), accountID)
 	if err != nil {
-		log.Printf("[QuestsHandler.WeeklyWins] CountWinsSince accountID=%d: %v", accountID, err)
+		log.Printf("[QuestsHandler.WeeklyWins] GetPeriodicWins accountID=%d: %v", accountID, err)
 		writeJSONError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	writeMatchesJSON(w, weeklyWinsResponse{WeeklyWins: wins, Goal: weeklyWinsGoal})
+	writeMatchesJSON(w, weeklyWinsResponse{WeeklyWins: weekly, Goal: weeklyWinsGoal})
 }
 
 // Stats handles GET /api/v1/quests/stats?startDate=...&endDate=...

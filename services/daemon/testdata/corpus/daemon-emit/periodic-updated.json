@@ -1,0 +1,12 @@
+{
+  "type": "periodic.updated",
+  "account_id": "test-account-001",
+  "event_id": "11111111-0000-0000-0000-000000000020",
+  "session_id": "22222222-0000-0000-0000-000000000001",
+  "sequence": 20,
+  "occurred_at": "2026-06-12T09:00:00Z",
+  "payload": {
+    "daily_wins": 4,
+    "weekly_wins": 7
+  }
+}

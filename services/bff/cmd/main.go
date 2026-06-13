@@ -424,7 +424,8 @@ func main() {
 		// Phase 2 PR #3 — /api/v1/quests surface (active/history/wins/stats).
 		// QuestRepository was previously write-only (projection worker writes);
 		// PR #3 adds the read-side methods used here.
-		questsHandler = handlers.NewQuestsHandler(repository.NewQuestRepository(sqlDB), accountRepo)
+		questsHandler = handlers.NewQuestsHandler(repository.NewQuestRepository(sqlDB), accountRepo).
+			WithWinsReader(accountRepo)
 
 		// Phase 2 PR #4 — /api/v1/standard surface (sets/rotation/config/
 		// validate/legality). Mixed scope: sets+config+legality are global,
@@ -728,8 +729,10 @@ func main() {
 			worker.WithAnalyticsClient(analyticsClient)
 			// Wire deck-summary (header-only) fan-out from inventory.updated (#1337).
 			worker.WithDeckSummaryStore(deckProjectorRepo)
-			// Wire mastery pass fan-out from inventory.updated (#1338).
+			// Wire mastery pass fan-out from inventory.updated + standalone mastery.updated (#1338, #1344).
 			worker.WithMasteryStore(repository.NewAccountMasteryRepository(sqlDB))
+			// Wire periodic wins from periodic.updated (#1344).
+			worker.WithPeriodicStore(repository.NewAccountPeriodicRepository(sqlDB))
 			// ADR-084 §1: publish coalesced readmodel.updated SSE notifications
 			// after each projection pass so clients refetch immediately.
 			worker.WithNotifier(broker)
