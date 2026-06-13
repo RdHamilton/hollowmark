@@ -7,14 +7,14 @@
  * the Setup /health probe and the Copy-Diagnostics fetch, so the SPA only
  * ever has to discover one local daemon port per channel.
  *
- * Surface (post Phase 2 PR #15): `get` + `post` only. Two modules call us:
+ * Surface (post #1436): `get`, `post`, `put`, `del`, `postFormData`. Three
+ * modules call us:
  *   - system.ts        (the surviving /system/* + /feedback/ml-training routes)
  *   - drafts.ts        (the 3 Bucket C live-state wrappers from PR #14)
  *
- * Phase 1 stripped the daemon's HTTP surface to a small set of paths; the
- * old PUT/PATCH/DELETE/SSE/getRaw helpers had no remaining callers and
- * were deleted to keep the boundary honest. If a future daemon endpoint
- * needs a verb that is not here, add it back deliberately.
+ * `put`, `del`, and `postFormData` were absent before #1436 — they match the
+ * three-line patterns from apiClient.ts and are added here so any future daemon
+ * endpoint needing those verbs has a daemon-scoped wrapper (not a BFF one).
  *
  * Cloud/BFF routes must continue to import from ./apiClient.
  */
@@ -128,4 +128,74 @@ export function get<T>(path: string, options?: RequestInit): Promise<T> {
 
 export function post<T>(path: string, body?: unknown, options?: RequestInit): Promise<T> {
   return request<T>('POST', path, body, options);
+}
+
+export function put<T>(path: string, body?: unknown, options?: RequestInit): Promise<T> {
+  return request<T>('PUT', path, body, options);
+}
+
+export function del<T>(path: string, options?: RequestInit): Promise<T> {
+  return request<T>('DELETE', path, undefined, options);
+}
+
+/**
+ * HTTP POST with multipart/form-data body targeting the daemon.
+ *
+ * Mirrors apiClient.postFormData: the caller builds the FormData and we
+ * omit Content-Type so the browser sets it with the multipart boundary.
+ */
+export async function postFormData<T>(path: string, formData: FormData, options: RequestInit = {}): Promise<T> {
+  const daemonConfig = getDaemonConfig();
+  const url = `${daemonConfig.baseUrl}${path}`;
+
+  const controller = new globalThis.AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), daemonConfig.timeout);
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        ...options.headers,
+      },
+      body: formData,
+      signal: controller.signal,
+      ...options,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      let errorData: ApiError = { error: 'Unknown error' };
+      try {
+        errorData = await response.json();
+      } catch {
+        errorData = { error: response.statusText || 'Request failed' };
+      }
+      const errorMessage = errorData.message || errorData.error;
+      throw new ApiRequestError(errorMessage, response.status, errorData.code, errorData.details);
+    }
+
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    const data = await response.json();
+    return data.data as T;
+  } catch (error) {
+    clearTimeout(timeoutId);
+
+    if (error instanceof ApiRequestError) {
+      throw error;
+    }
+
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        throw new ApiRequestError('Request timeout', 408);
+      }
+      throw new ApiRequestError(error.message, 0);
+    }
+
+    throw new ApiRequestError('Unknown error', 0);
+  }
 }

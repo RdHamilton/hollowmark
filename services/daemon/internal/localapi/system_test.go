@@ -306,3 +306,101 @@ func TestSetStateUpdatesEndpoints(t *testing.T) {
 		t.Errorf("version after SetState: %q", body.Version)
 	}
 }
+
+// helperInfoBody is the shape of the helper_info sub-object in /system/status.
+type helperInfoBody struct {
+	HelperInstalled bool    `json:"helper_installed"`
+	KeychainError   *string `json:"keychain_error"`
+	LastSync        *string `json:"last_sync"`
+}
+
+// systemStatusWithHelper is the full /system/status response shape including
+// the new helper_info field added by #1439.
+type systemStatusWithHelper struct {
+	Status    string         `json:"status"`
+	Connected bool           `json:"connected"`
+	Mode      string         `json:"mode"`
+	URL       string         `json:"url"`
+	Port      int            `json:"port"`
+	HelperInfo helperInfoBody `json:"helper_info"`
+}
+
+// TestSystemStatus_HelperInfo_DefaultsWhenNotSet verifies that when the State
+// carries no helper fields the response still includes helper_info with safe
+// zero-value defaults (helper_installed=false, null keychain_error, null last_sync).
+// This proves backward-compat: existing callers that don't set the new fields
+// get a well-formed response, not a missing key.
+func TestSystemStatus_HelperInfo_DefaultsWhenNotSet(t *testing.T) {
+	srv := startTestServer(t, nil) // no helper fields set
+	var body systemStatusWithHelper
+	getJSON(t, srv, "/api/v1/system/status", &body)
+
+	if body.HelperInfo.HelperInstalled {
+		t.Errorf("helper_installed: want false when not set, got true")
+	}
+	if body.HelperInfo.KeychainError != nil {
+		t.Errorf("keychain_error: want null when not set, got %q", *body.HelperInfo.KeychainError)
+	}
+	if body.HelperInfo.LastSync != nil {
+		t.Errorf("last_sync: want null when not set, got %q", *body.HelperInfo.LastSync)
+	}
+}
+
+// TestSystemStatus_HelperInfo_InstalledAndHealthy verifies that when
+// State.HelperInstalled is true and no error / sync time are set, the response
+// reflects that.
+func TestSystemStatus_HelperInfo_InstalledAndHealthy(t *testing.T) {
+	srv := startTestServer(t, func(s *localapi.State) {
+		s.HelperInstalled = true
+	})
+	var body systemStatusWithHelper
+	getJSON(t, srv, "/api/v1/system/status", &body)
+
+	if !body.HelperInfo.HelperInstalled {
+		t.Errorf("helper_installed: want true, got false")
+	}
+	if body.HelperInfo.KeychainError != nil {
+		t.Errorf("keychain_error: want null for healthy helper, got %q", *body.HelperInfo.KeychainError)
+	}
+	if body.HelperInfo.LastSync != nil {
+		t.Errorf("last_sync: want null when no sync recorded, got %q", *body.HelperInfo.LastSync)
+	}
+}
+
+// TestSystemStatus_HelperInfo_KeychainError verifies that a non-empty
+// State.HelperKeychainError is surfaced as a non-null keychain_error string.
+func TestSystemStatus_HelperInfo_KeychainError(t *testing.T) {
+	const wantErr = "keychain item not found"
+	srv := startTestServer(t, func(s *localapi.State) {
+		s.HelperInstalled = true
+		s.HelperKeychainError = wantErr
+	})
+	var body systemStatusWithHelper
+	getJSON(t, srv, "/api/v1/system/status", &body)
+
+	if body.HelperInfo.KeychainError == nil {
+		t.Fatal("keychain_error: want non-null, got null")
+	}
+	if *body.HelperInfo.KeychainError != wantErr {
+		t.Errorf("keychain_error: got %q, want %q", *body.HelperInfo.KeychainError, wantErr)
+	}
+}
+
+// TestSystemStatus_HelperInfo_LastSync verifies that State.HelperLastSync is
+// serialised as an RFC3339 timestamp in last_sync.
+func TestSystemStatus_HelperInfo_LastSync(t *testing.T) {
+	syncAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	srv := startTestServer(t, func(s *localapi.State) {
+		s.HelperInstalled = true
+		s.HelperLastSync = &syncAt
+	})
+	var body systemStatusWithHelper
+	getJSON(t, srv, "/api/v1/system/status", &body)
+
+	if body.HelperInfo.LastSync == nil {
+		t.Fatal("last_sync: want non-null, got null")
+	}
+	if *body.HelperInfo.LastSync != "2026-06-01T12:00:00Z" {
+		t.Errorf("last_sync: got %q, want 2026-06-01T12:00:00Z", *body.HelperInfo.LastSync)
+	}
+}

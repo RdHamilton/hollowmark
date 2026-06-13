@@ -74,6 +74,18 @@ type State struct {
 	// JSON response — an empty string signals a derivation bug rather than a
 	// valid absent value. Updated on each heartbeat tick (~30s staleness).
 	AuthStatus string
+
+	// HelperInstalled reports whether the privileged collection-helper
+	// component is present on the local machine. Surfaced in the
+	// helper_info sub-object of GET /system/status (#1439).
+	HelperInstalled bool
+	// HelperKeychainError, when non-empty, is the last error message
+	// produced by a keychain read attempt in the helper. An empty string
+	// serialises as null in the JSON response.
+	HelperKeychainError string
+	// HelperLastSync is the timestamp of the most recent successful sync
+	// performed by the collection-helper. nil serialises as null.
+	HelperLastSync *time.Time
 }
 
 // Server is the loopback HTTP server. Construct with New, then call Start
