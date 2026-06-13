@@ -1393,4 +1393,3 @@ func TestHandle_SkipGuardWarning_NotEmittedBelowThreshold(t *testing.T) {
 	assert.NotContains(t, logOutput, "[sync] skip guard WARNING:",
 		"WARNING log must NOT appear when skip count is below threshold")
 }
-}
