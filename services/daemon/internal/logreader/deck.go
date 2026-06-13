@@ -3,9 +3,33 @@ package logreader
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/RdHamilton/hollowmark/services/contract"
 )
+
+// isPreconDeck reports whether a deck name identifies an MTGA system / precon
+// deck that should never be synced. MTGA prefixes all system deck names with
+// the localization key "?=?Loc/Decks/Precon/"; player decks never carry this
+// prefix.
+func isPreconDeck(name string) bool {
+	return strings.HasPrefix(name, "?=?Loc/Decks/Precon/")
+}
+
+// cleanDeckName resolves an MTGA localization key to a human-readable deck
+// name. If the name does not start with "?=?Loc/" it is returned unchanged.
+// Otherwise the last path segment is extracted and underscores are replaced
+// with spaces, e.g. "?=?Loc/Decks/Precon/FNM_Brawl_Kaza" → "FNM Brawl Kaza".
+func cleanDeckName(name string) string {
+	if !strings.HasPrefix(name, "?=?Loc/") {
+		return name
+	}
+	lastSlash := strings.LastIndex(name, "/")
+	if lastSlash == -1 || lastSlash >= len(name)-1 {
+		return name
+	}
+	return strings.ReplaceAll(name[lastSlash+1:], "_", " ")
+}
 
 // IsDeckEntry reports whether the log entry is a DeckUpsertDeckV2 response.
 // Arena emits deck updates with a top-level "request" key whose value is a
@@ -60,6 +84,13 @@ func ParseDeckEntry(entry *LogEntry) (*contract.DeckUpdatedPayload, error) {
 		return nil, fmt.Errorf("Summary.DeckId is missing or empty")
 	}
 
+	// Skip system / precon decks — they are identified exclusively by the
+	// "?=?Loc/Decks/Precon/" name prefix. Return nil, nil so the caller
+	// discards the entry without treating it as an error.
+	if rawName, _ := summary["Name"].(string); isPreconDeck(rawName) {
+		return nil, nil
+	}
+
 	p := &contract.DeckUpdatedPayload{
 		DeckID: deckID,
 		Format: "Unknown",
@@ -67,7 +98,7 @@ func ParseDeckEntry(entry *LogEntry) (*contract.DeckUpdatedPayload, error) {
 	}
 
 	if name, ok := summary["Name"].(string); ok {
-		p.Name = name
+		p.Name = cleanDeckName(name)
 	}
 
 	// Format is stored as an Attribute with name "Format".

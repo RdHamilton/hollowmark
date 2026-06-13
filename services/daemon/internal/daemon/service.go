@@ -1869,6 +1869,9 @@ func (s *Service) handleEntry(ctx context.Context, entry *logreader.LogEntry) er
 			log.Printf("[daemon] warn: parse deck: %v", err)
 			s.recordParseFailure(eventType, entry.Raw)
 			payload = entry.JSON
+		} else if p == nil {
+			// nil, nil means the deck was silently skipped (e.g. precon deck).
+			return nil
 		} else {
 			payload = p
 		}

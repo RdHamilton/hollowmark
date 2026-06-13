@@ -115,6 +115,9 @@ func ParseInventoryEntry(entry *LogEntry) (*contract.InventoryUpdatedPayload, er
 				continue // skip entries with no identity
 			}
 			name, _ := dMap["Name"].(string)
+			if isPreconDeck(name) {
+				continue // skip system / precon decks
+			}
 
 			// Format is stored as an Attribute with name=="Format", matching the
 			// same Attributes[name=="Format"].value pattern as ParseDeckEntry.
