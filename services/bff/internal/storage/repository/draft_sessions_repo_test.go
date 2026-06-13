@@ -266,7 +266,7 @@ func TestDraftSessionsRepository_UpsertDraftSession_InsertAndUpdate(t *testing.T
 		t.Fatalf("second UpsertDraftSession: %v", err)
 	}
 
-	// Verify status updated and total_picks is GREATEST(42, 0) = 42.
+	// Verify status updated and total_picks is 0 + 42 = 42 (additive upsert).
 	var status string
 	var picks int
 
@@ -285,6 +285,64 @@ func TestDraftSessionsRepository_UpsertDraftSession_InsertAndUpdate(t *testing.T
 
 	if picks != 42 {
 		t.Errorf("total_picks: want 42, got %d", picks)
+	}
+}
+
+// TestDraftSessionsRepository_UpsertDraftSession_TotalPicksAccumulates verifies
+// that each draft.pick event (TotalPicks=1 partial upsert) increments the
+// stored total rather than staying stuck at 1.  Before the #1424 fix, the
+// ON CONFLICT clause used GREATEST(EXCLUDED.total_picks, current) which
+// resolved to GREATEST(1, 1) = 1 on every subsequent pick.
+func TestDraftSessionsRepository_UpsertDraftSession_TotalPicksAccumulates(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDraftSessionsRepository(db)
+
+	accountID := insertTestAccount(t, db, "draft-picks-accum-acct")
+	sessionID := fmt.Sprintf("ds-picks-%d", accountID)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM draft_sessions WHERE id = $1`, sessionID)
+	})
+
+	// INSERT on draft.started — TotalPicks=0 (zero value, not a pick event).
+	if err := repo.UpsertDraftSession(context.Background(), repository.DraftSessionUpsert{
+		ID:        sessionID,
+		AccountID: accountID,
+		EventName: "QuickDraftEmblem_SOS_20260611",
+		SetCode:   "SOS",
+		DraftType: "QuickDraftEmblem",
+		StartTime: now,
+		Status:    "in_progress",
+	}); err != nil {
+		t.Fatalf("draft.started upsert: %v", err)
+	}
+
+	// Simulate 3 draft.pick events, each contributing TotalPicks=1.
+	for i := 0; i < 3; i++ {
+		if err := repo.UpsertDraftSession(context.Background(), repository.DraftSessionUpsert{
+			ID:         sessionID,
+			AccountID:  accountID,
+			StartTime:  now,
+			Status:     "in_progress",
+			TotalPicks: 1,
+		}); err != nil {
+			t.Fatalf("pick upsert %d: %v", i, err)
+		}
+	}
+
+	var picks int
+	if err := db.QueryRowContext(
+		context.Background(),
+		`SELECT total_picks FROM draft_sessions WHERE id = $1`,
+		sessionID,
+	).Scan(&picks); err != nil {
+		t.Fatalf("select total_picks: %v", err)
+	}
+
+	// Expect 0 (started) + 3×1 (picks) = 3.
+	if picks != 3 {
+		t.Errorf("total_picks: want 3, got %d (stuck-at-1 regression)", picks)
 	}
 }
 

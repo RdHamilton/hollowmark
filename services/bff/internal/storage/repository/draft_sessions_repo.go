@@ -304,7 +304,7 @@ func (r *DraftSessionsRepository) UpsertDraftSession(ctx context.Context, s Draf
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,'quick_draft'),COALESCE($11,FALSE),NOW())
 		ON CONFLICT (id) DO UPDATE
 			SET end_time    = COALESCE(EXCLUDED.end_time, draft_sessions.end_time),
-			    total_picks = GREATEST(EXCLUDED.total_picks, draft_sessions.total_picks),
+			    total_picks = draft_sessions.total_picks + EXCLUDED.total_picks,
 			    status      = EXCLUDED.status,
 			    format_type = COALESCE($10, draft_sessions.format_type),
 			    is_trophy   = CASE WHEN $11 IS TRUE THEN TRUE ELSE draft_sessions.is_trophy END,
