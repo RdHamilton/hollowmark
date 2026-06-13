@@ -218,18 +218,32 @@ func (h *SyncHandler) Handle(ctx context.Context, _ any) error {
 	log.Printf("[sync] fetching ratings for %d set(s) x %d format(s): sets=%v formats=%v",
 		len(sets), len(h.formats), codes, h.formats)
 
+	// allRatings accumulates card ratings from all set/format fetches for the
+	// backfill pass (step 3b). Key: Scryfall set code. Duplicates across formats
+	// are deduplicated by arena_id inside backfillSetCardStubs.
+	allRatings := make(map[string][]seventeenlands.CardRating, len(sets))
+
 	var firstErr error
 	for _, set := range sets {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := h.syncSet(ctx, set); err != nil {
+		fetched, err := h.syncSetAndCollect(ctx, set)
+		if err != nil {
 			log.Printf("[sync] syncSet %s: %v", set.Code, err)
 			if firstErr == nil {
 				firstErr = err
 			}
 		}
+		allRatings[set.Code] = append(allRatings[set.Code], fetched...)
 	}
+
+	// Step 3b: backfill set_cards stubs from 17Lands card ratings. This inserts
+	// (arena_id, name, set_code) rows for cards not yet present in set_cards —
+	// covering cards Scryfall bulk-data lacks arena_id for (Alchemy sets, recently
+	// released sets). Uses ON CONFLICT DO NOTHING to never overwrite Scryfall rows.
+	// Non-fatal: a failure here is logged and the ratings already persisted.
+	h.backfillSetCardStubs(ctx, allRatings)
 
 	return firstErr
 }
@@ -262,48 +276,69 @@ func (h *SyncHandler) syncCards(ctx context.Context) {
 	log.Printf("[sync] syncCards: upserted %d cards into set_cards", len(cards))
 }
 
-// syncSet fetches and upserts ratings for all formats of a single set. It never
-// returns an error due to the consecutive-skip guard — the guard is non-fatal and
-// only emits a WARNING log at threshold. syncSet can still return a non-nil error
-// for context cancellation. A courtesy inter-request pause (h.interRequestSleep)
-// is injected between each set×format API call to stay within 17Lands'
-// undocumented rate limit.
+// syncSetAndCollect fetches and upserts ratings for all formats of a single set,
+// and returns all successfully-fetched card ratings (deduplicated by arena_id) so
+// that the caller can backfill set_cards stubs without additional API calls.
+//
+// It never returns an error due to the consecutive-skip guard — the guard is
+// non-fatal and only emits a WARNING log at threshold. It can still return a
+// non-nil error for context cancellation. A courtesy inter-request pause
+// (h.interRequestSleep) is injected between each set×format API call.
 //
 // set.ExpansionCode is sent to the 17Lands API; set.Code is used for all DB
 // writes so ratings remain keyed on the stable Scryfall code.
-func (h *SyncHandler) syncSet(ctx context.Context, set datasets.SyncSet) error {
+func (h *SyncHandler) syncSetAndCollect(ctx context.Context, set datasets.SyncSet) ([]seventeenlands.CardRating, error) {
+	// seen deduplicates cards across formats — the same arena_id appears in every
+	// format's response; we only need one representative name per id for the stub.
+	seen := make(map[int]struct{})
+	var collected []seventeenlands.CardRating
+
 	var firstErr error
 	for i, format := range h.formats {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return collected, ctx.Err()
 		}
 		// Inject inter-request sleep before every call except the first.
 		if i > 0 && h.interRequestSleep > 0 {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return collected, ctx.Err()
 			case <-time.After(h.interRequestSleep):
 			}
 		}
-		if err := h.syncFormat(ctx, set, format); err != nil {
+		ratings, err := h.syncFormatAndCollect(ctx, set, format)
+		if err != nil {
 			log.Printf("[sync] %s/%s: %v", set.Code, format, err)
 			if firstErr == nil {
 				firstErr = err
 			}
 		}
+		for _, r := range ratings {
+			if r.MtgaID == 0 {
+				continue // paper-only card, no Arena id
+			}
+			if _, dup := seen[r.MtgaID]; !dup {
+				seen[r.MtgaID] = struct{}{}
+				collected = append(collected, r)
+			}
+		}
 	}
-	return firstErr
+	return collected, firstErr
 }
 
-// syncFormat fetches and upserts ratings for one (set, format) pair with retry.
-// Returns a non-nil error only when the consecutive-skip guard trips. Transient
-// fetch/upsert errors are retried and swallowed after exhausting retries.
+// syncFormatAndCollect fetches and upserts ratings for one (set, format) pair with
+// retry, and returns the fetched card ratings so the caller can accumulate them for
+// the set_cards stub backfill pass (step 3b in Handle). The returned slice is nil
+// (not an error) on a fetch failure or when 0 cards are returned.
+//
+// Returns a non-nil error only for context cancellation. Transient fetch/upsert
+// errors are retried and swallowed after exhausting retries.
 //
 // set.ExpansionCode is used for all 17Lands API requests.
 // set.Code (Scryfall) is used for all DB writes so ratings are keyed stably.
 // The skip guard also keys on set.Code so the counter key never changes when
 // the 17Lands expansion code differs from the Scryfall code.
-func (h *SyncHandler) syncFormat(ctx context.Context, set datasets.SyncSet, format string) error {
+func (h *SyncHandler) syncFormatAndCollect(ctx context.Context, set datasets.SyncSet, format string) ([]seventeenlands.CardRating, error) {
 	var (
 		ratings  []seventeenlands.CardRating
 		fetchErr error
@@ -313,7 +348,7 @@ func (h *SyncHandler) syncFormat(ctx context.Context, set datasets.SyncSet, form
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil, ctx.Err()
 			case <-time.After(h.retryBackoff(attempt)):
 			}
 		}
@@ -327,8 +362,8 @@ func (h *SyncHandler) syncFormat(ctx context.Context, set datasets.SyncSet, form
 	}
 
 	if fetchErr != nil {
-		// All fetch attempts failed — non-fatal; caller logs at syncSet level if needed.
-		return nil
+		// All fetch attempts failed — non-fatal; caller logs at syncSetAndCollect level.
+		return nil, nil
 	}
 
 	if len(ratings) == 0 {
@@ -338,7 +373,7 @@ func (h *SyncHandler) syncFormat(ctx context.Context, set datasets.SyncSet, form
 		// Non-fatal: increments the counter and logs a warning at threshold, but
 		// never aborts the run so other sets continue syncing.
 		h.updateSkipGuard(ctx, set.Code)
-		return nil
+		return nil, nil
 	}
 
 	// Successful card response: reset the skip counter (keyed on Scryfall Code).
@@ -360,7 +395,8 @@ func (h *SyncHandler) syncFormat(ctx context.Context, set datasets.SyncSet, form
 		}
 		if storedHash != "" && storedHash == newHash {
 			log.Printf("[sync] skipped %s/%s: payload unchanged (hash=%s)", set.Code, format, newHash[:8])
-			return nil
+			// Return ratings even on hash-skip — the backfill still needs the card list.
+			return ratings, nil
 		}
 	}
 
@@ -377,7 +413,7 @@ func (h *SyncHandler) syncFormat(ctx context.Context, set datasets.SyncSet, form
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil, ctx.Err()
 			case <-time.After(h.retryBackoff(attempt)):
 			}
 		}
@@ -390,7 +426,8 @@ func (h *SyncHandler) syncFormat(ctx context.Context, set datasets.SyncSet, form
 
 	if upsertErr != nil {
 		log.Printf("[sync] upsert %s/%s failed after all retries: %v", set.Code, format, upsertErr)
-		return nil
+		// Return ratings — upsert failure must not block the backfill.
+		return ratings, nil
 	}
 
 	// Store the hash only after a successful upsert.
@@ -407,7 +444,7 @@ func (h *SyncHandler) syncFormat(ctx context.Context, set datasets.SyncSet, form
 	// Fetch and persist per-color-combination win rates. A failure here is
 	// non-fatal — card ratings are already stored and color data is best-effort.
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return ratings, ctx.Err()
 	}
 
 	// Rolling 2-year date window: avoids a Store interface change and covers all
@@ -420,7 +457,7 @@ func (h *SyncHandler) syncFormat(ctx context.Context, set datasets.SyncSet, form
 	colorRatings, err := h.fetcher.FetchColorRatings(ctx, set.ExpansionCode, format, startDate, endDate)
 	if err != nil {
 		log.Printf("[sync] fetch color ratings %s/%s: %v", set.Code, format, err)
-		return nil
+		return ratings, nil
 	}
 
 	// Filter out is_summary rows — these are aggregate rows returned by the API
@@ -434,17 +471,48 @@ func (h *SyncHandler) syncFormat(ctx context.Context, set datasets.SyncSet, form
 
 	if len(filtered) == 0 {
 		log.Printf("[sync] no color ratings returned for %s/%s", set.Code, format)
-		return nil
+		return ratings, nil
 	}
 
 	// DB write for color ratings keyed on Scryfall Code.
 	if err := h.store.UpsertColorRatings(ctx, set.Code, format, filtered); err != nil {
 		log.Printf("[sync] upsert color ratings %s/%s: %v", set.Code, format, err)
-		return nil
+		return ratings, nil
 	}
 
 	log.Printf("[sync] refreshed color ratings %s/%s: %d combinations", set.Code, format, len(filtered))
-	return nil
+	return ratings, nil
+}
+
+// backfillSetCardStubs builds a deduplicated list of SetCardStubs from the ratings
+// collected during the sync loop and writes them to set_cards via UpsertSetCardStubs.
+// It is non-fatal: any failure is logged and does not affect the already-persisted
+// card ratings. The map key is the Scryfall set code; the value is the accumulated
+// slice of card ratings across all formats for that set (deduplication already done
+// in syncSetAndCollect per-set; here we only need to build the stub list).
+func (h *SyncHandler) backfillSetCardStubs(ctx context.Context, allRatings map[string][]seventeenlands.CardRating) {
+	var stubs []datasets.SetCardStub
+	for setCode, ratings := range allRatings {
+		for _, r := range ratings {
+			stubs = append(stubs, datasets.SetCardStub{
+				ArenaID: r.MtgaID,
+				Name:    r.Name,
+				SetCode: setCode,
+				Source:  "17lands",
+			})
+		}
+	}
+
+	if len(stubs) == 0 {
+		return
+	}
+
+	if err := h.store.UpsertSetCardStubs(ctx, stubs); err != nil {
+		log.Printf("[sync] backfillSetCardStubs: UpsertSetCardStubs: %v", err)
+		return
+	}
+
+	log.Printf("[sync] backfillSetCardStubs: wrote %d set_cards stubs from 17Lands ratings", len(stubs))
 }
 
 // activeSets returns the SyncSets to process for this invocation.

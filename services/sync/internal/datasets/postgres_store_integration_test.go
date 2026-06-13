@@ -246,6 +246,130 @@ func TestPostgresStore_UpsertRatings_ZeroFetchedAt_Integration(t *testing.T) {
 
 func intPtrTest(v int) *int { return &v }
 
+// TestPostgresStore_UpsertSetCardStubs_WritesRows_Integration verifies that
+// UpsertSetCardStubs inserts (arena_id, name, set_code, arena_id_source) rows
+// into set_cards and that the source column is set to "17lands".
+func TestPostgresStore_UpsertSetCardStubs_WritesRows_Integration(t *testing.T) {
+	dbURL := os.Getenv("TEST_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("TEST_DATABASE_URL not set; skipping integration test")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dbURL)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	store := datasets.NewPostgresStore(pool)
+
+	stubs := []datasets.SetCardStub{
+		{ArenaID: 9900001, Name: "Stub Card Alpha", SetCode: "_st", Source: "17lands"},
+		{ArenaID: 9900002, Name: "Stub Card Beta", SetCode: "_st", Source: "17lands"},
+	}
+
+	require.NoError(t, store.UpsertSetCardStubs(ctx, stubs))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM set_cards WHERE set_code = '_st' AND arena_id IN ('9900001', '9900002')`)
+	})
+
+	for _, stub := range stubs {
+		var name, source string
+		err := pool.QueryRow(
+			ctx,
+			`SELECT name, arena_id_source FROM set_cards WHERE set_code = $1 AND arena_id = $2`,
+			stub.SetCode,
+			fmt.Sprintf("%d", stub.ArenaID),
+		).Scan(&name, &source)
+		require.NoError(t, err, "stub row must exist for arena_id=%d", stub.ArenaID)
+		assert.Equal(t, stub.Name, name)
+		assert.Equal(t, "17lands", source, "arena_id_source must be '17lands' for stub rows")
+	}
+}
+
+// TestPostgresStore_UpsertSetCardStubs_DoesNotOverwriteScryfall_Integration verifies
+// the DO NOTHING conflict behaviour: a 17lands stub must not overwrite an existing
+// Scryfall-sourced row (which carries full metadata including image URLs, rarity, etc.).
+func TestPostgresStore_UpsertSetCardStubs_DoesNotOverwriteScryfall_Integration(t *testing.T) {
+	dbURL := os.Getenv("TEST_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("TEST_DATABASE_URL not set; skipping integration test")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dbURL)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	store := datasets.NewPostgresStore(pool)
+
+	// Write a Scryfall-sourced row first (via UpsertSetCards, which uses DO UPDATE).
+	scryfallCards := []scryfall.ScryfallCard{
+		{
+			ScryfallID: "sc-stub-test-001",
+			ArenaID:    intPtrTest(9900101),
+			Name:       "Scryfall Card",
+			SetCode:    "_st",
+			Rarity:     "rare",
+		},
+	}
+	require.NoError(t, store.UpsertSetCards(ctx, scryfallCards))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM set_cards WHERE set_code = '_st' AND arena_id = '9900101'`)
+	})
+
+	// Now try to write a stub for the same (set_code, arena_id) — must be silently ignored.
+	stubs := []datasets.SetCardStub{
+		{ArenaID: 9900101, Name: "17lands Overwrite Attempt", SetCode: "_st", Source: "17lands"},
+	}
+	require.NoError(t, store.UpsertSetCardStubs(ctx, stubs))
+
+	// The Scryfall row must be unchanged.
+	var name, rarity string
+	err = pool.QueryRow(
+		ctx,
+		`SELECT name, COALESCE(rarity, '') FROM set_cards WHERE set_code = '_st' AND arena_id = '9900101'`,
+	).Scan(&name, &rarity)
+	require.NoError(t, err)
+	assert.Equal(t, "Scryfall Card", name,
+		"name must remain 'Scryfall Card' — 17lands stub must not overwrite Scryfall row")
+	assert.Equal(t, "rare", rarity,
+		"rarity must remain 'rare' — Scryfall metadata must be preserved")
+}
+
+// TestPostgresStore_UpsertSetCardStubs_Idempotent_Integration verifies that calling
+// UpsertSetCardStubs twice with the same stubs is idempotent — no error, no duplicate rows.
+func TestPostgresStore_UpsertSetCardStubs_Idempotent_Integration(t *testing.T) {
+	dbURL := os.Getenv("TEST_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("TEST_DATABASE_URL not set; skipping integration test")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dbURL)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	store := datasets.NewPostgresStore(pool)
+
+	stubs := []datasets.SetCardStub{
+		{ArenaID: 9900201, Name: "Idempotent Card", SetCode: "_st", Source: "17lands"},
+	}
+
+	require.NoError(t, store.UpsertSetCardStubs(ctx, stubs), "first call must succeed")
+	require.NoError(t, store.UpsertSetCardStubs(ctx, stubs), "second call must succeed (idempotent)")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM set_cards WHERE set_code = '_st' AND arena_id = '9900201'`)
+	})
+
+	var count int
+	err = pool.QueryRow(
+		ctx,
+		`SELECT count(*) FROM set_cards WHERE set_code = '_st' AND arena_id = '9900201'`,
+	).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "idempotent call must produce exactly one row, not two")
+}
+
 // TestPostgresStore_UpsertSetCards_Integration verifies that UpsertSetCards writes
 // per-set card entries to set_cards with arena_id stored as TEXT, that a second
 // call upserts (not appends) the rows, and that image_url_small and image_url_art

@@ -339,6 +339,49 @@ func extractImageURLKey(imageURIs any, key string) string {
 	return ""
 }
 
+// UpsertSetCardStubs inserts minimal set_cards rows sourced from 17lands card ratings.
+// Each stub carries arena_id, name, set_code, and arena_id_source='17lands'.
+// The insert uses ON CONFLICT (set_code, arena_id) DO NOTHING so an existing
+// Scryfall-sourced row (with full metadata) is never overwritten by a stub.
+// scryfall_id is stored as an empty string — it is not available from 17lands.
+func (s *PostgresStore) UpsertSetCardStubs(ctx context.Context, stubs []SetCardStub) error {
+	if len(stubs) == 0 {
+		return nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			log.Printf("[sync] UpsertSetCardStubs: rollback error: %v", err)
+		}
+	}()
+
+	const q = `
+		INSERT INTO set_cards (set_code, arena_id, scryfall_id, name, arena_id_source)
+		VALUES ($1, $2, '', $3, $4)
+		ON CONFLICT (set_code, arena_id) DO NOTHING
+	`
+
+	inserted := 0
+	for _, stub := range stubs {
+		arenaIDText := fmt.Sprintf("%d", stub.ArenaID)
+		if _, err := tx.Exec(ctx, q, stub.SetCode, arenaIDText, stub.Name, stub.Source); err != nil {
+			return fmt.Errorf("insert stub (set=%s arena_id=%s): %w", stub.SetCode, arenaIDText, err)
+		}
+		inserted++
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	log.Printf("[sync] UpsertSetCardStubs: attempted %d stubs for set_cards", inserted)
+	return nil
+}
+
 // GetHash returns the stored hash for the given key, or ("", nil) if none exists.
 func (s *PostgresStore) GetHash(ctx context.Context, key string) (string, error) {
 	var hash string
