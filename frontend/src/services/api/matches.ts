@@ -13,6 +13,7 @@
 
 import { get as bffGet, post as bffPost } from '../apiClient';
 import { models, storage } from '@/types/models';
+import { toLocalDateString } from '@/utils/dateHelpers';
 
 // Re-export types for convenience
 export type Match = models.Match;
@@ -211,8 +212,16 @@ export async function exportMatches(format: 'json' | 'csv'): Promise<unknown> {
 }
 
 /**
- * Helper to convert a time value to a date string (YYYY-MM-DD).
- * Handles both Date objects and time.Time (which serializes to ISO string).
+ * Helper to convert a time value to a LOCAL calendar date string (YYYY-MM-DD).
+ *
+ * Uses getFullYear/getMonth/getDate (local methods) instead of toISOString()
+ * to avoid emitting the UTC date for users behind UTC who are active near
+ * midnight (toISOString() returns tomorrow's date for them — #1391).
+ *
+ * Handles:
+ *  - Date objects → local calendar date via toLocalDateString()
+ *  - strings already in YYYY-MM-DD or ISO format → strip after 'T'
+ *  - time.Time serialised objects → toString then strip after 'T'
  */
 function formatDateParam(date: unknown): string | undefined {
   if (!date) return undefined;
@@ -220,9 +229,9 @@ function formatDateParam(date: unknown): string | undefined {
     return date.split('T')[0];
   }
   if (date instanceof Date) {
-    return date.toISOString().split('T')[0];
+    return toLocalDateString(date);
   }
-  // Handle time.Time which may have been serialized
+  // Handle time.Time which may have been serialized as an object with toString
   const dateObj = date as { toString?: () => string };
   if (dateObj.toString) {
     const str = dateObj.toString();

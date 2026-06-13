@@ -9,6 +9,7 @@ import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import { useAppContext } from '../context/AppContext';
 import { getVisibleSetAnnotations, type ChartPeriodMeta } from '@/utils/setReleaseAnnotations';
+import { toLocalDateString } from '@/utils/dateHelpers';
 import './WinRateTrend.css';
 
 const WinRateTrend = () => {
@@ -66,18 +67,9 @@ const WinRateTrend = () => {
         formats = [format];
       }
 
-      // Format dates as YYYY-MM-DD in local timezone (backend expects this format)
-      // Using local time methods avoids off-by-one day errors from UTC conversion
-      const formatDate = (d: Date) => {
-        const year = d.getFullYear();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-      };
-
       const data = await matches.getTrendAnalysis({
-        startDate: formatDate(start),
-        endDate: formatDate(now),
+        startDate: toLocalDateString(start),
+        endDate: toLocalDateString(now),
         periodType: periodType,
         formats: formats || undefined,
       });
