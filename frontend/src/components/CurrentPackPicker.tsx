@@ -132,6 +132,16 @@ const CurrentPackPicker: React.FC<CurrentPackPickerProps> = ({ sessionID, onRefr
                     {packData.recommended_card.reasoning && (
                         <span className="rec-reason" data-testid="rec-reasoning">{packData.recommended_card.reasoning}</span>
                     )}
+                    {packData.recommended_card.low_confidence === true && (
+                        <span className="rec-low-confidence" data-testid="rec-low-confidence">
+                            Limited data — early format
+                        </span>
+                    )}
+                    {packData.recommended_card.gihwr == null && (
+                        <span className="rec-no-arena-data" data-testid="rec-no-arena-data">
+                            Community consensus / No Arena data yet
+                        </span>
+                    )}
                 </div>
             )}
 

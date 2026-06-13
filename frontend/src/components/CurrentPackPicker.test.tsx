@@ -997,4 +997,157 @@ describe('CurrentPackPicker Component', () => {
       });
     });
   });
+
+  // ── Recommended banner ADR-047 §2 disclosures (#1401) ──────────────────
+  // AC1: inline "Limited data — early format" when low_confidence=true.
+  // AC2: inline "Community consensus / No Arena data yet" when gihwr is
+  //      null/undefined (no Arena sample at all).
+  // Ray's required correction: gihwr==null (no data) MUST NOT conflate with
+  // gihwr===0 (real 0% GIHWR — a legitimate, terrible card). The
+  // disambiguation test is mandatory.
+
+  describe('Recommended banner disclosure — ADR-047 §2 (#1401)', () => {
+    // AC1 — low_confidence disclosure
+    it('banner shows "Limited data — early format" when recommended_card.low_confidence is true', async () => {
+      const packData = createMockPackResponse({
+        recommended_card: createMockPackCard({ arena_id: '1', name: 'Lightning Bolt', low_confidence: true }),
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const el = container.querySelector('[data-testid="rec-low-confidence"]');
+        expect(el).toBeInTheDocument();
+        expect(el).toHaveTextContent('Limited data — early format');
+      });
+    });
+
+    it('banner does NOT show low_confidence disclosure when low_confidence is false', async () => {
+      const packData = createMockPackResponse({
+        recommended_card: createMockPackCard({ arena_id: '1', name: 'Lightning Bolt', low_confidence: false }),
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        // Lightning Bolt appears in both the banner and the card grid — use getAllByText.
+        expect(screen.getAllByText('Lightning Bolt').length).toBeGreaterThanOrEqual(1);
+      });
+      expect(container.querySelector('[data-testid="rec-low-confidence"]')).not.toBeInTheDocument();
+    });
+
+    it('banner does NOT show low_confidence disclosure when low_confidence is undefined', async () => {
+      const packData = createMockPackResponse({
+        recommended_card: createMockPackCard({ arena_id: '1', name: 'Lightning Bolt' }),
+      });
+      (packData.recommended_card as unknown as Record<string, unknown>)['low_confidence'] = undefined;
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        // Lightning Bolt appears in both the banner and the card grid — use getAllByText.
+        expect(screen.getAllByText('Lightning Bolt').length).toBeGreaterThanOrEqual(1);
+      });
+      expect(container.querySelector('[data-testid="rec-low-confidence"]')).not.toBeInTheDocument();
+    });
+
+    // AC2 — no Arena data disclosure
+    it('banner shows "Community consensus / No Arena data yet" when gihwr is null (no data)', async () => {
+      const packData = createMockPackResponse({
+        recommended_card: createMockPackCard({ arena_id: '1', name: 'New Set Card', low_confidence: false }),
+      });
+      // Null gihwr = the BFF/daemon has no GIH sample at all for this card.
+      (packData.recommended_card as unknown as Record<string, unknown>)['gihwr'] = null;
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const el = container.querySelector('[data-testid="rec-no-arena-data"]');
+        expect(el).toBeInTheDocument();
+        expect(el).toHaveTextContent('Community consensus / No Arena data yet');
+      });
+    });
+
+    it('banner shows "Community consensus / No Arena data yet" when gihwr is undefined (no data)', async () => {
+      const packData = createMockPackResponse({
+        recommended_card: createMockPackCard({ arena_id: '1', name: 'New Set Card', low_confidence: false }),
+      });
+      (packData.recommended_card as unknown as Record<string, unknown>)['gihwr'] = undefined;
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        const el = container.querySelector('[data-testid="rec-no-arena-data"]');
+        expect(el).toBeInTheDocument();
+      });
+    });
+
+    // Ray's required correction: legit-0% GIHWR (real data, terrible card)
+    // MUST NOT trigger the no-Arena-data label.
+    it('banner does NOT show no-Arena-data label when gihwr is exactly 0 (legit 0% win rate)', async () => {
+      const packData = createMockPackResponse({
+        recommended_card: createMockPackCard({ arena_id: '1', name: 'Terrible Card', gihwr: 0, low_confidence: false }),
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Terrible Card')).toBeInTheDocument();
+      });
+      // gihwr===0 is a legitimate data point — do not show the no-data label.
+      expect(container.querySelector('[data-testid="rec-no-arena-data"]')).not.toBeInTheDocument();
+    });
+
+    it('banner does NOT show no-Arena-data label when gihwr is a normal positive value', async () => {
+      const packData = createMockPackResponse({
+        recommended_card: createMockPackCard({ arena_id: '1', name: 'Good Card', gihwr: 0.631 }),
+      });
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Good Card')).toBeInTheDocument();
+      });
+      expect(container.querySelector('[data-testid="rec-no-arena-data"]')).not.toBeInTheDocument();
+    });
+
+    // Both disclosures can appear simultaneously on a new-set card with < 500
+    // game sample AND no GIHWR data at all.
+    it('banner shows both disclosures simultaneously when low_confidence AND gihwr is null', async () => {
+      const packData = createMockPackResponse({
+        recommended_card: createMockPackCard({ arena_id: '1', name: 'Mystery Card', low_confidence: true }),
+      });
+      (packData.recommended_card as unknown as Record<string, unknown>)['gihwr'] = null;
+      mockDrafts.getCurrentPackWithRecommendation.mockResolvedValue(packData);
+
+      const { container } = render(<CurrentPackPicker sessionID="test-session" />);
+
+      await waitFor(() => {
+        expect(container.querySelector('[data-testid="rec-low-confidence"]')).toBeInTheDocument();
+        expect(container.querySelector('[data-testid="rec-no-arena-data"]')).toBeInTheDocument();
+      });
+    });
+
+    // CSS token compliance — new disclosure spans must use design tokens.
+    it('CSS — rec-low-confidence uses --warning token for border and color', () => {
+      const css = readFileSync(CSS_PATH, 'utf8');
+      expect(css).toContain('.rec-low-confidence');
+      expect(css).toContain('var(--warning)');
+    });
+
+    it('CSS — rec-no-arena-data uses --fg-muted and --border tokens', () => {
+      const css = readFileSync(CSS_PATH, 'utf8');
+      expect(css).toContain('.rec-no-arena-data');
+      expect(css).toContain('var(--fg-muted)');
+      expect(css).toContain('var(--border)');
+    });
+  });
+  // ─────────────────────────────────────────────────────────────────────────
 });
