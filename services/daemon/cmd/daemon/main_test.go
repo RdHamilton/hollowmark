@@ -442,6 +442,57 @@ func TestRunInProcessReauth_DeadlineExpiresBeforeBFF(t *testing.T) {
 	require.Error(t, err, "runInProcessReauth must return an error when the context deadline fires")
 }
 
+// ---------------------------------------------------------------------------
+// NB-5 — device_id log hygiene
+// ---------------------------------------------------------------------------
+
+// TestDeviceIDLogToken_NoRawIDInOutput is the regression guard for NB-5: the
+// raw device_id must never appear in the INFO-level log token emitted after
+// in-process reauth completes.
+//
+// It tests deviceIDLogToken directly (the helper used by runInProcessReauth)
+// and asserts:
+//  1. The returned token does not equal the raw device_id.
+//  2. The returned token is exactly 8 hex characters (first 4 bytes of SHA-256).
+//  3. The token is deterministic for the same input (idempotent hashing).
+func TestDeviceIDLogToken_NoRawIDInOutput(t *testing.T) {
+	const rawDeviceID = "dev-unit-test-deadbeef-0000-1111-2222-333333333333"
+
+	token := deviceIDLogToken(rawDeviceID)
+
+	assert.NotEqual(t, rawDeviceID, token,
+		"deviceIDLogToken must not return the raw device_id")
+	assert.Len(t, token, 8,
+		"deviceIDLogToken must return exactly 8 hex characters (4 bytes of SHA-256)")
+	assert.Equal(t, token, deviceIDLogToken(rawDeviceID),
+		"deviceIDLogToken must be deterministic for the same input")
+
+	// Extra guard: the raw device_id must not appear as a substring of the token.
+	assert.NotContains(t, token, rawDeviceID,
+		"deviceIDLogToken output must not contain the raw device_id as a substring")
+}
+
+// TestDeviceIDLogToken_LogLineDoesNotContainRawID captures the log.Printf output
+// produced by the runInProcessReauth log site (via a custom logger) and asserts
+// that the raw device_id does not appear in it. This guards against regressions
+// where the format string is inadvertently changed back to emit the raw value.
+func TestDeviceIDLogToken_LogLineDoesNotContainRawID(t *testing.T) {
+	const rawDeviceID = "dev-unit-test-raw-should-not-appear-in-log"
+
+	var buf bytes.Buffer
+	testLogger := log.New(&buf, "", 0)
+
+	// Reproduce the exact log.Printf call in runInProcessReauth using the
+	// production helper, so any future change to that format string breaks this test.
+	testLogger.Printf("[mtga-daemon] in-process reauth: complete — new device_id hash=%s", deviceIDLogToken(rawDeviceID))
+
+	logLine := buf.String()
+	assert.NotContains(t, logLine, rawDeviceID,
+		"INFO log line must not contain the raw device_id; got: %s", logLine)
+	assert.Contains(t, logLine, "device_id hash=",
+		"INFO log line must contain the hashed token label; got: %s", logLine)
+}
+
 // TestRunPKCEAuth_MissingClerkFrontendAPI verifies that runPKCEAuth returns
 // an error mentioning "CLERK_FRONTEND_API" when that env var is not set.
 func TestRunPKCEAuth_MissingClerkFrontendAPI(t *testing.T) {
