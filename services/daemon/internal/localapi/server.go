@@ -83,17 +83,22 @@ type State struct {
 // handlers and writes from the daemon's dispatch goroutine are safe without
 // a mutex on the hot path.
 type Server struct {
-	port          int
-	state         atomic.Pointer[State]
-	srv           *http.Server
-	ln            net.Listener
-	ctx           context.Context          // lifecycle context; cancelled when the daemon stops
-	uninstaller   Uninstaller              // nil → defaultUninstaller; tests override via SetUninstaller
-	draftStore    DraftStore               // nil → draft endpoints respond with empty/no-session
-	cardsLookup   draftalgo.CardLookup     // nil → noopCards; defaults applied lazily in drafts.go
-	ratingsLookup draftalgo.RatingsLookup  // nil → noopRatings; defaults applied lazily in drafts.go
-	metaLookup    draftalgo.CardMetaLookup // nil → noMeta; Phase B card metadata (color, ALSA, GIHCount)
-	replayTrigger ReplayFunc               // nil → /api/v1/replay returns 503
+	port               int
+	state              atomic.Pointer[State]
+	srv                *http.Server
+	ln                 net.Listener
+	ctx                context.Context          // lifecycle context; cancelled when the daemon stops
+	uninstaller        Uninstaller              // nil → defaultUninstaller; tests override via SetUninstaller
+	draftStore         DraftStore               // nil → draft endpoints respond with empty/no-session
+	cardsLookup        draftalgo.CardLookup     // nil → noopCards; defaults applied lazily in drafts.go
+	ratingsLookup      draftalgo.RatingsLookup  // nil → noopRatings; defaults applied lazily in drafts.go
+	metaLookup         draftalgo.CardMetaLookup // nil → noMeta; Phase B card metadata (color, ALSA, GIHCount)
+	replayTrigger      ReplayFunc               // nil → /api/v1/replay returns 503
+	syncNowTrigger     SyncNowFunc              // nil → /api/v1/system/sync-now returns 503
+	grantAccessTrigger GrantAccessFunc          // nil → /api/v1/system/grant-access returns 503
+	// Concurrency guards — prevent overlapping executions.
+	syncNowInFlight     atomic.Bool
+	grantAccessInFlight atomic.Bool
 }
 
 // New returns a Server bound to 127.0.0.1:port. Use DefaultPort unless tests
@@ -195,6 +200,11 @@ func (s *Server) Start() error {
 	// Phase 2 PR #18 — uninstall surface. Lets the SPA's Settings UI
 	// trigger a clean uninstall without forcing the user into a Terminal.
 	mux.HandleFunc("/api/v1/system/uninstall", s.handleSystemUninstall)
+
+	// #1438 — mutating system action endpoints (sync-now, grant-access).
+	// Implemented in system_actions.go to avoid collision with #1439 (system.go).
+	mux.HandleFunc("/api/v1/system/sync-now", s.handleSystemSyncNow)
+	mux.HandleFunc("/api/v1/system/grant-access", s.handleSystemGrantAccess)
 
 	// #1832 — support diagnostics bundle. Returns daemon version, OS, uptime,
 	// and the last N lines of the daemon log file (secrets scrubbed) so the
