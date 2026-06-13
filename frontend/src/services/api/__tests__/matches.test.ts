@@ -16,10 +16,14 @@ describe('matches API', () => {
 
   describe('statsFilterToRequest', () => {
     it('should convert StatsFilter to StatsFilterRequest', () => {
+      // Use local-midnight construction (year, month-1, day) so the expected
+      // date string is portable across all host timezone offsets.
+      // new Date('2024-01-01') parses as UTC midnight, which may render as a
+      // different local date for behind-UTC users — use the 3-arg constructor.
       const filter = {
         AccountID: 123,
-        StartDate: new Date('2024-01-01'),
-        EndDate: new Date('2024-01-31'),
+        StartDate: new Date(2024, 0, 1),   // 2024-01-01 local midnight
+        EndDate: new Date(2024, 0, 31),    // 2024-01-31 local midnight
         Format: 'standard',
         Formats: ['standard', 'historic'],
         DeckFormat: 'standard',

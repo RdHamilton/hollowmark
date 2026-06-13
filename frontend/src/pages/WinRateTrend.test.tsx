@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import WinRateTrend from './WinRateTrend';
 import { mockMatches } from '@/test/mocks/apiMock';
@@ -798,6 +798,49 @@ describe('WinRateTrend', () => {
         // Empty state because Trends array is missing
         expect(screen.getByText('Not enough data')).toBeInTheDocument();
       });
+    });
+  });
+
+  // ─── Date-consistency tests (#1391) ────────────────────────────────────────
+  // WinRateTrend calls getTrendAnalysis directly with a TrendAnalysisRequest
+  // (not via statsFilterToRequest). Both startDate and endDate are serialised
+  // as YYYY-MM-DD strings directly in the component. After the fix, it uses
+  // the shared toLocalDateString() helper instead of the local formatDate.
+  // ─────────────────────────────────────────────────────────────────────────────
+  describe('Date param consistency (#1391)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('sends startDate and endDate as YYYY-MM-DD strings (no T in the string)', async () => {
+      mockMatches.getTrendAnalysis.mockResolvedValue(createMockTrendAnalysis());
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(2024, 5, 15, 12, 0, 0));
+
+      renderWithProvider(<WinRateTrend />);
+      await waitFor(() => expect(mockMatches.getTrendAnalysis).toHaveBeenCalled());
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const call = (mockMatches.getTrendAnalysis.mock.calls[0] as any[])[0];
+      expect(call.startDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(call.startDate).not.toContain('T');
+      expect(call.endDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(call.endDate).not.toContain('T');
+    });
+
+    it('startDate for 7-day window is 2024-06-08 when today is 2024-06-15', async () => {
+      mockMatches.getTrendAnalysis.mockResolvedValue(createMockTrendAnalysis());
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(2024, 5, 15, 12, 0, 0)); // 2024-06-15
+
+      renderWithProvider(<WinRateTrend />);
+      await waitFor(() => expect(mockMatches.getTrendAnalysis).toHaveBeenCalled());
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const call = (mockMatches.getTrendAnalysis.mock.calls[0] as any[])[0];
+      // WinRateTrend sends `now` as endDate (not now+1 — trend API uses inclusive dates).
+      expect(call.startDate).toBe('2024-06-08');
+      expect(call.endDate).toBe('2024-06-15');
     });
   });
 });

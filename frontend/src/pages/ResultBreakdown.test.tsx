@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import ResultBreakdown from './ResultBreakdown';
 import { mockMatches } from '@/test/mocks/apiMock';
@@ -563,6 +563,63 @@ describe('ResultBreakdown', () => {
         expect(screen.getByText('Match to Game Win Rate Ratio')).toBeInTheDocument();
         expect(screen.getByText('Performance Category')).toBeInTheDocument();
       });
+    });
+  });
+
+  // ─── Date-consistency tests (#1391) ────────────────────────────────────────
+  // Verify ResultBreakdown builds the StatsFilter with LOCAL calendar dates,
+  // not UTC-shifted dates from toISOString().
+  //
+  // NOTE: statsFilterToRequest is mocked as identity (filter => filter) in
+  // setup.ts, so getStats receives the raw StatsFilter model. We inspect
+  // filter.StartDate / filter.EndDate directly on the StatsFilter object.
+  // ─────────────────────────────────────────────────────────────────────────────
+  describe('Date param consistency (#1391)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('passes StartDate as a Date object (not a string) to statsFilterToRequest', async () => {
+      mockMatches.getStats.mockResolvedValue(createMockStatistics());
+      // Use toFake only for Date so waitFor polling (setTimeout) still works.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(2024, 5, 15, 12, 0, 0)); // 2024-06-15 noon
+
+      renderWithProvider(<ResultBreakdown />);
+      await waitFor(() => expect(mockMatches.getStats).toHaveBeenCalled());
+
+      // statsFilterToRequest mock is identity so getStats receives StatsFilter.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const filter = (mockMatches.getStats.mock.calls[0] as any[])[0] as models.StatsFilter;
+      expect(filter.StartDate).toBeInstanceOf(Date);
+      expect(filter.EndDate).toBeInstanceOf(Date);
+    });
+
+    it('StartDate for 7-day window is 7 days before today at local midnight', async () => {
+      mockMatches.getStats.mockResolvedValue(createMockStatistics());
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(2024, 5, 15, 12, 0, 0)); // 2024-06-15
+
+      renderWithProvider(<ResultBreakdown />);
+      await waitFor(() => expect(mockMatches.getStats).toHaveBeenCalled());
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const filter = (mockMatches.getStats.mock.calls[0] as any[])[0] as models.StatsFilter;
+      const start = filter.StartDate as Date;
+      const end = filter.EndDate as Date;
+
+      // startDate = 2024-06-08 local midnight
+      expect(start.getFullYear()).toBe(2024);
+      expect(start.getMonth()).toBe(5); // June
+      expect(start.getDate()).toBe(8);
+      expect(start.getHours()).toBe(0);
+      expect(start.getMinutes()).toBe(0);
+
+      // endDate = 2024-06-16 local midnight (today + 1, exclusive upper bound)
+      expect(end.getFullYear()).toBe(2024);
+      expect(end.getMonth()).toBe(5);
+      expect(end.getDate()).toBe(16);
+      expect(end.getHours()).toBe(0);
     });
   });
 });

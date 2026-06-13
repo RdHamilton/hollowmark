@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import FormatDistribution from './FormatDistribution';
 import { mockMatches } from '@/test/mocks/apiMock';
@@ -485,6 +485,50 @@ describe('FormatDistribution', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const call = mockMatches.getFormatDistribution.mock.calls[0] as any[];
       expect(call[0]).toBeInstanceOf(models.StatsFilter);
+    });
+  });
+
+  // ─── Date-consistency tests (#1391) ────────────────────────────────────────
+  // FormatDistribution must build its StatsFilter with the same LOCAL date
+  // window as ResultBreakdown — both use the shared buildLastNDaysWindow util.
+  // ─────────────────────────────────────────────────────────────────────────────
+  describe('Date param consistency (#1391)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('passes StartDate as a Date object to statsFilterToRequest', async () => {
+      mockMatches.getFormatDistribution.mockResolvedValue(createMockFormatStatsResponse());
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(2024, 5, 15, 12, 0, 0));
+
+      renderWithProvider(<FormatDistribution />);
+      await waitFor(() => expect(mockMatches.getFormatDistribution).toHaveBeenCalled());
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const filter = (mockMatches.getFormatDistribution.mock.calls[0] as any[])[0] as models.StatsFilter;
+      expect(filter.StartDate).toBeInstanceOf(Date);
+      expect(filter.EndDate).toBeInstanceOf(Date);
+    });
+
+    it('StartDate for 7-day window matches ResultBreakdown (same shared util)', async () => {
+      mockMatches.getFormatDistribution.mockResolvedValue(createMockFormatStatsResponse());
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(2024, 5, 15, 12, 0, 0)); // 2024-06-15
+
+      renderWithProvider(<FormatDistribution />);
+      await waitFor(() => expect(mockMatches.getFormatDistribution).toHaveBeenCalled());
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const filter = (mockMatches.getFormatDistribution.mock.calls[0] as any[])[0] as models.StatsFilter;
+      const start = filter.StartDate as Date;
+      const end = filter.EndDate as Date;
+
+      // Same window as ResultBreakdown: 2024-06-08 to 2024-06-16
+      expect(start.getFullYear()).toBe(2024);
+      expect(start.getMonth()).toBe(5);
+      expect(start.getDate()).toBe(8);
+      expect(end.getDate()).toBe(16);
     });
   });
 });

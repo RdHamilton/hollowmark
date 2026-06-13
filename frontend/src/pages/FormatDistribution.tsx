@@ -8,6 +8,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import { useAppContext } from '../context/AppContext';
+import { buildLastNDaysWindow } from '@/utils/dateHelpers';
 import './FormatDistribution.css';
 
 interface FormatStats {
@@ -118,28 +119,10 @@ const FormatDistribution = () => {
           filter.EndDate = end;
         }
       } else if (dateRange !== 'all') {
-        const now = new Date();
-        const start = new Date();
-
-        switch (dateRange) {
-          case '7days':
-            start.setDate(now.getDate() - 7);
-            break;
-          case '30days':
-            start.setDate(now.getDate() - 30);
-            break;
-          case '90days':
-            start.setDate(now.getDate() - 90);
-            break;
-        }
-
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(now);
-        end.setDate(end.getDate() + 1);
-        end.setHours(0, 0, 0, 0);
-
-        filter.StartDate = start;
-        filter.EndDate = end;
+        const nDays = dateRange === '7days' ? 7 : dateRange === '30days' ? 30 : 90;
+        const { startDate, endDate } = buildLastNDaysWindow(nDays);
+        filter.StartDate = startDate;
+        filter.EndDate = endDate;
       }
 
       const data = await matches.getFormatDistribution(matches.statsFilterToRequest(filter));
