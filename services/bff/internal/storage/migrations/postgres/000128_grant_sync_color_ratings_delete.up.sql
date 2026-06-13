@@ -1,4 +1,4 @@
--- 000126_grant_sync_color_ratings_delete.up.sql
+-- 000128_grant_sync_color_ratings_delete.up.sql
 --
 -- Grants DELETE on draft_color_ratings and USAGE/SELECT on its sequence to
 -- the mtga_sync role.

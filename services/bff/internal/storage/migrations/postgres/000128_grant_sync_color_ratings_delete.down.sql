@@ -1,4 +1,4 @@
--- 000126_grant_sync_color_ratings_delete.down.sql
+-- 000128_grant_sync_color_ratings_delete.down.sql
 --
 -- Reverts the DELETE grant and sequence grants on draft_color_ratings
 -- from the mtga_sync role. After this runs, UpsertColorRatings will fail
