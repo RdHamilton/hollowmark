@@ -13,16 +13,27 @@ import (
 	"time"
 )
 
+// helperInfoResponse is the helper_info sub-object of connectionStatusResponse.
+// It carries collection-helper install and health fields added in #1439 so the
+// tray can render contextual menu items without reaching into daemon internals.
+type helperInfoResponse struct {
+	HelperInstalled bool    `json:"helper_installed"`
+	KeychainError   *string `json:"keychain_error"`
+	LastSync        *string `json:"last_sync"`
+}
+
 // connectionStatusResponse mirrors gui.ConnectionStatus on the frontend.
 // `connected` is true while the daemon process is up (we are answering),
 // `mode` distinguishes live-log from playback (placeholder "live" for v0.3.x),
 // `url` and `port` echo the cloud API the daemon is dispatching to.
+// `helper_info` carries collection-helper install/health state (#1439).
 type connectionStatusResponse struct {
-	Status    string `json:"status"`
-	Connected bool   `json:"connected"`
-	Mode      string `json:"mode"`
-	URL       string `json:"url"`
-	Port      int    `json:"port"`
+	Status     string             `json:"status"`
+	Connected  bool               `json:"connected"`
+	Mode       string             `json:"mode"`
+	URL        string             `json:"url"`
+	Port       int                `json:"port"`
+	HelperInfo helperInfoResponse `json:"helper_info"`
 }
 
 // daemonStatusResponse mirrors the SPA's DaemonStatus type. Returned by both
@@ -111,6 +122,21 @@ func (s *Server) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
 	if !st.BFFReachable {
 		status = "degraded"
 	}
+
+	// Build the helper_info sub-object. keychain_error and last_sync are
+	// pointer-to-string / pointer-to-string so that absent values serialise
+	// as JSON null rather than empty string / zero time (#1439).
+	hi := helperInfoResponse{
+		HelperInstalled: st.HelperInstalled,
+	}
+	if st.HelperKeychainError != "" {
+		hi.KeychainError = &st.HelperKeychainError
+	}
+	if st.HelperLastSync != nil {
+		s := st.HelperLastSync.UTC().Format(time.RFC3339)
+		hi.LastSync = &s
+	}
+
 	writeJSON(w, r, http.StatusOK, connectionStatusResponse{
 		Status:    status,
 		Connected: true,
@@ -119,7 +145,8 @@ func (s *Server) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
 		// Report the port this server actually bound (channel-derived:
 		// stable=9001, staging=9011) rather than the hardcoded DefaultPort,
 		// so staging diagnostics reflect the real loopback port (#667).
-		Port: s.boundPort(),
+		Port:       s.boundPort(),
+		HelperInfo: hi,
 	})
 }
 
