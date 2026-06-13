@@ -1154,6 +1154,13 @@ func (s *Service) Run(ctx context.Context) error {
 	// Wire the replay trigger so POST /api/v1/replay can start a
 	// historical log replay that emits replay:* events via the BFF.
 	localAPI.SetReplayTrigger(s.Replay)
+	// Wire the sync-now trigger so POST /api/v1/system/sync-now can start a
+	// manual collection memory-scan (same action as the tray SyncNow hook).
+	localAPI.SetSyncNowTrigger(s.performCollectionSync)
+	// Wire the grant-access trigger so POST /api/v1/system/grant-access can
+	// invoke the one-time helper-authorization dialog.
+	// authorizeCollectionHelper takes no ctx — the wrapper drops it.
+	localAPI.SetGrantAccessTrigger(func() { s.authorizeCollectionHelper() })
 	// Use the daemon lifecycle context so replay goroutines are cancelled
 	// when the daemon stops rather than on HTTP request completion.
 	localAPI.WithContext(ctx)
