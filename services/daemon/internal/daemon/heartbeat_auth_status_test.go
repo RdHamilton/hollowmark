@@ -87,6 +87,18 @@ func runUntilHeartbeat(t *testing.T, cfg *config.Config, mutate func(svc *Servic
 	}
 
 	svc := New(cfg)
+
+	// Stub the credential store so Keychain=true tests pass on keychain-less CI
+	// (Linux, headless). New() calls the real credstore, which fails when
+	// org.freedesktop.secrets / the macOS Keychain is absent, setting keychainErr
+	// and causing Run() to block in retryKeychain's 2s/4s/8s backoff — the
+	// daemon never reaches the heartbeat ticker. Override after New() so the
+	// getter returns a valid key and any startup keychainErr is cleared before
+	// Run() begins. The mutate callback runs after this stub so individual tests
+	// can further adjust svc fields (e.g. authPaused) without fighting the stub.
+	svc.keychainGet = func() (string, error) { return "test-api-key", nil }
+	svc.keychainErr = nil
+
 	if mutate != nil {
 		mutate(svc)
 	}
@@ -315,13 +327,33 @@ func TestHeartbeatPayload_AuthStatus_AlwaysPresent(t *testing.T) {
 	defer cancel()
 
 	svc := New(cfg)
-	go func() { _ = svc.Run(ctx) }()
+
+	// Same credstore stub as runUntilHeartbeat: clear any startup keychainErr so
+	// Run() does not block in retryKeychain backoff on keychain-less CI.
+	svc.keychainGet = func() (string, error) { return "test-api-key", nil }
+	svc.keychainErr = nil
+
+	// Use a WaitGroup so we can join Run() before the t.Cleanup fires. Without
+	// this, the cleanup writes heartbeatInterval = old while the Run goroutine is
+	// still reading heartbeatInterval at service.go startup — data race detected
+	// by the race detector (#3309 Defect 2).
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = svc.Run(ctx)
+	}()
 
 	select {
 	case <-captured:
 	case <-ctx.Done():
 		t.Fatal("no heartbeat captured")
 	}
+	// Cancel and join before reading rawPayload and before t.Cleanup runs.
+	// This ensures the Run goroutine has exited before heartbeatInterval is
+	// restored, eliminating the race.
+	cancel()
+	wg.Wait()
 
 	rawMu.Lock()
 	p := rawPayload
