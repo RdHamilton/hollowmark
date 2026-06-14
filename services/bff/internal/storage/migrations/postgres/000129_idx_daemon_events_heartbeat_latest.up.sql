@@ -1,0 +1,31 @@
+-- Migration 000129: partial index to accelerate GetLatestHeartbeatAuthStatus (#144).
+--
+-- GET /api/v1/health/daemon now reads the auth_status field from the most
+-- recent daemon.heartbeat row for the requesting user:
+--   SELECT payload FROM daemon_events
+--   WHERE user_id = $1 AND event_type = 'daemon.heartbeat'
+--   ORDER BY received_at DESC LIMIT 1
+--
+-- None of the four existing daemon_events indexes serve this query efficiently:
+--   - idx_daemon_events_user_occurred sorts by occurred_at (not received_at) and
+--     has no event_type predicate.
+--   - idx_daemon_events_pending is a partial on projected_at IS NULL — wrong predicate.
+--   - idx_daemon_events_user_event_id is on (user_id, event_id) — wrong sort key.
+--   - idx_daemon_events_account_sequence is on (account_id, sequence) — wrong lead.
+--
+-- The partial index below covers the query exactly:
+--   - user_id equality narrows to one user.
+--   - received_at DESC gives LIMIT 1 as a single index seek (no sort step).
+--   - WHERE event_type = 'daemon.heartbeat' keeps the index small (heartbeats
+--     are a fraction of all daemon_events rows, which include match/draft events).
+--   - event_type is NOT a key column — it is already fixed by the partial predicate,
+--     so carrying it in the key would widen the b-tree with no benefit (Ray verdict).
+--
+-- NOTE: CREATE INDEX does NOT use CONCURRENTLY — golang-migrate wraps each
+-- migration in a transaction, and CONCURRENTLY cannot run inside a transaction
+-- block. The brief ShareLock taken during a non-concurrent index build is
+-- acceptable; the daemon_events table is append-heavy so read latency during
+-- the build is minimal. (See migrations 000105, 000112, 000116 for the same SOP.)
+CREATE INDEX IF NOT EXISTS idx_daemon_events_heartbeat_latest
+    ON daemon_events (user_id, received_at DESC)
+    WHERE event_type = 'daemon.heartbeat';

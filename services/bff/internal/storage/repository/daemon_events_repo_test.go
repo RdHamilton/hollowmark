@@ -393,3 +393,210 @@ func TestDaemonEventsRepository_Insert_SequencePersisted(t *testing.T) {
 		t.Errorf("sequence=%d, want %d", gotSequence, wantSequence)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// GetLatestHeartbeatAuthStatus integration tests (#144)
+// ---------------------------------------------------------------------------
+
+// insertHeartbeat inserts a daemon.heartbeat row for the given userID with
+// the provided payload JSON string. Cleans up via t.Cleanup.
+func insertHeartbeat(t *testing.T, db *sql.DB, userID int64, payloadJSON string) {
+	t.Helper()
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO daemon_events (user_id, account_id, event_type, payload, occurred_at)
+		 VALUES ($1, $2, 'daemon.heartbeat', $3::jsonb, NOW())`,
+		userID, "test-account-hb", payloadJSON,
+	)
+	if err != nil {
+		t.Fatalf("insertHeartbeat: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(
+			context.Background(),
+			`DELETE FROM daemon_events WHERE user_id = $1 AND event_type = 'daemon.heartbeat' AND account_id = 'test-account-hb'`,
+			userID,
+		)
+	})
+}
+
+// TestGetLatestHeartbeatAuthStatus_Authenticated verifies that a heartbeat row
+// with auth_status="authenticated" is returned correctly.
+func TestGetLatestHeartbeatAuthStatus_Authenticated(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonEventsRepository(db)
+	userID := seedTestUser(t, db, "hb-auth-authenticated")
+
+	insertHeartbeat(t, db, userID, `{"auth_status":"authenticated","parse_failure_count":0}`)
+
+	got, err := repo.GetLatestHeartbeatAuthStatus(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("GetLatestHeartbeatAuthStatus: %v", err)
+	}
+	if got != "authenticated" {
+		t.Errorf("want authenticated, got %q", got)
+	}
+}
+
+// TestGetLatestHeartbeatAuthStatus_SetupRequired verifies the setup_required value.
+func TestGetLatestHeartbeatAuthStatus_SetupRequired(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonEventsRepository(db)
+	userID := seedTestUser(t, db, "hb-auth-setup")
+
+	insertHeartbeat(t, db, userID, `{"auth_status":"setup_required","parse_failure_count":0}`)
+
+	got, err := repo.GetLatestHeartbeatAuthStatus(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("GetLatestHeartbeatAuthStatus: %v", err)
+	}
+	if got != "setup_required" {
+		t.Errorf("want setup_required, got %q", got)
+	}
+}
+
+// TestGetLatestHeartbeatAuthStatus_KeychainError verifies the keychain_error value.
+func TestGetLatestHeartbeatAuthStatus_KeychainError(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonEventsRepository(db)
+	userID := seedTestUser(t, db, "hb-auth-keychain")
+
+	insertHeartbeat(t, db, userID, `{"auth_status":"keychain_error","parse_failure_count":0}`)
+
+	got, err := repo.GetLatestHeartbeatAuthStatus(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("GetLatestHeartbeatAuthStatus: %v", err)
+	}
+	if got != "keychain_error" {
+		t.Errorf("want keychain_error, got %q", got)
+	}
+}
+
+// TestGetLatestHeartbeatAuthStatus_AuthPaused verifies the auth_paused value.
+func TestGetLatestHeartbeatAuthStatus_AuthPaused(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonEventsRepository(db)
+	userID := seedTestUser(t, db, "hb-auth-paused")
+
+	insertHeartbeat(t, db, userID, `{"auth_status":"auth_paused","parse_failure_count":0}`)
+
+	got, err := repo.GetLatestHeartbeatAuthStatus(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("GetLatestHeartbeatAuthStatus: %v", err)
+	}
+	if got != "auth_paused" {
+		t.Errorf("want auth_paused, got %q", got)
+	}
+}
+
+// TestGetLatestHeartbeatAuthStatus_NoRows verifies that when there are no
+// daemon.heartbeat rows for the user, the result is ("unknown", nil).
+func TestGetLatestHeartbeatAuthStatus_NoRows(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonEventsRepository(db)
+	// Use a user with no daemon_events rows at all. Read-only query, no FK risk.
+	const userID int64 = 9994
+
+	got, err := repo.GetLatestHeartbeatAuthStatus(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("expected nil error for no-rows, got: %v", err)
+	}
+	if got != "unknown" {
+		t.Errorf("want unknown on no-rows, got %q", got)
+	}
+}
+
+// TestGetLatestHeartbeatAuthStatus_OldDaemon_FieldAbsent verifies that when
+// the most recent heartbeat payload lacks the auth_status field (old daemon,
+// pre-#144), the result is ("unknown", nil).
+func TestGetLatestHeartbeatAuthStatus_OldDaemon_FieldAbsent(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonEventsRepository(db)
+	userID := seedTestUser(t, db, "hb-auth-oldfield")
+
+	// Old daemon payload — no auth_status field.
+	insertHeartbeat(t, db, userID, `{"parse_failure_count":0,"consecutive_bff_failures":0}`)
+
+	got, err := repo.GetLatestHeartbeatAuthStatus(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("expected nil error for missing field, got: %v", err)
+	}
+	if got != "unknown" {
+		t.Errorf("want unknown when auth_status field absent, got %q", got)
+	}
+}
+
+// TestGetLatestHeartbeatAuthStatus_MultipleRows_ReturnsNewest verifies that
+// when multiple heartbeat rows exist, the newest received_at row is used.
+func TestGetLatestHeartbeatAuthStatus_MultipleRows_ReturnsNewest(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonEventsRepository(db)
+	userID := seedTestUser(t, db, "hb-auth-multi")
+
+	// Insert old row (setup_required) then newer row (authenticated).
+	_, err := db.ExecContext(
+		context.Background(),
+		`INSERT INTO daemon_events (user_id, account_id, event_type, payload, occurred_at, received_at)
+		 VALUES ($1, 'test-account-multi', 'daemon.heartbeat', '{"auth_status":"setup_required"}'::jsonb,
+		         NOW() - INTERVAL '2 minutes', NOW() - INTERVAL '2 minutes')`,
+		userID,
+	)
+	if err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+	_, err = db.ExecContext(
+		context.Background(),
+		`INSERT INTO daemon_events (user_id, account_id, event_type, payload, occurred_at, received_at)
+		 VALUES ($1, 'test-account-multi', 'daemon.heartbeat', '{"auth_status":"authenticated"}'::jsonb,
+		         NOW() - INTERVAL '1 minute', NOW() - INTERVAL '1 minute')`,
+		userID,
+	)
+	if err != nil {
+		t.Fatalf("insert newer row: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(
+			context.Background(),
+			`DELETE FROM daemon_events WHERE user_id = $1 AND account_id = 'test-account-multi'`,
+			userID,
+		)
+	})
+
+	got, err := repo.GetLatestHeartbeatAuthStatus(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("GetLatestHeartbeatAuthStatus: %v", err)
+	}
+	if got != "authenticated" {
+		t.Errorf("want authenticated (newest row), got %q", got)
+	}
+}
+
+// TestGetLatestHeartbeatAuthStatus_CrossTenantIsolation verifies that user B's
+// heartbeat rows are not visible to user A's query.
+func TestGetLatestHeartbeatAuthStatus_CrossTenantIsolation(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDaemonEventsRepository(db)
+	userA := seedTestUser(t, db, "hb-auth-tenant-a")
+	userB := seedTestUser(t, db, "hb-auth-tenant-b")
+
+	// Only user B has a heartbeat with an auth_status.
+	insertHeartbeat(t, db, userB, `{"auth_status":"authenticated"}`)
+
+	// User A must get "unknown" (no rows for A).
+	got, err := repo.GetLatestHeartbeatAuthStatus(context.Background(), userA)
+	if err != nil {
+		t.Fatalf("GetLatestHeartbeatAuthStatus userA: %v", err)
+	}
+	if got != "unknown" {
+		t.Errorf("cross-tenant leak: userA must get unknown, got %q", got)
+	}
+
+	// User B must get "authenticated" from their own row.
+	got, err = repo.GetLatestHeartbeatAuthStatus(context.Background(), userB)
+	if err != nil {
+		t.Fatalf("GetLatestHeartbeatAuthStatus userB: %v", err)
+	}
+	if got != "authenticated" {
+		t.Errorf("userB: want authenticated, got %q", got)
+	}
+}
