@@ -1262,6 +1262,11 @@ func (s *Service) Run(ctx context.Context) error {
 				FailedEventTypes:       driftTypes,
 				ConsecutiveBFFFailures: bffFailCount,
 				LastBFFStatusCode:      bffStatusCode,
+				// computeAuthStatus is already called on this tick for
+				// localAPI.SetState (line 1235); calling it again here on the
+				// same goroutine with the same arguments is deterministic and
+				// requires no additional locking (#144).
+				AuthStatus: computeAuthStatus(s.cfg, s.getKeychainErr(), s.authPaused.Load()),
 			}
 			evt, err := dispatch.BuildEvent("daemon.heartbeat", s.cfg.AccountID, s.sessionID, hbPayload)
 			if err != nil {
@@ -1455,6 +1460,11 @@ func (s *Service) handleInstallUpdate(ctx context.Context) {
 // ConsecutiveBFFFailures is the number of consecutive SendOrBuffer terminal
 // failures since the last success; the BFF emits daemon.dispatch_degraded when
 // this counter is >= dispatchDegradedThreshold (#2139).
+// AuthStatus carries the daemon's current authentication state so the BFF can
+// surface it in GET /api/v1/health/daemon without a separate daemon endpoint
+// (#144). One of: "authenticated", "setup_required", "keychain_error",
+// "auth_paused". Always present (no omitempty) so the BFF can distinguish an
+// old daemon (field absent → "unknown") from a new daemon with empty string.
 type heartbeatPayload struct {
 	// From #2569: parse-failure drift detection.
 	ParseFailureCount uint32   `json:"parse_failure_count"`
@@ -1463,6 +1473,9 @@ type heartbeatPayload struct {
 	// From #2139: BFF dispatch degradation signal.
 	ConsecutiveBFFFailures uint32 `json:"consecutive_bff_failures,omitempty"`
 	LastBFFStatusCode      int    `json:"last_bff_status_code,omitempty"`
+	// From #144: auth state passthrough to BFF. No omitempty — presence without
+	// a value makes new-daemon-empty distinguishable from old-daemon-absent.
+	AuthStatus string `json:"auth_status"`
 }
 
 // recordParseFailure increments the per-heartbeat parse-failure counter,
