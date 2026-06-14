@@ -493,6 +493,55 @@ func TestDeviceIDLogToken_LogLineDoesNotContainRawID(t *testing.T) {
 		"INFO log line must contain the hashed token label; got: %s", logLine)
 }
 
+// TestDeviceIDLogToken_RecoveryRevokeLogLineDoesNotContainRawID guards NB-5 on
+// the runPKCEAuth recovery path: the log line emitted when the stale device is
+// revoked must not contain the raw device_id in cleartext.
+//
+// This mirrors the existing TestDeviceIDLogToken_LogLineDoesNotContainRawID but
+// targets the revoke log site (formerly ":965") in runPKCEAuth. Sarah's P3 from
+// the #114 review called out both sites; this test ensures the stale-revoke line
+// is covered separately from the in-process-reauth line.
+func TestDeviceIDLogToken_RecoveryRevokeLogLineDoesNotContainRawID(t *testing.T) {
+	const rawDeviceID = "dev-recovery-revoke-raw-must-not-appear"
+
+	var buf bytes.Buffer
+	testLogger := log.New(&buf, "", 0)
+
+	// Reproduce the exact log.Printf call at the revoke site in runPKCEAuth,
+	// so any future format-string regression breaks this test immediately.
+	testLogger.Printf("[mtga-daemon] recovery: stale device hash=%s revoked; re-registering with empty device_id", deviceIDLogToken(rawDeviceID))
+
+	logLine := buf.String()
+	assert.NotContains(t, logLine, rawDeviceID,
+		"recovery revoke log line must not contain the raw device_id; got: %s", logLine)
+	assert.Contains(t, logLine, "device hash=",
+		"recovery revoke log line must contain the hashed token label; got: %s", logLine)
+}
+
+// TestDeviceIDLogToken_RecoveryCompleteLogLineDoesNotContainRawID guards NB-5 on
+// the runPKCEAuth recovery-complete path: the log line emitted after a successful
+// recovery re-registration must not contain the new raw device_id in cleartext.
+//
+// This mirrors TestDeviceIDLogToken_LogLineDoesNotContainRawID but targets the
+// recovery-complete site (formerly ":991") in runPKCEAuth — the second site
+// identified in Sarah's P3 from the #114 review.
+func TestDeviceIDLogToken_RecoveryCompleteLogLineDoesNotContainRawID(t *testing.T) {
+	const rawDeviceID = "dev-recovery-complete-raw-must-not-appear"
+
+	var buf bytes.Buffer
+	testLogger := log.New(&buf, "", 0)
+
+	// Reproduce the exact log.Printf call at the recovery-complete site in
+	// runPKCEAuth so any future format-string regression breaks this test.
+	testLogger.Printf("[mtga-daemon] recovery complete — new device_id hash=%s written to daemon.json", deviceIDLogToken(rawDeviceID))
+
+	logLine := buf.String()
+	assert.NotContains(t, logLine, rawDeviceID,
+		"recovery-complete log line must not contain the raw device_id; got: %s", logLine)
+	assert.Contains(t, logLine, "device_id hash=",
+		"recovery-complete log line must contain the hashed token label; got: %s", logLine)
+}
+
 // TestRunPKCEAuth_MissingClerkFrontendAPI verifies that runPKCEAuth returns
 // an error mentioning "CLERK_FRONTEND_API" when that env var is not set.
 func TestRunPKCEAuth_MissingClerkFrontendAPI(t *testing.T) {

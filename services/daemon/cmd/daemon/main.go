@@ -964,7 +964,8 @@ func runPKCEAuth(cfg *config.Config, cfgPath string, keychainService string, cs 
 			log.Printf("[mtga-daemon] recovery: DELETE /api/v1/daemons/%s failed: %v; entering setup-required state", serverDeviceID, delErr)
 			return fmt.Errorf("re-register recovery: revoke stale device: %w", delErr)
 		}
-		log.Printf("[mtga-daemon] recovery: stale device %s revoked; re-registering with empty device_id", serverDeviceID)
+		// NB-5: hash the device_id rather than emit raw value — same log-hygiene policy as runInProcessReauth.
+		log.Printf("[mtga-daemon] recovery: stale device hash=%s revoked; re-registering with empty device_id", deviceIDLogToken(serverDeviceID))
 
 		// Clear the stale device_id so registerWithBFF sends "" and the BFF mints fresh.
 		cfg.DaemonID = ""
@@ -990,7 +991,8 @@ func runPKCEAuth(cfg *config.Config, cfgPath string, keychainService string, cs 
 
 		// Attach hashed account_id as Sentry user context (#1832).
 		sentryhook.SetUser(newAccountID)
-		log.Printf("[mtga-daemon] recovery complete — new device_id=%s written to daemon.json", newDeviceID)
+		// NB-5: hash the device_id rather than emit raw value — same log-hygiene policy as runInProcessReauth.
+		log.Printf("[mtga-daemon] recovery complete — new device_id hash=%s written to daemon.json", deviceIDLogToken(newDeviceID))
 		return nil
 	}
 
