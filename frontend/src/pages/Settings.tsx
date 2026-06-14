@@ -105,6 +105,7 @@ const Settings = () => {
   // Custom hooks for state management
   const {
     connectionStatus,
+    authStatus,
   } = useDaemonConnection();
 
   const {
@@ -169,6 +170,7 @@ const Settings = () => {
         content: (
           <DaemonConnectionSection
             connectionStatus={connectionStatus}
+            auth_status={authStatus}
           />
         ),
       },

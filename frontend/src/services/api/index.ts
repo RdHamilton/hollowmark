@@ -129,6 +129,7 @@ export type {
 
 export type {
   DaemonHealthStatus,
+  DaemonAuthStatus,
   DaemonHealthResponse,
 } from './bffHealth';
 

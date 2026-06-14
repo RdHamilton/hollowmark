@@ -1,11 +1,20 @@
 import { gui } from '@/types/models';
+import type { DaemonAuthStatus } from '@/services/api/bffHealth';
+import { DaemonAuthStatusBadge } from './DaemonAuthStatusBadge';
 
 export interface DaemonConnectionSectionProps {
   connectionStatus: gui.ConnectionStatus;
+  /**
+   * Optional auth_status from GET /api/v1/health/daemon (#144).
+   * When provided, renders the daemon auth status row below the connection
+   * badge. When omitted (e.g. old BFF, not yet loaded), the auth row is hidden.
+   */
+  auth_status?: DaemonAuthStatus;
 }
 
 export function DaemonConnectionSection({
   connectionStatus,
+  auth_status,
 }: DaemonConnectionSectionProps) {
   return (
     <div className="settings-section">
@@ -25,6 +34,18 @@ export function DaemonConnectionSection({
           </div>
         </div>
       </div>
+
+      {auth_status !== undefined && (
+        <div className="setting-item">
+          <label className="setting-label">
+            Authentication Status
+            <span className="setting-description">Current daemon authentication state</span>
+          </label>
+          <div className="setting-control">
+            <DaemonAuthStatusBadge auth_status={auth_status} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
