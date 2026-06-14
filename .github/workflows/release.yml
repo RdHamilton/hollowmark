@@ -237,16 +237,220 @@ jobs:
     uses: ./.github/workflows/integration.yml
     secrets: inherit
 
+  # ---------------------------------------------------------------------------
+  # PC-13 pre-cut triage gate (ADR-089 / #1144)
+  #
+  # Asserts that a PC-13 triage manifest exists at .release/pc13/app/<version>.yml
+  # for the cut SHA, carries a PASS verdict, and contains a row for every commit
+  # in the prev_tag..cut_sha range that touches the app component paths.
+  #
+  # Guard: runs ONLY on push: tags 'app/v*' (a real cut). Skips on:
+  #   - workflow_dispatch  (re-deploy of an existing commit — not a cut)
+  #   - workflow_call      (staging deploy — not a cut)
+  #
+  # App component paths (sourced from ci.yml detect-changes 'bff' + 'frontend' filters):
+  #   frontend/
+  #   services/bff/
+  #   services/bff/internal/storage/migrations/   (subset of services/bff/ — explicit for clarity)
+  #
+  # RULE-INFRA-01 (ADR-075 / ADR-089 §4): ships continue-on-error: true for the first cut.
+  # A follow-up PR flips it to false (hard-fail) after the manifest format shakes out.
+  # ---------------------------------------------------------------------------
+  pc13-gate:
+    name: PC-13 Pre-Cut Triage Gate (app)
+    runs-on: ubuntu-latest
+    # Skip on workflow_dispatch (re-deploy, not a cut) and workflow_call (staging).
+    # Only runs on push: tags app/v* — a real release cut.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/app/v')
+    # RULE-INFRA-01: continue-on-error=true for first cycle; flip to false in follow-up PR.
+    continue-on-error: true
+    steps:
+      - name: Checkout at cut SHA (full history required for git log range)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve VERSION and manifest path
+        id: resolve
+        run: |
+          set -euo pipefail
+          # Strip 'app/v' prefix from the tag to produce the bare semver (e.g. '0.4.3.3').
+          RAW_TAG="${{ github.ref_name }}"
+          VERSION="${RAW_TAG#app/v}"
+          MANIFEST_PATH=".release/pc13/app/${VERSION}.yml"
+          {
+            echo "version=${VERSION}"
+            echo "manifest_path=${MANIFEST_PATH}"
+            echo "cut_sha=${{ github.sha }}"
+          } >> "$GITHUB_OUTPUT"
+          echo "PC-13 gate: tag=${RAW_TAG} version=${VERSION} manifest=${MANIFEST_PATH}"
+
+      - name: Assert manifest exists
+        id: manifest_exists
+        run: |
+          set -euo pipefail
+          MANIFEST_PATH="${{ steps.resolve.outputs.manifest_path }}"
+          if [[ ! -f "${MANIFEST_PATH}" ]]; then
+            echo "ERROR: PC-13 manifest missing at ${MANIFEST_PATH}" >&2
+            echo "" >&2
+            echo "Najah must commit the triage manifest at the cut SHA before this tag" >&2
+            echo "ships (ADR-089 / #1144). The manifest must be present at:" >&2
+            echo "  ${MANIFEST_PATH}" >&2
+            echo "" >&2
+            echo "See: ADR-089 §A for the manifest schema." >&2
+            exit 1
+          fi
+          echo "PASS: manifest found at ${MANIFEST_PATH}"
+          cat "${MANIFEST_PATH}"
+
+      - name: Assert verdict is PASS
+        id: check_verdict
+        run: |
+          set -euo pipefail
+          MANIFEST_PATH="${{ steps.resolve.outputs.manifest_path }}"
+          # Extract 'verdict:' value from YAML using Python (available on ubuntu-latest).
+          VERDICT=$(python3 -c "
+          import yaml, sys
+          with open('${MANIFEST_PATH}') as f:
+              doc = yaml.safe_load(f)
+          verdict = doc.get('verdict', '')
+          print(verdict)
+          ")
+          echo "Manifest verdict: ${VERDICT}"
+          if [[ "${VERDICT}" != "PASS" ]]; then
+            echo "ERROR: PC-13 manifest verdict is '${VERDICT}', not PASS." >&2
+            echo "The cut is blocked until Najah updates the manifest to PASS." >&2
+            echo "See the manifest at ${{ steps.resolve.outputs.manifest_path }} for details." >&2
+            exit 1
+          fi
+          echo "PASS: verdict is PASS"
+
+      - name: Verify prev_tag matches git describe
+        id: check_prev_tag
+        run: |
+          set -euo pipefail
+          MANIFEST_PATH="${{ steps.resolve.outputs.manifest_path }}"
+          CUT_SHA="${{ steps.resolve.outputs.cut_sha }}"
+          # Read prev_tag from manifest.
+          MANIFEST_PREV_TAG=$(python3 -c "
+          import yaml, sys
+          with open('${MANIFEST_PATH}') as f:
+              doc = yaml.safe_load(f)
+          print(doc.get('prev_tag', ''))
+          ")
+          echo "Manifest prev_tag: ${MANIFEST_PREV_TAG}"
+          # Verify prev_tag against git describe to prevent a forged-low prev_tag
+          # that would shrink the commit range and hide unreviewed commits.
+          GIT_PREV_TAG=$(git describe --tags --match 'app/v*' --abbrev=0 "${CUT_SHA}^" 2>/dev/null || echo "")
+          echo "Git-derived prev_tag: ${GIT_PREV_TAG}"
+          if [[ -z "${MANIFEST_PREV_TAG}" ]]; then
+            echo "ERROR: manifest prev_tag is empty." >&2
+            exit 1
+          fi
+          if [[ "${MANIFEST_PREV_TAG}" != "${GIT_PREV_TAG}" ]]; then
+            echo "ERROR: manifest prev_tag '${MANIFEST_PREV_TAG}' does not match" >&2
+            echo "git describe result '${GIT_PREV_TAG}'." >&2
+            echo "A forged-low prev_tag would shrink the commit range — fix the manifest." >&2
+            exit 1
+          fi
+          echo "prev_tag=${MANIFEST_PREV_TAG}" >> "$GITHUB_OUTPUT"
+          echo "PASS: prev_tag '${MANIFEST_PREV_TAG}' verified against git describe"
+
+      - name: Compute in-range commit set and assert coverage
+        run: |
+          set -euo pipefail
+          MANIFEST_PATH="${{ steps.resolve.outputs.manifest_path }}"
+          CUT_SHA="${{ steps.resolve.outputs.cut_sha }}"
+          PREV_TAG="${{ steps.check_prev_tag.outputs.prev_tag }}"
+
+          # App component paths — sourced from ci.yml detect-changes 'bff' + 'frontend' filters.
+          # services/bff/internal/storage/migrations/ is a subset of services/bff/ but listed
+          # explicitly for spec clarity (ADR-089 §B step 5).
+          APP_PATHS=(
+            "frontend/"
+            "services/bff/"
+            "services/bff/internal/storage/migrations/"
+          )
+
+          echo "Computing commits in range: ${PREV_TAG}..${CUT_SHA} touching app paths"
+          printf '  path: %s\n' "${APP_PATHS[@]}"
+
+          # Collect all commits in range touching app paths.
+          IN_RANGE_COMMITS=$(git log \
+            --format="%H" \
+            "${PREV_TAG}..${CUT_SHA}" \
+            -- "${APP_PATHS[@]}" \
+            2>/dev/null || true)
+
+          if [[ -z "${IN_RANGE_COMMITS}" ]]; then
+            echo "INFO: No commits in range ${PREV_TAG}..${CUT_SHA} touch app paths."
+            echo "PASS: empty cohort — nothing to verify."
+            exit 0
+          fi
+
+          echo "In-range commits touching app paths:"
+          echo "${IN_RANGE_COMMITS}"
+
+          # Read manifest commit SHAs.
+          MANIFEST_SHAS=$(python3 -c "
+          import yaml, sys
+          with open('${MANIFEST_PATH}') as f:
+              doc = yaml.safe_load(f)
+          commits = doc.get('commits', []) or []
+          for c in commits:
+              sha = c.get('sha', '')
+              if sha:
+                  # Support both full and short SHAs in manifest (match by prefix).
+                  print(sha)
+          ")
+
+          MISSING=""
+          while IFS= read -r commit_sha; do
+            [[ -z "${commit_sha}" ]] && continue
+            # Match: in-range commit SHA starts with or equals a manifest SHA entry.
+            FOUND=0
+            while IFS= read -r manifest_sha; do
+              [[ -z "${manifest_sha}" ]] && continue
+              # Match full SHA or short-SHA prefix (manifest may use 8-char short SHAs).
+              if [[ "${commit_sha}" == "${manifest_sha}"* || "${manifest_sha}" == "${commit_sha}"* ]]; then
+                FOUND=1
+                break
+              fi
+            done <<< "${MANIFEST_SHAS}"
+            if [[ "${FOUND}" -eq 0 ]]; then
+              MISSING="${MISSING}  ${commit_sha}\n"
+            fi
+          done <<< "${IN_RANGE_COMMITS}"
+
+          if [[ -n "${MISSING}" ]]; then
+            echo "ERROR: The following in-range commits are missing from the PC-13 manifest:" >&2
+            printf '%s' "${MISSING}" >&2
+            echo "" >&2
+            echo "Each commit touching app paths (frontend/, services/bff/) must have a row" >&2
+            echo "in the manifest commits[] list (ADR-089 / #1144)." >&2
+            echo "Najah must update the manifest before this tag ships." >&2
+            exit 1
+          fi
+
+          echo "PASS: all in-range commits are covered in the PC-13 manifest."
+
   release:
-    needs: [resolve-ref, e2e-smoke-gate, integration-gate]
-    # Run if smoke passed (or skipped) AND integration tests passed.
+    needs: [resolve-ref, e2e-smoke-gate, integration-gate, pc13-gate]
+    # Run if smoke passed (or skipped), integration tests passed, AND the PC-13 gate passed.
     # Skip entirely for workflow_dispatch — that path re-deploys an existing
     # commit and must not create a duplicate GitHub Release for it.
+    #
+    # CRITICAL (ADR-089 Correction 2 / Lee G4 F2): this job uses always(), so the
+    # pc13-gate check MUST be in this if-clause — adding it only to needs: above is
+    # insufficient. With always(), needs outcomes do not block job evaluation; only
+    # an explicit if-clause check prevents the job from running on gate failure.
     if: |
       always() &&
       github.event_name != 'workflow_dispatch' &&
       (needs.e2e-smoke-gate.result == 'success' || needs.e2e-smoke-gate.result == 'skipped') &&
-      needs.integration-gate.result == 'success'
+      needs.integration-gate.result == 'success' &&
+      needs.pc13-gate.result == 'success'
     name: Create Release
     runs-on: ubuntu-latest
 

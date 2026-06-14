@@ -1,0 +1,3 @@
+# This directory holds PC-13 pre-cut triage manifests committed at each cut SHA.
+# See ADR-089 and .release/pc13/app/ and .release/pc13/daemon/ for per-version manifests.
+# Manifests are authored by Najah per the /pre-release-pipeline-check orchestration.

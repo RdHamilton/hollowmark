@@ -68,9 +68,261 @@ permissions:
   id-token: write  # required for OIDC assume-role (BFF SSM update step, vault-mtg-tickets#167)
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # PC-13 pre-cut triage gate (ADR-089 / #1144)
+  #
+  # Asserts that a PC-13 triage manifest exists at .release/pc13/daemon/<version>.yml
+  # for the cut SHA, carries a PASS verdict, contains a row for every commit in
+  # the prev_tag..cut_sha range touching daemon component paths, and asserts that
+  # every row with a new event type / contract change has bff_consumer_deployed: true.
+  #
+  # Guard: runs ONLY on push: tags 'daemon/v*' (a real cut). On workflow_dispatch,
+  # github.ref is a branch (not a tag), so startsWith(github.ref, 'refs/tags/daemon/v')
+  # is false — this job is skipped on dispatch. The goreleaser job itself is also
+  # guarded identically (ADR-089 Correction 3 / Lee G4 F3 — confirmed: goreleaser
+  # never publishes on workflow_dispatch; dispatch is dry-run signing validation only).
+  #
+  # Daemon component paths (sourced from daemon.yml push/PR path filters + the
+  # collection-agent-helper deliberate exception):
+  #   services/daemon/           — from daemon.yml:20
+  #   services/contract/         — from daemon.yml:21
+  #   pkg/logparse/              — from daemon.yml:22 (ADDED in G4 F1 correction)
+  #   pkg/draftalgo/             — from daemon.yml:23 (ADDED in G4 F1 correction)
+  #   services/collection-agent-helper/ — NOT in daemon.yml CI triggers, but built
+  #                                       + lipo-merged into the daemon .pkg by
+  #                                       daemon-release.yml:850-890, so a helper-only
+  #                                       change ships in the daemon artifact and must
+  #                                       be PC-13-triaged (ADR-089 §B deliberate decision).
+  #
+  # RULE-INFRA-01 (ADR-075 / ADR-089 §4): ships continue-on-error: true for the first cut.
+  # A follow-up PR flips it to false (hard-fail) after the manifest format shakes out.
+  # ---------------------------------------------------------------------------
+  pc13-gate:
+    name: PC-13 Pre-Cut Triage Gate (daemon)
+    runs-on: ubuntu-latest
+    # Guard: same condition as goreleaser — only runs on real daemon/v* tag pushes.
+    # workflow_dispatch sets github.ref to a branch ref, not a tag ref, so this
+    # condition is false on dispatch (ADR-089 Correction 3 / blast-radius confirmed).
+    if: startsWith(github.ref, 'refs/tags/daemon/v')
+    # RULE-INFRA-01: continue-on-error=true for first cycle; flip to false in follow-up PR.
+    continue-on-error: true
+    steps:
+      - name: Checkout at cut SHA (full history required for git log range)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve VERSION and manifest path
+        id: resolve
+        run: |
+          set -euo pipefail
+          # Strip 'daemon/v' prefix from the tag to produce the bare semver (e.g. '0.4.3.1').
+          RAW_TAG="${{ github.ref_name }}"
+          VERSION="${RAW_TAG#daemon/v}"
+          MANIFEST_PATH=".release/pc13/daemon/${VERSION}.yml"
+          {
+            echo "version=${VERSION}"
+            echo "manifest_path=${MANIFEST_PATH}"
+            echo "cut_sha=${{ github.sha }}"
+          } >> "$GITHUB_OUTPUT"
+          echo "PC-13 gate: tag=${RAW_TAG} version=${VERSION} manifest=${MANIFEST_PATH}"
+
+      - name: Assert manifest exists
+        id: manifest_exists
+        run: |
+          set -euo pipefail
+          MANIFEST_PATH="${{ steps.resolve.outputs.manifest_path }}"
+          if [[ ! -f "${MANIFEST_PATH}" ]]; then
+            echo "ERROR: PC-13 manifest missing at ${MANIFEST_PATH}" >&2
+            echo "" >&2
+            echo "Najah must commit the triage manifest at the cut SHA before this tag" >&2
+            echo "ships (ADR-089 / #1144). The manifest must be present at:" >&2
+            echo "  ${MANIFEST_PATH}" >&2
+            echo "" >&2
+            echo "See: ADR-089 §A for the manifest schema." >&2
+            exit 1
+          fi
+          echo "PASS: manifest found at ${MANIFEST_PATH}"
+          cat "${MANIFEST_PATH}"
+
+      - name: Assert verdict is PASS
+        id: check_verdict
+        run: |
+          set -euo pipefail
+          MANIFEST_PATH="${{ steps.resolve.outputs.manifest_path }}"
+          VERDICT=$(python3 -c "
+          import yaml, sys
+          with open('${MANIFEST_PATH}') as f:
+              doc = yaml.safe_load(f)
+          verdict = doc.get('verdict', '')
+          print(verdict)
+          ")
+          echo "Manifest verdict: ${VERDICT}"
+          if [[ "${VERDICT}" != "PASS" ]]; then
+            echo "ERROR: PC-13 manifest verdict is '${VERDICT}', not PASS." >&2
+            echo "The cut is blocked until Najah updates the manifest to PASS." >&2
+            echo "See the manifest at ${{ steps.resolve.outputs.manifest_path }} for details." >&2
+            exit 1
+          fi
+          echo "PASS: verdict is PASS"
+
+      - name: Verify prev_tag matches git describe
+        id: check_prev_tag
+        run: |
+          set -euo pipefail
+          MANIFEST_PATH="${{ steps.resolve.outputs.manifest_path }}"
+          CUT_SHA="${{ steps.resolve.outputs.cut_sha }}"
+          # Read prev_tag from manifest.
+          MANIFEST_PREV_TAG=$(python3 -c "
+          import yaml, sys
+          with open('${MANIFEST_PATH}') as f:
+              doc = yaml.safe_load(f)
+          print(doc.get('prev_tag', ''))
+          ")
+          echo "Manifest prev_tag: ${MANIFEST_PREV_TAG}"
+          # Verify prev_tag against git describe to prevent a forged-low prev_tag
+          # that would shrink the commit range and hide unreviewed commits.
+          GIT_PREV_TAG=$(git describe --tags --match 'daemon/v*' --abbrev=0 "${CUT_SHA}^" 2>/dev/null || echo "")
+          echo "Git-derived prev_tag: ${GIT_PREV_TAG}"
+          if [[ -z "${MANIFEST_PREV_TAG}" ]]; then
+            echo "ERROR: manifest prev_tag is empty." >&2
+            exit 1
+          fi
+          if [[ "${MANIFEST_PREV_TAG}" != "${GIT_PREV_TAG}" ]]; then
+            echo "ERROR: manifest prev_tag '${MANIFEST_PREV_TAG}' does not match" >&2
+            echo "git describe result '${GIT_PREV_TAG}'." >&2
+            echo "A forged-low prev_tag would shrink the commit range — fix the manifest." >&2
+            exit 1
+          fi
+          echo "prev_tag=${MANIFEST_PREV_TAG}" >> "$GITHUB_OUTPUT"
+          echo "PASS: prev_tag '${MANIFEST_PREV_TAG}' verified against git describe"
+
+      - name: Compute in-range commit set and assert coverage
+        run: |
+          set -euo pipefail
+          MANIFEST_PATH="${{ steps.resolve.outputs.manifest_path }}"
+          CUT_SHA="${{ steps.resolve.outputs.cut_sha }}"
+          PREV_TAG="${{ steps.check_prev_tag.outputs.prev_tag }}"
+
+          # Daemon component paths — sourced from daemon.yml push/PR path filters
+          # PLUS the collection-agent-helper deliberate exception (ADR-089 §B):
+          #
+          #   services/daemon/                  — daemon.yml:20
+          #   services/contract/                — daemon.yml:21
+          #   pkg/logparse/                     — daemon.yml:22 (G4 F1: was missing; causes false PASS)
+          #   pkg/draftalgo/                    — daemon.yml:23 (G4 F1: was missing; causes false PASS)
+          #   services/collection-agent-helper/ — NOT in daemon.yml CI triggers but ships in
+          #                                       daemon .pkg (daemon-release.yml:850-890)
+          DAEMON_PATHS=(
+            "services/daemon/"
+            "services/contract/"
+            "pkg/logparse/"
+            "pkg/draftalgo/"
+            "services/collection-agent-helper/"
+          )
+
+          echo "Computing commits in range: ${PREV_TAG}..${CUT_SHA} touching daemon paths"
+          printf '  path: %s\n' "${DAEMON_PATHS[@]}"
+
+          # Collect all commits in range touching daemon paths.
+          IN_RANGE_COMMITS=$(git log \
+            --format="%H" \
+            "${PREV_TAG}..${CUT_SHA}" \
+            -- "${DAEMON_PATHS[@]}" \
+            2>/dev/null || true)
+
+          if [[ -z "${IN_RANGE_COMMITS}" ]]; then
+            echo "INFO: No commits in range ${PREV_TAG}..${CUT_SHA} touch daemon paths."
+            echo "PASS: empty cohort — nothing to verify."
+            exit 0
+          fi
+
+          echo "In-range commits touching daemon paths:"
+          echo "${IN_RANGE_COMMITS}"
+
+          # Read manifest commit SHAs.
+          MANIFEST_SHAS=$(python3 -c "
+          import yaml, sys
+          with open('${MANIFEST_PATH}') as f:
+              doc = yaml.safe_load(f)
+          commits = doc.get('commits', []) or []
+          for c in commits:
+              sha = c.get('sha', '')
+              if sha:
+                  print(sha)
+          ")
+
+          MISSING=""
+          while IFS= read -r commit_sha; do
+            [[ -z "${commit_sha}" ]] && continue
+            # Match full SHA or short-SHA prefix (manifest may use 8-char short SHAs).
+            FOUND=0
+            while IFS= read -r manifest_sha; do
+              [[ -z "${manifest_sha}" ]] && continue
+              if [[ "${commit_sha}" == "${manifest_sha}"* || "${manifest_sha}" == "${commit_sha}"* ]]; then
+                FOUND=1
+                break
+              fi
+            done <<< "${MANIFEST_SHAS}"
+            if [[ "${FOUND}" -eq 0 ]]; then
+              MISSING="${MISSING}  ${commit_sha}\n"
+            fi
+          done <<< "${IN_RANGE_COMMITS}"
+
+          if [[ -n "${MISSING}" ]]; then
+            echo "ERROR: The following in-range commits are missing from the PC-13 manifest:" >&2
+            printf '%s' "${MISSING}" >&2
+            echo "" >&2
+            echo "Each commit touching daemon paths must have a row in the manifest" >&2
+            echo "commits[] list (ADR-089 / #1144)." >&2
+            echo "Najah must update the manifest before this tag ships." >&2
+            exit 1
+          fi
+
+          echo "PASS: all in-range commits are covered in the PC-13 manifest."
+
+      - name: Assert bff_consumer_deployed for all contract-changing commits (daemon-only)
+        run: |
+          set -euo pipefail
+          MANIFEST_PATH="${{ steps.resolve.outputs.manifest_path }}"
+          # For daemon manifests: every commit row that introduces a new event type
+          # or contract change must have bff_consumer_deployed: true. A false value
+          # means the BFF consumer that projects the new event type is not yet
+          # deployed to prod — auto-updating user daemons ahead of the BFF would
+          # silently drop those events (the exact hazard from daemon/v0.4.3.1 triage).
+          UNDEPLOYED=$(python3 -c "
+          import yaml, sys
+          with open('${MANIFEST_PATH}') as f:
+              doc = yaml.safe_load(f)
+          commits = doc.get('commits', []) or []
+          failed = []
+          for c in commits:
+              # bff_consumer_deployed must be True when present and False.
+              # Only flag explicit False — missing key is treated as not-applicable
+              # (for commits with no contract change).
+              deployed = c.get('bff_consumer_deployed', None)
+              if deployed is False:
+                  failed.append(c.get('sha', '(unknown sha)'))
+          for sha in failed:
+              print(sha)
+          ")
+          if [[ -n "${UNDEPLOYED}" ]]; then
+            echo "ERROR: The following commits have bff_consumer_deployed: false" >&2
+            echo "in the PC-13 manifest:" >&2
+            echo "${UNDEPLOYED}" >&2
+            echo "" >&2
+            echo "Cutting this daemon tag would auto-update user binaries ahead of the" >&2
+            echo "BFF consumer. The BFF cohort must be deployed to prod (app/v* tag cut" >&2
+            echo "and deployed) before the daemon tag ships (ADR-089 / ADR-079 §R2/§R4)." >&2
+            exit 1
+          fi
+          echo "PASS: no bff_consumer_deployed: false rows in manifest."
+
   goreleaser:
     name: GoReleaser (build + release)
     runs-on: ubuntu-latest
+    needs: [pc13-gate]
     # Guard: job-level condition ensures goreleaser only produces a release
     # artifact when triggered by a real daemon/v* tag. A workflow_dispatch run
     # (no matching tag) would produce an unsigned snapshot binary that bypasses
@@ -79,7 +331,12 @@ jobs:
     # the entire goreleaser job on non-tag runs prevents silent unsigned output.
     # Use workflow_dispatch trigger on a daemon/v* tag for signed release
     # dry-runs; for local debugging build directly via 'go build'. ADR-041 F3.
-    if: startsWith(github.ref, 'refs/tags/daemon/v')
+    #
+    # PC-13 gate (ADR-089 Correction 2 / Lee G4 F2): pc13-gate result is added
+    # as an explicit if-clause for symmetry and clarity. goreleaser does not use
+    # always(), so needs skip-propagation would suffice — the explicit clause
+    # documents intent and guards against future if-clause additions of always().
+    if: startsWith(github.ref, 'refs/tags/daemon/v') && needs.pc13-gate.result == 'success'
 
     steps:
       - name: Checkout code
