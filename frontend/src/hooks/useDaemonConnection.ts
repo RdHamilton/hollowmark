@@ -1,11 +1,18 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@clerk/react';
 import { getDaemonHealth } from '@/services/api/bffHealth';
+import type { DaemonAuthStatus } from '@/services/api/bffHealth';
 import { gui } from '@/types/models';
 
 export interface UseDaemonConnectionReturn {
   /** Current connection status */
   connectionStatus: gui.ConnectionStatus;
+  /**
+   * Daemon auth status from the most recent BFF health poll (#144).
+   * undefined until the first successful fetch. "unknown" is the BFF-only
+   * absence-of-data sentinel — not an error (Ray verdict §3).
+   */
+  authStatus: DaemonAuthStatus | undefined;
 }
 
 const defaultConnectionStatus = new gui.ConnectionStatus({
@@ -19,6 +26,7 @@ const defaultConnectionStatus = new gui.ConnectionStatus({
 export function useDaemonConnection(): UseDaemonConnectionReturn {
   const { getToken, isSignedIn } = useAuth();
   const [connectionStatus, setConnectionStatus] = useState<gui.ConnectionStatus>(defaultConnectionStatus);
+  const [authStatus, setAuthStatus] = useState<DaemonAuthStatus | undefined>(undefined);
 
   // Poll the BFF daemon health endpoint regardless of desktop/browser context.
   // DaemonHealthIndicator (nav bar) uses the same endpoint without an
@@ -49,6 +57,7 @@ export function useDaemonConnection(): UseDaemonConnectionReturn {
             port: 9999,
           }),
         );
+        setAuthStatus(result.auth_status);
       } catch {
         // Connection status load failed silently - UI will show default state
       }
@@ -63,5 +72,6 @@ export function useDaemonConnection(): UseDaemonConnectionReturn {
 
   return {
     connectionStatus,
+    authStatus,
   };
 }

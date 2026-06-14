@@ -1,6 +1,8 @@
 export { DaemonConnectionSection } from './DaemonConnectionSection';
 export type { DaemonConnectionSectionProps } from './DaemonConnectionSection';
 
+export { DaemonAuthStatusBadge } from './DaemonAuthStatusBadge';
+
 export { AppPreferencesSection } from './AppPreferencesSection';
 export type { AppPreferencesSectionProps } from './AppPreferencesSection';
 

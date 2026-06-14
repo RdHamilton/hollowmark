@@ -151,4 +151,53 @@ describe('useDaemonConnection', () => {
       expect(mockGetDaemonHealth).not.toHaveBeenCalled();
     });
   });
+
+  // #112: authStatus return value
+  describe('authStatus return value (#112)', () => {
+    it('is undefined before first fetch completes', () => {
+      mockGetDaemonHealth.mockReturnValue(new Promise(() => {})); // never resolves
+
+      const { result } = renderHook(() => useDaemonConnection());
+
+      expect(result.current.authStatus).toBeUndefined();
+    });
+
+    it('returns auth_status from BFF response after fetch', async () => {
+      mockGetDaemonHealth.mockResolvedValueOnce({
+        status: 'connected',
+        auth_status: 'authenticated',
+      });
+
+      const { result } = renderHook(() => useDaemonConnection());
+
+      await waitFor(() => {
+        expect(result.current.authStatus).toBe('authenticated');
+      });
+    });
+
+    it('returns auth_status: unknown (neutral, not error) from BFF response', async () => {
+      mockGetDaemonHealth.mockResolvedValueOnce({
+        status: 'disconnected',
+        auth_status: 'unknown',
+      });
+
+      const { result } = renderHook(() => useDaemonConnection());
+
+      await waitFor(() => {
+        expect(result.current.authStatus).toBe('unknown');
+      });
+    });
+
+    it('remains undefined on BFF error (hook handles silently)', async () => {
+      mockGetDaemonHealth.mockRejectedValueOnce(new Error('network error'));
+
+      const { result } = renderHook(() => useDaemonConnection());
+
+      await waitFor(() => {
+        expect(mockGetDaemonHealth).toHaveBeenCalled();
+      });
+
+      expect(result.current.authStatus).toBeUndefined();
+    });
+  });
 });

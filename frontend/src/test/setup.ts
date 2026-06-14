@@ -37,10 +37,14 @@ vi.mock('@/services/websocketClient', () => mockWailsRuntime);
 // Mock the REST API modules globally
 vi.mock('@/services/api', () => mockApi);
 
-// Mock bffHealth globally — returns connected by default so pages render normally.
-// Tests that need daemon-disconnected behaviour can override this mock per-test.
+// Mock bffHealth globally — returns connected + auth_status:unknown by default
+// so pages render normally. The "unknown" auth_status renders neutral (no error)
+// per Ray's #144 verdict §3. Tests that need specific auth states can override
+// this mock per-test.
 vi.mock('@/services/api/bffHealth', () => ({
-  getDaemonHealth: vi.fn(() => Promise.resolve({ status: 'connected' })),
+  getDaemonHealth: vi.fn(() =>
+    Promise.resolve({ status: 'connected', auth_status: 'unknown' })
+  ),
 }));
 
 // Mock useDaemonStatus globally — returns connected+checked by default so page
