@@ -14,13 +14,26 @@ import (
 )
 
 // stubDaemonHealthChecker is a test double for DaemonHealthChecker.
+// It satisfies both HasRecentEventByUserID and GetLatestHeartbeatAuthStatus.
 type stubDaemonHealthChecker struct {
-	connected bool
-	err       error
+	connected  bool
+	err        error
+	authStatus string
+	authErr    error
 }
 
 func (s *stubDaemonHealthChecker) HasRecentEventByUserID(_ context.Context, _ int64, _ time.Duration) (bool, error) {
 	return s.connected, s.err
+}
+
+func (s *stubDaemonHealthChecker) GetLatestHeartbeatAuthStatus(_ context.Context, _ int64) (string, error) {
+	if s.authErr != nil {
+		return "unknown", s.authErr
+	}
+	if s.authStatus == "" {
+		return "unknown", nil
+	}
+	return s.authStatus, nil
 }
 
 // authedHealthHandler injects userID into context and delegates to GetDaemonHealth.
@@ -129,5 +142,125 @@ func TestGetDaemonHealth_ContentType(t *testing.T) {
 	ct := rr.Header().Get("Content-Type")
 	if ct != "application/json" {
 		t.Errorf("expected Content-Type=application/json, got %q", ct)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// auth_status field tests (#144)
+// ---------------------------------------------------------------------------
+
+// daemonHealthFull is a typed response struct for tests that assert auth_status.
+type daemonHealthFull struct {
+	Status     string `json:"status"`
+	AuthStatus string `json:"auth_status"`
+}
+
+func parseHealthFull(t *testing.T, rr *httptest.ResponseRecorder) daemonHealthFull {
+	t.Helper()
+	var resp daemonHealthFull
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal daemonHealthFull: %v", err)
+	}
+	return resp
+}
+
+// TestGetDaemonHealth_AuthStatus_Connected_Authenticated verifies that a
+// connected daemon with auth_status="authenticated" returns both fields.
+func TestGetDaemonHealth_AuthStatus_Connected_Authenticated(t *testing.T) {
+	checker := &stubDaemonHealthChecker{
+		connected:  true,
+		authStatus: "authenticated",
+	}
+	h := handlers.NewDaemonHealthHandler(checker)
+	handler := authedHealthHandler(h, 1)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health/daemon", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	resp := parseHealthFull(t, rr)
+	if resp.Status != "connected" {
+		t.Errorf("status: want connected, got %q", resp.Status)
+	}
+	if resp.AuthStatus != "authenticated" {
+		t.Errorf("auth_status: want authenticated, got %q", resp.AuthStatus)
+	}
+}
+
+// TestGetDaemonHealth_AuthStatus_Disconnected_KeychainError verifies that a
+// disconnected daemon with a keychain error returns both fields correctly.
+func TestGetDaemonHealth_AuthStatus_Disconnected_KeychainError(t *testing.T) {
+	checker := &stubDaemonHealthChecker{
+		connected:  false,
+		authStatus: "keychain_error",
+	}
+	h := handlers.NewDaemonHealthHandler(checker)
+	handler := authedHealthHandler(h, 1)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health/daemon", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	resp := parseHealthFull(t, rr)
+	if resp.Status != "disconnected" {
+		t.Errorf("status: want disconnected, got %q", resp.Status)
+	}
+	if resp.AuthStatus != "keychain_error" {
+		t.Errorf("auth_status: want keychain_error, got %q", resp.AuthStatus)
+	}
+}
+
+// TestGetDaemonHealth_AuthStatus_RepoError_FallsBackToUnknown verifies that
+// when GetLatestHeartbeatAuthStatus returns an error, auth_status is "unknown"
+// in the response (never a 500 — the error is absorbed, Ray's verdict §2).
+func TestGetDaemonHealth_AuthStatus_RepoError_FallsBackToUnknown(t *testing.T) {
+	checker := &stubDaemonHealthChecker{
+		connected: true,
+		authErr:   errors.New("db timeout"),
+	}
+	h := handlers.NewDaemonHealthHandler(checker)
+	handler := authedHealthHandler(h, 1)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health/daemon", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — error must not surface as HTTP 5xx", rr.Code)
+	}
+	resp := parseHealthFull(t, rr)
+	if resp.AuthStatus != "unknown" {
+		t.Errorf("auth_status: want unknown on repo error, got %q", resp.AuthStatus)
+	}
+}
+
+// TestGetDaemonHealth_AuthStatus_NoHeartbeat_ReturnsUnknown verifies that
+// when GetLatestHeartbeatAuthStatus returns "" (no heartbeat rows yet),
+// the response carries auth_status="unknown".
+func TestGetDaemonHealth_AuthStatus_NoHeartbeat_ReturnsUnknown(t *testing.T) {
+	// authStatus "" → stub returns "unknown", nil
+	checker := &stubDaemonHealthChecker{
+		connected:  false,
+		authStatus: "",
+	}
+	h := handlers.NewDaemonHealthHandler(checker)
+	handler := authedHealthHandler(h, 1)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health/daemon", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	resp := parseHealthFull(t, rr)
+	if resp.AuthStatus != "unknown" {
+		t.Errorf("auth_status: want unknown when no heartbeat rows, got %q", resp.AuthStatus)
 	}
 }

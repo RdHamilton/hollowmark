@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -212,6 +214,45 @@ func (r *DaemonEventsRepository) ResetProjected(ctx context.Context, id int64) e
 	const q = `UPDATE daemon_events SET projected_at = NULL WHERE id = $1`
 	_, err := r.db.ExecContext(ctx, q, id)
 	return err
+}
+
+// GetLatestHeartbeatAuthStatus returns the auth_status string from the payload
+// of the most recent daemon.heartbeat event row for the given user.
+//
+// Returns ("unknown", nil) in all of these cases (back-compat with old daemons
+// and fresh users — "unknown" is a BFF-only sentinel, never surfaced as error):
+//   - No daemon.heartbeat row exists for this user (ErrNoRows)
+//   - The payload does not contain an auth_status field (old daemon, pre-#144)
+//   - The auth_status field is present but empty
+//
+// The query is always scoped to userID — no cross-tenant risk.
+func (r *DaemonEventsRepository) GetLatestHeartbeatAuthStatus(ctx context.Context, userID int64) (string, error) {
+	const q = `
+		SELECT payload
+		FROM daemon_events
+		WHERE user_id = $1
+		  AND event_type = 'daemon.heartbeat'
+		ORDER BY received_at DESC
+		LIMIT 1`
+
+	row := r.db.QueryRowContext(ctx, q, userID)
+
+	var raw json.RawMessage
+	if err := row.Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "unknown", nil
+		}
+		return "unknown", err
+	}
+
+	var hb struct {
+		AuthStatus string `json:"auth_status"`
+	}
+	if err := json.Unmarshal(raw, &hb); err != nil || hb.AuthStatus == "" {
+		return "unknown", nil
+	}
+
+	return hb.AuthStatus, nil
 }
 
 // HasRecentEventByUserID returns true when the given user has at least one
